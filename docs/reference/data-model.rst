@@ -1,0 +1,236 @@
+3. Data model
+=============
+
+3.1. Objects, values, and types
+-------------------------------
+
+Lucid values have visible type contracts. Type annotations describe fields, function parameters, return values, local variables, and interface requirements.
+
+.. code-block:: python
+
+   name: str = "Ada"
+   count: int = 3
+   scores: list[float] = [10.0, 9.5]
+   tags: set[str] = {"draft", "public"}
+   metadata: dict[str, object] = {:}
+
+When a value is intentionally dynamic, the type should say so. Open-ended per-object data belongs in an explicit dictionary field:
+
+.. code-block:: python
+
+   class DynamicThing:
+       attrs: dict[str, object]
+
+Lucid avoids implicit object structure. A dictionary is the visible way to say "this data has dynamic keys."
+
+3.2. Classes and object shape
+-----------------------------
+
+Classes define concrete object types. Stored instance state is declared directly in the class body.
+
+.. code-block:: python
+
+   class Point:
+       x: float
+       y: float
+
+Every class has a fixed shape. Assigning an undeclared field is an error.
+
+.. code-block:: python
+
+   p = Point(1.0, 2.0)
+   p.z = 3.0  # error: z is not a declared field
+
+There is no implicit instance dictionary. If a class needs dynamic attributes, declare that storage explicitly:
+
+.. code-block:: python
+
+   class Record:
+       fields: dict[str, object]
+
+Class member variables are written as assignments in the class body.
+
+.. code-block:: python
+
+   class User:
+       count = 0
+       name: str
+
+This separates shared class state from stored instance fields.
+
+3.3. Generic types and variance
+-------------------------------
+
+Generic type parameters are written on the definition. Variance is explicit:
+
+.. code-block:: python
+
+   interface Producer[+K]:
+       declare get(self) -> K
+
+   interface Consumer[-K]:
+       declare put(self, value: K) -> None
+
+   class Cell[=K]:
+       value: K
+
+``+K`` is covariant, ``-K`` is contravariant, and ``=K`` is invariant. If a parameter is written without a variance marker, the checker warns, infers the narrowest valid variance, and offers an autofix.
+
+.. code-block:: python
+
+   interface Cache[K]:
+       declare get(self, key: str) -> K
+
+3.4. Mutable, read-only, and immutable views
+--------------------------------------------
+
+Mutable and immutable variants of the same abstraction are declared as one type family. The short name is the ordinary mutable type.
+
+.. code-block:: python
+
+   class InferenceModel[=K]:
+       weights: Tensor
+       metadata: dict[str, object]
+       cache: dict[str, Tensor]
+
+       def warm(self, key: str, value: Tensor) -> None:
+           self.cache[key] = value
+
+       frozen:
+           hash=True
+
+At use sites, punctuation marks the less common views:
+
+.. code-block:: python
+
+   working: InferenceModel[str] = InferenceModel(weights, metadata, {:})
+   stable: InferenceModel![str] = freeze(working)
+   view: InferenceModel?[str] = working
+
+``T`` is the mutable/default type. ``T?`` is the read-only view: code can observe it but cannot mutate it and cannot rely on it being permanently frozen. ``T!`` is the immutable type: code can rely on stability for operations such as hashing, memoization, and persistent sharing.
+
+The variants are siblings under the read-only view, not an inheritance chain where mutable is a subtype of immutable:
+
+.. code-block:: text
+
+   InferenceModel[K]  <: InferenceModel?[K]
+   InferenceModel![K] <: InferenceModel?[K]
+
+Variance is computed separately for each view. Mutable types are usually invariant because they both produce and consume their type parameters. Read-only and immutable views can often be covariant:
+
+.. code-block:: text
+
+   InferenceModel[=K]
+   InferenceModel?[+K]
+   InferenceModel![+K]
+
+3.5. Members and properties
+---------------------------
+
+Class bodies contain a closed set of member kinds:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Member kind
+     - Example
+   * - instance field
+     - ``x: int``
+   * - method
+     - ``def f(self): ...``
+   * - class method
+     - ``classmethod f(cls): ...``
+   * - factory
+     - ``factory f(cls): ...``
+   * - getter
+     - ``getter x(self) -> T: ...``
+   * - setter
+     - ``setter x(self, value: T): ...``
+   * - class member variable
+     - ``count = 0``
+
+Getters define computed readable attributes. Setters define assignment behavior. Setter-only attributes are valid.
+
+.. code-block:: python
+
+   class Circle:
+       radius: float
+
+       getter area(self) -> float:
+           return pi * self.radius ** 2
+
+       setter area(self, value: float):
+           self.radius = sqrt(value / pi)
+
+Attribute access is structural and visible in the class body. Lucid does not include descriptors or dynamic attribute hooks.
+
+3.6. Interfaces, traits, and inheritance
+----------------------------------------
+
+Interfaces declare required APIs. They do not store data and do not provide method bodies.
+
+.. code-block:: python
+
+   interface Sized:
+       declare __len__(self) -> int
+
+Interface members use ``declare``, not ``def``, because they specify a callable requirement without implementing it.
+
+Traits provide reusable method bodies. They do not declare fields.
+
+.. code-block:: python
+
+   interface Renderable:
+       declare render(self) -> str
+
+   trait DebugRenderable(Renderable):
+       def debug(self) -> str:
+           return "<debug " + self.render() + ">"
+
+Classes implement interfaces and include traits explicitly.
+
+.. code-block:: python
+
+   class Buffer(Sized, Truthy, SizedTruthy):
+       data: bytes
+
+       def __len__(self) -> int:
+           return len(self.data)
+
+Trait conflicts are explicit. If two traits define the same method, the class must resolve the collision.
+
+A class may have at most one concrete parent. A class header can combine one concrete parent, any number of interfaces, and any number of traits.
+
+.. code-block:: python
+
+   class FileLogger(LoggerBase, Closeable, Timestamped):
+       path: str
+
+3.7. Value semantics
+--------------------
+
+Classes can request common value semantics with class options.
+
+.. code-block:: python
+
+   class Point(frozen=True, eq=True, order=True, hash=True):
+       x: float
+       y: float
+
+Supported core options:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Option
+     - Meaning
+   * - ``frozen``
+     - instances cannot be mutated
+   * - ``eq``
+     - equality is generated
+   * - ``order``
+     - ordering methods are generated
+   * - ``hash``
+     - hashing behavior is generated
+
+Representation is generated by default unless the class defines its own representation method.
