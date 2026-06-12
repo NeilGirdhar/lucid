@@ -19,21 +19,26 @@ assignment target, where it discards the assigned value.
 
 Calling a class invokes Lucid construction. Calling an ordinary function, method, class method, or factory uses Python-like call syntax.
 
-A generator expression written directly as a call argument expands into
-positional arguments for the call:
+A generator expression written directly as a call argument is one lazy argument.
+Lucid does not treat it as argument expansion:
 
 .. code-block:: python
 
-   f(x for x in [x_1, x_2, x_3])
+   f(x for x in items)
 
 means:
 
 .. code-block:: python
 
-   f(x_1, x_2, x_3)
+   f((x for x in items))
 
-To pass an actual generator object, bind it first or use another explicit
-generator-producing expression before the call.
+Argument expansion is explicit with ``*``:
+
+.. code-block:: python
+
+   f(*(x for x in [x_1, x_2, x_3]))
+
+This keeps laziness and call arity visible at the call site.
 
 6.3. Indexing
 -------------
@@ -214,6 +219,25 @@ if the ``__add__`` dispatch table contains a method applicable to ``(A, C)``.
 That may be an exact ``(A, C)`` method, a method written for parent classes or
 interfaces of ``A`` or ``C``, a method provided with ``C``, or a method in
 another module that is allowed to extend the generic operation.
+
+Dispatch tables are coherent within the set of imported modules. A module can
+define a dispatch method when it owns the generic operation or owns at least one
+concrete operand type. Other extension points must be explicit. If two imported
+dispatch methods are applicable and neither is more specific than the other, the
+call is ambiguous and must be rejected instead of depending on import order.
+
+Dispatch resolution uses a partial order over applicable methods:
+
+1. A dispatch method is applicable when each declared parameter type accepts the
+   corresponding runtime argument type.
+2. Method ``A`` is more specific than method ``B`` when every parameter type in
+   ``A`` is the same as, or a subtype of, the corresponding parameter type in
+   ``B``, and at least one parameter type is strictly more specific.
+3. The selected method is the unique most-specific applicable method.
+4. If there is no applicable method, the operation is undefined for those
+   operands. If there are multiple incomparable most-specific methods, the call
+   is ambiguous. Statically known ambiguity is a compile-time error; otherwise
+   it is a runtime dispatch error.
 
 This lets cross-type operations be defined directly:
 

@@ -51,9 +51,9 @@ This keeps annotations literal: ``int`` means integer, not ``int | bool``;
 ``float`` does not mean ``int | float``; ``complex`` does not mean
 ``int | float | complex``.
 
-Generic code that needs a numeric capability uses structural ``Supports...``
-interfaces instead of numeric-tower base classes. These interfaces are builtins
-and are always available without import:
+Generic code that needs a numeric capability uses built-in capability
+interfaces instead of numeric-tower base classes. These interfaces are always
+available without import:
 
 .. code-block:: python
 
@@ -220,20 +220,23 @@ Generic type parameters are written on the definition. Variance is explicit:
 3.6. Mutable, read-only, and immutable views
 --------------------------------------------
 
-Mutable and immutable variants of the same abstraction are declared as one type family. The short name is the ordinary mutable type.
+Mutable and read-only views are available for every object type. Immutable views
+are available for values whose types support freezing. User-defined classes opt
+in to an immutable view with a ``frozen:`` block. The short name is the ordinary
+mutable type.
 
 .. code-block:: python
 
    class InferenceModel[=K]:
        weights: Tensor
-       metadata: dict[str, object]
+       metadata: dict[str, str]
        cache: dict[str, Tensor]
 
        def warm(self, key: str, value: Tensor) -> None:
            self.cache[key] = value
 
        frozen:
-           hash=True
+           hash=False
 
 At use sites, punctuation marks the less common views:
 
@@ -244,6 +247,44 @@ At use sites, punctuation marks the less common views:
    view: InferenceModel?[str] = working
 
 ``T`` is the mutable/default type. ``T?`` is the read-only view: code can observe it but cannot mutate it and cannot rely on it being permanently frozen. ``T!`` is the immutable type: code can rely on stability for operations such as hashing, memoization, and persistent sharing.
+
+Receiver mutability is part of method checking. A method written with ordinary
+``self`` receives the mutable view and is callable on ``T``. Getters and methods
+that explicitly annotate a read-only receiver are callable on ``T?`` and ``T!``:
+
+.. code-block:: python
+
+   class InferenceModel[=K]:
+       labels: list[K]
+       scores: dict[K, float]
+
+       getter label_count(self) -> int:
+           return len(self.labels)
+
+       def describe(self: InferenceModel?[K]) -> str:
+           return "labels=" + str(len(self.labels))
+
+       def remember(self, item: K, score: float) -> None:
+           self.scores[item] = score
+
+This means a cache-filling method is mutable. The core language has no hidden
+interior mutability: a ``T!`` value cannot change through ordinary fields,
+collection elements, getters, or methods. Types that need mutable caches behind
+immutable APIs must keep those caches outside the frozen object or use an
+explicit library type whose freezing behavior is specified by that type.
+
+Freezing is transitive. ``freeze(value: T) -> T!`` produces an immutable value
+whose declared stored fields and collection elements are also immutable. For a
+class value, freezing walks the class's declared fields. For a collection value,
+freezing walks the collection's elements and produces the corresponding
+immutable collection view. A freeze succeeds only if every reached value has an
+immutable view; otherwise it is an error.
+
+Freezing behaves as if it creates an immutable copy. An implementation may reuse
+storage when doing so cannot expose later mutation through an alias. If the
+source object graph contains sharing, the frozen result preserves that sharing.
+If a cyclic object graph cannot be represented safely as immutable, freezing
+must fail rather than expose a partially frozen value.
 
 The variants are siblings under the read-only view, not an inheritance chain where mutable is a subtype of immutable:
 
@@ -323,7 +364,10 @@ Traits provide reusable method bodies. They do not declare fields.
        def debug(self) -> str:
            return "<debug " + self.render() + ">"
 
-Classes implement interfaces and include traits explicitly.
+Classes implement interfaces and include traits explicitly. A class implements
+an interface by naming it in the class header; having the same member names by
+accident is not enough. This keeps type relationships visible at the
+abstraction boundary.
 
 .. code-block:: python
 
@@ -344,26 +388,31 @@ A class may have at most one concrete parent. A class header can combine one con
    class FileLogger(LoggerBase, Closeable, Timestamped):
        path: str
 
-3.7. Value semantics
+3.9. Value semantics
 --------------------
 
-Classes can request common value semantics with class options.
+Classes can request common value semantics with explicit class-body options.
 
 .. code-block:: python
 
-   class Point(frozen=True, eq=True, order=True, hash=True):
+   class Point:
        x: float
        y: float
 
-Supported core options:
+       frozen:
+           eq=True
+           order=True
+           hash=True
+
+Supported core class-body options:
 
 .. list-table::
    :header-rows: 1
 
    * - Option
      - Meaning
-   * - ``frozen``
-     - instances cannot be mutated
+   * - ``frozen:``
+     - opts the class into an immutable view and defines generated behavior for it
    * - ``eq``
      - equality is generated
    * - ``order``
@@ -372,3 +421,9 @@ Supported core options:
      - hashing behavior is generated
 
 Representation is generated by default unless the class defines its own representation method.
+
+The checker validates generated value behavior against the immutable view.
+``order=True`` requires ``eq=True``. ``hash=True`` is valid only when every field
+participating in the generated hash has a hashable immutable view. Generated
+equality and ordering compare immutable field values in declaration order unless
+the class defines the corresponding operation itself.

@@ -40,9 +40,15 @@ acts like:
 .. code-block:: python
 
    factory __init__(cls, x: float, y: float):
-       return construct(x, y)
+       return construct(x=x, y=y)
 
-``construct`` is a keyword, not an ordinary function. It can only appear inside a factory. At runtime, a ``construct`` expression creates an instance of the exact class whose factory is running, assigns the supplied values to that class's declared fields in field order, and returns the fully initialized object.
+``construct`` is a keyword, not an ordinary function. It can only appear inside
+a factory. At runtime, a ``construct`` expression creates an instance of the
+exact class whose factory is running, assigns the supplied values to that
+class's declared fields, and returns the fully initialized object.
+``construct`` can use positional field order or explicit field names, but a
+factory must provide exactly one value for each declared field and cannot supply
+undeclared fields.
 
 Custom construction is written with a factory:
 
@@ -53,7 +59,7 @@ Custom construction is written with a factory:
        email: str
 
        factory __init__(cls, name: str, raw_email: str):
-           return construct(name, raw_email.lower())
+           return construct(name=name, email=raw_email.lower())
 
 ``__init__`` is not a mutating post-allocation hook. It is a factory that returns the object.
 
@@ -80,7 +86,7 @@ For ``Point``, the generated factory has this behavior:
    factory replace(cls, original: Point, **changes):
        x = changes.get("x", original.x)
        y = changes.get("y", original.y)
-       return construct(x, y)
+       return construct(x=x, y=y)
 
 ``replace`` is a factory, so it is not inherited. Each class has its own
 ``replace`` factory for its own declared fields and exact construction rules.

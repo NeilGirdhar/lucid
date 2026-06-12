@@ -16,10 +16,10 @@ Example
 
 .. code-block:: python
 
-   export interface Scorable[+K]:
+   export interface Scorable[-K]:
        declare score(self, item: K) -> float
 
-   export trait ScoreBands[+K](Scorable[K]):
+   export trait ScoreBands[-K](Scorable[K]):
        def is_confident(self, item: K) -> bool:
            return self.score(item) >= 0.8
 
@@ -30,7 +30,7 @@ Example
 
        factory from_checkpoint(cls, path: Path, labels: list[K]):
            weights = Tensor.load(path)
-           return construct(weights, labels, {:})
+           return construct(weights=weights, labels=labels, scores={:})
 
        def score(self, item: K) -> float:
            if item not in self.scores:
@@ -41,12 +41,15 @@ Example
            return len(self.labels)
 
        frozen:
-           hash=True
+           hash=False
 
-   def evaluate(model: InferenceModel?[str], item: str) -> float:
+   def evaluate(model: InferenceModel[str], item: str) -> float:
        return model.score(item)
 
-   model: InferenceModel[str] = InferenceModel.from_checkpoint("model.bin", ["cat", "dog"])
+   def label_total(model: InferenceModel?[str]) -> int:
+       return model.label_count
+
+   model: InferenceModel[str] = InferenceModel.from_checkpoint(Path("model.bin"), ["cat", "dog"])
    stable: InferenceModel![str] = freeze(model)
 
 This example shows Lucid's main commitments in one place:
@@ -58,6 +61,7 @@ This example shows Lucid's main commitments in one place:
 * factories construct exact, fully initialized objects
 * getters expose computed attributes without descriptors
 * mutable, read-only, and immutable views are visible in annotations
+* read-only views expose observation without permitting cache-filling mutation
 
 Documentation
 -------------

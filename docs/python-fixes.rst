@@ -35,7 +35,7 @@ Python's type annotations are valuable, but they are layered over a language who
 
 Lucid follows Scala more closely here. Scala's type parameters sit directly on classes and traits, and variance markers such as ``+A`` and ``-A`` make subtyping behavior a property of the abstraction itself. Lucid adopts that clarity with ``+K``, ``-K``, and ``=K``. The useful Python-like shortcut is that plain ``K`` is allowed as a draft form: the checker warns and can autofix it to the inferred variance.
 
-Lucid also makes mutability part of the type spelling without making common mutable code verbose. ``InferenceModel[K]`` is the ordinary mutable type. ``InferenceModel?[K]`` is the read-only view. ``InferenceModel![K]`` is the immutable type. This mirrors Scala's virtue of making collection and API mutability visible in the type, while adapting the surface syntax to Python-like code where mutable objects are common.
+Lucid also makes mutability part of the type spelling without making common mutable code verbose. ``InferenceModel[K]`` is the ordinary mutable type. ``InferenceModel?[K]`` is the read-only view. ``InferenceModel![K]`` is the immutable type. The immutable marker is transitive: it does not mean "read-only reference to a mutable object"; it means ``freeze`` has converted declared stored state and collection contents into immutable views. This mirrors Scala's virtue of making collection and API mutability visible in the type, while adapting the surface syntax to Python-like code where mutable objects are common.
 
 Class-level behavior
 --------------------
@@ -77,8 +77,9 @@ Python truthiness falls back through ``__bool__``, ``__len__``, and built-in emp
 Python also makes ``bool`` a subclass of ``int``. That means ``int`` annotations can accept boolean values and arithmetic or bitwise operators can silently treat flags as numbers.
 
 Lucid keeps ``bool`` separate from ``int`` and removes the numeric tower
-entirely. Numeric capability is expressed through structural interfaces such as
-``SupportsInt``, ``SupportsFloat``, ``SupportsComplex``, and ``SupportsIndex``,
+entirely. Numeric capability is expressed through built-in capability
+interfaces such as ``SupportsInt``, ``SupportsFloat``, ``SupportsComplex``,
+and ``SupportsIndex``,
 plus operation-specific interfaces such as ``SupportsAbs`` and
 ``SupportsRound``, and broader operation bundles such as ``IntLike``,
 ``FloatLike``, and ``ComplexLike``, not through abstract numeric base classes.
@@ -163,13 +164,17 @@ successive integers until indexing fails. Lucid removes that sequence protocol.
 Indexing and iteration are separate capabilities. A type is iterable only if it
 implements or inherits from ``Iterable``.
 
-Call arguments
---------------
+Argument expansion
+------------------
 
 Python treats ``f(x for x in items)`` as a call with one generator object
-argument. Lucid treats a generator expression written directly as a call
-argument as argument expansion. For example, ``f(x for x in [x_1, x_2, x_3])``
-means ``f(x_1, x_2, x_3)``.
+argument. Lucid keeps that behavior because changing it would make lazy code
+eager and make call arity depend on iteration. Argument expansion remains
+explicit with ``*``:
+
+.. code-block:: python
+
+   f(*(x for x in [x_1, x_2, x_3]))
 
 Loop search clauses
 -------------------
@@ -201,6 +206,10 @@ Operators
 ---------
 
 Python binary operators are left-owned first, then may try reflected methods on the right operand. Lucid treats binary operators as multiple-dispatch functions over both operands.
+
+Dispatch is still deterministic. The selected implementation must be the unique
+most-specific applicable method in the imported dispatch table. Ambiguous
+cross-type operations are errors, not import-order behavior.
 
 Removed object-model hooks
 --------------------------
