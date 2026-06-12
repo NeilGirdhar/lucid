@@ -59,6 +59,32 @@ Custom construction is written with a factory:
 
 Alternative constructors are factories too. Factories are not inherited. A factory constructs the exact class where it is defined.
 
+Every class also has a generated ``replace`` factory. It works like Python's
+``__replace__`` protocol: given an existing instance and any changed field
+values, it constructs a new instance of the same exact class with unchanged
+fields copied from the original object.
+
+.. code-block:: python
+
+   class Point:
+       x: float
+       y: float
+
+   p = Point(1.0, 2.0)
+   q = Point.replace(p, y=3.0)
+
+For ``Point``, the generated factory has this behavior:
+
+.. code-block:: python
+
+   factory replace(cls, original: Point, **changes):
+       x = changes.get("x", original.x)
+       y = changes.get("y", original.y)
+       return construct(x, y)
+
+``replace`` is a factory, so it is not inherited. Each class has its own
+``replace`` factory for its own declared fields and exact construction rules.
+
 4.4. Runtime components
 -----------------------
 

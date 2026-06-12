@@ -10,12 +10,21 @@ Python instances usually have an open-ended ``__dict__``, unless a class uses ``
 
 Use an explicit dictionary field when dynamic keys are part of the model.
 
+Discarded values
+----------------
+
+Python treats ``_`` as an ordinary name by default, even though many codebases
+use it by convention for ignored values. Lucid makes ``_`` a black-hole keyword:
+assigning to it discards the value, and using it in an expression is invalid.
+
 Construction
 ------------
 
 Python splits construction across ``__new__``, ``__init__``, dataclass-generated initializers, ``__post_init__``, ``InitVar``, and field options such as ``init=False`` or ``kw_only``.
 
 Lucid has one construction model: factories return fully constructed objects through the factory-only ``construct`` keyword.
+
+Every class also gets a generated ``replace`` factory for copy-with-update construction. Because it is a factory, it follows the same exact-class rule as other construction forms and is not inherited.
 
 A Python backend can lower this however it needs to. For example, generated Python might give the class a private construction class method that allocates the object, assigns fields, and returns it, then compile Lucid factories into calls to that helper.
 
@@ -60,15 +69,83 @@ Lucid separates those roles:
 
 Lucid keeps Python's useful abstract-method instantiation check, but makes the marker part of the language. A remaining ``declare`` member makes a class abstract for construction purposes, so there is no separate ``@abstractmethod`` decorator.
 
-Truth
------
+Truth and Boolean values
+------------------------
 
 Python truthiness falls back through ``__bool__``, ``__len__``, and built-in emptiness rules. Lucid requires boolean control flow to use ``bool`` or an explicit ``__bool__``.
+
+Python also makes ``bool`` a subclass of ``int``. That means ``int`` annotations can accept boolean values and arithmetic or bitwise operators can silently treat flags as numbers.
+
+Lucid keeps ``bool`` separate from ``int`` and removes the numeric tower
+entirely. Numeric capability is expressed through structural interfaces such as
+``SupportsInt``, ``SupportsFloat``, ``SupportsComplex``, and ``SupportsIndex``,
+plus operation-specific interfaces such as ``SupportsAbs`` and
+``SupportsRound``, and broader operation bundles such as ``IntLike``,
+``FloatLike``, and ``ComplexLike``, not through abstract numeric base classes.
+These interfaces are builtins. Boolean values do not support numeric arithmetic
+or bitwise arithmetic operators such as ``+``, ``-``, ``*``, ``/``, ``%``,
+``|``, ``&``, and ``^``. An ``int`` annotation means ``int``; use ``int | bool``
+only when both types are intended.
+
+Lucid also keeps ``float`` and ``complex`` annotations exact. ``float`` does not
+mean ``int | float``, and ``complex`` does not mean ``int | float | complex``.
+Use a union or a ``Supports...`` interface when a broader capability is
+intended.
+
+``SupportsIndex`` remains separate from ``SupportsInt`` because exact
+indexability is not the same as explicit integer conversion. ``int(x)`` is an
+explicit conversion and may be lossy for some types; it does not make ``x`` an
+``int`` for annotation or indexing purposes.
+
+Numeric equality and ordering are type-directed. Cross-type numeric equality,
+cross-type hashing, and cross-type ordering exist only where explicitly defined.
+``bool`` and ``complex`` are not orderable. Bitwise operators are integer-like
+operations, not general numeric operations, and are not provided by ``bool``,
+``float``, or ``complex``.
+
+Because Lucid binary operators are multiple-dispatch functions, an interface
+cannot promise an operator by declaring a left-owned method. It uses ``declare
+dispatch`` instead, which says that a matching implementation of that generic
+operation must exist for the specified operand types. Checking that promise is
+global to the generic operation's dispatch table: if an interface requires
+``__add__(Self, C)``, then concrete type ``A`` satisfies it when some applicable
+``__add__`` dispatch exists for ``(A, C)``. Applicability follows Julia's method
+model: a method written for parent classes or interfaces of ``A`` or ``C`` also
+satisfies the obligation. The implementation may be written with ``A``, with
+``C``, or in another permitted extension location.
+
+This is close to Julia's model: operators such as ``+`` are generic functions,
+and typed definitions add methods to those functions. Julia's interfaces are
+informal collections of methods a type should implement. Lucid makes the same
+kind of obligation explicit in interfaces.
+
+This matches the way numerical libraries usually treat Boolean arrays as logical values rather than ordinary integers. It also removes footguns such as ``True + True == 2`` and ``True & 4 == 0``, where the result differs from logical control-flow intuition. These operations are uncommon, and the old behavior remains explicit as ``int(flag)``. Keeping the ``bool`` interface small also helps static checkers catch accidental leaks of Boolean flags into arithmetic code.
 
 Collection literals
 -------------------
 
 Python uses ``{}`` for an empty dictionary and requires ``set()`` for an empty set. Lucid uses ``{}`` for an empty set and ``{:}`` for an empty dictionary.
+
+Lucid also uses the immutable marker ``!`` on collection literals. ``!{a, b}``
+constructs a frozenset, and ``!{a: b}`` constructs a frozendict. The empty forms
+follow the same distinction: ``!{}`` is an empty frozenset, and ``!{:}`` is an
+empty frozendict.
+
+String literals
+---------------
+
+Python concatenates adjacent string literals at compile time. Lucid rejects adjacent string literals. Use an explicit concatenation operation when a string is meant to be joined.
+
+Python also treats ``str`` as ``Sequence[str]`` for static typing. Lucid keeps
+``str`` narrower: it is ``Container[str]`` and ``Sized``, but not
+``Iterable[str]``, ``Collection[str]``, or ``Sequence[str]``. Strings do not
+provide ``__iter__``. Use ``text.chars()`` when code intentionally wants a
+``Sequence[str]`` view of the string's characters.
+
+This avoids accidental character-by-character use of strings in APIs that ask
+for general sequences or iterables. The cost is explicit at the call site:
+write ``chars()`` when character traversal is intended, or use a cast when
+bridging to code that deliberately accepts strings as sequences.
 
 Lazy imports
 ------------
@@ -79,6 +156,46 @@ Indexing
 --------
 
 Python parses ``x[1, 2, 3]`` as a single tuple index. Lucid treats comma-separated indexing as multiple index arguments. Use ``x[(1, 2, 3)]`` when the intended index is a tuple.
+
+Python also has an old sequence-iteration fallback: if an object has
+``__getitem__`` but no ``__iter__``, iteration may call ``__getitem__`` with
+successive integers until indexing fails. Lucid removes that sequence protocol.
+Indexing and iteration are separate capabilities. A type is iterable only if it
+implements or inherits from ``Iterable``.
+
+Call arguments
+--------------
+
+Python treats ``f(x for x in items)`` as a call with one generator object
+argument. Lucid treats a generator expression written directly as a call
+argument as argument expansion. For example, ``f(x for x in [x_1, x_2, x_3])``
+means ``f(x_1, x_2, x_3)``.
+
+Loop search clauses
+-------------------
+
+Python loop ``else`` clauses run when a loop finishes without ``break``. Lucid
+removes loop ``else`` and adds ``if_broken`` for the opposite case.
+
+Lucid adds an optional ``if_broken`` clause for loops. The loop body can focus on
+searching, ``if_broken`` handles the found-by-break case, and ordinary
+fall-through code handles the exhausted-without-break case:
+
+.. code-block:: python
+
+   def find_match(items: Iterable[Item]) -> Item | None:
+       for item in items:
+           if is_match(item):
+               found = item
+               break
+       if_broken:
+           return found
+       return None
+
+The keyword is ``if_broken``, a single soft keyword in loop syntax. This avoids
+the misleading ``if break`` spelling, which would give ``if`` and ``break`` a
+combined meaning they do not have elsewhere. The cost is that parsers,
+highlighters, and other code-aware tools need to learn the new soft keyword.
 
 Operators
 ---------

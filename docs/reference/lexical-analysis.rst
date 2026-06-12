@@ -22,10 +22,26 @@ Lucid reserves punctuation in type positions for mutability views:
 2.3. Names, identifiers, and keywords
 -------------------------------------
 
-Lucid adds member and module keywords including ``export``, ``lazy``, ``factory``, ``construct``, ``getter``, ``setter``, ``interface``, ``trait``, ``declare``, and ``frozen``.
+Lucid adds member and module keywords including ``export``, ``lazy``,
+``factory``, ``construct``, ``getter``, ``setter``, ``interface``, ``trait``,
+``declare``, and ``frozen``.
+
+The single underscore ``_`` is also a keyword. It is a black-hole assignment
+target, not a name binding.
+
+``if_broken`` is a soft keyword. It acts as a keyword only when it introduces a
+loop ``if_broken`` clause; elsewhere it remains an ordinary identifier.
 
 2.4. Literals
 -------------
+
+Adjacent string literals are not concatenated. Two string literal tokens cannot
+appear next to each other as one expression.
+
+.. code-block:: python
+
+   path = "/api/" "users"  # error
+   path = "/api/" + "users"
 
 Collection literals keep empty sets and empty dictionaries distinct.
 
@@ -33,7 +49,16 @@ Collection literals keep empty sets and empty dictionaries distinct.
 
    empty_set = {}
    empty_dict = {:}
+   empty_frozenset = !{}
+   empty_frozendict = !{:}
    names = {"Ada", "Grace"}
    scores = {"Ada": 10, "Grace": 9}
+   frozen_names = !{"Ada", "Grace"}
+   frozen_scores = !{"Ada": 10, "Grace": 9}
 
-``{}`` constructs a set. ``{:}`` constructs a dictionary. A braced literal with key-value pairs is also a dictionary.
+``{}`` constructs a set. ``{:}`` constructs a dictionary. A braced literal with
+key-value pairs is also a dictionary.
+
+The immutable marker ``!`` before a collection literal constructs the immutable
+variant. ``!{a, b}`` constructs a frozenset. ``!{a: b}`` constructs a
+frozendict. ``!{}`` is an empty frozenset, and ``!{:}`` is an empty frozendict.

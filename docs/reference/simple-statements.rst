@@ -11,6 +11,15 @@ Expression statements use Python-like syntax.
 
 Assignment binds names, updates declared fields, or delegates to explicit assignment behavior such as setters and item assignment. Assigning an undeclared field is an error.
 
+Assigning to ``_`` discards the value instead of binding a name:
+
+.. code-block:: python
+
+   _ = compute()
+   result, _ = split_pair()
+
+The discard target is allowed only where assignment targets are allowed.
+
 7.3. Import statements
 ----------------------
 

@@ -23,7 +23,143 @@ When a value is intentionally dynamic, the type should say so. Open-ended per-ob
 
 Lucid avoids implicit object structure. A dictionary is the visible way to say "this data has dynamic keys."
 
-3.2. Classes and object shape
+3.2. Boolean values and numeric protocols
+-----------------------------------------
+
+``bool`` is a distinct logical type, not a numeric subtype.
+
+Lucid does not have a numeric tower. Numeric types do not inherit from abstract
+numeric base classes such as ``Integral``, ``Real``, or ``Complex``.
+Annotations for concrete numeric types are exact: ``int`` means ``int``,
+``float`` means ``float``, and ``complex`` means ``complex``. Code that
+intentionally wants more than one concrete numeric type must say so explicitly:
+
+.. code-block:: python
+
+   count: int = 1
+   ready: bool = True
+   mixed: int | bool = ready
+   real: int | float = count
+   scalar: int | float | complex = 1.0
+
+   count = ready  # error
+   real_float: float = count  # error
+   complex_value: complex = real_float  # error
+   count = int(ready)
+
+This keeps annotations literal: ``int`` means integer, not ``int | bool``;
+``float`` does not mean ``int | float``; ``complex`` does not mean
+``int | float | complex``.
+
+Generic code that needs a numeric capability uses structural ``Supports...``
+interfaces instead of numeric-tower base classes. These interfaces are builtins
+and are always available without import:
+
+.. code-block:: python
+
+   interface SupportsInt:
+       declare __int__(self) -> int
+
+   interface SupportsFloat:
+       declare __float__(self) -> float
+
+   interface SupportsComplex:
+       declare __complex__(self) -> complex
+
+   interface SupportsIndex:
+       declare __index__(self) -> int
+
+   interface SupportsAbs[+K]:
+       declare __abs__(self) -> K
+
+   interface SupportsRound[+K]:
+       declare __round__(self, ndigits: int | None = None) -> K
+
+   interface IntLike(SupportsInt, SupportsIndex, SupportsAbs[int], SupportsRound[int]):
+       declare dispatch __add__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __sub__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __mul__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __floordiv__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __truediv__(lhs: Self, rhs: Self) -> float
+       declare dispatch __mod__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __pow__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __and__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __or__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __xor__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __lshift__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __rshift__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __lt__(lhs: Self, rhs: Self) -> bool
+       declare dispatch __le__(lhs: Self, rhs: Self) -> bool
+       declare dispatch __gt__(lhs: Self, rhs: Self) -> bool
+       declare dispatch __ge__(lhs: Self, rhs: Self) -> bool
+
+   interface FloatLike(SupportsFloat, SupportsAbs[float], SupportsRound[float]):
+       declare dispatch __add__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __sub__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __mul__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __truediv__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __pow__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __lt__(lhs: Self, rhs: Self) -> bool
+       declare dispatch __le__(lhs: Self, rhs: Self) -> bool
+       declare dispatch __gt__(lhs: Self, rhs: Self) -> bool
+       declare dispatch __ge__(lhs: Self, rhs: Self) -> bool
+
+   interface ComplexLike(SupportsComplex, SupportsAbs[float]):
+       declare dispatch __add__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __sub__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __mul__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __truediv__(lhs: Self, rhs: Self) -> Self
+       declare dispatch __pow__(lhs: Self, rhs: Self) -> Self
+
+These interfaces describe available operations without implying subtype
+relationships among ``bool``, ``int``, ``float``, and ``complex``.
+``SupportsIndex`` is separate from ``SupportsInt`` because exact indexability is
+not the same as explicit integer conversion. ``SupportsInt`` permits explicit
+conversion with ``int(x)``; it does not make a value acceptable where an ``int``
+annotation is required.
+
+Inside an interface, ``Self`` names the implementing type. A ``declare
+dispatch`` member is not an instance method. It is an obligation that a matching
+multiple-dispatch implementation exists for the named generic operation and
+argument types. Satisfaction is checked against the generic operation's dispatch
+table after substituting the concrete implementing type for ``Self``. A dispatch
+definition satisfies the obligation if its signature is applicable to the
+resulting argument types, including through parent classes or interfaces. The
+matching dispatch definition does not need to be written on, or owned by, the
+implementing type.
+
+Numeric equality is type-directed. Cross-type numeric equality exists only where
+an explicit equality operation is defined for those two operand types. Lucid
+does not assume Python's ``1 == 1.0 == 1+0j`` rule or the matching cross-type
+hash behavior.
+
+3.3. Strings and character access
+---------------------------------
+
+``str`` is a sized container of strings, not a sequence of strings.
+
+``str`` implements ``Container[str]`` and ``Sized``. It does not implement
+``Iterable[str]``, ``Collection[str]``, or ``Sequence[str]``, and it does not
+provide ``__iter__``. Code that wants a sequence view of a string's characters
+uses ``chars()`` explicitly:
+
+.. code-block:: python
+
+   text: str = "hello"
+
+   "e" in text
+   len(text)
+   text.chars()[0]
+
+   for ch in text:          # error
+       ...
+
+   for ch in text.chars():
+       ...
+
+``chars()`` returns ``Sequence[str]``.
+
+3.4. Classes and object shape
 -----------------------------
 
 Classes define concrete object types. Stored instance state is declared directly in the class body.
@@ -58,7 +194,7 @@ Class member variables are written as assignments in the class body.
 
 This separates shared class state from stored instance fields.
 
-3.3. Generic types and variance
+3.5. Generic types and variance
 -------------------------------
 
 Generic type parameters are written on the definition. Variance is explicit:
@@ -81,7 +217,7 @@ Generic type parameters are written on the definition. Variance is explicit:
    interface Cache[K]:
        declare get(self, key: str) -> K
 
-3.4. Mutable, read-only, and immutable views
+3.6. Mutable, read-only, and immutable views
 --------------------------------------------
 
 Mutable and immutable variants of the same abstraction are declared as one type family. The short name is the ordinary mutable type.
@@ -124,7 +260,7 @@ Variance is computed separately for each view. Mutable types are usually invaria
    InferenceModel?[+K]
    InferenceModel![+K]
 
-3.5. Members and properties
+3.7. Members and properties
 ---------------------------
 
 Class bodies contain a closed set of member kinds:
@@ -164,7 +300,7 @@ Getters define computed readable attributes. Setters define assignment behavior.
 
 Attribute access is structural and visible in the class body. Lucid does not include descriptors or dynamic attribute hooks.
 
-3.6. Interfaces, traits, and inheritance
+3.8. Interfaces, traits, and inheritance
 ----------------------------------------
 
 Interfaces declare required APIs. They do not store data and do not provide method bodies.

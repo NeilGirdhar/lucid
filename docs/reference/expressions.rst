@@ -6,10 +6,34 @@
 
 Lucid uses Python-like expression syntax unless this reference says otherwise.
 
+The black-hole target ``_`` is not an expression. It is valid only as an
+assignment target, where it discards the assigned value.
+
+.. code-block:: python
+
+   _ = compute()
+   use(_)  # error
+
 6.2. Calls
 ----------
 
 Calling a class invokes Lucid construction. Calling an ordinary function, method, class method, or factory uses Python-like call syntax.
+
+A generator expression written directly as a call argument expands into
+positional arguments for the call:
+
+.. code-block:: python
+
+   f(x for x in [x_1, x_2, x_3])
+
+means:
+
+.. code-block:: python
+
+   f(x_1, x_2, x_3)
+
+To pass an actual generator object, bind it first or use another explicit
+generator-producing expression before the call.
 
 6.3. Indexing
 -------------
@@ -62,6 +86,9 @@ means:
 
    x.__setitem__(1, 2, 3, v)
 
+Indexing does not imply iteration. Defining ``__getitem__`` for integer indexes
+does not make a type iterable.
+
 6.4. Boolean operations
 -----------------------
 
@@ -98,6 +125,28 @@ Length does not imply truth. A sized type can opt in explicitly:
        def __bool__(self) -> bool:
            return self.__len__() != 0
 
+``bool`` does not support numeric arithmetic or bitwise arithmetic operators.
+The operators ``+``, ``-``, ``*``, ``/``, ``%``, ``|``, ``&``, and ``^`` are
+invalid for boolean operands. Use boolean operators for logic and an explicit
+conversion for intentional integer arithmetic:
+
+.. code-block:: python
+
+   True + True       # error
+   True & flag       # error
+   True or flag
+   int(True) + 1
+
+``bool`` is not orderable. Comparisons such as ``False < True`` are invalid.
+
+Numeric ordering is defined only for operand types that provide an explicit
+ordering operation for those two types. ``complex`` is not orderable.
+
+Bitwise operators are integer-like operations, not general numeric operations.
+The operators ``|``, ``&``, ``^``, ``~``, ``<<``, and ``>>`` are valid only for
+types that explicitly provide those operations. ``bool``, ``float``, and
+``complex`` do not provide them.
+
 6.5. Operator precedence
 ------------------------
 
@@ -128,8 +177,7 @@ Binary operators are relations between two operand types.
 
 .. code-block:: python
 
-   @dispatch
-   def __add__(lhs: X, rhs: Y) -> Z:
+   def dispatch __add__(lhs: X, rhs: Y) -> Z:
        ...
 
 Then:
@@ -140,16 +188,41 @@ Then:
 
 dispatches on both runtime types.
 
+Interfaces can require one element of a multiple-dispatch operation with
+``declare dispatch``:
+
+.. code-block:: python
+
+   interface Addable:
+       declare dispatch __add__(lhs: Self, rhs: Self) -> Self
+
+A concrete implementation satisfies that requirement when the generic operation
+has an applicable dispatch definition after substituting the concrete type for
+``Self``:
+
+.. code-block:: python
+
+   def dispatch __add__(lhs: Vector2, rhs: Vector2) -> Vector2:
+       ...
+
+The matching dispatch can be supplied wherever dispatch definitions for that
+generic operation are allowed. It is not owned by the left operand. Lucid follows
+Julia's method-applicability model here: a dispatch definition applies when its
+declared parameter types accept the runtime argument types. If an interface
+requires ``__add__(Self, C)``, then a concrete ``A`` satisfies that requirement
+if the ``__add__`` dispatch table contains a method applicable to ``(A, C)``.
+That may be an exact ``(A, C)`` method, a method written for parent classes or
+interfaces of ``A`` or ``C``, a method provided with ``C``, or a method in
+another module that is allowed to extend the generic operation.
+
 This lets cross-type operations be defined directly:
 
 .. code-block:: python
 
-   @dispatch
-   def __add__(lhs: Duration, rhs: Timestamp) -> Timestamp:
+   def dispatch __add__(lhs: Duration, rhs: Timestamp) -> Timestamp:
        ...
 
-   @dispatch
-   def __add__(lhs: Timestamp, rhs: Duration) -> Timestamp:
+   def dispatch __add__(lhs: Timestamp, rhs: Duration) -> Timestamp:
        ...
 
 The operation is not owned by the left operand. Lucid does not need reflected binary methods such as ``__radd__``, and does not use ``NotImplemented`` as an operator negotiation protocol.
