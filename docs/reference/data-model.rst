@@ -174,7 +174,7 @@ Interfaces declare required APIs. They do not store data and do not provide meth
    interface Sized:
        declare __len__(self) -> int
 
-Interface members use ``declare``, not ``def``, because they specify a callable requirement without implementing it.
+Interface members use ``declare``, not ``def``, because they specify a callable requirement without implementing it. ``declare`` is also the abstraction marker: Lucid does not need Python's ``@abstractmethod`` decorator.
 
 Traits provide reusable method bodies. They do not declare fields.
 
@@ -196,6 +196,8 @@ Classes implement interfaces and include traits explicitly.
 
        def __len__(self) -> int:
            return len(self.data)
+
+Every class is checked for unimplemented declared obligations before it can be constructed. A class with any remaining ``declare`` member from an interface, trait, or parent class is abstract for construction purposes, matching the instantiation check Python performs for ``abc.ABC`` classes with abstract methods.
 
 Trait conflicts are explicit. If two traits define the same method, the class must resolve the collision.
 

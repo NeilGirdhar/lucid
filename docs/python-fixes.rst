@@ -58,6 +58,8 @@ Lucid separates those roles:
 * traits provide reusable method bodies
 * trait conflicts are resolved explicitly by the class
 
+Lucid keeps Python's useful abstract-method instantiation check, but makes the marker part of the language. A remaining ``declare`` member makes a class abstract for construction purposes, so there is no separate ``@abstractmethod`` decorator.
+
 Truth
 -----
 
