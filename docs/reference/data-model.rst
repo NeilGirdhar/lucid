@@ -298,7 +298,12 @@ Getters define computed readable attributes. Setters define assignment behavior.
        setter area(self, value: float):
            self.radius = sqrt(value / pi)
 
-Attribute access is structural and visible in the class body. Lucid does not include descriptors or dynamic attribute hooks.
+Attribute access is structural and visible in the class body. Lucid does not
+include descriptors or dynamic attribute hooks such as ``__getattr__``,
+``__getattribute__``, or ``__setattr__``. Missing attributes are errors, and
+assignment to an attribute is valid only for declared fields or explicit
+setters. If a type needs open-ended keyed data, model that data as an explicit
+dictionary field.
 
 3.8. Interfaces, traits, and inheritance
 ----------------------------------------

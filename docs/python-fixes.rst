@@ -143,9 +143,31 @@ Lucid has syntax for class-level behavior:
 Properties and descriptors
 --------------------------
 
-Python descriptors, ``property``, ``__getattribute__``, ``__getattr__``, ``__setattr__``, and ``__delattr__`` can make attribute access programmable from many places.
+Python descriptors, ``property``, ``__getattribute__``, ``__getattr__``,
+``__setattr__``, and ``__delattr__`` can make attribute access programmable
+from many places.
 
 Lucid replaces that with explicit member kinds: fields, methods, class methods, factories, getters, setters, and class member variables.
+
+Lucid does not include ``__getattr__`` or ``__getattribute__`` fallback hooks.
+An attribute read is valid when the member is visible in the class body as a
+field, method, getter, class method, factory, or class member variable. Missing
+attributes are errors instead of calls into dynamic lookup code.
+
+Lucid also does not include ``__setattr__``. Attribute assignment targets a
+declared field or an explicit setter. Dynamic per-object keys belong in an
+ordinary dictionary field:
+
+.. code-block:: python
+
+   class Record:
+       fields: dict[str, object]
+
+       def get(self, name: str) -> object | None:
+           return self.fields.get(name)
+
+       def set(self, name: str, value: object):
+           self.fields[name] = value
 
 Composition
 -----------
@@ -318,6 +340,10 @@ Lucid removes object-model features that can rewrite class creation, type relati
      - class shape is closed
    * - ``__del__``
      - cleanup must be explicit
+   * - ``__getattr__``, ``__getattribute__``
+     - attribute reads use visible members
+   * - ``__setattr__``
+     - attribute assignment uses declared fields or setters
    * - implicit instance ``__dict__``
      - use explicit dictionary fields
 
