@@ -11,6 +11,10 @@ Expression statements use Python-like syntax.
 
 Assignment binds names, updates declared fields, or delegates to explicit assignment behavior such as setters and item assignment. Assigning an undeclared field is an error.
 
+Assignment never changes the binding mode of an enclosing scope. Lucid has no
+``global`` or ``nonlocal`` statements; assign to a local name, a declared field,
+or an explicit member or item of a mutable object.
+
 Assigning to ``_`` discards the value instead of binding a name:
 
 .. code-block:: python

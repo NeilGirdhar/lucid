@@ -40,6 +40,75 @@ In a call, positional and keyword arguments that reach ``skip`` are omitted:
 
 means ``print(1, 3)``.
 
+Scope rebinding
+---------------
+
+Python uses ``global`` and ``nonlocal`` declarations to make assignment inside a
+function rebind a name from a module or enclosing function scope:
+
+.. code-block:: python
+
+   counter = 0
+
+   def next_id() -> int:
+       global counter
+       counter += 1
+       return counter
+
+and:
+
+.. code-block:: python
+
+   def make_counter():
+       count = 0
+
+       def next():
+           nonlocal count
+           count += 1
+           return count
+
+       return next
+
+Lucid removes both declarations. Reading outer bindings is allowed, but
+assignment to a name is local to the current function. Code that needs shared
+state uses an explicit mutable object:
+
+.. code-block:: python
+
+   counter = Cell(0)
+
+   def next_id() -> int:
+       counter.value += 1
+       return counter.value
+
+or puts the state on the object that owns it:
+
+.. code-block:: python
+
+   class IdSource:
+       next: int = 0
+
+       def take(self) -> int:
+           value = self.next
+           self.next += 1
+           return value
+
+Closure state follows the same rule:
+
+.. code-block:: python
+
+   def make_counter() -> Callable[[], int]:
+       count = Cell(0)
+
+       def next() -> int:
+           count.value += 1
+           return count.value
+
+       return next
+
+This keeps assignment direct: a name assignment binds locally, while mutation of
+shared state is visible as member or item mutation on an explicit object.
+
 Construction
 ------------
 

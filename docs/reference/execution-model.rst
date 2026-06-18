@@ -24,6 +24,48 @@ Only exported names are included in ``import *``.
 
 Names bind through ordinary definitions, imports, assignments, and parameters. Lucid does not use a separate ``__all__`` list for public API control.
 
+Lucid does not have ``global`` or ``nonlocal`` declarations. Reading bindings
+from an enclosing lexical scope is allowed, but assigning to a name always binds
+or updates the name in the current local scope. An inner function cannot rebind
+a name from an outer function or module scope.
+
+Shared state is represented explicitly. Code that needs mutable module state,
+closure state, counters, caches, or configuration stores that state in an
+object and mutates the object's members or items:
+
+.. code-block:: python
+
+   counter = Cell(0)
+
+   def next_id() -> int:
+       counter.value += 1
+       return counter.value
+
+State owned by a domain object should usually be modeled as fields:
+
+.. code-block:: python
+
+   class IdSource:
+       next: int = 0
+
+       def take(self) -> int:
+           value = self.next
+           self.next += 1
+           return value
+
+The same rule handles closure state without a rebinding declaration:
+
+.. code-block:: python
+
+   def make_counter() -> Callable[[], int]:
+       count = Cell(0)
+
+       def next() -> int:
+           count.value += 1
+           return count.value
+
+       return next
+
 4.3. Construction
 -----------------
 
