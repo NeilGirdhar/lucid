@@ -169,6 +169,10 @@ ordinary dictionary field:
        def set(self, name: str, value: object):
            self.fields[name] = value
 
+Lucid does not include ``__del__`` finalizers. Cleanup should be explicit in the
+API that owns the resource, instead of being hidden behind object destruction
+timing.
+
 Composition
 -----------
 
