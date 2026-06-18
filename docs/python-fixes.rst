@@ -17,6 +17,29 @@ Python treats ``_`` as an ordinary name by default, even though many codebases
 use it by convention for ignored values. Lucid makes ``_`` a black-hole keyword:
 assigning to it discards the value, and using it in an expression is invalid.
 
+Lucid also adds ``skip`` for conditional elision inside collection literals and
+call arguments. ``skip`` is not a value and cannot be returned or assigned. In a
+list, tuple, or set literal, an entry that reaches ``skip`` is omitted:
+
+.. code-block:: python
+
+   [1, 2, 3 if False else skip, 4] == [1, 2, 4]
+
+In a dictionary literal, an entry is omitted if either the key or the value
+reaches ``skip``:
+
+.. code-block:: python
+
+   {1: 2, 3: skip, skip: 6} == {1: 2}
+
+In a call, positional and keyword arguments that reach ``skip`` are omitted:
+
+.. code-block:: python
+
+   print(1, skip, 3, file=skip)
+
+means ``print(1, 3)``.
+
 Construction
 ------------
 

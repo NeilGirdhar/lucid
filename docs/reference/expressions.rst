@@ -14,10 +14,29 @@ assignment target, where it discards the assigned value.
    _ = compute()
    use(_)  # error
 
+The ``skip`` keyword is not a value. It is valid only inside elidable collection
+entries and call arguments. A ``skip`` branch reached in one of those positions
+omits the enclosing entry or argument; it cannot be bound, returned, or passed
+through ordinary expressions.
+
 6.2. Calls
 ----------
 
 Calling a class invokes Lucid construction. Calling an ordinary function, method, class method, or factory uses Python-like call syntax.
+
+The ``skip`` keyword may appear as a positional or keyword argument. A
+positional argument that reaches ``skip`` is omitted. A keyword argument whose
+value reaches ``skip`` is omitted.
+
+.. code-block:: python
+
+   print(1, skip, 3, file=skip)
+
+means:
+
+.. code-block:: python
+
+   print(1, 3)
 
 A generator expression written directly as a call argument expands into
 positional arguments for the call:

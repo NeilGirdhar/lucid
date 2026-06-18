@@ -33,4 +33,4 @@ Return statements use Python-like syntax. A factory returns a fully constructed 
 7.5. Unspecified simple statements
 ----------------------------------
 
-This sketch has not yet specified Lucid's full behavior for ``assert``, ``pass``, ``del``, ``raise``, ``break``, ``continue``, or type-alias statements.
+This sketch has not yet specified Lucid's full behavior for ``assert``, ``pass``, ``del``, ``raise``, ``break``, ``continue``, or type-alias statements. The ``skip`` keyword is an expression-level elision marker, not a replacement for the statement-level ``pass`` placeholder.

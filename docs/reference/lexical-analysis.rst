@@ -24,7 +24,7 @@ Lucid reserves punctuation in type positions for mutability views:
 
 Lucid adds member and module keywords including ``export``, ``lazy``,
 ``factory``, ``construct``, ``getter``, ``setter``, ``interface``, ``trait``,
-``declare``, and ``frozen``.
+``declare``, ``frozen``, and ``skip``.
 
 The single underscore ``_`` is also a keyword. It is a black-hole assignment
 target, not a name binding.
@@ -58,6 +58,20 @@ Collection literals keep empty sets and empty dictionaries distinct.
 
 ``{}`` constructs a set. ``{:}`` constructs a dictionary. A braced literal with
 key-value pairs is also a dictionary.
+
+The ``skip`` keyword may appear in collection entries. In list, tuple, and set
+literals, an entry that reaches ``skip`` is omitted from the result:
+
+.. code-block:: python
+
+   [1, 2, 3 if False else skip, 4] == [1, 2, 4]
+
+In dictionary literals, an entry is omitted if either the key expression or the
+value expression reaches ``skip``:
+
+.. code-block:: python
+
+   {1: 2, 3: skip, skip: 6} == {1: 2}
 
 The immutable marker ``!`` before a collection literal constructs the immutable
 variant. ``!{a, b}`` constructs a frozenset. ``!{a: b}`` constructs a
