@@ -1,15 +1,25 @@
 The Lucid language
 ==================
 
-Lucid is a Python-like language sketch built around explicit structure, exact construction, and a smaller object model.
+Lucid is a Python-like language sketch that keeps Python easy to read and write
+while making room for cleaner type, dispatch, object, and compatibility rules.
 
 Core principle:
 
-    Make structure explicit, make construction exact, and remove hidden object-model magic.
+    Keep Python's directness, make structure explicit, and choose the cleaner
+    rule when compatibility no longer has to win.
 
-Lucid keeps Python's readable surface syntax, but changes the places where Python can hide behavior behind conventions, decorators, mutable dictionaries, or object-model hooks. Object state is declared in the class body. Construction returns fully built objects. Public module APIs are marked with ``export``. Interfaces declare obligations, traits provide reusable behavior, and binary operators dispatch on both operands.
+Lucid borrows Python's readable surface syntax, Scala-style definition-site type
+information, Julia-style multiple dispatch, dataclasses' transparent field-first
+objects, and the freedom to follow Python Enhancement Proposals that Python
+could not adopt because of backward compatibility.
 
-The result is a language that tries to keep Python's directness while borrowing Scala's better habit of making type relationships visible where abstractions are defined. Generic parameters carry definition-site variance with ``+K``, ``-K``, and ``=K``. Mutable, read-only, and immutable views are visible in the type spelling with ``T``, ``T?``, and ``T!``.
+Object state is declared in the class body. Construction returns fully built
+objects. Public module APIs are marked with ``export``. Interfaces declare
+obligations, traits provide reusable behavior, and binary operators dispatch on
+both operands. Generic parameters carry definition-site variance with ``+K``,
+``-K``, and ``=K``. Mutable, read-only, and immutable views are visible in the
+type spelling with ``T``, ``T?``, and ``T!``.
 
 Example
 -------
@@ -40,9 +50,6 @@ Example
        getter label_count(self) -> int:
            return len(self.labels)
 
-       frozen:
-           hash=True
-
    def evaluate(model: InferenceModel?[str], item: str) -> float:
        return model.score(item)
 
@@ -62,11 +69,10 @@ This example shows Lucid's main commitments in one place:
 Documentation
 -------------
 
-The full language sketch is split into focused documents:
+Continue with:
 
 * `Language overview <docs/index.rst>`_
-* `Language reference <docs/reference/index.rst>`_
-* `Problems with Python that Lucid fixes <docs/python-fixes.rst>`_
+* `The Lucid language <docs/language.rst>`_
 
 Current slogan
 --------------

@@ -1,27 +1,46 @@
-Lucid language sketch
-=====================
+Lucid documentation
+===================
 
-Lucid is a Python-like language sketch built around explicit structure, exact construction, and a smaller object model.
+Lucid is a Python-like language sketch that keeps Python easy to read and write
+while making room for cleaner type, dispatch, object, and compatibility rules.
 
 Core principle:
 
-    Make structure explicit, make construction exact, and remove hidden object-model magic.
+    Keep Python's directness, make structure explicit, and choose the cleaner
+    rule when compatibility no longer has to win.
 
-Lucid keeps Python's readable surface syntax, but makes object shape, public APIs, type relationships, and construction rules visible in the program text.
+Lucid borrows Python's readable surface syntax, Scala-style definition-site type
+information, Julia-style multiple dispatch, dataclasses' transparent field-first
+objects, and the freedom to follow Python Enhancement Proposals that Python
+could not adopt because of backward compatibility.
 
-Documentation
--------------
+Reading path
+------------
 
-* `Language reference <reference/index.rst>`_
-* `Problems with Python that Lucid fixes <python-fixes.rst>`_
+Start with the README for the short version, then read the language spec
+front-to-back.
 
-The language reference is organized after Python's own reference: lexical structure, data model, execution model, imports, expressions, statements, top-level forms, and grammar. The Python-fixes document is deliberately separate. It explains why Lucid changes particular Python behaviors without mixing design rationale into the normative reference.
+.. list-table::
+   :header-rows: 1
+
+   * - Document
+     - Purpose
+   * - `The Lucid language <language.rst>`_
+     - The readable specification of the current language sketch, with rationale
+       for each difference from Python.
+
+The language document is the source of truth for Lucid semantics.
 
 Commitments
 -----------
 
 Lucid's main commitments are:
 
+* Python-like readability and writeability
+* Scala-style visible type relationships
+* Julia-style multiple dispatch
+* dataclass-like transparent object state
+* freedom to choose PEP-inspired improvements without Python compatibility limits
 * stored object state is declared in the class body
 * construction returns fully built objects
 * public module APIs are marked with ``export``
