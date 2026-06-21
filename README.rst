@@ -73,6 +73,7 @@ Continue with:
 
 * `Language overview <docs/index.rst>`_
 * `The Lucid language <docs/language.rst>`_
+* `Modern type specification <docs/type-specification.rst>`_
 
 Current slogan
 --------------

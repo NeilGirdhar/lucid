@@ -17,8 +17,8 @@ could not adopt because of backward compatibility.
 Reading path
 ------------
 
-Start with the README for the short version, then read the language spec
-front-to-back.
+Start with the README for the short version, then read the specification
+documents front-to-back.
 
 .. list-table::
    :header-rows: 1
@@ -26,16 +26,20 @@ front-to-back.
    * - Document
      - Purpose
    * - `The Lucid language <language.rst>`_
-     - The readable specification of the current language sketch, with rationale
-       for each difference from Python.
+     - The readable specification of the current core language sketch, with
+       rationale for each difference from Python.
+   * - `Modern type specification <type-specification.rst>`_
+     - The interface, trait, and class model for user-defined types.
 
-The language document is the source of truth for Lucid semantics.
+The language and type specification documents are the source of truth for Lucid
+semantics.
 
 Main ideas
 ----------
 
-The language document opens with the main ideas behind Lucid's syntax, type
-model, construction rules, composition model, and module boundaries.
+The language document opens with the main ideas behind Lucid's syntax, values,
+control flow, operators, and module boundaries. The type specification document
+covers interfaces, traits, classes, construction, and type member rules.
 
 Current slogan
 --------------
