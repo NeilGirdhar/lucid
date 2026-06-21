@@ -21,8 +21,8 @@ each difference from Python.
    :depth: 4
    :local:
 
-Design commitments
-------------------
+Main ideas
+----------
 
 Python readability
 ~~~~~~~~~~~~~~~~~~
@@ -1305,25 +1305,6 @@ loaders. Lucid makes laziness explicit in the source with ``lazy import`` and
 A lazy import binds the requested name immediately, but does not load the target
 module until the name is first used. After the first use, the binding behaves
 like an ordinary import.
-
-Open specification work
------------------------
-
-Incomplete grammar
-~~~~~~~~~~~~~~~~~~
-
-Lucid does not yet have a complete grammar specification. The current docs
-record the intended language shape and the syntax decisions made so far.
-
-Unspecified interactive input
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Interactive input is not yet specified.
-
-Unspecified expression input
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Expression input is not yet specified.
 
 Keywords
 --------

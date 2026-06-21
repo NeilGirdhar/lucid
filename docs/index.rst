@@ -31,23 +31,11 @@ front-to-back.
 
 The language document is the source of truth for Lucid semantics.
 
-Commitments
------------
+Main ideas
+----------
 
-Lucid's main commitments are:
-
-* Python-like readability and writeability
-* Scala-style visible type relationships
-* Julia-style multiple dispatch
-* dataclass-like transparent object state
-* freedom to choose PEP-inspired improvements without Python compatibility limits
-* stored object state is declared in the class body
-* construction returns fully built objects
-* public module APIs are marked with ``export``
-* interfaces declare required behavior
-* traits provide reusable method bodies
-* binary operators dispatch on both operands
-* dynamic object-model hooks are not part of the language
+The language document opens with the main ideas behind Lucid's syntax, type
+model, construction rules, composition model, and module boundaries.
 
 Current slogan
 --------------

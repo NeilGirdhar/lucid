@@ -56,7 +56,7 @@ Example
    model: InferenceModel[str] = InferenceModel.from_checkpoint("model.bin", ["cat", "dog"])
    stable: InferenceModel![str] = freeze(model)
 
-This example shows Lucid's main commitments in one place:
+This example shows several core language mechanics in one place:
 
 * exported definitions are explicitly public
 * interfaces use ``declare`` for required behavior
