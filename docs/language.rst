@@ -193,7 +193,7 @@ Lucid makes the author choose the intended contract up front.
        declare get(self) -> K
 
    interface Consumer[-K]:
-       declare put(self, value: K) -> None
+       declare put(self, value: K) -> none
 
    class Cell[=K]:
        value: K
@@ -317,8 +317,8 @@ indexes, or bit masks. The numeric and bitwise operators ``+``, ``-``, ``*``,
    page = pages[is_admin]           # error: bool is not an index
    mask = can_read | can_write      # error: use boolean operators for flags
    ratio: float = is_ready          # error: bool is not a numeric value
-   True + True                      # error: bool is not numeric
-   True & flag                      # error: use boolean operators for logic
+   true + true                      # error: bool is not numeric
+   true & flag                      # error: use boolean operators for logic
 
 Write the conversion when the numeric interpretation is intentional:
 
@@ -375,7 +375,7 @@ values and for types that explicitly provide the relevant operation.
    flags = READ | WRITE
    shifted = flags << 2
 
-   index = True        # error: bool is not int
+   index = true        # error: bool is not int
    index = "3"         # error: explicit conversion required
    index = int("3")
 
@@ -435,7 +435,7 @@ reaching for a broad tower class.
 
 .. code-block:: python
 
-   def repeat(count: SupportsIndex, action: Callable[[], None]) -> None:
+   def repeat(count: SupportsIndex, action: Callable[[], none]) -> none:
        for _ in range(count.__index__()):
            action()
 
@@ -470,7 +470,7 @@ available without import:
        declare __abs__(self) -> K
 
    interface SupportsRound[+K]:
-       declare __round__(self, ndigits: int | None = None) -> K
+       declare __round__(self, ndigits: int | none = none) -> K
 
 
 No implicit cross-type numeric behavior
@@ -571,7 +571,7 @@ call arguments. In list, tuple, and set literals, an entry that reaches
 
 .. code-block:: python
 
-   [1, 2, 3 if False else skip, 4] == [1, 2, 4]
+   [1, 2, 3 if false else skip, 4] == [1, 2, 4]
 
 In dictionary literals, an entry is omitted if either the key expression or the
 value expression reaches ``skip``:
@@ -812,14 +812,14 @@ fall-through code handles the case where a loop exits normally without
 
 .. code-block:: python
 
-   def find_match(items: Iterable[Item]) -> Item | None:
+   def find_match(items: Iterable[Item]) -> Item | none:
        for item in items:
            if is_match(item):
                found = item
                break
        if_broken:
            return found
-       return None
+       return none
 
 Nested ``if_broken`` clauses
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -896,15 +896,24 @@ like an ordinary import.
 Keywords
 --------
 
-Preserved Python keywords
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Lowercase constants
+~~~~~~~~~~~~~~~~~~~
 
-Lucid preserves Python's ordinary keyword vocabulary except where this document
-explicitly replaces a Python behavior. The preserved Python keywords are:
+Lucid spells its boolean and null constants in lowercase:
 
 .. code-block:: text
 
-   False None True
+   false none true
+
+Preserved Python keywords
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Apart from the lowercase constants and behaviors explicitly replaced in this
+document, Lucid preserves Python's ordinary keyword vocabulary. The preserved
+Python keywords are:
+
+.. code-block:: text
+
    and as assert async await break class continue def del elif else except
    finally for from if import in is lambda not or pass raise return try while
    with yield

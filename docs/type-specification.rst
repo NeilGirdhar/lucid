@@ -33,8 +33,8 @@ Interfaces declare required APIs with ``declare``:
        declare __len__(self) -> int
 
    interface Cache[=K, =V]:
-       declare get(self, key: K) -> V | None
-       declare put(self, key: K, value: V) -> None
+       declare get(self, key: K) -> V | none
+       declare put(self, key: K, value: V) -> none
        declare is_fresh(self, key: K) -> bool
 
 Interface members use ``declare``, not ``def``, because they specify a callable
@@ -253,7 +253,7 @@ definition is also not part of Lucid; class shape is closed. Assigning
    class Record:
        fields: dict[str, object]
 
-       def get(self, name: str) -> object | None:
+       def get(self, name: str) -> object | none:
            return self.fields.get(name)
 
        def set(self, name: str, value: object):
@@ -349,7 +349,7 @@ value is the field's default.
    class User:
        classvar count: int = 0
        name: str
-       active: bool = True
+       active: bool = true
 
 This separates shared class state from stored instance fields.
 
@@ -446,7 +446,7 @@ not a class option; it is represented by the ``T!`` view.
 
 .. code-block:: python
 
-   class Point(eq=True, order=True, hash=True):
+   class Point(eq=true, order=true, hash=true):
        x: float
        y: float
 
@@ -517,8 +517,8 @@ report freshness; traits can build higher-level behavior from those obligations:
 .. code-block:: python
 
    interface Cache[=K, =V]:
-       declare get(self, key: K) -> V | None
-       declare put(self, key: K, value: V) -> None
+       declare get(self, key: K) -> V | none
+       declare put(self, key: K, value: V) -> none
        declare is_fresh(self, key: K) -> bool
 
    interface Sized:
@@ -527,7 +527,7 @@ report freshness; traits can build higher-level behavior from those obligations:
    trait CacheLookup[K, V](Cache[K, V]):
        def get_or_put(self, key: K, build: Callable[[], V]) -> V:
            cached = self.get(key)
-           if cached is not None and self.is_fresh(key):
+           if cached is not none and self.is_fresh(key):
                return cached
            value = build()
            self.put(key, value)
@@ -541,10 +541,10 @@ report freshness; traits can build higher-level behavior from those obligations:
        entries: dict[K, V] = {:}
        fresh: set[K] = {}
 
-       def get(self, key: K) -> V | None:
+       def get(self, key: K) -> V | none:
            return self.entries.get(key)
 
-       def put(self, key: K, value: V) -> None:
+       def put(self, key: K, value: V) -> none:
            self.entries[key] = value
            self.fresh.add(key)
 
