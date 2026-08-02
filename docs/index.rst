@@ -30,16 +30,21 @@ documents front-to-back.
        rationale for each difference from Python.
    * - `Modern type specification <type-specification.rst>`_
      - The interface, trait, and class model for user-defined types.
+   * - `Project configuration <project-configuration.rst>`_
+     - The structure of ``project.yaml`` and ``development.yaml``, and how
+       they replace ``pyproject.toml`` and ``__init__.py``.
 
-The language and type specification documents are the source of truth for Lucid
-semantics.
+The language, type specification, and project configuration documents are the
+source of truth for Lucid semantics.
 
 Main ideas
 ----------
 
 The language document opens with the main ideas behind Lucid's syntax, values,
 control flow, operators, and module boundaries. The type specification document
-covers interfaces, traits, classes, construction, and type member rules.
+covers interfaces, traits, classes, construction, and type member rules. The
+project configuration document covers project metadata, dependencies, public
+API, library initialization, entry points, and development tooling.
 
 Current slogan
 --------------

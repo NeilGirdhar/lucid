@@ -16,7 +16,9 @@ dataclasses' transparent field-first object style, and the freedom to follow
 Python Enhancement Proposals that Python could not adopt because of backward
 compatibility. This document contains the current core language rules and the
 reason for each difference from Python. User-defined type specification is
-covered separately in `Modern type specification <type-specification.rst>`_.
+covered separately in `Modern type specification <type-specification.rst>`_,
+and the structure of project configuration files is covered separately in
+`Project configuration <project-configuration.rst>`_.
 
 .. contents:: Table of contents
    :depth: 4
@@ -64,6 +66,11 @@ operator negotiation protocol.
 
 Source basics
 -------------
+
+File extension
+~~~~~~~~~~~~~~
+
+Lucid source files use the ``.lcd`` extension.
 
 Python-like indentation
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -881,17 +888,33 @@ Lazy imports
 ~~~~~~~~~~~~
 
 Python already has lazy-import building blocks, such as import hooks and lazy
-loaders. Lucid makes laziness explicit in the source with ``lazy import`` and
-``lazy from`` forms.
+loaders. Lucid makes laziness the only import behavior instead of an opt-in
+building block: every import binds the requested name immediately but does not
+load the target module until the name is first used.
 
 .. code-block:: python
 
-   lazy import pandas as pd
-   lazy from .reports import build_report
+   import pandas as pd
+   from .reports import build_report
 
-A lazy import binds the requested name immediately, but does not load the target
-module until the name is first used. After the first use, the binding behaves
-like an ordinary import.
+After the first use, the binding behaves like an ordinary import. No separate
+keyword or opt-in form is needed.
+
+Projects
+--------
+
+Every project has a ``project.yaml`` file, written in StrictYAML, that
+declares the project's identity and dependencies, its public API, its local
+import shortcuts, its library initialization, and its runnable commands. A
+sibling ``development.yaml`` holds tool configuration and development-only
+dependencies. Together they take over the roles Python splits across
+``pyproject.toml`` and ``__init__.py``.
+
+Lazy imports mean none of this runs implicit setup code on ``import``: a
+project's library initialization runs only when an entry point explicitly
+opens ``library.initialize`` for the libraries it depends on. The full
+structure of both files is covered separately in
+`Project configuration <project-configuration.rst>`__.
 
 Keywords
 --------
@@ -926,7 +949,7 @@ kinds, abstraction, dispatch, and elision:
 
 .. code-block:: text
 
-   export lazy
+   export
    classmethod classvar factory construct
    getter setter
    interface trait declare
