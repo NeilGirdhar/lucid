@@ -183,6 +183,46 @@ requirements.
    tags: set[str] = {"draft", "public"}
    metadata: dict[str, object] = {:}
 
+Type expressions and the ``type`` keyword
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Wherever a type is expected — variable, parameter, and return annotations,
+generic parameter lists, ``declare`` signatures — Lucid parses a *type
+expression* rather than an ordinary expression. Most syntax means the same
+thing in both grammars (``dict[str, int]``, ``T?``, ``T!``, and
+``Producer[+K]`` all evaluate identically either way), but a type expression
+can use forms that mean something else, or nothing at all, as an ordinary
+expression — for example the TypedDict shape literal below.
+
+The ``type`` keyword crosses between the two grammars, in the two directions
+that matter:
+
+``type Name = <type expression>``
+    A type alias statement. The right-hand side is parsed as a type
+    expression, and ``Name`` becomes usable in future type positions exactly
+    as if the aliased expression had been written inline there.
+
+``type <type expression>``
+    A prefix operator usable inside an ordinary expression. It parses its
+    operand as a type expression and evaluates it to a first-class *type
+    form*: an ordinary value, usable wherever ordinary values are, for example
+    when passing a type to a metaprogramming function.
+
+.. code-block:: python
+
+   type Shape = InferenceModel![str]
+   value: Shape = freeze(model)
+
+   form = type list[str]                                # an ordinary value: a reified type
+   handlers = {"json": JSONHandler, "xml": XMLHandler}   # an ordinary dict, not a type
+
+An ordinary assignment such as ``Shape = {"name": str, "year": int}``, without
+``type``, parses its right-hand side as an ordinary expression: it produces a
+plain dict whose values happen to be type objects, it does not register
+``Shape`` as a type alias, and its ``{}`` does not get TypedDict-shape
+parsing (below). Which grammar applies is always visible at the point where a
+name is bound, rather than depending on where the name is used later.
+
 Definition-site variance
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -568,6 +608,42 @@ frozendict. ``!{}`` is an empty frozenset, and ``!{:}`` is an empty frozendict.
    immutable_names = !{"Ada", "Grace"}
    immutable_scores = !{"Ada": 10, "Grace": 9}
 
+TypedDict shapes in type position
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In a type expression (see `Type expressions and the ``type`` keyword`_), a
+brace literal maps literal keys to per-key types instead of constructing a
+dict value. This is Lucid's TypedDict: an exact dict shape, not a class.
+Values are ordinary dicts, indexed and iterated like any other dict, but each
+key's value is checked against that key's own type instead of every value
+being unified into one value type.
+
+.. code-block:: python
+
+   type Movie = {"name": str, "year": int}
+
+   movie: Movie = {"name": "Paths of Glory", "year": 1957}
+   movie["year"] += 1
+   movie["name"] = 1957          # error: str expected
+
+Keys are not restricted to strings. Any literal hashable key is allowed:
+
+.. code-block:: python
+
+   type Row = {0: str, 1: int, "label": str}
+
+A trailing ``...`` marks the shape open, allowing keys beyond the ones listed:
+
+.. code-block:: python
+
+   type Movie = {"name": str, "year": int, ...}
+
+   movie: Movie = {"name": "Paths of Glory", "year": 1957, "director": "Kubrick"}
+
+Outside a type expression, the same brace syntax is an ordinary dict literal:
+written as a plain expression, ``{"name": str, "year": int}`` is a dict value
+mapping to the ``str`` and ``int`` type objects, not a ``Movie`` shape.
+
 ``skip`` in collection literals
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -945,7 +1021,7 @@ New Lucid keywords
 ~~~~~~~~~~~~~~~~~~
 
 Lucid adds keywords for explicit module boundaries, construction, class member
-kinds, abstraction, dispatch, and elision:
+kinds, abstraction, dispatch, type expressions, and elision:
 
 .. code-block:: text
 
@@ -954,6 +1030,7 @@ kinds, abstraction, dispatch, and elision:
    getter setter
    interface trait declare
    dispatch
+   type
    if_broken
    skip
    _
