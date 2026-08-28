@@ -69,12 +69,40 @@ This example shows several core language mechanics in one place:
 Documentation
 -------------
 
-Continue with:
+Continue with the specification documents, front-to-back:
 
-* `Language overview <docs/index.rst>`_
-* `The Lucid language <docs/language.rst>`_
-* `Modern type specification <docs/type-specification.rst>`_
-* `Project configuration <docs/project-configuration.rst>`_
+.. list-table::
+   :header-rows: 1
+
+   * - Document
+     - Purpose
+   * - `Main ideas <docs/principles.rst>`_
+     - The five ideas that shape the rest of the language, plus a keyword
+       quick reference.
+   * - `Source basics and names <docs/source-and-names.rst>`_
+     - File layout and indentation, and how names, assignment, and scope
+       work.
+   * - `Types, mutability, and annotations <docs/types.rst>`_
+     - Visible type contracts, type expressions and the ``type`` keyword,
+       definition-site variance, mutable/read-only/immutable views, and exact
+       numeric types.
+   * - `Strings and collections <docs/collections.rst>`_
+     - String and collection literals, TypedDict shapes, and ``skip``
+       elision.
+   * - `Calls, indexing, and operators <docs/operators.rst>`_
+     - Call and indexing syntax and multiple-dispatch operators.
+   * - `Control flow and statements <docs/control-flow.rst>`_
+     - Conditionals, loops, ``if_broken``, and unspecified statements.
+   * - `Modules, projects, and public APIs <docs/modules.rst>`_
+     - Exports, lazy imports, and how ``project.yaml``/``development.yaml``
+       fit in.
+   * - `Modern type specification <docs/type-specification.rst>`_
+     - The interface, trait, and class model for user-defined types.
+   * - `Project configuration <docs/project-configuration.rst>`_
+     - The structure of ``project.yaml`` and ``development.yaml``, and how
+       they replace ``pyproject.toml`` and ``__init__.py``.
+
+These nine documents are the source of truth for Lucid semantics.
 
 Current slogan
 --------------
