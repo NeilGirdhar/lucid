@@ -2,7 +2,7 @@ Source basics and names
 ========================
 
 .. contents:: Table of contents
-   :depth: 2
+   :depth: 3
    :local:
 
 File extension
@@ -25,23 +25,51 @@ assignment behavior such as setters and item assignment.
 Black-hole assignment with ``_``
 -----------------------------------
 
-Python treats ``_`` as an ordinary name by default, even though many codebases
-use it by convention for ignored values. Lucid makes ``_`` a black-hole
-assignment target: assigning to it discards the value instead of binding a name.
+Python treats ``_`` as an ordinary name, so a value assigned to it stays
+readable — a stray later use (a copy-pasted line, a half-finished rename)
+silently reads a discarded value instead of failing:
+
+.. code-block:: python
+
+   _ = expensive_setup()
+   if _:      # Python: silently reads the discarded value
+       proceed()
+
+Lucid makes ``_`` a black-hole assignment target: assigning to it discards
+the value, and ``_`` is not an expression, so reading it is a syntax error
+rather than a silent bug.
 
 .. code-block:: python
 
    _ = compute()
    result, _ = split_pair()
+   use(_)  # error
 
-``_`` is not an expression:
+No scope-rebinding declarations
+-----------------------------------
+
+A statement's meaning should not depend on some other statement elsewhere in
+the same function. Python's ``global``/``nonlocal`` violate this: whether
+``x = value`` binds a new local or rebinds an enclosing name depends on a
+declaration that can sit anywhere in the function body, so an assignment can
+retroactively change what an *earlier, unrelated-looking* read meant:
 
 .. code-block:: python
 
-   use(_)  # error
+   counter = 0
+
+   def increment():
+       print(counter)    # UnboundLocalError
+       counter += 1      # this line is why
+
+Lucid removes the declaration rather than live with that coupling: assignment
+is always local, independent of anything else in the function. Sharing
+mutable state across scopes instead goes through an explicit object, so the
+sharing is visible at the object's declaration and at each call site that
+touches it, rather than hidden behind a keyword elsewhere in the function.
 
 No ``global``
-----------------
+~~~~~~~~~~~~~~~~
 
 Python uses ``global`` to let assignment inside a function rebind a module
 binding:
@@ -55,9 +83,7 @@ binding:
        counter += 1
        return counter
 
-Lucid has no ``global`` declaration. Reading module bindings is allowed, but
-assignment to a name inside a function is local to that function. Shared module
-state is represented by an explicit mutable object:
+Lucid represents shared module state with an explicit mutable object:
 
 .. code-block:: python
 
@@ -68,7 +94,7 @@ state is represented by an explicit mutable object:
        return counter.value
 
 No ``nonlocal``
-------------------
+~~~~~~~~~~~~~~~~~~
 
 Python uses ``nonlocal`` to let assignment inside an inner function rebind a
 name from an enclosing function:
@@ -85,9 +111,7 @@ name from an enclosing function:
 
        return next
 
-Lucid has no ``nonlocal`` declaration. Reading enclosing bindings is allowed,
-but assignment to a name is local to the current function. Closure state uses an
-explicit mutable object:
+Closure state uses the same pattern:
 
 .. code-block:: python
 
