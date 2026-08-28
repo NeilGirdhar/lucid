@@ -337,6 +337,45 @@ Class bodies contain a closed set of member kinds:
    * - class member variable
      - ``classvar count: int = 0``
 
+Read-only methods with ``Self?``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``Self`` is a builtin type, referring to the enclosing class. A method's
+``self`` parameter is ``Self`` by default — the ordinary mutable type — but
+a method that only reads its object, never writing to it, should annotate
+it ``self: Self?``, the read-only view (see
+`Mutable, read-only, and immutable views <types.rst>`_):
+
+.. code-block:: python
+
+   class Counter:
+       value: int
+
+       def get(self: Self?) -> int:
+           return self.value
+
+       def increment(self):
+           self.value += 1
+
+This is what lets a frozen object know which of its methods are safe to
+call. Since both ``Self`` and ``Self!`` are subtypes of ``Self?``, a method
+declared ``self: Self?`` is callable on a mutable, read-only, or frozen
+receiver, while a method left at the default ``self: Self`` requires a
+mutable receiver and is not available on a read-only or frozen value at
+all:
+
+.. code-block:: python
+
+   counter: Counter = Counter(0)
+   frozen: Counter! = freeze(counter)
+
+   frozen.get()        # fine: get takes self: Self?
+   frozen.increment()  # error: increment takes self: Self, frozen is not mutable
+
+A ``getter`` is read-only by construction — computing a value from an
+object should never require write access — so it behaves as though
+``self: Self?`` were already implied.
+
 Class member variables
 ^^^^^^^^^^^^^^^^^^^^^^
 

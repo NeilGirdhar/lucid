@@ -8,17 +8,20 @@ Types, mutability, and annotations
 Visible type contracts
 -------------------------
 
-Lucid values have visible type contracts. Type annotations describe fields,
-function parameters, return values, local variables, and interface
-requirements.
+Lucid's annotation syntax is Python's, unchanged: a colon after a name
+annotates a field, a parameter, or a local variable, and ``->`` annotates a
+function's return value. Interface requirements are annotated the same way
+(see `Modern type specification <type-specification.rst>`_).
 
 .. code-block:: python
 
-   name: str = "Ada"
-   count: int = 3
-   scores: list[float] = [10.0, 9.5]
-   tags: set[str] = {"draft", "public"}
-   metadata: dict[str, object] = {:}
+   class User:
+       name: str
+       tags: set[str] = {"draft"}
+
+   def greet(user: User, times: int = 1) -> str:
+       lines: list[str] = [f"Hello, {user.name}"] * times
+       return "\n".join(lines)
 
 Type expressions and the ``type`` keyword
 ---------------------------------------------
@@ -64,13 +67,13 @@ bound, rather than depending on where the name is used later.
 Definition-site variance
 ----------------------------
 
-Python's generic variance is often hidden in library declarations or stubs.
-Lucid puts variance on the definition because variance is part of the public
-contract. If a checker infers variance from the current member set, then an
-ordinary edit to an interface can change assignability for downstream code. For
-example, adding a method that consumes ``K`` can turn an inferred covariant
-interface into an invariant one, breaking users who never touched their code.
-Lucid makes the author choose the intended contract up front.
+Lucid writes variance on the generic parameter where it is declared: ``+K``
+for covariant, ``-K`` for contravariant, and ``=K`` for invariant. If a
+parameter is written without a variance marker, the checker warns, infers
+the narrowest valid variance, and offers an autofix — keeping most of the
+convenience of inferred variance during drafting, while still requiring the
+marker to be written into the source, and preserved or intentionally
+changed on future edits, before the API is accepted.
 
 .. code-block:: python
 
@@ -83,20 +86,28 @@ Lucid makes the author choose the intended contract up front.
    class Cell[=K]:
        value: K
 
-``+K`` is covariant, ``-K`` is contravariant, and ``=K`` is invariant. If a
-parameter is written without a variance marker, the checker warns, infers the
-narrowest valid variance, and offers an autofix. This keeps most of the
-convenience of inferred variance while avoiding an inferred public contract:
-during drafting, the checker can discover the right marker; before the API is
-accepted, the marker is written into the source and future edits must preserve
-or intentionally change it.
+Python's generic variance is often hidden in library declarations or stubs,
+inferred from the current member set rather than written down. Lucid puts
+variance on the definition instead because variance is part of the public
+contract: if a checker infers it from the current members, an ordinary edit
+to an interface can silently change assignability for downstream code —
+adding a method that consumes ``K`` can turn an inferred covariant interface
+into an invariant one, breaking users who never touched their code. Writing
+the marker up front makes the author choose the intended contract, rather
+than letting it shift underneath callers as the interface evolves.
 
 Mutable, read-only, and immutable views
 -------------------------------------------
 
 Lucid makes mutability part of the type spelling. Mutable and immutable
-variants of the same abstraction are declared as one type family. The short name
-is the ordinary mutable type.
+variants of the same abstraction are declared as one type family, spelled
+with a marker on the short, unqualified name:
+
+- ``T`` — mutable, the default. Code can read and write it.
+- ``T?`` — read-only view. Code can observe it but cannot mutate it, and
+  cannot rely on it being permanently immutable.
+- ``T!`` — immutable. Code can rely on stability for operations such as
+  hashing, memoization, and persistent sharing.
 
 .. code-block:: python
 
@@ -104,23 +115,82 @@ is the ordinary mutable type.
    stable: InferenceModel![str] = freeze(working)
    view: InferenceModel?[str] = working
 
-``T`` is the mutable/default type. ``T?`` is the read-only view: code can
-observe it but cannot mutate it and cannot rely on it being permanently
-immutable.
-``T!`` is the immutable type: code can rely on stability for operations such as
-hashing, memoization, and persistent sharing.
+Python's ``collections.abc`` models mutability as a single inheritance
+chain: ``MutableMapping`` is a subclass of ``Mapping``. That gets the
+mutable-to-read-only direction right, but leaves no sound place for genuine
+immutability. ``Mapping`` doesn't even promise "no mutation methods on this
+object" — it only hides mutation methods from the type checker's view of a
+reference. The underlying object keeps whatever mutation methods its real
+class has, and anyone else holding a reference to it can still call them:
 
-The variants are siblings under the read-only view, not an inheritance chain
-where mutable is a subtype of immutable:
+.. code-block:: python
+
+   from collections.abc import Mapping
+
+   underlying = {"a": 1}
+   view: Mapping[str, int] = underlying
+   underlying["a"] = 2
+   view["a"]  # 2 -- "read-only", but not stable
+
+Python has no ABC for the stronger guarantee, and adding one to the chain
+would not work: a mutable mapping cannot be a subtype of an immutable one
+(mutation would break the promise), and an immutable mapping cannot be a
+subtype of a mutable one (nothing could ever be written to it). Mutable and
+immutable are incomparable, not a chain, so Lucid puts them side by side as
+siblings under the read-only view instead of trying to line them up:
 
 .. code-block:: text
 
    InferenceModel[K]  <: InferenceModel?[K]
    InferenceModel![K] <: InferenceModel?[K]
 
+Read-only view
+~~~~~~~~~~~~~~~~
+
+As a function parameter
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Without a distinct read-only view, a parameter type is stuck between two bad
+options. Make it invariant, and a function that only reads ``Animal``\ s
+can't accept a ``list[Cat]`` argument even though reading is always safe.
+Make it covariant instead, and nothing stops the function from writing a
+``Dog`` into what is actually the caller's ``list[Cat]``, corrupting it.
+``T?`` escapes that dilemma: it is the natural type for a parameter that
+only reads its argument, and because both ``T`` and ``T!`` are subtypes of
+``T?``, a single ``T?``-typed parameter accepts a mutable value, an
+immutable value, or another read-only view, with no conversion at the call
+site — while the callee gets a compile-time guarantee that it cannot mutate
+an object it does not own:
+
+.. code-block:: python
+
+   def report(model: InferenceModel?[str]) -> str:
+       return f"{model.label_count} labels"
+
+   report(working)  # mutable
+   report(stable)   # immutable
+   report(view)      # already a read-only view
+
+Safe covariance
+^^^^^^^^^^^^^^^^^^
+
 Variance is computed separately for each view. Mutable types are usually
-invariant because they both produce and consume their type parameters.
-Read-only and immutable views can often be covariant:
+invariant because they both produce and consume their type parameters, but
+read-only and immutable views can often be covariant — this is exactly the
+covariance the parameter dilemma above needed, made sound because the view
+itself blocks writes. The same pattern applies to any type family with these
+three views: the mutable variant is typically invariant, while the
+read-only and immutable views can each be declared with the narrowest
+variance their own operations support:
+
+.. code-block:: text
+
+   InferenceModel[=K]
+   InferenceModel?[+K]
+   InferenceModel![+K]
+
+Read-only dictionaries
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 This avoids the old split between mutable dictionaries and read-only mapping
 interfaces. A mutable ``dict[str, Cat]`` should not be usable as a
@@ -150,11 +220,26 @@ produces keys. A narrower view that only produces keys or values can expose
 different variance. Code does not need a separate ``Mapping`` type just to ask
 for a read-only dictionary-shaped view.
 
-.. code-block:: text
+Immutable view
+~~~~~~~~~~~~~~~~
 
-   InferenceModel[=K]
-   InferenceModel?[+K]
-   InferenceModel![+K]
+``T!`` is for code that needs to rely on stability, not just observe a
+snapshot of it. An immutable value can be hashed and used as a dict key or
+set member, memoized safely since a cached result can never go stale, and
+shared freely across threads, caches, and closures without defensive
+copying — nothing holding a ``T!`` can ever see it change underneath it.
+
+.. code-block:: python
+
+   cache: dict[InferenceModel![str], float] = {:}
+   cache[stable] = evaluate(stable)
+
+A mutable value becomes a ``T!`` through ``freeze``, which takes a ``T`` and
+returns the immutable view.
+
+.. code-block:: python
+
+   stable: InferenceModel![str] = freeze(working)
 
 Exact annotations and numeric capabilities
 ----------------------------------------------

@@ -5,23 +5,6 @@ Modules, projects, and public APIs
    :depth: 2
    :local:
 
-Explicit exports
---------------------
-
-Definitions are private by default. A definition becomes part of the public
-module API when it is marked with ``export``.
-
-.. code-block:: python
-
-   export def parse_user(raw: str) -> User:
-       ...
-
-   export class User:
-       name: str
-       email: str
-
-Only exported names are included in ``import *``.
-
 Explicit re-exports
 ------------------------
 
@@ -29,8 +12,8 @@ Packages can re-export public names:
 
 .. code-block:: python
 
-   export from .models import User
-   export from .parsing import parse_user
+   from .models export User
+   from .parsing export parse_user
 
 This keeps the public API local to the definition or re-export site.
 
