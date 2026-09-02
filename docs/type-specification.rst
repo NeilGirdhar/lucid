@@ -82,7 +82,7 @@ classes, which can limit which metaclasses those children can use.
 
 This class definition fails unless ``ModelMeta`` is made compatible with
 ``ABCMeta``. The interface requirement has forced a metaclass choice onto the
-concrete class.
+class.
 
 The same interface in Lucid is just the required member:
 
@@ -116,7 +116,7 @@ Multiple inheritance in Python
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Python multiple inheritance uses the same base-class list for several different
-jobs: concrete inheritance, interface promises, mixin behavior, metaclass
+jobs: *class inheritance*, interface promises, mixin behavior, metaclass
 selection, and MRO construction. Those jobs interfere with each other.
 
 Common pitfalls include:
@@ -124,7 +124,7 @@ Common pitfalls include:
 * MRO order changes which implementation a method call reaches
 * cooperative ``super()`` only works when every class in the chain follows the
   same calling convention
-* concrete base classes can bring incompatible constructor requirements
+* base classes can bring incompatible constructor requirements
 
 Cooperative ``super()``
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -158,7 +158,7 @@ when every participant follows the same forwarding convention.
 Incompatible constructors
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Concrete base classes can require incompatible initialization protocols.
+Base classes can require incompatible initialization protocols.
 
 .. code-block:: python
 
@@ -176,20 +176,23 @@ Concrete base classes can require incompatible initialization protocols.
 
 There is no obvious generated constructor for ``Cache``. One parent needs a
 path, the other needs host and port, and neither constructor explains how to
-initialize the other concrete base.
+initialize the other base.
 
-Lucid avoids those pitfalls by separating the roles. A class may have at most
-one concrete parent. It can satisfy any number of interfaces because interfaces
-only declare obligations. It can use any number of traits because traits provide
-reusable bodies without owning state or concrete identity. If traits collide,
-the class must resolve the conflict explicitly.
+Lucid avoids those pitfalls by separating the roles. A class may use
+*class inheritance* — inheriting from at most one other class — because a
+class is the only one of the three roles that owns stored data. It can
+satisfy any number of interfaces because interfaces only declare
+obligations. It can use any number of traits because traits provide
+reusable bodies without owning state or identity. If traits collide, the
+class must resolve the conflict explicitly.
 
 Classes
 -------
 
-Classes define concrete state, construction, and identity. A class can satisfy
-interfaces, use traits, and inherit from one concrete parent, but stored fields
-and construction belong to the class.
+Classes define concrete state, construction, and identity. A class can
+satisfy interfaces, use traits, and use *class inheritance* to extend at
+most one other class, but stored fields and construction belong to the
+class.
 
 .. code-block:: python
 
@@ -509,19 +512,38 @@ representation method.
 Class inheritance and runtime hooks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Class inheritance stays explicit and does not use Python's metaclass or MRO
+*Class inheritance* stays explicit and does not use Python's metaclass or MRO
 customization hooks.
 
-One concrete parent
-^^^^^^^^^^^^^^^^^^^
+One class parent
+^^^^^^^^^^^^^^^^^
 
-A class may have at most one concrete parent. A class header can combine one
-concrete parent, any number of interfaces, and any number of traits.
+*Class inheritance* is limited to one parent: a class may have at most one
+class parent. A class header can combine one class parent, any number of
+interfaces, and any number of traits.
 
 .. code-block:: python
 
    class FileLogger(LoggerBase, Closeable, Timestamped):
        path: str
+
+No private-name mangling
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Python rewrites a name such as ``self.__a`` to include the defining class's
+name. This name mangling helps prevent accidental collisions between members
+introduced by different classes, especially in multiple-inheritance
+hierarchies.
+
+A class can have at most one class parent. The restriction is not about the
+parent being non-abstract — it is that a class, unlike an interface or a
+trait, owns stored data, and combining stored data from more than one parent
+is exactly what produces the collisions above. Interfaces do not provide
+storage, traits do not own stored state, and trait member conflicts must be
+resolved explicitly. Because class shape is declared and inherited member
+collisions can therefore be reported directly, Lucid does not need automatic
+name mangling. Declare and use ``a`` as ``self.a``; ``self.__a`` is not a
+special spelling for private state.
 
 No metaclasses
 ^^^^^^^^^^^^^^
