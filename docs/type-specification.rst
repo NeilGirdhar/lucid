@@ -54,6 +54,73 @@ requirement, so writing one inside an interface is an error. That gets
 Python's ``@abstractmethod`` check for free, without needing a decorator or
 a separate marker keyword at all.
 
+Field, getter, and setter obligations compose
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A field, a getter, and a setter obligation are each a claim about one
+capability — read access, write access, or both — and satisfaction follows
+the same width-subtyping already used for mutable, read-only, and immutable
+views (`Mutable, read-only, and immutable views <types.rst>`__): whatever
+provides at least the capability asked for satisfies the obligation, the
+same way a mutable ``T`` is usable wherever the narrower ``T?`` is expected.
+
+A stored field provides both read and write access, so it satisfies a
+``getter``-only obligation, a ``setter``-only obligation, or a plain field
+obligation, on its own:
+
+.. code-block:: python
+
+   interface Readable:
+       getter x(self) -> float
+
+   class Point:
+       x: float   # satisfies Readable: reading a field needs no write access
+
+A ``getter`` and ``setter`` pair together provide exactly what a plain field
+does — read and write, nothing more — so the pair satisfies a plain field
+obligation the same way a field satisfies the pair:
+
+.. code-block:: python
+
+   interface Located:
+       x: float
+
+   class ComputedPoint:
+       getter x(self) -> float:
+           return self._x
+
+       setter x(self, value: float):
+           self._x = value
+
+A ``getter`` alone does not satisfy a ``setter`` obligation, or the reverse:
+read and write are independent capabilities, and neither implies the other.
+
+A ``final`` field obligation does not compose the way plain field, getter,
+and setter obligations did above — it asks for something stronger. ``final``
+only promises that the binding is never rebound to a different object; it
+says nothing about that object's own contents (see `Final fields`_). A
+``getter`` does not satisfy it, even alone with no setter:
+
+.. code-block:: python
+
+   interface HasModel:
+       final model: InferenceModel
+
+   class FixedModel:
+       final model: InferenceModel   # satisfies HasModel
+
+   class RebuiltModel:
+       getter model(self) -> InferenceModel:   # does not satisfy HasModel
+           return InferenceModel(self.weights, self.metadata, {:})
+
+A getter's signature only promises no direct external write — nothing about
+it rules out ``RebuiltModel`` handing back a different object on every
+call, which is exactly what ``final`` rules out. A ``getter`` and ``setter``
+pair satisfies it even less: a setter is an explicit write path, and
+``final`` rules out any write path existing at all. There is currently no
+way to mark a getter as provably returning the same object every call, so a
+``final`` field obligation can only be satisfied by a ``final`` field.
+
 Every class is checked for unimplemented obligations before it can be
 constructed. A class with any remaining bodyless member from an interface,
 trait, or parent class is abstract for construction purposes, matching
