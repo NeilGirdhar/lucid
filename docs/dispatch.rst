@@ -63,16 +63,17 @@ dispatch definitions the runtime uses: it knows exactly which operand-type
 pairs are supported and what each one returns, because that is all the
 declaration says.
 
-``declare dispatch`` requirements
+Dispatch requirements
 --------------------------------------
 
-Interfaces can require one element of a multiple-dispatch operation with
-``declare dispatch``:
+Interfaces can require one element of a multiple-dispatch operation by
+writing a ``dispatch`` member without a body, the same as any other
+interface member:
 
 .. code-block:: python
 
    interface Addable:
-       declare dispatch __add__(lhs: Self, rhs: Self) -> Self
+       def dispatch __add__(lhs: Self, rhs: Self) -> Self
 
 A concrete implementation satisfies that requirement when the generic operation
 has an applicable dispatch definition after substituting the concrete type for

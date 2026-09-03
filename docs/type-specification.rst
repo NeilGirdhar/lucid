@@ -25,28 +25,41 @@ Interfaces specify obligations. They say which fields, methods, getters,
 setters, class methods, or factories a type must provide, but they do not store
 data and do not provide method bodies.
 
-Interfaces declare required APIs with ``declare``:
+Interfaces never provide an implementation for anything — that is what makes
+a member an obligation, not a per-member choice inside the block. So a
+required member is written with the exact same keyword a class would use —
+``def``, ``classmethod``, ``getter``, ``setter``, ``factory`` — with no body,
+and no separate marker keyword is needed to say so, because every member in
+an interface is already bodyless by virtue of being in one:
 
 .. code-block:: python
 
    interface Sized:
-       declare __len__(self) -> int
+       def __len__(self) -> int
 
    interface Cache[=K, =V]:
-       declare get(self, key: K) -> V | none
-       declare put(self, key: K, value: V) -> none
-       declare is_fresh(self, key: K) -> bool
+       def get(self, key: K) -> V | none
+       def put(self, key: K, value: V) -> none
+       def is_fresh(self, key: K) -> bool
 
-Interface members use ``declare``, not ``def``, because they specify a callable
-requirement without implementing it. ``declare`` is also the abstraction marker:
-Lucid does not need Python's ``@abstractmethod`` decorator.
+A classmethod obligation reads the same way:
 
-Every class is checked for unimplemented declared obligations before it can be
-constructed. A class with any remaining ``declare`` member from an interface,
-trait, or parent class is abstract for construction purposes, matching Python's
-useful abstract-class instantiation check without using decorators. Lucid gets
-that check without requiring classes to inherit from ``ABC`` or take on
-``ABCMeta`` as a metaclass.
+.. code-block:: python
+
+   interface Buildable:
+       classmethod from_default(cls) -> Self
+
+A body is what turns a member into an implementation rather than a
+requirement, so writing one inside an interface is an error. That gets
+Python's ``@abstractmethod`` check for free, without needing a decorator or
+a separate marker keyword at all.
+
+Every class is checked for unimplemented obligations before it can be
+constructed. A class with any remaining bodyless member from an interface,
+trait, or parent class is abstract for construction purposes, matching
+Python's useful abstract-class instantiation check without using decorators.
+Lucid gets that check without requiring classes to inherit from ``ABC`` or
+take on ``ABCMeta`` as a metaclass.
 
 Interfaces in Python
 ~~~~~~~~~~~~~~~~~~~~
@@ -89,7 +102,7 @@ The same interface in Lucid is just the required member:
 .. code-block:: python
 
    interface Sized:
-       declare __len__(self) -> int
+       def __len__(self) -> int
 
 No structural interfaces
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -198,7 +211,7 @@ Traits provide reusable method bodies. They do not declare fields.
 .. code-block:: python
 
    interface Renderable:
-       declare render(self) -> str
+       def render(self) -> str
 
    trait DebugRenderable(Renderable):
        def debug(self) -> str:
@@ -673,12 +686,12 @@ report freshness; traits can build higher-level behavior from those obligations:
 .. code-block:: python
 
    interface Cache[=K, =V]:
-       declare get(self, key: K) -> V | none
-       declare put(self, key: K, value: V) -> none
-       declare is_fresh(self, key: K) -> bool
+       def get(self, key: K) -> V | none
+       def put(self, key: K, value: V) -> none
+       def is_fresh(self, key: K) -> bool
 
    interface Sized:
-       declare __len__(self) -> int
+       def __len__(self) -> int
 
    trait CacheLookup[K, V](Cache[K, V]):
        def get_or_put(self, key: K, build: Callable[[], V]) -> V:

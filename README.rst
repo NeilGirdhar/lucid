@@ -91,8 +91,9 @@ Continue with the specification documents, front-to-back:
    * - `Calls, indexing, and operators <docs/operators.rst>`_
      - Call and indexing syntax.
    * - `Multiple dispatch <docs/dispatch.rst>`_
-     - Why binary operators dispatch on both operands, ``declare dispatch``,
-       ambiguous dispatch, and dispatch across projects and hierarchies.
+     - Why binary operators dispatch on both operands, dispatch requirements
+       in interfaces, ambiguous dispatch, and dispatch across projects and
+       hierarchies.
    * - `Control flow and statements <docs/control-flow.rst>`_
      - Conditionals, loops, ``if_broken``, and unspecified statements.
    * - `Modules, projects, and public APIs <docs/modules.rst>`_

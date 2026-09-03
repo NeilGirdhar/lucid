@@ -39,7 +39,7 @@ expressions, and elision:
    export
    classmethod classvar factory construct
    getter setter
-   interface trait declare
+   interface trait
    dispatch
    implement
    type

@@ -27,7 +27,7 @@ Type expressions and the ``type`` keyword
 ---------------------------------------------
 
 Wherever a type is expected — variable, parameter, and return annotations,
-generic parameter lists, ``declare`` signatures — Lucid parses a *type
+generic parameter lists, interface member signatures — Lucid parses a *type
 expression* rather than an ordinary expression. Most syntax means the same
 thing in both grammars (``dict[str, int]``, ``T?``, ``T!``, and
 ``Producer[+K]`` all evaluate identically either way), but a type expression
@@ -78,10 +78,10 @@ changed on future edits, before the API is accepted.
 .. code-block:: python
 
    interface Producer[+K]:
-       declare get(self) -> K
+       def get(self) -> K
 
    interface Consumer[-K]:
-       declare put(self, value: K) -> none
+       def put(self, value: K) -> none
 
    class Cell[=K]:
        value: K
@@ -317,14 +317,14 @@ Types that want truth behavior define ``__bool__``.
 .. code-block:: python
 
    interface Truthy:
-       declare __bool__(self) -> bool
+       def __bool__(self) -> bool
 
 A sized type can opt in explicitly:
 
 .. code-block:: python
 
    interface Sized:
-       declare __len__(self) -> int
+       def __len__(self) -> int
 
    trait SizedTruthy(Sized, Truthy):
        def __bool__(self) -> bool:
@@ -429,23 +429,23 @@ happening to define a matching method.
 .. code-block:: python
 
    interface SupportsInt:
-       declare __int__(self) -> int
+       def __int__(self) -> int
 
    interface SupportsFloat:
-       declare __float__(self) -> float
+       def __float__(self) -> float
 
    interface SupportsComplex:
-       declare __complex__(self) -> complex
+       def __complex__(self) -> complex
 
    interface SupportsIndex:
        # Exact indexability, not just explicit int(x) conversion.
-       declare __index__(self) -> int
+       def __index__(self) -> int
 
    interface SupportsAbs[+K]:
-       declare __abs__(self) -> K
+       def __abs__(self) -> K
 
    interface SupportsRound[+K]:
-       declare __round__(self, ndigits: int | none = none) -> K
+       def __round__(self, ndigits: int | none = none) -> K
 
    class int(SupportsInt, SupportsFloat, SupportsIndex):
        ...
