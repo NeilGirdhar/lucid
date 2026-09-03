@@ -338,6 +338,62 @@ obligations. It can use any number of traits because traits provide
 reusable bodies without owning state or identity. If traits collide, the
 class must resolve the conflict explicitly.
 
+Explicit overrides
+~~~~~~~~~~~~~~~~~~~~
+
+A method that replaces an inherited implementation — the class's one class
+parent's, or a trait's — must be marked ``override``:
+
+.. code-block:: python
+
+   class Timestamped:
+       def save(self):
+           self.updated_at = now()
+
+   class Document(Timestamped):
+       override def save(self):
+           super().save()
+           write_to_disk(self)
+
+The same rule governs ``override`` as governs variance markers: the checker
+warns and offers an autofix while drafting, but the marker must be written
+into the source before the API is accepted. That protects against both
+directions of the same mistake — a parent or trait gaining a method that
+silently starts shadowing an unrelated method of the same name with no
+signal anywhere, and an intended override whose name or signature no longer
+matches anything, silently becoming an unrelated new method while the
+original goes on being called elsewhere.
+
+Because a class has at most one class parent, calling through to the
+overridden implementation is unambiguous — ``super()`` always means that one
+parent, never a position in an MRO. A linter checks that an ``override``
+method calls it, but this check is a suggestion, not a rule: some overrides
+exist specifically to replace an inherited implementation entirely, such as
+a class resolving a conflict between two traits, and the warning can be
+suppressed for those.
+
+Final methods
+~~~~~~~~~~~~~~~
+
+``final`` applies to a method the same way it applies to a field or a
+class: the same keyword, one relationship fixed permanently — here, that
+the method can be overridden at all.
+
+.. code-block:: python
+
+   class Timestamped:
+       final def save(self):
+           self.updated_at = now()
+
+   class Document(Timestamped):
+       override def save(self):  # error: save is final
+           ...
+
+``final`` is not valid on an interface member. It protects a method's
+implementation from being replaced, and an interface member has no
+implementation to protect — there is nothing there yet for ``final`` to
+fix in place.
+
 Classes
 -------
 

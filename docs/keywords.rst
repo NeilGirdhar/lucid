@@ -31,16 +31,16 @@ New Lucid keywords
 -----------------------
 
 Lucid adds keywords for explicit module boundaries, construction, class
-member kinds, closing off rebinding or further class inheritance,
-abstraction, dispatch, external interface implementation, type expressions,
-and elision:
+member kinds, closing off rebinding or further class inheritance or
+overriding, explicit overrides, abstraction, dispatch, external interface
+implementation, type expressions, and elision:
 
 .. code-block:: text
 
    export
    classmethod classvar factory construct
    getter setter
-   final
+   final override
    interface trait
    dispatch
    implement
