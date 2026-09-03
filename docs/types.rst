@@ -268,7 +268,7 @@ The tower also makes annotations less literal. If ``Real`` is used because
 ``float`` feels too narrow, the API may accidentally accept integers, booleans,
 fractions, decimals, or third-party numeric objects even when the implementation
 only works for a smaller operation set. Lucid replaces the tower with exact
-concrete annotations and small structural capability interfaces.
+concrete annotations and small, focused capability interfaces.
 
 Exact ``bool``
 ~~~~~~~~~~~~~~~~
@@ -418,8 +418,13 @@ reaching for a broad tower class.
 Capability interfaces
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-The structural numeric capability interfaces are builtins and are always
-available without import:
+The numeric capability interfaces are builtins and are always available
+without import. They are ordinary nominal interfaces, not structural ones:
+a type satisfies ``SupportsInt`` because its class header explicitly declares
+it, the same way any user-defined class declares any other interface —
+``int`` itself explicitly inherits from ``SupportsInt`` (and the other
+capability interfaces it satisfies), rather than qualifying merely by
+happening to define a matching method.
 
 .. code-block:: python
 
@@ -441,6 +446,9 @@ available without import:
 
    interface SupportsRound[+K]:
        declare __round__(self, ndigits: int | none = none) -> K
+
+   class int(SupportsInt, SupportsFloat, SupportsIndex):
+       ...
 
 
 No implicit cross-type numeric behavior

@@ -31,7 +31,8 @@ New Lucid keywords
 -----------------------
 
 Lucid adds keywords for explicit module boundaries, construction, class
-member kinds, abstraction, dispatch, type expressions, and elision:
+member kinds, abstraction, dispatch, external interface implementation, type
+expressions, and elision:
 
 .. code-block:: text
 
@@ -40,6 +41,7 @@ member kinds, abstraction, dispatch, type expressions, and elision:
    getter setter
    interface trait declare
    dispatch
+   implement
    type
    if_broken
    skip

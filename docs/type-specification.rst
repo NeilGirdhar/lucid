@@ -91,6 +91,101 @@ The same interface in Lucid is just the required member:
    interface Sized:
        declare __len__(self) -> int
 
+No structural interfaces
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Lucid interfaces are nominal. A class satisfies an interface only by
+explicitly listing it in the class header — ``class Foo(SomeInterface)`` —
+never merely by happening to define members with matching names and types.
+This holds even for the numeric capability interfaces such as
+``SupportsInt``: ``int`` satisfies them because it explicitly inherits from
+them, not because it happens to define ``__int__``.
+
+Python's ``typing.Protocol`` takes the opposite approach: any object with
+matching methods satisfies a ``Protocol``, whether or not its author ever
+intended to make that promise. That costs something real, not just style.
+
+An interface is a promise about behavior, not a description of a method
+table, and having a matching method is not the same as making that promise.
+Two unrelated methods can share a name and signature by coincidence without
+sharing a meaning: ``close(self) -> none`` on a file handle releases a
+resource; ``close(self) -> none`` on a negotiation finalizes a deal.
+Structural matching only ever compares shape, never intent, so a
+``Closeable``-shaped structural interface would silently accept both, and
+code written for one meaning could be handed the other with no error at all.
+Only the author of a class can say which promise, if any, a method is
+actually making — which is exactly what listing the interface by name in
+the class header does and mere structural matching cannot.
+
+Nominal declaration is also cheaper to check. Satisfying an interface is
+verified once, at the class's own definition, against the fixed, usually
+short list of interfaces that class actually names. Structural satisfaction
+has no such fixed point: it would have to be rechecked at every place a
+value meets an interface-typed slot, comparing that slot's full member
+signatures against whatever value happens to show up there, for as long as
+either side might change.
+
+Implementing an interface after the fact
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Nominal satisfaction has a real cost of its own: it normally means writing
+``class Foo(SomeInterface)`` at ``Foo``'s own definition, which is not
+possible when ``Foo`` is a builtin or a third-party type you do not control.
+Sometimes an existing type should satisfy an interface its own author never
+wrote it against.
+
+``implement`` attaches an implementation to a type from outside that type's own
+definition:
+
+.. code-block:: python
+
+   implement Sized for ThirdPartyBuffer:
+       def __len__(self) -> int:
+           return self.byte_count
+
+``ThirdPartyBuffer`` did not declare ``Sized`` when it was defined; this
+``implement`` block is what makes it satisfy that interface, checked the same way
+any other implementation is — does this block actually provide everything
+``Sized`` declares.
+
+``implement`` is not unrestricted. It is valid only if its author owns the
+interface or the type — never neither. That rule, not a runtime check, is
+what keeps two unrelated packages from each attaching a different
+``implement Sized for ThirdPartyBuffer`` and leaving which one wins to import
+order: for any interface/type pair, at most one project in the whole
+dependency graph is ever eligible to write it, because ownership of each
+name is unique. The members an ``implement`` block adds are also only visible
+where the interface itself is imported, not ambiently on every
+``ThirdPartyBuffer`` everywhere — the same reasoning that removed ``global``
+and ``nonlocal``: nothing about a value's usable surface should change
+because of something declared elsewhere that the reader never imported.
+
+Subclassing cannot substitute for this. ``class Buf(ThirdPartyBuffer,
+Sized): ...`` only covers instances constructed through ``Buf`` — it does
+nothing for a buffer that already exists, built by code that is never going
+to construct your subclass, which is the case this problem actually shows
+up in. It does not compose, either: two independent subclasses of
+``ThirdPartyBuffer``, each adding a different capability, cannot later be
+combined into one class, because that class would need two class parents,
+which class inheritance does not allow (`One class parent`_). ``implement``
+has neither limit — it changes what the original type itself satisfies, for
+every instance, and any number of unrelated ``implement`` blocks for the
+same type coexist without ever needing to be reconciled into one class.
+
+Python's ``typing.Protocol`` solves the same retrofitting problem
+differently: any type with matching methods satisfies a ``Protocol``
+automatically, without its author writing anything at all. That is exactly
+the accidental-collision risk described above — a type can match a
+``Protocol``'s shape by coincidence, without its author ever intending to
+make that promise, and Python has no way to tell an intentional
+implementation from a lucky guess. ``implement`` gets structural typing's actual
+benefit — an existing type outside your control can come to satisfy an
+interface — without that risk. It is still an explicit, checked declaration,
+not a shape match: someone has to write it, the checker verifies it actually
+provides what the interface declares, and the ownership rule guarantees
+that whoever wrote it was entitled to make that claim about that type.
+Retrofitting is possible; accidental retrofitting is not.
+
 Traits
 ------
 
