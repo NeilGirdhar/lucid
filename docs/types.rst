@@ -64,6 +64,25 @@ plain dict whose values happen to be type objects, it does not register
 parsing. Which grammar applies is always visible at the point where a name is
 bound, rather than depending on where the name is used later.
 
+Recursive type aliases
+-----------------------------
+
+A ``type`` alias may refer to itself within its own definition. Resolving a
+type expression is deferred until the name is actually used, the same way
+imports are lazy, so a self-reference inside the alias body is not a
+forward-reference problem the way it would be for an ordinary, eagerly
+evaluated assignment:
+
+.. code-block:: python
+
+   type PyTree[L] = L | list[PyTree[L]] | dict[str, PyTree[L]]
+
+   leaves: PyTree[int] = [1, {"a": 2, "b": [3, 4]}, 5]
+
+Recursion is what makes a type like ``PyTree`` expressible at all: at every
+level, the shape is either a leaf, or one of the listed containers holding
+that very same shape one level down.
+
 Definition-site variance
 ----------------------------
 
