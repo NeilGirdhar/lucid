@@ -199,6 +199,50 @@ provides what the interface declares, and the ownership rule guarantees
 that whoever wrote it was entitled to make that claim about that type.
 Retrofitting is possible; accidental retrofitting is not.
 
+Higher-kinded interfaces
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An interface can be generic over a type constructor instead of an ordinary
+type, using ``F[_]`` (see
+`Higher-kinded parameters <types.rst>`_). Inside such an interface, ``Self``
+takes its kind from how the interface's own members use it: subscripting
+``Self`` with a type parameter the member declares itself, rather than one
+of the class's own, is what makes ``Self`` behave as a constructor rather
+than an already-saturated type. No separate marker is needed on ``Self``
+the way one is needed on a free-standing parameter like ``F`` — the
+interface's member list is already the explicit, checked-once contract that
+a free-standing generic parameter does not have.
+
+.. code-block:: python
+
+   interface Functor:
+       classmethod map[A, B](cls, tree: Self[A], f: Callable[[A], B]) -> Self[B]
+
+``list`` was not defined with ``Functor``, so it satisfies it through
+``implement``:
+
+.. code-block:: python
+
+   implement Functor for list:
+       classmethod map[A, B](cls, tree: Self[A], f: Callable[[A], B]) -> Self[B]:
+           return [f(x) for x in tree]
+
+Bounding a free-standing generic parameter by a higher-kinded interface
+gets one signature checked once for every implementer, present and future,
+instead of the open set of independently-checked cases the dispatch-based
+``tree_map`` in `Multiple dispatch <dispatch.rst>`_ uses:
+
+.. code-block:: python
+
+   def tree_map[F[_]: Functor, A, B](tree: F[A], f: Callable[[A], B]) -> F[B]:
+       return F.map(tree, f)
+
+Which to reach for is the same question either way: dispatch is enough when
+each container's traversal only needs to be locally correct on its own; a
+bounded, higher-kinded parameter earns its cost when every implementer,
+including ones that do not exist yet, needs to be provably checked against
+the same signature.
+
 Traits
 ------
 

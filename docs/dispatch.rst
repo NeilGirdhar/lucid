@@ -141,3 +141,34 @@ No ``NotImplemented`` operator negotiation
 
 Lucid does not use ``NotImplemented`` as an operator negotiation protocol.
 Dispatch applicability decides whether an operation is available.
+
+Dispatch beyond operators
+--------------------------------
+
+Every example so far has been a binary operator, but dispatch is not
+specific to operators — it is a general way to give an ordinary function a
+growing, independently-checked set of cases, one per argument type. Walking
+a nested structure built from unrelated container types is a natural fit:
+each container gets its own case, and recursion resolves the next case by
+whatever type shows up at that level:
+
+.. code-block:: python
+
+   def dispatch tree_map(tree: list[A], f: Callable[[Array], bool]) -> list[B]:
+       return [tree_map(item, f) for item in tree]
+
+   def dispatch tree_map(tree: dict[X, A], f: Callable[[Array], bool]) -> dict[X, B]:
+       return {k: tree_map(v, f) for k, v in tree.items()}
+
+   def dispatch tree_map(tree: Array, f: Callable[[Array], bool]) -> bool:
+       return f(tree)
+
+Each case only has to be correct on its own — there is no single signature
+that has to hold for every case at once, present and future, the way a
+bounded generic parameter would require (see
+`Higher-kinded interfaces <type-specification.rst>`_ for that alternative,
+and when it is worth the extra cost). A third party can add a
+``tree_map(tree: SomeClass[A], ...)`` case for their own container type
+without touching ``list``, ``dict``, or this code at all — the same
+extensibility `Dispatch across projects and hierarchies`_ already
+described, applied to a plain function instead of an operator.

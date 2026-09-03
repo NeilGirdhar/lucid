@@ -96,6 +96,34 @@ into an invariant one, breaking users who never touched their code. Writing
 the marker up front makes the author choose the intended contract, rather
 than letting it shift underneath callers as the interface evolves.
 
+Higher-kinded parameters
+-----------------------------
+
+An ordinary generic parameter like ``K`` above stands for a type. Some
+generic code needs a parameter that stands for a type *constructor*
+instead — something that is not itself a complete type until it is applied
+to one, the same way a plain function is not a value until it is called.
+``F[_]`` declares that: a generic parameter that takes exactly one type
+argument to become concrete, written with the same subscript syntax
+ordinary type application already uses (``F[_, _]`` for a constructor that
+takes two, and so on). The ``_`` is the same black-hole marker used
+elsewhere for a binding that does not need a name (see
+`Source basics and names <source-and-names.rst>`_) — here, in type
+position, it means a type-argument slot the declaration does not need to
+name either.
+
+.. code-block:: python
+
+   def tree_map[F[_]: Functor, A, B](tree: F[A], f: Callable[[A], B]) -> F[B]:
+       return F.map(tree, f)
+
+The same rule that governs variance markers governs ``F[_]``: it must be
+written explicitly on a free-standing generic parameter like ``F`` above,
+even though the checker could infer the arity from ``tree: F[A]`` during
+drafting, because an unrelated later edit to ``tree_map``'s body could
+otherwise silently change what ``F`` is required to be — exactly the danger
+explicit variance markers already exist to rule out.
+
 Mutable, read-only, and immutable views
 -------------------------------------------
 
