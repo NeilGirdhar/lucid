@@ -503,6 +503,30 @@ value is the field's default.
 
 This separates shared class state from stored instance fields.
 
+Final fields
+^^^^^^^^^^^^
+
+``final`` marks a field that can be set once and never reassigned again,
+regardless of which view — ``T``, ``T?``, or ``T!`` — the caller holds. It
+is a property of the binding, not the type: ``T!`` says the value on the
+other end of a reference cannot change; ``final`` says the reference itself
+cannot be pointed somewhere else. The two compose independently:
+
+.. code-block:: python
+
+   class Session:
+       final id: str
+       final model: InferenceModel
+       final config: InferenceModel!
+
+``id`` and ``model`` cannot be rebound after construction, but ``model``'s
+own fields can still be mutated in place, since ``InferenceModel`` on its own
+is an ordinary mutable type. ``config`` cannot be rebound, and the object it
+points to cannot change either.
+
+A ``final`` field is normally set once, in a ``factory``. Assigning to it
+again anywhere afterward — from any method, through any view — is an error.
+
 No static methods for namespaced functions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -634,6 +658,28 @@ interfaces, and any number of traits.
 
    class FileLogger(LoggerBase, Closeable, Timestamped):
        path: str
+
+Final classes
+^^^^^^^^^^^^^
+
+``final`` applies to a class the same way it applies to a field: a
+relationship is fixed permanently, no matter who is asking. On a field, that
+relationship is the binding; on a class, it is class inheritance. A
+``final`` class may not be used as anyone's class parent:
+
+.. code-block:: python
+
+   final class Point:
+       x: float
+       y: float
+
+   class Point3D(Point):  # error: Point is final
+       z: float
+
+This lets an author close off a class specifically because a subclass could
+violate an invariant the implementation depends on, without that decision
+touching anything about fields or ordinary variable bindings — the same
+``final`` keyword, applied one level up.
 
 No private-name mangling
 ^^^^^^^^^^^^^^^^^^^^^^^^

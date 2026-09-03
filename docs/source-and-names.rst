@@ -22,6 +22,22 @@ Names bind through definitions, imports, assignments, and parameters.
 Assignment binds names, updates declared fields, or delegates to explicit
 assignment behavior such as setters and item assignment.
 
+Final local variables
+-------------------------
+
+``final`` marks an ordinary local variable that can be assigned once and
+never reassigned:
+
+.. code-block:: python
+
+   final total = 0
+   total = total + 1  # error: total is final
+
+Like a final field, this is a property of the binding, not of whatever
+value it holds: a ``final`` binding to a mutable object still lets that
+object be mutated through it; it only rules out pointing the name somewhere
+else.
+
 Black-hole assignment with ``_``
 -----------------------------------
 
