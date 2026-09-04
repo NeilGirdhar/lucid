@@ -79,7 +79,7 @@ awaiting whatever positions were left unfilled:
    sorted(items, key=score(weights, _))
 
 ``score(weights, _)`` is not a call to ``score`` — it is a value of type
-``Callable[[Item], float]``, built without calling ``score`` at all, ready
+``Callable[(Item,), float]``, built without calling ``score`` at all, ready
 to be called once ``sorted`` supplies the missing argument itself. No
 import, no wrapper object, no separate type to teach a checker about.
 
@@ -90,17 +90,17 @@ Multiple holes fill left to right, matching the order they appear:
    def combine(a: A, b: B, c: C) -> R:
        ...
 
-   combine(_, y, _)   # Callable[[A, C], R]
+   combine(_, y, _)   # Callable[(A, C), R]
 
 A keyword hole stays keyword in the result:
 
 .. code-block:: python
 
-   combine(x, c=_)    # Callable[[C], R]
+   combine(x, c=_)    # Callable[(C,), R]
 
 The type of a partial application is ordinary generic inference, not a
-special case: given ``f: Callable[[A, B], R]``, ``f(x, _)`` has type
-``Callable[[B], R]``, the same way substituting one type parameter of any
+special case: given ``f: Callable[(A, B), R]``, ``f(x, _)`` has type
+``Callable[(B,), R]``, the same way substituting one type parameter of any
 other generic leaves the rest.
 
 Generator call expansion
