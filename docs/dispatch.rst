@@ -172,3 +172,9 @@ and when it is worth the extra cost). A third party can add a
 without touching ``list``, ``dict``, or this code at all — the same
 extensibility `Dispatch across projects and hierarchies`_ already
 described, applied to a plain function instead of an operator.
+
+If the set of container shapes is fixed and known instead of open to third
+parties, `Exhaustive pattern matching <control-flow.rst>`_ is the better
+fit: it checks that every shape is handled, which an open set of dispatch
+cases cannot do, at the cost of not being extensible the way this version
+is.

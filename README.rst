@@ -97,7 +97,8 @@ Continue with the specification documents, front-to-back:
        in interfaces, ambiguous dispatch, dispatch across projects and
        hierarchies, and dispatch for ordinary functions.
    * - `Control flow and statements <docs/control-flow.rst>`_
-     - Conditionals, loops, ``if_broken``, and unspecified statements.
+     - Conditionals, loops, ``if_broken``, exhaustive pattern matching, and
+       unspecified statements.
    * - `Modules, projects, and public APIs <docs/modules.rst>`_
      - Re-exports, lazy imports, and how ``project.yaml``/``development.yaml``
        fit in.
