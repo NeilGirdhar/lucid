@@ -47,7 +47,7 @@ is a type error instead of a silent, wrong result:
    render_lines("hello")  # error: str is not Iterable[str]
 
 Code that wants a character sequence asks for the ``chars`` property explicitly.
-``chars`` returns a read-only sequence view, ``Sequence?[str]``:
+``chars`` returns a read-only sequence view, ``&Sequence[str]``:
 
 .. code-block:: python
 
@@ -56,7 +56,7 @@ Code that wants a character sequence asks for the ``chars`` property explicitly.
    for ch in text:          # error
        ...
 
-   chars: Sequence?[str] = text.chars
+   chars: &Sequence[str] = text.chars
    chars[0]
 
    for ch in text.chars:
@@ -228,8 +228,8 @@ same ``!`` that constructs a frozenset or frozendict:
 
 .. code-block:: python
 
-   point: list![int] = ![3, 4]
-   cache: dict[list![int], float] = {:}
+   point: !list[int] = ![3, 4]
+   cache: dict[!list[int], float] = {:}
    cache[![3, 4]] = distance(3, 4)
 
 Heterogeneous records

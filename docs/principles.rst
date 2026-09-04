@@ -29,7 +29,7 @@ Scala-style type information
 Type relationships live where abstractions are defined. Generic parameters
 carry definition-site variance with ``+K``, ``-K``, and ``=K``. Mutable,
 read-only, and immutable views are visible in the type spelling with ``T``,
-``T?``, and ``T!``. See `Types, mutability, and annotations <types.rst>`_ and
+``&T``, and ``!T``. See `Types, mutability, and annotations <types.rst>`_ and
 `Modern type specification <type-specification.rst>`_.
 
 Julia-style dynamic dispatch

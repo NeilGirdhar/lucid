@@ -21,7 +21,7 @@ overloading one word for both. A Lucid ``class`` is the narrow sense — the
 direct analogue of a Python class: nominal, data-owning, producing instances
 through construction. A Lucid *type* is the broad sense — the analogue of
 ``TypeForm``, not of ``class`` or ``type[X]``. Most Lucid types are not
-classes at all: ``int | none``, ``list![int]``, ``dict[str, int]``, an
+classes at all: ``int | none``, ``!list[int]``, ``dict[str, int]``, an
 anonymous record ``(x: int, y: int)``, and a TypedDict shape ``{...}`` are
 all types with nothing that could be called a class behind them — type
 expressions evaluated to values, the same way ``type <type expression>``
@@ -74,7 +74,7 @@ Type expressions and the ``type`` keyword
 Wherever a type is expected — variable, parameter, and return annotations,
 generic parameter lists, interface member signatures — Lucid parses a *type
 expression* rather than an ordinary expression. Most syntax means the same
-thing in both grammars (``dict[str, int]``, ``T?``, ``T!``, and
+thing in both grammars (``dict[str, int]``, ``&T``, ``!T``, and
 ``Producer[+K]`` all evaluate identically either way), but a type expression
 can use forms that mean something else, or nothing at all, as an ordinary
 expression — for example the TypedDict shape literal in
@@ -96,7 +96,7 @@ that matter:
 
 .. code-block:: python
 
-   type Shape = InferenceModel![str]
+   type Shape = !InferenceModel[str]
    value: Shape = freeze(model)
 
    form = type list[str]                                # an ordinary value: a reified type
@@ -289,7 +289,7 @@ Python requires an explicit, unverified claim: ``trust``.
 .. code-block:: python
 
    raw: object = some_python_function()
-   items: list![int] = trust[list![int]](raw)
+   items: !list[int] = trust[!list[int]](raw)
 
 ``trust`` asserts a type with no proof behind it — there is nothing on the
 Python side for the checker to verify against — but the claim is visible,
@@ -325,16 +325,16 @@ variants of the same abstraction are declared as one type family, spelled
 with a marker on the short, unqualified name:
 
 - ``T`` — mutable, the default. Code can read and write it.
-- ``T?`` — read-only view. Code can observe it but cannot mutate it, and
+- ``&T`` — read-only view. Code can observe it but cannot mutate it, and
   cannot rely on it being permanently immutable.
-- ``T!`` — immutable. Code can rely on stability for operations such as
+- ``!T`` — immutable. Code can rely on stability for operations such as
   hashing, memoization, and persistent sharing.
 
 .. code-block:: python
 
    working: InferenceModel[str] = InferenceModel(weights, metadata, {:})
-   stable: InferenceModel![str] = freeze(working)
-   view: InferenceModel?[str] = working
+   stable: !InferenceModel[str] = freeze(working)
+   view: &InferenceModel[str] = working
 
 Python's ``collections.abc`` models mutability as a single inheritance
 chain: ``MutableMapping`` is a subclass of ``Mapping``. That gets the
@@ -362,8 +362,8 @@ siblings under the read-only view instead of trying to line them up:
 
 .. code-block:: text
 
-   InferenceModel[K]  <: InferenceModel?[K]
-   InferenceModel![K] <: InferenceModel?[K]
+   InferenceModel[K]  <: &InferenceModel[K]
+   !InferenceModel[K] <: &InferenceModel[K]
 
 Read-only view
 ~~~~~~~~~~~~~~~~
@@ -376,16 +376,16 @@ options. Make it invariant, and a function that only reads ``Animal``\ s
 can't accept a ``list[Cat]`` argument even though reading is always safe.
 Make it covariant instead, and nothing stops the function from writing a
 ``Dog`` into what is actually the caller's ``list[Cat]``, corrupting it.
-``T?`` escapes that dilemma: it is the natural type for a parameter that
-only reads its argument, and because both ``T`` and ``T!`` are subtypes of
-``T?``, a single ``T?``-typed parameter accepts a mutable value, an
+``&T`` escapes that dilemma: it is the natural type for a parameter that
+only reads its argument, and because both ``T`` and ``!T`` are subtypes of
+``&T``, a single ``&T``-typed parameter accepts a mutable value, an
 immutable value, or another read-only view, with no conversion at the call
 site — while the callee gets a compile-time guarantee that it cannot mutate
 an object it does not own:
 
 .. code-block:: python
 
-   def report(model: InferenceModel?[str]) -> str:
+   def report(model: &InferenceModel[str]) -> str:
        return f"{model.label_count} labels"
 
    report(working)  # mutable
@@ -407,8 +407,8 @@ variance their own operations support:
 .. code-block:: text
 
    InferenceModel[=K]
-   InferenceModel?[+K]
-   InferenceModel![+K]
+   &InferenceModel[+K]
+   !InferenceModel[+K]
 
 Read-only dictionaries
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -421,7 +421,7 @@ read-only view can safely widen the produced value type:
 .. code-block:: python
 
    cats: dict[str, Cat] = {:}
-   animals: dict?[str, Animal] = cats
+   animals: &dict[str, Animal] = cats
 
    animal = animals["ada"]
    animals["turing"] = Dog()  # error: read-only view
@@ -435,7 +435,7 @@ that ``Mapping`` happened to declare.
 
 Lucid keeps these as views of the same collection abstraction and computes
 variance from each view's actual operations. Mutable ``dict`` stays invariant.
-A full read-only dictionary view such as ``dict?[K, +V]`` is covariant in the
+A full read-only dictionary view such as ``&dict[K, +V]`` is covariant in the
 value type while keeping the key type invariant if the view both consumes and
 produces keys. A narrower view that only produces keys or values can expose
 different variance. Code does not need a separate ``Mapping`` type just to ask
@@ -444,23 +444,23 @@ for a read-only dictionary-shaped view.
 Immutable view
 ~~~~~~~~~~~~~~~~
 
-``T!`` is for code that needs to rely on stability, not just observe a
+``!T`` is for code that needs to rely on stability, not just observe a
 snapshot of it. An immutable value can be hashed and used as a dict key or
 set member, memoized safely since a cached result can never go stale, and
 shared freely across threads, caches, and closures without defensive
-copying — nothing holding a ``T!`` can ever see it change underneath it.
+copying — nothing holding a ``!T`` can ever see it change underneath it.
 
 .. code-block:: python
 
-   cache: dict[InferenceModel![str], float] = {:}
+   cache: dict[!InferenceModel[str], float] = {:}
    cache[stable] = evaluate(stable)
 
-A mutable value becomes a ``T!`` through ``freeze``, which takes a ``T`` and
+A mutable value becomes a ``!T`` through ``freeze``, which takes a ``T`` and
 returns the immutable view.
 
 .. code-block:: python
 
-   stable: InferenceModel![str] = freeze(working)
+   stable: !InferenceModel[str] = freeze(working)
 
 Exact annotations and numeric capabilities
 ----------------------------------------------
@@ -598,9 +598,9 @@ By contrast, a ``float`` annotation means exactly ``float``:
    scale = 2              # error: int is not float
    scale = float(2)
 
-``float?`` is the read-only view of ``float``. It does not mean
+``&float`` is the read-only view of ``float``. It does not mean
 ``int | float`` and does not turn integer values into floating-point values.
-Scalar values are already immutable in practice, so ``float?`` is mainly useful
+Scalar values are already immutable in practice, so ``&float`` is mainly useful
 for uniform view syntax in generic APIs; it is not the way to spell
 float-like input.
 

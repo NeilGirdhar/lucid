@@ -19,7 +19,7 @@ objects. Public module APIs are marked with ``export``. Interfaces declare
 obligations, traits provide reusable behavior, and binary operators dispatch on
 both operands. Generic parameters carry definition-site variance with ``+K``,
 ``-K``, and ``=K``. Mutable, read-only, and immutable views are visible in the
-type spelling with ``T``, ``T?``, and ``T!``.
+type spelling with ``T``, ``&T``, and ``!T``.
 
 Example
 -------
@@ -27,7 +27,7 @@ Example
 .. code-block:: python
 
    export interface Scorable[+K]:
-       declare score(self, item: K) -> float
+       def score(self, item: K) -> float
 
    export trait ScoreBands[+K](Scorable[K]):
        def is_confident(self, item: K) -> bool:
@@ -50,16 +50,16 @@ Example
        getter label_count(self) -> int:
            return len(self.labels)
 
-   def evaluate(model: InferenceModel?[str], item: str) -> float:
+   def evaluate(model: &InferenceModel[str], item: str) -> float:
        return model.score(item)
 
    model: InferenceModel[str] = InferenceModel.from_checkpoint("model.bin", ["cat", "dog"])
-   stable: InferenceModel![str] = freeze(model)
+   stable: !InferenceModel[str] = freeze(model)
 
 This example shows several core language mechanics in one place:
 
 * exported definitions are explicitly public
-* interfaces use ``declare`` for required behavior
+* interfaces require behavior with a bodyless member, no marker keyword needed
 * traits provide reusable bodies
 * stored fields are declared in the class body
 * factories construct exact, fully initialized objects
