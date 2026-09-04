@@ -5,6 +5,51 @@ Types, mutability, and annotations
    :depth: 3
    :local:
 
+What ``type`` means in Lucid
+-------------------------------
+
+Python overloads the word "type." The builtin ``type`` returns a value's
+class; ``type[X]`` in an annotation means specifically a class object; and
+"type" used loosely in "type annotation" or "type checker" means something
+broader than either — any type expression, class or not. Static type
+checkers eventually needed a name for that broader sense on its own:
+``TypeForm`` — a type expression, evaluated to a value, whether or not it
+happens to be a single class.
+
+Lucid keeps that distinction, but gives each sense its own name instead of
+overloading one word for both. A Lucid ``class`` is the narrow sense — the
+direct analogue of a Python class: nominal, data-owning, producing instances
+through construction. A Lucid *type* is the broad sense — the analogue of
+``TypeForm``, not of ``class`` or ``type[X]``. Most Lucid types are not
+classes at all: ``int | none``, ``list![int]``, ``dict[str, int]``, an
+anonymous record ``(x: int, y: int)``, and a TypedDict shape ``{...}`` are
+all types with nothing that could be called a class behind them — type
+expressions evaluated to values, the same way ``type <type expression>``
+(see below) turns any of them into a first-class *type form* to pass around
+like any other value.
+
+Every ``class`` is a type. Not every type is a ``class``.
+
+The word itself appears in exactly these roles in Lucid, and no others:
+
+- **The category** — "a type," used the way this section has been using it:
+  any type expression evaluated to a value, class or not. This is prose
+  vocabulary, not syntax.
+- **Type expression**, as a grammar — the parsing mode that applies in
+  annotation positions, generic parameter lists, and interface member
+  signatures (see `Type expressions and the type keyword`_), as opposed to
+  the ordinary expression grammar used everywhere else. Also not syntax by
+  itself — it names which grammar is in effect at a given position.
+- ``type Name = <type expression>`` — the alias statement, giving a type
+  expression a name usable in future type positions.
+- ``type <type expression>`` — the prefix operator, reifying a type
+  expression into an ordinary value — a type form — usable in ordinary
+  expression positions.
+
+Only the last two are actual keyword uses; both are the same keyword,
+disambiguated by position rather than by two different words the way
+Python's ``type``/``type[X]``/``TypeForm`` are.
+
 Visible type contracts
 -------------------------
 
