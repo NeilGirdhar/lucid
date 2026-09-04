@@ -73,7 +73,7 @@ Continue with the specification documents. Nesting groups related documents
 under one theme; within a theme, and across the list top to bottom, each
 document builds mostly on documents already covered above it:
 
-* `Main ideas <docs/principles.rst>`_ — the five ideas that shape the rest
+* `Main ideas <docs/principles.rst>`_ — the seven ideas that shape the rest
   of the language.
 * `Names, binding, and scope <docs/names.rst>`_ — ordinary binding, final
   local variables, black-hole assignment with ``_``, and no
