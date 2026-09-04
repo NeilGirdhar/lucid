@@ -83,8 +83,9 @@ Continue with the specification documents, front-to-back:
        work.
    * - `Types, mutability, and annotations <docs/types.rst>`_
      - Visible type contracts, type expressions and the ``type`` keyword,
-       definition-site variance, mutable/read-only/immutable views, and exact
-       numeric types.
+       recursive type aliases, definition-site variance, higher-kinded
+       parameters and existential types, mutable/read-only/immutable views,
+       and exact numeric types.
    * - `Strings and collections <docs/collections.rst>`_
      - String and collection literals, TypedDict shapes, records instead of
        tuples, and ``skip`` elision.

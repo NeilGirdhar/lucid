@@ -46,6 +46,7 @@ implementation, type expressions, existential quantification, and elision:
    implement
    type
    any
+   trust
    if_broken
    skip
    _
