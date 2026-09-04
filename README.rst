@@ -69,52 +69,71 @@ This example shows several core language mechanics in one place:
 Documentation
 -------------
 
-Continue with the specification documents, front-to-back:
+Continue with the specification documents. Nesting groups related documents
+under one theme; within a theme, and across the list top to bottom, each
+document builds mostly on documents already covered above it:
 
-.. list-table::
-   :header-rows: 1
+* `Main ideas <docs/principles.rst>`_ — the five ideas that shape the rest
+  of the language.
+* `Source basics and names <docs/source-and-names.rst>`_ — file layout and
+  indentation, and how names, assignment, and scope work.
+* Types, mutability, and annotations
 
-   * - Document
-     - Purpose
-   * - `Main ideas <docs/principles.rst>`_
-     - The five ideas that shape the rest of the language.
-   * - `Source basics and names <docs/source-and-names.rst>`_
-     - File layout and indentation, and how names, assignment, and scope
-       work.
-   * - `Types, mutability, and annotations <docs/types.rst>`_
-     - What ``type`` means in Lucid versus Python, visible type contracts,
-       type expressions and the ``type`` keyword, recursive type aliases,
-       definition-site variance, higher-kinded parameters, existential
-       types, literal types, mutable/read-only/immutable views,
-       and exact numeric types.
-   * - `Strings and collections <docs/collections.rst>`_
-     - String and collection literals, TypedDict shapes, records instead of
-       tuples, and ``skip`` elision.
-   * - `Calls, indexing, and operators <docs/operators.rst>`_
-     - Call and indexing syntax, positional-before-keyword argument order,
-       partial application with ``_``, the anonymous class, gathering
-       arguments with ``Arguments`` and ``Parameters``, and decorators.
-   * - `Multiple dispatch <docs/dispatch.rst>`_
-     - Why binary operators dispatch on both operands, dispatch requirements
-       in interfaces, ambiguous dispatch, dispatch across projects and
-       hierarchies, and dispatch for ordinary functions.
-   * - `Control flow and statements <docs/control-flow.rst>`_
-     - Conditionals, loops, ``if_broken``, exhaustive pattern matching,
-       recoverable errors as ordinary return types, the ``?`` propagation
-       operator, unrecoverable errors
-       with ``raise``, and unspecified statements.
-   * - `Modules, projects, and public APIs <docs/modules.rst>`_
-     - Re-exports, lazy imports, and how ``project.yaml``/``development.yaml``
-       fit in.
-   * - `Modern type specification <docs/type-specification.rst>`_
-     - The interface, trait, and class model for user-defined types.
-   * - `Project configuration <docs/project-configuration.rst>`_
-     - The structure of ``project.yaml`` and ``development.yaml``, and how
-       they replace ``pyproject.toml`` and ``__init__.py``.
-   * - `Keyword reference <docs/keywords.rst>`_
-     - Every keyword Lucid preserves, discards, and adds, in one place.
+  * `Type vocabulary <docs/types.rst>`_ — what ``type`` means in Lucid
+    versus Python, visible type contracts, type expressions and the
+    ``type`` keyword, recursive type aliases, literal types, no ``Any``
+    escape hatch, and Python interop with ``trust``.
+  * `Mutability <docs/mutability.rst>`_ — mutable, read-only, and
+    immutable views.
+  * `Generics <docs/generics.rst>`_ — definition-site variance,
+    higher-kinded parameters, and existential types.
+  * `Numeric types <docs/numeric-types.rst>`_ — exact numeric annotations
+    and capability interfaces.
 
-These eleven documents are the source of truth for Lucid semantics.
+* Modern type specification
+
+  * `Overview <docs/type-specification.rst>`_ — why Lucid separates
+    interfaces, traits, and classes, and how the three work together.
+  * `Interfaces <docs/interfaces.rst>`_ — obligations, composing field
+    and getter/setter obligations, retroactive implementation, and
+    higher-kinded interfaces.
+  * `Traits <docs/traits.rst>`_ — reusable behavior, and why Lucid
+    replaces Python's multiple inheritance with it.
+  * `Classes <docs/classes.rst>`_ — object shape, attribute access,
+    construction, and single class inheritance.
+
+* `Multiple dispatch <docs/dispatch.rst>`_ — why binary operators dispatch
+  on both operands, dispatch requirements in interfaces, ambiguous
+  dispatch, dispatch across projects and hierarchies, and dispatch for
+  ordinary functions.
+* `Control flow and statements <docs/control-flow.rst>`_ — conditionals,
+  loops, ``if_broken``, exhaustive pattern matching, recoverable errors as
+  ordinary return types, the ``?`` propagation operator, unrecoverable
+  errors with ``raise``, and unspecified statements.
+* `Strings and collections <docs/collections.rst>`_ — string and
+  collection literals, TypedDict shapes, records instead of tuples, and
+  ``skip`` elision.
+* `Indexing <docs/indexing.rst>`_ — comma-separated indexing, no
+  ``__getitem__`` iteration fallback, and unpacking.
+* `Calls <docs/calls.rst>`_ — ``skip`` in calls, positional-before-keyword
+  argument order, partial application with ``_``, and generator call
+  expansion.
+* Parameters and decorators
+
+  * `Parameters and arguments <docs/parameters.rst>`_ — the anonymous
+    class, and gathering arguments with ``Arguments`` and ``Parameters``.
+  * `Decorators <docs/decorators.rst>`_ — identity-preserving ``@``, and
+    decorator factories.
+
+* `Project configuration <docs/project-configuration.rst>`_ — the
+  structure of ``project.yaml`` and ``development.yaml``, and how they
+  replace ``pyproject.toml`` and ``__init__.py``.
+* `Modules, projects, and public APIs <docs/modules.rst>`_ — re-exports,
+  lazy imports, and how ``project.yaml``/``development.yaml`` fit in.
+* `Keyword reference <docs/keywords.rst>`_ — every keyword Lucid
+  preserves, discards, and adds, in one place.
+
+These twenty documents are the source of truth for Lucid semantics.
 
 Current slogan
 --------------

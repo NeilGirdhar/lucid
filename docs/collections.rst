@@ -189,7 +189,7 @@ way Python does:
    first, second = [1, 2]
 
 A plain class is not ``Iterable`` (see
-`No __getitem__ iteration fallback <operators.rst>`_), so a class instance
+`No __getitem__ iteration fallback <indexing.rst>`_), so a class instance
 cannot be unpacked this way — reading its fields by name is the only way
 in. A starred target on the left-hand side collects the remaining elements
 into a ``list``, not a tuple:
@@ -283,7 +283,7 @@ TypedDict shapes in type position
 -------------------------------------
 
 In a type expression (see the ``type`` keyword in
-`Types, mutability, and annotations <types.rst>`_), a brace literal maps
+`Type vocabulary <types.rst>`_), a brace literal maps
 literal keys to per-key types instead of constructing a dict value. This is
 Lucid's TypedDict: an exact dict shape, not a class. Values are ordinary
 dicts, indexed and iterated like any other dict, but each key's value is

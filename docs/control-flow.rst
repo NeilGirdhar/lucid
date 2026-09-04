@@ -175,7 +175,7 @@ independently-checked cases that anyone can add to later, with no
 exhaustiveness check possible, because the set is never closed. A fixed
 ``PyTree`` with two known container shapes is exactly matched to ``match``;
 a version meant to stay open to third parties (see
-`Existential types <types.rst>`_) is exactly matched to dispatch instead.
+`Existential types <generics.rst>`_) is exactly matched to dispatch instead.
 
 Errors: results and exceptions
 -----------------------------------

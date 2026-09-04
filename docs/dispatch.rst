@@ -166,7 +166,7 @@ whatever type shows up at that level:
 Each case only has to be correct on its own — there is no single signature
 that has to hold for every case at once, present and future, the way a
 bounded generic parameter would require (see
-`Higher-kinded interfaces <type-specification.rst>`_ for that alternative,
+`Higher-kinded interfaces <interfaces.rst>`_ for that alternative,
 and when it is worth the extra cost). A third party can add a
 ``tree_map(tree: SomeClass[A], ...)`` case for their own container type
 without touching ``list``, ``dict``, or this code at all — the same
