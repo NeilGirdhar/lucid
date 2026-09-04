@@ -570,10 +570,10 @@ a link back to the original:
 
 .. code-block:: python
 
-   def timed[**P, R](f: Callable[P, R]) -> Callable[P, R]:
-       def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+   def timed[P: Parameters, R](f: Callable[P, R]) -> Callable[P, R]:
+       def wrapper(***args: P) -> R:
            start = now()
-           result = f(*args, **kwargs)
+           result = f(***args)
            log(f.__name__, now() - start)
            return result
        return wrapper
@@ -583,6 +583,11 @@ a link back to the original:
        ...
 
    slow_query.__name__  # "slow_query" — guaranteed by @, not opted into
+
+``P``, bounded by ``Parameters`` rather than a bespoke ParamSpec, is
+inferred at each ``@timed`` application to whatever shape ``f``'s real
+parameter list turns out to be — here, ``(id: int)`` — which is what lets
+``wrapper`` receive and forward exactly the arguments ``f`` accepts.
 
 There is nothing to forget: identity preservation is not a convention a
 decorator can skip, it is what ``@`` means. A decorator that genuinely
@@ -604,7 +609,7 @@ function as an ordinary parameter:
 
 .. code-block:: python
 
-   def lru_cache(f: Callable[P, R], *, maxsize: int) -> Callable[P, R]:
+   def lru_cache[P: Parameters, R](f: Callable[P, R], *, maxsize: int) -> Callable[P, R]:
        ...
 
    @lru_cache(maxsize=128)

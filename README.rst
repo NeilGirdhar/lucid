@@ -92,7 +92,8 @@ Continue with the specification documents, front-to-back:
        tuples, and ``skip`` elision.
    * - `Calls, indexing, and operators <docs/operators.rst>`_
      - Call and indexing syntax, positional-before-keyword argument order,
-       partial application with ``_``, and decorators.
+       partial application with ``_``, the anonymous class, gathering
+       arguments with ``Arguments`` and ``Parameters``, and decorators.
    * - `Multiple dispatch <docs/dispatch.rst>`_
      - Why binary operators dispatch on both operands, dispatch requirements
        in interfaces, ambiguous dispatch, dispatch across projects and
