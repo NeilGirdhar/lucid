@@ -91,7 +91,8 @@ Continue with the specification documents, front-to-back:
      - String and collection literals, TypedDict shapes, records instead of
        tuples, and ``skip`` elision.
    * - `Calls, indexing, and operators <docs/operators.rst>`_
-     - Call and indexing syntax.
+     - Call and indexing syntax, partial application with ``_``, and
+       decorators.
    * - `Multiple dispatch <docs/dispatch.rst>`_
      - Why binary operators dispatch on both operands, dispatch requirements
        in interfaces, ambiguous dispatch, dispatch across projects and
