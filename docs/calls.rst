@@ -71,7 +71,7 @@ Python's tool for fixing some of a call's arguments ahead of time is
 have long struggled to treat it as the ``Callable`` it behaves like.
 
 Lucid reuses ``_`` for this — the same "unspecified" marker already used
-for black-hole assignment (see `Ordinary binding <source-and-names.rst>`_)
+for black-hole assignment (see `Ordinary binding <names.rst>`_)
 and the match wildcard (see
 `Exhaustive pattern matching <control-flow.rst>`_), now in a call's
 argument list. An argument position filled with ``_`` is not a value; it

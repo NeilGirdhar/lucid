@@ -58,7 +58,7 @@ Discarded Python keywords
 
 Lucid discards Python's scope-rebinding declarations — see the ``No global``
 and ``No nonlocal`` rules in
-`Source basics and names <source-and-names.rst>`_:
+`Names, binding, and scope <names.rst>`_:
 
 .. code-block:: text
 

@@ -1,10 +1,11 @@
 Project configuration
 ======================
 
-A Lucid project is configured by two StrictYAML files at its root:
-``project.yaml`` and ``development.yaml``. Between them, these two files take
-over the roles Python spreads across ``pyproject.toml``, ``setup.cfg``, and
-the side-effect code conventionally placed in ``__init__.py``.
+Lucid source files use the ``.lcd`` extension. A Lucid project is configured
+by two StrictYAML files at its root: ``project.yaml`` and
+``development.yaml``. Between them, these two files take over the roles
+Python spreads across ``pyproject.toml``, ``setup.cfg``, and the
+side-effect code conventionally placed in ``__init__.py``.
 
 ``project.yaml`` describes the project as a dependency: what it needs to run,
 what it exposes to other code, and how it is initialized and invoked.

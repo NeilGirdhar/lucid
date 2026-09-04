@@ -54,7 +54,7 @@ argument to become concrete, written with the same subscript syntax
 ordinary type application already uses (``F[_, _]`` for a constructor that
 takes two, and so on). The ``_`` is the same black-hole marker used
 elsewhere for a binding that does not need a name (see
-`Source basics and names <source-and-names.rst>`_) — here, in type
+`Names, binding, and scope <names.rst>`_) — here, in type
 position, it means a type-argument slot the declaration does not need to
 name either.
 

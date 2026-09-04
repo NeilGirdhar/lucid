@@ -130,7 +130,7 @@ positional-before-keyword order every zone already follows:
 - ``_: int, ...`` — variadic keyword: zero or more further keyword
   arguments, each ``int``. ``_`` marks the slot as nameless the same way
   it already does for black-hole assignment
-  (`Ordinary binding <source-and-names.rst>`__) — the key isn't fixed,
+  (`Ordinary binding <names.rst>`__) — the key isn't fixed,
   only the value's type is.
 
 This is inline sugar for a direct ``Parameters`` instantiation:

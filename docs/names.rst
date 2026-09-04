@@ -1,19 +1,9 @@
-Source basics and names
-========================
+Names, binding, and scope
+==========================
 
 .. contents:: Table of contents
    :depth: 3
    :local:
-
-File extension
-----------------
-
-Lucid source files use the ``.lcd`` extension.
-
-Python-like indentation
---------------------------
-
-Lucid uses Python-like indentation and layout.
 
 Ordinary binding
 -------------------

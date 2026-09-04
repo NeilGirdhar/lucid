@@ -75,8 +75,9 @@ document builds mostly on documents already covered above it:
 
 * `Main ideas <docs/principles.rst>`_ — the five ideas that shape the rest
   of the language.
-* `Source basics and names <docs/source-and-names.rst>`_ — file layout and
-  indentation, and how names, assignment, and scope work.
+* `Names, binding, and scope <docs/names.rst>`_ — ordinary binding, final
+  local variables, black-hole assignment with ``_``, and no
+  ``global``/``nonlocal``.
 * Types, mutability, and annotations
 
   * `Type vocabulary <docs/types.rst>`_ — what ``type`` means in Lucid

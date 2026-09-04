@@ -20,7 +20,7 @@ Python readability
 Lucid code should stay easy to read and write in the same way ordinary Python
 is easy to read and write: indentation matters, definitions are direct,
 common control flow is familiar, and simple programs do not need ceremony.
-See `Source basics and names <source-and-names.rst>`_ and
+See `Names, binding, and scope <names.rst>`_ and
 `Control flow and statements <control-flow.rst>`_.
 
 Scala-style type information
