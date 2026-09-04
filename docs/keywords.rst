@@ -33,7 +33,7 @@ New Lucid keywords
 Lucid adds keywords for explicit module boundaries, construction, class
 member kinds, closing off rebinding or further class inheritance or
 overriding, explicit overrides, abstraction, dispatch, external interface
-implementation, type expressions, and elision:
+implementation, type expressions, existential quantification, and elision:
 
 .. code-block:: text
 
@@ -45,6 +45,7 @@ implementation, type expressions, and elision:
    dispatch
    implement
    type
+   any
    if_broken
    skip
    _

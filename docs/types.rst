@@ -143,6 +143,44 @@ drafting, because an unrelated later edit to ``tree_map``'s body could
 otherwise silently change what ``F`` is required to be — exactly the danger
 explicit variance markers already exist to rule out.
 
+Existential types
+-----------------------------
+
+An ordinary interface can already be used directly as a type — ``count:
+SupportsIndex`` already means "any type satisfying ``SupportsIndex``, caller's
+choice, checker doesn't care which." That is existential quantification,
+even though it is ordinary enough that nothing here has called it that
+until now.
+
+It stops working for a higher-kinded interface like ``Functor``, because
+``Functor`` is not itself a complete type — the same reason bare ``list``
+is not. What a recursive alias like ``PyTree`` wants to say is "a value of
+type ``F[PyTree[L]]``, for *some* ``F`` satisfying ``Functor``," which
+bundles two things an ordinary interface-as-type never had to: the
+constraint, and what it is applied to. ``any`` spells that:
+
+.. code-block:: python
+
+   type PyTree[L] = L | any Functor[PyTree[L]]
+
+``any Functor`` stands in for an unnamed ``F`` satisfying ``Functor``, the
+same role ``Self`` plays inside ``Functor``'s own declaration, just
+existentially bound instead of referring back to whatever class the
+declaration is already inside. Subscripting it, ``any Functor[PyTree[L]]``,
+applies that stand-in the same way ``F[PyTree[L]]`` would if ``F`` were a
+real, named, universally-quantified parameter — the two are duals of each
+other, one saying "works for every ``F``," the other "holds some particular
+``F``, unspecified."
+
+This costs nothing at runtime. Every value already carries its own concrete
+class — the same fact `Multiple dispatch <dispatch.rst>`_ already relies
+on — so a value of type ``any Functor[X]`` needs no extra representation;
+whatever concretely `implement <type-specification.rst>`_\ s ``Functor`` is
+already dispatchable the ordinary way. The only new thing ``any`` asks of
+the checker is to accept any concrete ``F[X]`` under one annotation for a
+higher-kinded interface, the same courtesy it already extends to ordinary
+ones.
+
 Mutable, read-only, and immutable views
 -------------------------------------------
 
