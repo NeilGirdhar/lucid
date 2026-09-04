@@ -22,6 +22,42 @@ means:
 
    print(1, 3)
 
+Positional arguments precede keyword arguments
+----------------------------------------------------
+
+Python's rule looks simple — positional arguments come before keyword
+arguments — but its grammar (PEP 448) treats star-unpacking as an
+exception: an unpacked iterable still binds positionally, but is allowed to
+appear in the source *after* a keyword argument, as long as nothing
+double-star-unpacked has appeared yet. Source order and binding order can
+disagree:
+
+.. code-block:: python
+
+   def f(a, b, c):
+       ...
+
+   f(c=3, *[1, 2])   # legal Python: a=1, b=2, c=3
+
+``c=3`` is written first but binds to the last parameter; ``*[1, 2]``,
+written last, supplies the first two. The call has to be read back to
+front to see what it does.
+
+Lucid closes the exception: positional arguments — plain and
+star-unpacked alike — must precede every keyword argument, including
+double-star unpacking, with no interleaving permitted.
+
+.. code-block:: python
+
+   f(*[1, 2], c=3)   # fine
+   f(c=3, *[1, 2])   # error: positional argument follows keyword argument
+
+Within the positional section, plain arguments and ``*``-unpacking can mix
+freely in any relative order, since both bind purely by position, in the
+order written. The same holds for named arguments and ``**``-unpacking
+within the keyword section. The one rule that never bends is between the
+two sections: positional, then keyword, always.
+
 Partial application with ``_``
 ------------------------------------
 
