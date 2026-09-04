@@ -226,6 +226,23 @@ the checker is to accept any concrete ``F[X]`` under one annotation for a
 higher-kinded interface, the same courtesy it already extends to ordinary
 ones.
 
+Literal types
+-----------------------------
+
+``Literal[value]`` is the type whose only inhabitant is that exact value —
+using an ordinary value as a type, the opposite direction from ``type
+<type expression>`` (above), which turns a type into an ordinary value.
+
+``none`` already relies on this every time it appears in a union like
+``Item | none``: that ``none`` means the type containing only the ``none``
+singleton, which is exactly ``Literal[none]``, written without the wrapper
+because ``none`` is common enough to earn the shorthand. Other singleton
+values do not get that exemption and are written out in full:
+
+.. code-block:: python
+
+   type IterResult[T] = T | Literal[iteration.done]
+
 No ``Any`` escape hatch
 -----------------------------
 

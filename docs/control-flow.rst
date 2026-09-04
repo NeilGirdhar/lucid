@@ -17,6 +17,43 @@ Explicit iteration
 ``for`` loops require an explicitly iterable value. A type is iterable only if
 it implements or inherits from ``Iterable``.
 
+Advancing an iterator returns a result, the same way any other recoverable
+outcome does (see `Errors: results and exceptions`_): either the next
+value, or a sentinel meaning there isn't one. Python signals this by
+raising ``StopIteration`` — using an exception for the single most
+ordinary outcome an iterator has, not an exceptional one. Lucid's iterators
+return a value instead:
+
+.. code-block:: python
+
+   import iteration
+
+   type IterResult[T] = T | Literal[iteration.done]
+
+   interface Iterator[+T]:
+       def __next__(self) -> IterResult[T]
+
+``iteration.done`` is a singleton value, not a class — the same shape as
+``none``, just not common enough to earn ``none``'s bare-word exemption in
+type position, so it is written through ``Literal`` (see
+`Literal types <types.rst>`_) instead of getting a type invented to
+represent it. It matches like any other case:
+
+.. code-block:: python
+
+   match cursor.__next__():
+       case Literal[iteration.done]:
+           ...
+       case _:
+           ...
+
+``iteration.done`` lives in the ``iteration`` module rather than being a
+builtin the way ``none`` is: ``none`` is a genuinely universal absence of a
+value, needed everywhere, while ``iteration.done`` only matters to code
+that implements or consumes the iterator protocol directly — a small
+enough audience that an explicit import is the right cost, not a builtin
+every program pays for.
+
 No loop ``else``
 --------------------
 
@@ -140,10 +177,71 @@ exhaustiveness check possible, because the set is never closed. A fixed
 a version meant to stay open to third parties (see
 `Existential types <types.rst>`_) is exactly matched to dispatch instead.
 
+Errors: results and exceptions
+-----------------------------------
+
+Python collapses two different kinds of failure into one mechanism.
+``raise``/``try``/``except`` handle both "this call can fail in an
+ordinary, expected way" — a missing key, a parse failure — and "something
+is broken" — a violated invariant, a bug — and because exceptions carry no
+signature, nothing about a function's type distinguishes the two. Java
+tried to fix the visibility problem by making exceptions checked —
+declared in ``throws``, enforced by the compiler — and got the goal right
+and the mechanism wrong: checked exceptions do not compose with generics
+or lambdas, and one new exception type deep in a call chain forces every
+intermediate signature to change, which is why nearly every language
+designed since has rejected the mechanism while still agreeing with what
+it was reaching for.
+
+Lucid splits the two kinds of failure instead of choosing one mechanism for
+both.
+
+Recoverable errors are ordinary return types
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An expected, recoverable failure is just part of what a function returns —
+a union, handled the same exhaustive way any other union is:
+
+.. code-block:: python
+
+   type ParseResult = Value | ParseError
+
+   def parse(text: str) -> ParseResult:
+       ...
+
+   match parse(text):
+       case Value:
+           ...
+       case ParseError:
+           ...
+
+This needs no new mechanism: it is `Exhaustive pattern matching`_ applied
+to errors, not a separate error-handling feature. The checker already
+refuses to let a case go unhandled, which is the guarantee Java's checked
+exceptions were reaching for, without the signature-propagation cost —
+adding a new failure mode to ``ParseResult`` is an ordinary union change,
+not something every caller up the chain has to redeclare.
+
+Unrecoverable errors keep ``raise``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``raise``/``try``/``except``/``finally`` stay, narrowed to the other kind
+of failure: a broken invariant, a bug, something that should never happen
+— Rust's ``panic!``, not Rust's ``Result``. They are not for everyday,
+expected outcomes the way Python's ``StopIteration``-driven iteration or
+its ``KeyError``-then-catch idiom use them.
+
+``raise`` stays unchecked — not declared in a function's signature, not
+enforced by the checker. That is deliberate, not an oversight: the
+visibility Java wanted from checked exceptions is already delivered by
+recoverable errors being ordinary return types. Checking the broken-
+invariant case too would just be ceremony around something no caller is
+meant to routinely handle in the first place.
+
 Unspecified simple statements
 -----------------------------------
 
 This sketch has not yet specified Lucid's full behavior for ``assert``,
-``pass``, ``del``, ``raise``, ``break``, or ``continue``.
+``pass``, ``del``, ``break``, or ``continue``.
 The ``skip`` keyword is an expression-level elision marker, not a replacement
 for the statement-level ``pass`` placeholder.

@@ -84,8 +84,8 @@ Continue with the specification documents, front-to-back:
    * - `Types, mutability, and annotations <docs/types.rst>`_
      - What ``type`` means in Lucid versus Python, visible type contracts,
        type expressions and the ``type`` keyword, recursive type aliases,
-       definition-site variance, higher-kinded parameters and existential
-       types, mutable/read-only/immutable views,
+       definition-site variance, higher-kinded parameters, existential
+       types, literal types, mutable/read-only/immutable views,
        and exact numeric types.
    * - `Strings and collections <docs/collections.rst>`_
      - String and collection literals, TypedDict shapes, records instead of
@@ -97,8 +97,9 @@ Continue with the specification documents, front-to-back:
        in interfaces, ambiguous dispatch, dispatch across projects and
        hierarchies, and dispatch for ordinary functions.
    * - `Control flow and statements <docs/control-flow.rst>`_
-     - Conditionals, loops, ``if_broken``, exhaustive pattern matching, and
-       unspecified statements.
+     - Conditionals, loops, ``if_broken``, exhaustive pattern matching,
+       recoverable errors as ordinary return types, unrecoverable errors
+       with ``raise``, and unspecified statements.
    * - `Modules, projects, and public APIs <docs/modules.rst>`_
      - Re-exports, lazy imports, and how ``project.yaml``/``development.yaml``
        fit in.
