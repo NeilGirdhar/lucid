@@ -98,7 +98,8 @@ Continue with the specification documents, front-to-back:
        hierarchies, and dispatch for ordinary functions.
    * - `Control flow and statements <docs/control-flow.rst>`_
      - Conditionals, loops, ``if_broken``, exhaustive pattern matching,
-       recoverable errors as ordinary return types, unrecoverable errors
+       recoverable errors as ordinary return types, the ``?`` propagation
+       operator, unrecoverable errors
        with ``raise``, and unspecified statements.
    * - `Modules, projects, and public APIs <docs/modules.rst>`_
      - Re-exports, lazy imports, and how ``project.yaml``/``development.yaml``
