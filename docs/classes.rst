@@ -211,6 +211,30 @@ value is the field's default.
 
 This separates shared class state from stored instance fields.
 
+Field docstrings and metadata
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A field declaration can open an indented block with ``:``, the same suite
+grammar every other compound statement already has. The block holds up to
+two bare statements, in this order and both optional: a string literal,
+the field's docstring, and a dict literal, its metadata:
+
+.. code-block:: python
+
+   class Config:
+       name: str:
+           "the user's display name"
+
+       retries: int = 3:
+           "how many times to retry a failed request"
+           {"cli_flag": "--retries"}
+
+No new keyword or builtin call is needed — the block reads the same way a
+function body's leading string literal already reads as a docstring in
+Python, just made a real, checked part of the field declaration instead
+of an unenforced convention. The ``fields()`` builtin reports both
+alongside each field's name and value.
+
 Final fields
 ~~~~~~~~~~~~
 
@@ -330,23 +354,27 @@ given an instance or the class itself:
 
 .. code-block:: python
 
-   def dispatch fields[T](obj: T) -> Iterable[(name: str, value: object, metadata: dict[str, object])]:
+   def dispatch fields[T](obj: T) -> Iterable[(name: str, value: object, doc: str | none, metadata: dict[str, object])]:
        ...
 
-   def dispatch fields[T](cls: type[T]) -> Iterable[(name: str, metadata: dict[str, object])]:
+   def dispatch fields[T](cls: type[T]) -> Iterable[(name: str, doc: str | none, metadata: dict[str, object])]:
        ...
 
 Both yield fields in declaration order. The instance form pairs each
 field's name with its current value; the class form has no instance to
-read a value from, so it yields only names, alongside whatever metadata
-the field carries. Metadata defaults to an empty ``dict`` — the syntax for
-attaching custom metadata to a field declaration is not yet specified.
+read a value from, so it yields only names. Both carry ``doc`` and
+``metadata`` from `Field docstrings and metadata`_, ``none`` and ``{:}``
+respectively when a field declares neither.
 
 .. code-block:: python
 
-   p = Point(1.0, 2.0)
-   list(fields(p))[0]      # (name="x", value=1.0, metadata={:})
-   list(fields(Point))[0]  # (name="x", metadata={:})
+   class Config:
+       name: str:
+           "the user's display name"
+
+   c = Config("Ada")
+   list(fields(c))[0]      # (name="name", value="Ada", doc="the user's display name", metadata={:})
+   list(fields(Config))[0]  # (name="name", doc="the user's display name", metadata={:})
 
 Caller-captured source locations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
