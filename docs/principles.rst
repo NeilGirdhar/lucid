@@ -181,3 +181,17 @@ propagate it without Go's ``if err != nil`` boilerplate; ``raise`` stays,
 narrowed to broken invariants, unchecked, since nothing about them is
 meant to be routinely handled. See
 `Errors: results and exceptions <control-flow.rst>`_.
+
+Basedpython-style loop bindings
+-----------------------------------
+
+Python's ``for`` loop reuses one binding across every iteration, so a
+closure created inside the loop body captures that shared variable
+instead of the value it appeared to capture: ``fns = []; for i in [1, 2,
+3]: fns.append(def(): print(i))`` prints ``3 3 3`` in Python, since every
+closure shares the one binding the loop kept reassigning.
+
+Lucid gives each iteration a fresh binding instead, following
+``basedpython``: the closures above print ``1 2 3``, each one keeping the
+value from the iteration that created it. See
+`Fresh loop bindings <control-flow.rst>`_.

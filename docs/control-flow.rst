@@ -62,6 +62,41 @@ reach for (see `Name-captured identifiers <classes.rst>`_):
 
    done = Sentinel()
 
+Fresh loop bindings
+------------------------
+
+Python's ``for`` loop reuses one binding across every iteration: the loop
+target is a single variable, reassigned each time around, not a fresh one
+per iteration. A closure created inside the loop body captures that same
+variable, not its value at the moment of capture, so every closure ends up
+seeing whatever the loop left it at when the loop finished, not the value
+it appeared to capture:
+
+.. code-block:: python
+
+   fns = []
+   for i in [1, 2, 3]:
+       fns.append(def(): print(i))
+
+   for f in fns:
+       f()   # 3 3 3 in Python -- every closure shares the one binding
+
+Lucid gives each iteration its own binding instead, following
+``basedpython``: a closure created during one iteration keeps that
+iteration's value, unaffected by any that follow.
+
+.. code-block:: python
+
+   fns[0]()   # 1
+   fns[1]()   # 2
+   fns[2]()   # 3
+
+This is the same fix JavaScript's ``let`` made to its own ``var``-based
+loops, for the same reason: a variable a reader expects to be scoped to
+one iteration should behave that way, not leak its final value into every
+closure that captured it. The rule applies wherever a loop introduces a
+binding, comprehension targets included.
+
 No loop ``else``
 --------------------
 
