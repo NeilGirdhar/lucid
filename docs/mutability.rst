@@ -201,6 +201,13 @@ shared body instead of something synthesized fresh per class:
        def __hash__(self: !Self) -> int:
            ...
 
+``Ord``'s ``__lt__`` does the real field-by-field work; ``__le__``,
+``__gt__``, and ``__ge__`` are each defined generically in terms of
+``__lt__`` and ``__eq__`` instead of walking fields a second time
+(``a <= b`` is ``a < b or a == b``, ``a > b`` is ``b < a``, and so on). A
+class that replaces ``__lt__`` gets correct ``__le__``/``__gt__``/``__ge__``
+for free, unless it replaces those too.
+
 A class declines any of the three with ``without``, required before a
 comparison operator can return anything but ``bool`` — the same way
 `Explicit overrides <traits.rst>`_ requires ``override`` before a trait
@@ -268,4 +275,34 @@ frozen form to reach for, since they have no mutating methods to
 distinguish ``T`` from ``!T`` in the first place — the same reason
 ``&float`` was already "mainly useful for uniform view syntax" rather
 than a real second form (see `Numeric types <numeric-types.rst>`__).
+
+Containers supply their own bodies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``list``, ``dict``, and ``set`` satisfy ``Eq`` — and, where it makes
+sense, ``Ord`` and ``Hashable`` — the same way any class can: by
+supplying their own body instead of the one ``fields()`` would generate.
+None of the three own named fields to walk; they own elements, so the
+generic body would not even type-check for them, the same reason it
+would not for ``Array``. Unlike ``Array``, their comparisons still return
+``bool``, so none of them need ``without``.
+
+Order matters for a ``list``: its equality and hash walk elements by
+position, so ``[1, 2] != [2, 1]``. A ``dict`` and a ``set`` have no
+positions — two dicts with the same pairs inserted in a different order
+are equal, and a ``set`` equals any reordering of itself — so their
+``__eq__`` and ``__hash__`` combine elements order-independently instead.
+None of the three decline ``Hashable`` for any of this: a frozen
+``list``/``dict``/``set`` is hashable exactly when its elements are, the
+same rule as everywhere else.
+
+``dict`` declines ``Ord`` outright — two dicts with different keys have
+no natural less-than, the same reason ``complex`` declines it (see
+`Numeric types <numeric-types.rst>`__). ``set`` keeps ``Ord``, but gives
+``<`` a different meaning than lexicographic order: proper subset,
+matching Python. Only ``__lt__`` and ``__eq__`` need a body of their
+own — ``__le__``, ``__gt__``, and ``__ge__`` are already defined
+generically in terms of those two, and "proper subset or equal" already
+means exactly "subset," so the generic ``__le__`` is correct for ``set``
+unchanged.
 
