@@ -144,6 +144,33 @@ Scalar values are already immutable in practice, so ``&float`` is mainly useful
 for uniform view syntax in generic APIs; it is not the way to spell
 float-like input.
 
+Infinity and NaN
+-------------------
+
+Python spells these two special ``float`` values inconsistently:
+``math.inf`` and ``math.nan`` live in a separate module import, while
+``float("inf")`` and ``float("nan")`` parse a string to reach the same
+values a different way.
+
+Lucid puts both directly on ``float``, as ordinary class member
+variables — no import, no string parsing:
+
+.. code-block:: python
+
+   class float:
+       classvar inf: float
+       classvar nan: float
+
+.. code-block:: python
+
+   distance: float = float.inf
+   result: float = float.nan
+
+``float.nan`` is still IEEE 754 NaN and keeps the one property every
+IEEE 754 float shares: ``float.nan != float.nan``. That is a fact about
+the value, inherited from the standard ``float`` already follows, not a
+Lucid-specific exception to ``Eq``'s usual reflexivity.
+
 Exact ``complex``
 -------------------
 
