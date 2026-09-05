@@ -320,6 +320,34 @@ fields copied from the original object.
    p = Point(1.0, 2.0)
    q = Point.replace(p, y=3.0)
 
+Field reflection with ``fields``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``replace`` and the default constructor both already have to walk a
+class's fields generically. ``fields`` exposes that same walk directly,
+the way Python's ``dataclasses.fields`` does, dispatched on whether it is
+given an instance or the class itself:
+
+.. code-block:: python
+
+   def dispatch fields[T](obj: T) -> Iterable[(name: str, value: object, metadata: dict[str, object])]:
+       ...
+
+   def dispatch fields[T](cls: type[T]) -> Iterable[(name: str, metadata: dict[str, object])]:
+       ...
+
+Both yield fields in declaration order. The instance form pairs each
+field's name with its current value; the class form has no instance to
+read a value from, so it yields only names, alongside whatever metadata
+the field carries. Metadata defaults to an empty ``dict`` — the syntax for
+attaching custom metadata to a field declaration is not yet specified.
+
+.. code-block:: python
+
+   p = Point(1.0, 2.0)
+   list(fields(p))[0]      # (name="x", value=1.0, metadata={:})
+   list(fields(Point))[0]  # (name="x", metadata={:})
+
 Caller-captured source locations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
