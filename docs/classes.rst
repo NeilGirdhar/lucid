@@ -200,7 +200,9 @@ Class member variables
 
 Class member variables are marked with ``classvar``. A plain annotated
 assignment in the class body declares an instance field; if it has a value, that
-value is the field's default.
+value is the field's default — evaluated fresh per instance or shared
+across all of them depending on the field's own type (see
+`Default values <mutability.rst>`_).
 
 .. code-block:: python
 

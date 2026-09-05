@@ -306,3 +306,41 @@ generically in terms of those two, and "proper subset or equal" already
 means exactly "subset," so the generic ``__le__`` is correct for ``set``
 unchanged.
 
+Default values
+------------------
+
+A default value — for a field or for an ordinary function or method
+parameter — is evaluated according to its own declared type, the same
+``T``/``!T`` distinction this document opened with. A ``!T`` default is
+evaluated once and shared: nothing can mutate it, so sharing is harmless.
+A ``T`` default is evaluated fresh at every call or construction instead:
+
+.. code-block:: python
+
+   class Config:
+       tags: list[str] = []        # a fresh, empty list every time
+       limits: !list[int] = ![]    # evaluated once, shared safely
+
+   def process(seen: list[str] = []):  # also fresh every call
+       ...
+
+Python evaluates every default once, at definition time, and shares the
+result across every call afterward. For an immutable default this is
+invisible — sharing a value nothing can change is indistinguishable from
+recomputing it — but for a mutable one it is the language's most
+notorious footgun: ``def f(x=[]): x.append(1)`` accumulates across calls
+that never intended to share anything. Python's own fix,
+``dataclasses.field(default_factory=list)``, covers only dataclass
+fields, leaves ordinary function parameters exposed, and asks an author
+to remember which of two spellings a given default needs. Lucid needs
+neither spelling nor memory: the type already says whether sharing is
+safe, so evaluation timing follows from it automatically, for a field
+default and a parameter default alike.
+
+An impure default — one computed for a side effect rather than a value,
+such as a logging call — is not fully solved by this rule: its type may
+be trivially immutable while the side effect itself still only wants to
+run once, or once per call, an intent neither ``T`` nor ``!T`` records.
+This is a narrower, rarer problem than the aliasing one above, and Python
+does not solve it either.
+
