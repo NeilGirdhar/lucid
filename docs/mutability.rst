@@ -153,3 +153,119 @@ same flaw that makes Python's ``Mapping`` unsound.
 
    stable: !InferenceModel[str] = freeze(working)
 
+Freezing is deep
+~~~~~~~~~~~~~~~~~~~~
+
+``freeze`` freezes every field, recursively, bottoming out at scalars and
+other values with no mutable state to begin with. Nothing shallower would
+honor the guarantee this section opened with: "nothing holding a ``!T``
+can ever see it change underneath it" is false the moment one field is
+still a plain ``T`` that some other part of the program can still reach
+and mutate. A shallow freeze would just be a second name for ``&T``,
+which already covers "this one reference can't write to it."
+
+Equality, ordering, and hashing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Lucid generates three things for every class by default, the same way it
+generates a default constructor when ``__init__`` is left unspecified
+(see `Classes <classes.rst>`_): structural ``Eq``, structural ``Ord``,
+and hashability. All three are traits, not interfaces — each provides a
+real body, not just an obligation, because each just iterates over the
+class's own fields and does the obvious thing: ``Eq`` compares them all,
+``Ord`` compares them in field-declaration order, ``Hashable`` combines
+their hashes.
+
+`Field reflection with fields <classes.rst>`_ yields a class's own fields
+in declaration order — the same walk the generated constructor and
+``replace`` already do — which is what lets each trait below be one real,
+shared body instead of something synthesized fresh per class:
+
+.. code-block:: python
+
+   trait Eq:
+       def dispatch __eq__(lhs: Self, rhs: Self) -> bool:
+           return all(l.value == r.value for l, r in zip(fields(lhs), fields(rhs)))
+
+   trait Ord(Eq):
+       def dispatch __lt__(lhs: Self, rhs: Self) -> bool:
+           ...
+       def dispatch __le__(lhs: Self, rhs: Self) -> bool:
+           ...
+       def dispatch __gt__(lhs: Self, rhs: Self) -> bool:
+           ...
+       def dispatch __ge__(lhs: Self, rhs: Self) -> bool:
+           ...
+
+   trait Hashable:
+       def __hash__(self: !Self) -> int:
+           ...
+
+A class declines any of the three with ``without``, required before a
+comparison operator can return anything but ``bool`` — the same way
+`Explicit overrides <traits.rst>`_ requires ``override`` before a trait
+method's body can be replaced, so the departure is marked, not silent:
+
+.. code-block:: python
+
+   class complex without Ord:
+       ...
+
+   class Array without Eq, Ord:
+       def dispatch __eq__(lhs: Array, rhs: Array) -> Array:
+           ...
+       def dispatch __lt__(lhs: Array, rhs: Array) -> Array:
+           ...
+
+``complex`` declines only ``Ord`` — two complex values have no
+less-than to compare (see `Numeric types <numeric-types.rst>`_) — and
+keeps ``Eq`` and ``Hashable``. ``Array`` declines both: ``==`` and ``<``
+compare elementwise, returning another ``Array`` of booleans rather than
+one ``bool``, because two arrays that agree in some positions and
+disagree in others have no single answer to give. Declining ``Eq`` forces
+declining ``Ord`` and ``Hashable`` along with it — an ordering or a hash
+both presuppose the equality they must stay consistent with — while
+``Ord`` and ``Hashable`` can each be declined on their own, independently
+of the other.
+
+``T`` and ``&T`` are never hashable no matter what ``Eq``/``Ord``/
+``Hashable`` say, for the reason `Read-only view`_ already gave for
+mutation: ``T``'s storage can still change, and ``&T`` views an object
+that can still change through some other reference. Only ``!T`` can
+actually call ``__hash__``, which is why ``Hashable`` requires
+``self: !Self`` rather than the ordinary default. Because freezing is
+deep, every field of a hashable ``!T`` is itself hashable, so Lucid
+derives ``__hash__`` automatically from those fields — the same way it
+derives the rest of ``!T``'s interface from one declaration rather than
+asking an author to hand-write it.
+
+``dict`` and ``set`` require ``!Hashable`` keys
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A key or set member has to survive being hashed once and looked up again
+later, so both bound their element parameter to ``!Hashable``:
+
+.. code-block:: text
+
+   dict[K: !Hashable, +V]
+   set[K: !Hashable]
+
+``!Hashable`` reads the same way ``!InferenceModel`` does — the immutable
+view, here of anything satisfying ``Hashable`` rather than of one named
+class. ``K: Hashable`` alone would not be enough: that only asks whether
+a class has declined ``Hashable``, a fact independent of which view is in
+hand, and a mutable ``T`` can satisfy it in name while still being
+impossible to actually hash. ``!Hashable`` asks for both at once:
+
+.. code-block:: python
+
+   cache: dict[InferenceModel[str], float] = {:}   # error: not !Hashable
+   cache: dict[!InferenceModel[str], float] = {:}  # fine
+   index: dict[!Array, float] = {:}                # error: Array declined Hashable
+
+Scalars such as ``str`` and ``int`` are ``!Hashable`` with no separate
+frozen form to reach for, since they have no mutating methods to
+distinguish ``T`` from ``!T`` in the first place — the same reason
+``&float`` was already "mainly useful for uniform view syntax" rather
+than a real second form (see `Numeric types <numeric-types.rst>`__).
+

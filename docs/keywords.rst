@@ -32,9 +32,10 @@ New Lucid keywords
 
 Lucid adds keywords for explicit module boundaries, construction,
 call-site capture, class member kinds, closing off rebinding or further
-class inheritance or overriding, explicit overrides, abstraction, dispatch,
-external interface implementation, type expressions, existential
-quantification, exhaustive pattern matching, and elision:
+class inheritance or overriding, explicit overrides, declining generated
+behavior, abstraction, dispatch, external interface implementation, type
+expressions, existential quantification, exhaustive pattern matching, and
+elision:
 
 .. code-block:: text
 
@@ -43,6 +44,7 @@ quantification, exhaustive pattern matching, and elision:
    caller from_var_name
    getter setter
    final override
+   without
    interface trait
    dispatch
    implement

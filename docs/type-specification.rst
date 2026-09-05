@@ -52,7 +52,7 @@ report freshness; traits can build higher-level behavior from those obligations:
        getter empty(self) -> bool:
            return self.__len__() == 0
 
-   class MemoryCache[K, V](Cache[K, V], Sized, CacheLookup[K, V], SizedCacheSummary):
+   class MemoryCache[K: !Hashable, V](Cache[K, V], Sized, CacheLookup[K, V], SizedCacheSummary):
        entries: dict[K, V] = {:}
        fresh: set[K] = {}
 
