@@ -144,8 +144,10 @@ copying — nothing holding a ``!T`` can ever see it change underneath it.
    cache: dict[!InferenceModel[str], float] = {:}
    cache[stable] = evaluate(stable)
 
-A mutable value becomes a ``!T`` through ``freeze``, which takes a ``T`` and
-returns the immutable view.
+A mutable value becomes a ``!T`` through ``freeze``, which takes a ``T``
+and returns an immutable copy — not a view onto the same storage, since a
+view would leak mutations from whoever still holds the original ``T``, the
+same flaw that makes Python's ``Mapping`` unsound.
 
 .. code-block:: python
 
