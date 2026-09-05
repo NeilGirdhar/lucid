@@ -111,11 +111,10 @@ Anonymous functions
 ------------------------
 
 Python's ``lambda`` is a second, narrower construct for the same idea a
-``def`` already covers: an expression-only body, its own separate keyword
-borrowed from lambda calculus, no statements allowed at all. Lucid has no
-``lambda``. An anonymous function is just a ``def`` with no name, used as
-an expression instead of a statement — one construct, whether or not it's
-bound to a name:
+``def`` already covers, with its own separate keyword borrowed from
+lambda calculus. Lucid has no ``lambda``. An anonymous function is a
+``def`` with no name, written as a single expression, always, whose value
+it returns:
 
 .. code-block:: python
 
@@ -139,40 +138,33 @@ With nothing to check against, types are written out, same as any named
    f = def(x, y): x + y            # error: no expected type to infer x, y from
    f = def(x: int, y: int): x + y  # fine
 
-A body written on the same line as the ``:`` is a bare expression, whose
-value the anonymous function returns — this is the one shorthand that
-exists only here. `Exhaustive pattern matching <control-flow.rst>`__
-deliberately has no equivalent: a ``match`` case is always a statement
-block, so letting its last line double as a return value would make that
-block "secretly" an expression some of the time. An anonymous function
-has no such ambiguity, because the two forms are never the same shape: a
-body on the ``:`` line is an expression, full stop, and a body on an
-indented block below it is an ordinary statement suite needing its own
-``return``, exactly like a named ``def``:
-
-.. code-block:: python
-
-   def(x: int) -> int:
-       log(x)
-       return x + 1
-
-Zero parameters can drop the empty ``()`` entirely, in either form —
-there is nothing to write between ``def`` and ``:`` when there are no
-parameters to name:
+Zero parameters can drop the empty ``()`` entirely — there is nothing to
+write between ``def`` and ``:`` when there are no parameters to name:
 
 .. code-block:: python
 
    log(info_level, def: f"Some string {blah()}")
 
-   def:
-       log("called")
-       return 1
+An anonymous ``def`` has no block form and no ``return`` — one expression
+is the whole body, full stop. Anything that needs more than one statement
+needs a name. This is the same discipline
+`Exhaustive pattern matching <control-flow.rst>`__ already enforces for
+``match``: a block that sometimes doubles as a value, depending on what
+its last line happens to be, is exactly the ambiguity Lucid avoids
+everywhere else, and an anonymous ``def`` with a block body would be that
+same ambiguity one level up. Naming it removes the ambiguity instead of
+special-casing around it — and loses nothing capability-wise, since a
+named ``def`` nested inside another function closes over its enclosing
+scope exactly as well as an inline one would:
 
-None of this applies to a named ``def``: naming one still means an
-ordinary statement, an indented block, and an explicit ``return``,
-unchanged. The expression-bodied form is deliberately scoped to anonymous
-functions, the short-lived, immediately-consumed values ``lambda`` was
-for — not a second way to write an ordinary function.
+.. code-block:: python
+
+   def make_handler(threshold: int) -> Callable[[int], bool]:
+       def check(x: int) -> bool:
+           if x > threshold:
+               log(f"exceeded: {x}")
+           return x > threshold
+       return check
 
 Generator call expansion
 ----------------------------
