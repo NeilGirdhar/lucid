@@ -202,7 +202,7 @@ variadic:
 .. code-block:: python
 
    def __spread__(self: &Self) -> &Parameters[Self, Never, {:}]:
-       return Parameters.from_fields(self)
+       return Parameters((), {:}, self)
 
 which is why an ordinary class like `Decorators <decorators.rst>`__'s ``(name: str, loud:
 bool)`` spreads as one argument per field: ``pargs`` is the instance
