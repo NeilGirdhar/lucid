@@ -103,7 +103,7 @@ values and for types that explicitly provide the relevant operation.
 
    index: int = 3
    items[index]
-   flags = READ | WRITE
+   flags = read | write
    shifted = flags << 2
 
    index = true        # error: bool is not int
