@@ -31,17 +31,18 @@ New Lucid keywords
 -----------------------
 
 Lucid adds keywords for explicit module boundaries, construction,
-call-site capture, class member kinds, closing off rebinding or further
-class inheritance or overriding, explicit overrides, declining generated
-behavior, abstraction, dispatch, external interface implementation, type
-expressions, existential quantification, exhaustive pattern matching, and
-elision:
+call-site capture, destructuring, class member kinds, closing off
+rebinding or further class inheritance or overriding, explicit
+overrides, declining generated behavior, abstraction, dispatch, external
+interface implementation, type expressions, existential quantification,
+exhaustive pattern matching, and elision:
 
 .. code-block:: text
 
    export
    classmethod classvar factory construct
    caller from_var_name
+   let
    getter setter
    final sealed override
    without

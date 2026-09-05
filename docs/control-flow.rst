@@ -200,12 +200,14 @@ common parent and can inherit fields and methods from it — a capability
 a plain union of unrelated types never had, since nothing ties its
 alternatives together beyond appearing in the same alias.
 
-A ``case`` pattern is just a type — ``case Type:`` narrows the subject to
-``Type`` for that case, using the subject's own name, without introducing
-any pattern grammar of its own. That only works when the subject already is
-a name, the way ``tree`` is above. When it is some other expression — a
-call, an attribute access, anything without a name of its own to reuse —
-``match`` needs one supplied, with ``as``:
+A bare ``case Type:`` pattern just narrows — the subject keeps its own
+name, narrowed to ``Type`` for that case, with nothing pulled out of it.
+``case Type(a, b):`` does both at once, narrowing and destructuring the
+same way `Destructuring with let <names.rst>`_ does outside a ``match``.
+Narrowing by name only works when the subject already is a name, the way
+``tree`` is above. When it is some other expression — a call, an
+attribute access, anything without a name of its own to reuse — ``match``
+needs one supplied, with ``as``:
 
 .. code-block:: python
 
