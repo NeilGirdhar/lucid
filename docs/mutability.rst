@@ -344,3 +344,18 @@ run once, or once per call, an intent neither ``T`` nor ``!T`` records.
 This is a narrower, rarer problem than the aliasing one above, and Python
 does not solve it either.
 
+A default cannot reference another parameter of the same signature —
+``def g(a: int, b: int = a + 1):`` is an error, not a later-bound
+expression evaluated once ``a`` is known. Python already forbids this,
+if only by accident: its defaults evaluate once, in the enclosing scope,
+before any parameter exists to reference. Lucid's own per-call
+evaluation for ``T`` defaults would make it technically possible —
+``a`` really is in scope by the time ``b``'s default would run — but
+allowing it anyway would turn an independent, per-parameter rule into a
+dependency chain sensitive to parameter order: reordering ``a`` and
+``b``, or giving ``a`` its own default, would silently change what
+``b``'s default means. A default stays exactly what it already is
+elsewhere in this section — an expression evaluated on its own, once or
+per call depending on its type — never one that reads another parameter
+to compute itself.
+
