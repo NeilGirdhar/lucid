@@ -101,7 +101,8 @@ document builds mostly on documents already covered above it:
   * `Traits <docs/traits.rst>`_ — reusable behavior, and why Lucid
     replaces Python's multiple inheritance with it.
   * `Classes <docs/classes.rst>`_ — object shape, attribute access,
-    construction, and single class inheritance.
+    construction, caller- and name-captured call-site values, and single
+    class inheritance.
 
 * `Multiple dispatch <docs/dispatch.rst>`_ — why binary operators dispatch
   on both operands, dispatch requirements in interfaces, ambiguous

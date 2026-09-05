@@ -320,6 +320,66 @@ fields copied from the original object.
    p = Point(1.0, 2.0)
    q = Point.replace(p, y=3.0)
 
+Caller-captured source locations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A factory field typed ``SourceLocation`` can be filled with ``caller``, a
+reserved value meaning "the module and line of this call expression."
+Unlike an ordinary default, evaluated once at definition time and reused
+for every call, ``caller`` resolves fresh at each call site:
+
+.. code-block:: python
+
+   class Traceback:
+       location: SourceLocation
+
+       factory __init__(cls):
+           return construct(caller)
+
+   Traceback()   # Traceback at config.lcd:12
+
+This is the same category of mechanism as Rust's ``file!()``/``line!()``
+and ``#[track_caller]``: the substitution is fixed and entirely local to
+the one call expression it appears in — understanding what it does
+requires reading nothing else in the codebase, unlike attribute hooks or
+behavior inherited from elsewhere in a class hierarchy. ``caller`` is
+always available: every call happens somewhere, so there is always a
+module and line to substitute.
+
+Name-captured identifiers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A factory field typed ``VarName`` can be filled with ``from_var_name``, a
+reserved value meaning "the identifier this call's result is being
+assigned to." It resolves the same way ``caller`` does, fresh at each call
+site, but it is not always available: a call is only the direct
+right-hand side of a simple assignment sometimes, not always — it might
+instead be an argument, a return value, or a target of some other shape,
+such as a tuple or chained assignment. Those have no single identifier to
+substitute, and using ``from_var_name`` there is a compile-time error at
+that call site: the checker already knows, from the call's syntax alone,
+whether a name exists to capture, the same way it already knows whether
+``caller`` fills a ``SourceLocation``-typed field.
+
+.. code-block:: python
+
+   class Sentinel:
+       name: VarName
+
+       factory __init__(cls):
+           return construct(from_var_name)
+
+       def __repr__(self: &Self) -> str:
+           return f"<Sentinel {self.name}>"
+
+   missing = Sentinel()   # <Sentinel missing>
+   log(Sentinel())        # error: Sentinel() has no named assignment target
+
+Every ``Sentinel()`` gets the name it was assigned to, with nothing to
+write twice or let drift out of sync — the same category of mechanism as
+Python's ``__set_name__``, just restricted to exactly the one call
+expression it substitutes into instead of a class body.
+
 Value semantics options
 ~~~~~~~~~~~~~~~~~~~~~~~
 

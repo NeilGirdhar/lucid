@@ -30,16 +30,17 @@ preserved Python keywords are:
 New Lucid keywords
 -----------------------
 
-Lucid adds keywords for explicit module boundaries, construction, class
-member kinds, closing off rebinding or further class inheritance or
-overriding, explicit overrides, abstraction, dispatch, external interface
-implementation, type expressions, existential quantification, exhaustive
-pattern matching, and elision:
+Lucid adds keywords for explicit module boundaries, construction,
+call-site capture, class member kinds, closing off rebinding or further
+class inheritance or overriding, explicit overrides, abstraction, dispatch,
+external interface implementation, type expressions, existential
+quantification, exhaustive pattern matching, and elision:
 
 .. code-block:: text
 
    export
    classmethod classvar factory construct
+   caller from_var_name
    getter setter
    final override
    interface trait

@@ -54,6 +54,14 @@ that implements or consumes the iterator protocol directly — a small
 enough audience that an explicit import is the right cost, not a builtin
 every program pays for.
 
+It needs no bespoke definition either — it is an ordinary
+``Sentinel``, the same well-identified singleton any other module can
+reach for (see `Name-captured identifiers <classes.rst>`_):
+
+.. code-block:: python
+
+   done = Sentinel()
+
 No loop ``else``
 --------------------
 
