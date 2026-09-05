@@ -9,10 +9,12 @@ Core principle:
     Keep Python's directness, make structure explicit, and choose the cleaner
     rule when compatibility no longer has to win.
 
-Lucid borrows Python's readable surface syntax, Scala-style definition-site type
-information, Julia-style multiple dispatch, dataclasses' transparent field-first
-objects, and the freedom to follow Python Enhancement Proposals that Python
-could not adopt because of backward compatibility.
+Lucid borrows Python's readable surface syntax, Java-style single class
+inheritance plus multiple interfaces, Scala-style definition-site type
+information, Julia-style multiple dispatch, and Rust's split between
+recoverable and unrecoverable errors — made possible by a zero-deprecation
+release cadence that lets Lucid choose the cleaner rule instead of the
+Python-compatible one throughout the language.
 
 Object state is declared in the class body. Construction returns fully built
 objects. Public module APIs are marked with ``export``. Interfaces declare
