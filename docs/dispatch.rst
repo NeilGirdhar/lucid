@@ -154,24 +154,58 @@ whatever type shows up at that level:
 
 .. code-block:: python
 
-   def dispatch tree_map(tree: list[A], f: Callable[[Array], bool]) -> list[B]:
+   def dispatch tree_map[A, B](tree: list[A], f: Callable[[A], B]) -> list[B]:
        return [tree_map(item, f) for item in tree]
 
-   def dispatch tree_map(tree: dict[X, A], f: Callable[[Array], bool]) -> dict[X, B]:
+   def dispatch tree_map[X, A, B](tree: dict[X, A], f: Callable[[A], B]) -> dict[X, B]:
        return {k: tree_map(v, f) for k, v in tree.items()}
 
-   def dispatch tree_map(tree: Array, f: Callable[[Array], bool]) -> bool:
+   def dispatch tree_map[A, B](tree: A, f: Callable[[A], B]) -> B:
        return f(tree)
 
 Each case only has to be correct on its own — there is no single signature
 that has to hold for every case at once, present and future, the way a
 bounded generic parameter would require (see
 `Higher-kinded interfaces <interfaces.rst>`_ for that alternative,
-and when it is worth the extra cost). A third party can add a
-``tree_map(tree: SomeClass[A], ...)`` case for their own container type
-without touching ``list``, ``dict``, or this code at all — the same
-extensibility `Dispatch across projects and hierarchies`_ already
-described, applied to a plain function instead of an operator.
+and when it is worth the extra cost). The leaf case's ``tree: A`` is fully
+generic, not narrowed to some concrete leaf type, and that does not
+conflict with the two cases above it: ``list[A]`` and ``dict[X, A]`` are
+each strictly more specific than a bare ``A`` for any argument that
+actually is a list or a dict, so this is an ordinary specificity-ordered
+fallback, not the kind of tie `Ambiguous dispatch is an error`_ describes
+— it only ever applies to whatever reaches it as neither a list nor a
+dict. Recursion resolves the next case independently at each level, so
+nothing here commits up front to what a "leaf" is the way ``PyTree``'s
+declaration does.
+
+A third party can add a ``tree_map(tree: SomeClass[A], ...)`` case for
+their own container type without touching ``list``, ``dict``, or this code
+at all — the same extensibility `Dispatch across projects and hierarchies`_
+already described, applied to a plain function instead of an operator:
+
+.. code-block:: python
+
+   def dispatch tree_map[A, B](tree: SomeTree[A], f: Callable[[A], B]) -> SomeTree[B]:
+       return SomeTree(tree_map(tree.left, f), tree_map(tree.right, f))
+
+``tree_reduce`` follows the same shape, folding instead of rebuilding:
+
+.. code-block:: python
+
+   def dispatch tree_reduce[A, B](tree: list[A], f: Callable[[B, A], B], init: B) -> B:
+       acc = init
+       for item in tree:
+           acc = tree_reduce(item, f, acc)
+       return acc
+
+   def dispatch tree_reduce[X, A, B](tree: dict[X, A], f: Callable[[B, A], B], init: B) -> B:
+       acc = init
+       for v in tree.values():
+           acc = tree_reduce(v, f, acc)
+       return acc
+
+   def dispatch tree_reduce[A, B](tree: A, f: Callable[[B, A], B], init: B) -> B:
+       return f(init, tree)
 
 If the set of container shapes is fixed and known instead of open to third
 parties, `Exhaustive pattern matching <control-flow.rst>`_ is the better
