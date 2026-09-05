@@ -21,13 +21,15 @@ with a marker on the short, unqualified name:
    stable: !InferenceModel[str] = freeze(working)
    view: &InferenceModel[str] = working
 
-Python's ``collections.abc`` models mutability as a single inheritance
-chain: ``MutableMapping`` is a subclass of ``Mapping``. That gets the
-mutable-to-read-only direction right, but leaves no sound place for genuine
-immutability. ``Mapping`` doesn't even promise "no mutation methods on this
-object" — it only hides mutation methods from the type checker's view of a
-reference. The underlying object keeps whatever mutation methods its real
-class has, and anyone else holding a reference to it can still call them:
+Python's ``collections.abc`` needs a separate, hand-written class for each
+capability level: ``Mapping`` declares the read-only methods, and
+``MutableMapping`` is a second class, written by hand, adding the mutating
+ones. Nothing stops a third, hand-written ``ImmutableMapping`` from joining
+them — Python just never added one, and ``Mapping`` would be a poor
+foundation for it anyway: it doesn't promise "no mutation," only that this
+one reference hides mutating methods. The underlying object keeps whatever
+methods its real class has, and anyone holding another reference can still
+call them:
 
 .. code-block:: python
 
@@ -38,12 +40,14 @@ class has, and anyone else holding a reference to it can still call them:
    underlying["a"] = 2
    view["a"]  # 2 -- "read-only", but not stable
 
-Python has no ABC for the stronger guarantee, and adding one to the chain
-would not work: a mutable mapping cannot be a subtype of an immutable one
-(mutation would break the promise), and an immutable mapping cannot be a
-subtype of a mutable one (nothing could ever be written to it). Mutable and
-immutable are incomparable, not a chain, so Lucid puts them side by side as
-siblings under the read-only view instead of trying to line them up:
+Lucid generates the family instead of asking an author to hand-write it.
+Declare a type once, with its ordinary mutable methods, and ``&T`` and
+``!T`` both follow from that single declaration: ``&T`` is the same
+interface with every mutating operation removed, and ``!T``, produced by
+``freeze``, is the runtime-frozen instance of it. Both are subtypes of
+``&T`` because both satisfy its reduced interface — the mutable original
+by simply having more methods than it needs to, the frozen form by
+actually being what ``&T`` only promised to look like:
 
 .. code-block:: text
 
