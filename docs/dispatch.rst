@@ -212,3 +212,47 @@ parties, `Exhaustive pattern matching <control-flow.rst>`_ is the better
 fit: it checks that every shape is handled, which an open set of dispatch
 cases cannot do, at the cost of not being extensible the way this version
 is.
+
+No ``@overload``
+--------------------
+
+Python's ``@overload`` fakes multiple signatures for one function: each
+``@overload``-decorated stub has a body of ``...``, existing only for the
+type checker, while a single, separately-written implementation
+underneath does the real work for every case:
+
+.. code-block:: python
+
+   @overload
+   def parse(s: str) -> int: ...
+   @overload
+   def parse(s: bytes) -> int: ...
+   def parse(s):
+       return int(s)
+
+Nothing keeps the stubs and the real implementation in sync but the
+author's own care, and a type checker resolves an ambiguous call by
+picking the first overload that matches, in declaration order — silently
+favoring whichever definition happens to come first, the same failure
+mode `Ambiguous dispatch is an error`_ already rejects for ordinary
+method resolution.
+
+Lucid needs no separate mechanism for this: it is exactly
+`Dispatch beyond operators`_, applied to a function with no shared body
+across its cases:
+
+.. code-block:: python
+
+   def dispatch parse(s: str) -> int:
+       return int(s)
+
+   def dispatch parse(s: bytes) -> int:
+       return int(s.decode())
+
+Every case has a real body — nothing exists only to satisfy a checker —
+and an overlap a type checker would resolve by declaration order is an
+error here instead, the same as any other ambiguous dispatch. It is also
+open the way an ``@overload`` cluster never is: a third party can add
+``parse(s: SomeFormat) -> int`` later without touching this code, the
+same extensibility `Dispatch across projects and hierarchies`_ already
+described.
