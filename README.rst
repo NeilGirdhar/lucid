@@ -120,8 +120,8 @@ document builds mostly on documents already covered above it:
 * `Indexing <docs/indexing.rst>`_ — comma-separated indexing, no
   ``__getitem__`` iteration fallback, and unpacking.
 * `Calls <docs/calls.rst>`_ — ``skip`` in calls, positional-before-keyword
-  argument order, partial application with ``_``, and generator call
-  expansion.
+  argument order, partial application with ``_``, anonymous functions
+  in place of ``lambda``, and generator call expansion.
 * Parameters and decorators
 
   * `Parameters and arguments <docs/parameters.rst>`_ — the anonymous

@@ -70,4 +70,4 @@ report freshness; traits can build higher-level behavior from those obligations:
            return len(self.entries)
 
    cache = MemoryCache[str, User]()
-   user = cache.get_or_put("ada", lambda: load_user("ada"))
+   user = cache.get_or_put("ada", def(): load_user("ada"))

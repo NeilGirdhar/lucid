@@ -107,6 +107,73 @@ special case: given ``f: Callable[(A, B), R]``, ``f(x, _)`` has type
 ``Callable[(B,), R]``, the same way substituting one type parameter of any
 other generic leaves the rest.
 
+Anonymous functions
+------------------------
+
+Python's ``lambda`` is a second, narrower construct for the same idea a
+``def`` already covers: an expression-only body, its own separate keyword
+borrowed from lambda calculus, no statements allowed at all. Lucid has no
+``lambda``. An anonymous function is just a ``def`` with no name, used as
+an expression instead of a statement — one construct, whether or not it's
+bound to a name:
+
+.. code-block:: python
+
+   add = def(x: int, y: int): x + y
+
+Parameter types can be omitted when the position already supplies a
+``Callable[...]`` to check against — the same ordinary generic inference
+partial application above already relies on, not a new mechanism, and
+never inference from how the body uses them:
+
+.. code-block:: python
+
+   add: Callable[[int, int], int] = def(x, y): x + y   # x, y: int, from add's own annotation
+   cache.get_or_put("ada", def(): load_user("ada"))    # (): User, from get_or_put's signature
+
+With nothing to check against, types are written out, same as any named
+``def``:
+
+.. code-block:: python
+
+   f = def(x, y): x + y            # error: no expected type to infer x, y from
+   f = def(x: int, y: int): x + y  # fine
+
+A body written on the same line as the ``:`` is a bare expression, whose
+value the anonymous function returns — this is the one shorthand that
+exists only here. `Exhaustive pattern matching <control-flow.rst>`__
+deliberately has no equivalent: a ``match`` case is always a statement
+block, so letting its last line double as a return value would make that
+block "secretly" an expression some of the time. An anonymous function
+has no such ambiguity, because the two forms are never the same shape: a
+body on the ``:`` line is an expression, full stop, and a body on an
+indented block below it is an ordinary statement suite needing its own
+``return``, exactly like a named ``def``:
+
+.. code-block:: python
+
+   def(x: int) -> int:
+       log(x)
+       return x + 1
+
+Zero parameters can drop the empty ``()`` entirely, in either form —
+there is nothing to write between ``def`` and ``:`` when there are no
+parameters to name:
+
+.. code-block:: python
+
+   log(info_level, def: f"Some string {blah()}")
+
+   def:
+       log("called")
+       return 1
+
+None of this applies to a named ``def``: naming one still means an
+ordinary statement, an indented block, and an explicit ``return``,
+unchanged. The expression-bodied form is deliberately scoped to anonymous
+functions, the short-lived, immediately-consumed values ``lambda`` was
+for — not a second way to write an ordinary function.
+
 Generator call expansion
 ----------------------------
 
