@@ -38,7 +38,7 @@ a link back to the original:
 
 .. code-block:: python
 
-   def timed[P: Parameters, R](f: Callable[P, R]) -> Callable[P, R]:
+   def timed[P: Parameters, R](f: P -> R) -> P -> R:
        def wrapper(***args: P) -> R:
            start = now()
            result = f(***args)
@@ -55,7 +55,11 @@ a link back to the original:
 ``P``, bounded by ``Parameters`` rather than a bespoke ParamSpec, is
 inferred at each ``@timed`` application to whatever shape ``f``'s real
 parameter list turns out to be — here, ``(id: int)`` — which is what lets
-``wrapper`` receive and forward exactly the arguments ``f`` accepts.
+``wrapper`` receive and forward exactly the arguments ``f`` accepts. A
+bare, unparenthesized name on a `function type's <types.rst>`_ left side,
+like ``P`` here, stands for a whole parameter shape not yet known —
+distinct from ``(A, B) -> R``'s parenthesized list of already-concrete
+types.
 
 There is nothing to forget: identity preservation is not a convention a
 decorator can skip, it is what ``@`` means. A decorator that genuinely
@@ -77,7 +81,7 @@ function as an ordinary parameter:
 
 .. code-block:: python
 
-   def lru_cache[P: Parameters, R](f: Callable[P, R], *, maxsize: int) -> Callable[P, R]:
+   def lru_cache[P: Parameters, R](f: P -> R, *, maxsize: int) -> P -> R:
        ...
 
    @lru_cache(maxsize=128)
@@ -85,13 +89,13 @@ function as an ordinary parameter:
        ...
 
 ``lru_cache(maxsize=128)`` is missing exactly one required parameter,
-``f``, and it is shaped like the decoration target — a ``Callable[P, R]``
-producing a ``Callable[P, R]``. At a ``@`` site, that missing parameter is
+``f``, and it is shaped like the decoration target — a ``P -> R``
+producing a ``P -> R``. At a ``@`` site, that missing parameter is
 filled with the decorated function automatically, with no ``_`` needed:
 unlike `Partial application with _ <calls.rst>`_ in an ordinary call, ``@`` already
 knows exactly which argument is missing and what has to go there, so
 there is nothing ambiguous left to mark. If a decorator factory leaves more
-than one ``Callable[P, R]``-shaped parameter unfilled, which one is the
+than one ``P -> R``-shaped parameter unfilled, which one is the
 decoration target is genuinely ambiguous, and that is a compile error;
 ``_`` is the way to disambiguate explicitly, the same as any other partial
 application:

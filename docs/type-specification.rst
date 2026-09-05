@@ -40,7 +40,7 @@ report freshness; traits can build higher-level behavior from those obligations:
        def __len__(self) -> int
 
    trait CacheLookup[K, V](Cache[K, V]):
-       def get_or_put(self, key: K, build: Callable[[], V]) -> V:
+       def get_or_put(self, key: K, build: () -> V) -> V:
            cached = self.get(key)
            if cached is not none and self.is_fresh(key):
                return cached

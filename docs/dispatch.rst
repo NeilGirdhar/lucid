@@ -154,13 +154,13 @@ whatever type shows up at that level:
 
 .. code-block:: python
 
-   def dispatch tree_map[A, B](tree: list[A], f: Callable[[A], B]) -> list[B]:
+   def dispatch tree_map[A, B](tree: list[A], f: (A) -> B) -> list[B]:
        return [tree_map(item, f) for item in tree]
 
-   def dispatch tree_map[X, A, B](tree: dict[X, A], f: Callable[[A], B]) -> dict[X, B]:
+   def dispatch tree_map[X, A, B](tree: dict[X, A], f: (A) -> B) -> dict[X, B]:
        return {k: tree_map(v, f) for k, v in tree.items()}
 
-   def dispatch tree_map[A, B](tree: A, f: Callable[[A], B]) -> B:
+   def dispatch tree_map[A, B](tree: A, f: (A) -> B) -> B:
        return f(tree)
 
 Each case only has to be correct on its own — there is no single signature
@@ -185,26 +185,26 @@ already described, applied to a plain function instead of an operator:
 
 .. code-block:: python
 
-   def dispatch tree_map[A, B](tree: SomeTree[A], f: Callable[[A], B]) -> SomeTree[B]:
+   def dispatch tree_map[A, B](tree: SomeTree[A], f: (A) -> B) -> SomeTree[B]:
        return SomeTree(tree_map(tree.left, f), tree_map(tree.right, f))
 
 ``tree_reduce`` follows the same shape, folding instead of rebuilding:
 
 .. code-block:: python
 
-   def dispatch tree_reduce[A, B](tree: list[A], f: Callable[[B, A], B], init: B) -> B:
+   def dispatch tree_reduce[A, B](tree: list[A], f: (B, A) -> B, init: B) -> B:
        acc = init
        for item in tree:
            acc = tree_reduce(item, f, acc)
        return acc
 
-   def dispatch tree_reduce[X, A, B](tree: dict[X, A], f: Callable[[B, A], B], init: B) -> B:
+   def dispatch tree_reduce[X, A, B](tree: dict[X, A], f: (B, A) -> B, init: B) -> B:
        acc = init
        for v in tree.values():
            acc = tree_reduce(v, f, acc)
        return acc
 
-   def dispatch tree_reduce[A, B](tree: A, f: Callable[[B, A], B], init: B) -> B:
+   def dispatch tree_reduce[A, B](tree: A, f: (B, A) -> B, init: B) -> B:
        return f(init, tree)
 
 If the set of container shapes is fixed and known instead of open to third

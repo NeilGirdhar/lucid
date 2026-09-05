@@ -12,10 +12,10 @@ Core principle:
 Lucid borrows Python's readable surface syntax, Java-style single class
 inheritance plus multiple interfaces, Scala-style definition-site type
 information, Julia-style multiple dispatch, basedpython's fresh
-per-iteration loop bindings, and Rust's split between recoverable and
-unrecoverable errors — made possible by a zero-deprecation release cadence
-that lets Lucid choose the cleaner rule instead of the Python-compatible
-one throughout the language.
+per-iteration loop bindings, Kotlin-style function types, and Rust's
+split between recoverable and unrecoverable errors — made possible by a
+zero-deprecation release cadence that lets Lucid choose the cleaner rule
+instead of the Python-compatible one throughout the language.
 
 Object state is declared in the class body. Construction returns fully built
 objects. Public module APIs are marked with ``export``. Interfaces declare
@@ -76,7 +76,7 @@ Continue with the specification documents. Nesting groups related documents
 under one theme; within a theme, and across the list top to bottom, each
 document builds mostly on documents already covered above it:
 
-* `Main ideas <docs/principles.rst>`_ — the eight ideas that shape the rest
+* `Main ideas <docs/principles.rst>`_ — the nine ideas that shape the rest
   of the language.
 * `Names, binding, and scope <docs/names.rst>`_ — ordinary binding, final
   local variables, black-hole assignment with ``_``, and no
@@ -84,9 +84,9 @@ document builds mostly on documents already covered above it:
 * Types, mutability, and annotations
 
   * `Type vocabulary <docs/types.rst>`_ — what ``type`` means in Lucid
-    versus Python, visible type contracts, type expressions and the
-    ``type`` keyword, recursive type aliases, literal types, no ``Any``
-    escape hatch, and Python interop with ``trust``.
+    versus Python, visible type contracts, function types, type
+    expressions and the ``type`` keyword, recursive type aliases, literal
+    types, no ``Any`` escape hatch, and Python interop with ``trust``.
   * `Mutability <docs/mutability.rst>`_ — mutable, read-only, and
     immutable views.
   * `Generics <docs/generics.rst>`_ — definition-site variance,

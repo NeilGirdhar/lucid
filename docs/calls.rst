@@ -83,9 +83,9 @@ awaiting whatever positions were left unfilled:
    sorted(items, key=score(weights, _))
 
 ``score(weights, _)`` is not a call to ``score`` — it is a value of type
-``Callable[(Item,), float]``, built without calling ``score`` at all, ready
-to be called once ``sorted`` supplies the missing argument itself. No
-import, no wrapper object, no separate type to teach a checker about.
+``(Item) -> float``, built without calling ``score`` at all, ready to be
+called once ``sorted`` supplies the missing argument itself. No import,
+no wrapper object, no separate type to teach a checker about.
 
 Multiple holes fill left to right, matching the order they appear:
 
@@ -94,18 +94,18 @@ Multiple holes fill left to right, matching the order they appear:
    def combine(a: A, b: B, c: C) -> R:
        ...
 
-   combine(_, y, _)   # Callable[(A, C), R]
+   combine(_, y, _)   # (A, C) -> R
 
 A keyword hole stays keyword in the result:
 
 .. code-block:: python
 
-   combine(x, c=_)    # Callable[(C,), R]
+   combine(x, c=_)    # (C) -> R
 
 The type of a partial application is ordinary generic inference, not a
-special case: given ``f: Callable[(A, B), R]``, ``f(x, _)`` has type
-``Callable[(B,), R]``, the same way substituting one type parameter of any
-other generic leaves the rest.
+special case: given ``f: (A, B) -> R``, ``f(x, _)`` has type
+``(B) -> R``, the same way substituting one type parameter of any other
+generic leaves the rest.
 
 Anonymous functions
 ------------------------
@@ -121,13 +121,13 @@ it returns:
    add = def(x: int, y: int): x + y
 
 Parameter types can be omitted when the position already supplies a
-``Callable[...]`` to check against — the same ordinary generic inference
+function type to check against — the same ordinary generic inference
 partial application above already relies on, not a new mechanism, and
 never inference from how the body uses them:
 
 .. code-block:: python
 
-   add: Callable[[int, int], int] = def(x, y): x + y   # x, y: int, from add's own annotation
+   add: (int, int) -> int = def(x, y): x + y           # x, y: int, from add's own annotation
    cache.get_or_put("ada", def(): load_user("ada"))    # (): User, from get_or_put's signature
 
 With nothing to check against, types are written out, same as any named
@@ -159,7 +159,7 @@ scope exactly as well as an inline one would:
 
 .. code-block:: python
 
-   def make_handler(threshold: int) -> Callable[[int], bool]:
+   def make_handler(threshold: int) -> (int) -> bool:
        def check(x: int) -> bool:
            if x > threshold:
                log(f"exceeded: {x}")

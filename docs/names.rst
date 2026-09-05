@@ -121,7 +121,7 @@ Closure state uses the same pattern:
 
 .. code-block:: python
 
-   def make_counter() -> Callable[[], int]:
+   def make_counter() -> () -> int:
        count = Cell(0)
 
        def next() -> int:

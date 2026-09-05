@@ -152,7 +152,7 @@ closed enums is possible here, and Lucid does it:
 
    type PyTree[L] = L | list[PyTree[L]] | dict[str, PyTree[L]]
 
-   def tree_map(tree: PyTree[Array], f: Callable[[Array], bool]) -> PyTree[bool]:
+   def tree_map(tree: PyTree[Array], f: (Array) -> bool) -> PyTree[bool]:
        match tree:
            case Array:
                return f(tree)

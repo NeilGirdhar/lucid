@@ -166,7 +166,7 @@ reaching for a broad tower class.
 
 .. code-block:: python
 
-   def repeat(count: SupportsIndex, action: Callable[[], none]) -> none:
+   def repeat(count: SupportsIndex, action: () -> none) -> none:
        for _ in range(count.__index__()):
            action()
 

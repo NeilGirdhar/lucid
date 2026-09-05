@@ -68,6 +68,39 @@ function's return value. Interface requirements are annotated the same way
        lines: list[str] = [f"Hello, {user.name}"] * times
        return "\n".join(lines)
 
+Function types
+-----------------
+
+A function's type is written the same way its signature already looks:
+``(A, B) -> R``, the same spelling Kotlin uses, in place of Python's
+``Callable[[A, B], R]``. ``->`` already means "returns" everywhere else
+it appears, so a callable's own type reuses it instead of a second,
+bracket-based notation for the same idea:
+
+.. code-block:: python
+
+   def process(handler: (int, str) -> bool) -> none:
+       ...
+
+   add: (int, int) -> int = def(x, y): x + y
+
+The arrow nests to the right for a function returning a function:
+``(int) -> (str) -> bool`` means ``(int) -> ((str) -> bool)``. Zero
+parameters still needs the parens, ``() -> R``; one needs no trailing
+comma, since a type position has no bare parenthesized expression for
+``(int) -> bool`` to be confused with. A named, positional-only, or
+keyword-only parameter list uses the same grammar a real signature does
+— see `Anonymous class <parameters.rst>`_ for the full shape.
+
+This form is recognized only in type positions, the same restriction
+already placed on other type-only syntax: ``(int) -> int`` written where
+a value is expected is an ordinary parenthesized expression, not a
+callable literal. Lucid also has no gradual, any-arity form — Python's
+``Callable[..., R]`` — since that is exactly the ``Any``-shaped escape
+hatch this document already closes off for everyday code; a genuinely
+unknown foreign signature stays ``object``, claimed with ``trust`` like
+any other untyped value crossing the interop boundary.
+
 Type expressions and the ``type`` keyword
 ---------------------------------------------
 

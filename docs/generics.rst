@@ -60,7 +60,7 @@ name either.
 
 .. code-block:: python
 
-   def tree_map[F[_]: Functor, A, B](tree: F[A], f: Callable[[A], B]) -> F[B]:
+   def tree_map[F[_]: Functor, A, B](tree: F[A], f: (A) -> B) -> F[B]:
        return F.map(tree, f)
 
 The same rule that governs variance markers governs ``F[_]``: it must be

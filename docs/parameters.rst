@@ -16,13 +16,13 @@ Anonymous class
 
 `Anonymous record shapes <collections.rst>`_ already give a value shape
 without declaring a name for it: ``(x: int, y: int)``. A callable's own
-parameter list uses the same grammar to fill a ``Callable``'s parameter
-position directly, whenever a function has no variadic zoning of its
-own:
+parameter list uses the same grammar, on the left of a
+`function type's <types.rst>`_ ``->``, whenever a function has no
+variadic zoning of its own:
 
 .. code-block:: python
 
-   Callable[(str, bool), R]
+   (str, bool) -> R
 
 — the type of a function like ``greet(name: str, loud: bool)``.
 
@@ -150,7 +150,7 @@ prefix, since ``path`` is already named separately:
 
 .. code-block:: python
 
-   Callable[(Path, str, ..., *, _: str, ...), Response]
+   (Path, str, ..., *, _: str, ...) -> Response
 
 What isn't ordinary about either is how ``***`` treats ``pargs``,
 ``vpargs``, and ``kwargs`` specifically, on both the gathering and the

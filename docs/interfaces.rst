@@ -267,7 +267,7 @@ a free-standing generic parameter does not have.
 .. code-block:: python
 
    interface Functor:
-       classmethod map[A, B](cls, tree: Self[A], f: Callable[[A], B]) -> Self[B]
+       classmethod map[A, B](cls, tree: Self[A], f: (A) -> B) -> Self[B]
 
 ``list`` was not defined with ``Functor``, so it satisfies it through
 ``implement``:
@@ -275,7 +275,7 @@ a free-standing generic parameter does not have.
 .. code-block:: python
 
    implement Functor for list:
-       classmethod map[A, B](cls, tree: Self[A], f: Callable[[A], B]) -> Self[B]:
+       classmethod map[A, B](cls, tree: Self[A], f: (A) -> B) -> Self[B]:
            return [f(x) for x in tree]
 
 Bounding a free-standing generic parameter by a higher-kinded interface
@@ -285,7 +285,7 @@ instead of the open set of independently-checked cases the dispatch-based
 
 .. code-block:: python
 
-   def tree_map[F[_]: Functor, A, B](tree: F[A], f: Callable[[A], B]) -> F[B]:
+   def tree_map[F[_]: Functor, A, B](tree: F[A], f: (A) -> B) -> F[B]:
        return F.map(tree, f)
 
 Which to reach for is the same question either way: dispatch is enough when

@@ -195,3 +195,19 @@ Lucid gives each iteration a fresh binding instead, following
 ``basedpython``: the closures above print ``1 2 3``, each one keeping the
 value from the iteration that created it. See
 `Fresh loop bindings <control-flow.rst>`_.
+
+Kotlin-style function types
+-------------------------------
+
+Python spells a callable's type ``Callable[[A, B], R]``: two nested
+brackets and a comma-separated list, inherited from having to fit a
+parameter list inside the same square-bracket generic syntax as every
+other type. It reads nothing like the ``def`` whose type it describes.
+
+Lucid spells it ``(A, B) -> R``, matching Kotlin: the same ``->`` a
+``def``'s own return type already uses, applied to the type of a
+function instead of to one definition of it. A parameter list that needs
+names, positional-only or keyword-only zones, or variadic gathering uses
+the same grammar an ordinary signature already does, so the type and the
+definition it describes are never spelled two different ways. See
+`Function types <types.rst>`_.
