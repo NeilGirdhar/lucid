@@ -256,3 +256,76 @@ open the way an ``@overload`` cluster never is: a third party can add
 ``parse(s: SomeFormat) -> int`` later without touching this code, the
 same extensibility `Dispatch across projects and hierarchies`_ already
 described.
+
+Promotion
+------------
+
+A binary operator between two *different* numeric types — ``int32 +
+float32`` — still looks like a job for one dispatch case per type pair.
+For a family with even a handful of members, that is quadratic: every
+pair of numeric types needs its own case, most of them following the
+exact same rule ("convert both to the wider type, then add"), duplicated
+once per pair instead of stated once.
+
+The fix is to stop enumerating pairs and instead give each type exactly
+one fact about itself: what it promotes to when combined with something
+wider. ``Promotes`` demands nothing but that fact, declared as an
+associated type rather than a method — a type relationship belongs at
+the definition site, the same principle already behind definition-site
+variance and mutability views, not something computed by running code:
+
+.. code-block:: python
+
+   interface Promotes:
+       type Wider
+
+   class float32(Promotes):
+       type Wider = float64 | complex64
+
+   class int32(Promotes):
+       type Wider = int64 | float32
+
+   class float64(Promotes):
+       type Wider = complex128
+
+   class complex128(Promotes):
+       type Wider = Never
+
+A type can widen in more than one direction — ``float32`` gains precision
+toward ``float64`` or gains an imaginary part toward ``complex64`` —
+because real promotion is a lattice, not a chain: ``Wider`` names a union
+of immediate neighbors, not a single next step. ``Never``, already used
+elsewhere for "provably no value," marks the top of the lattice.
+
+``promote[A, B]`` is a parameterized type like any other — ``Array[A]``,
+``list[A]``, ``PyTree[L]`` — living in the same type-expression grammar
+every generic type already does. Nothing about *where* it lives is new;
+what is new is *how* it resolves: given two ``Promotes`` types, to their
+least upper bound, the unique type reachable by following ``Wider`` from
+both, closest to both of them, rather than by plain substitution. A
+generic arithmetic operator can then be written once, for the whole
+family, instead of once per pair:
+
+.. code-block:: python
+
+   def dispatch __add__[A: Promotes, B: Promotes](lhs: A, rhs: B) -> promote[A, B]:
+       common = type promote[A, B]
+       return common(lhs) + common(rhs)
+
+``-> promote[A, B]`` is the checker resolving that type; ``type
+promote[A, B]`` inside the body is the same computation, reified into an
+ordinary value the way `Type expressions and the type keyword <types.rst>`__
+already lets any type expression become one, here to get the concrete
+class ``common(lhs)`` needs to call. This case only ever fires when ``A``
+and ``B`` differ — ``int64.__add__(int64, int64)`` is strictly more
+specific, the same rule that already lets ``list[A]`` beat a bare ``A``.
+
+What resolving ``promote[A, B]`` actually takes is still open: the
+checker has to treat each type's declared ``Wider`` as data for a
+graph search — the upward closure of ``A``, the upward closure of ``B``,
+their intersection, and whichever element of that intersection is
+reachable from every other element in it, erroring the way
+`Ambiguous dispatch is an error`_ already does if no such element is
+unique. That is real, new checker machinery, closer to Rust's associated
+types or Haskell's type families than anything committed to elsewhere in
+this spec — worth pursuing, but not yet a settled part of it.
