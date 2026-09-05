@@ -43,7 +43,7 @@ elision:
    classmethod classvar factory construct
    caller from_var_name
    getter setter
-   final override
+   final sealed override
    without
    interface trait
    dispatch

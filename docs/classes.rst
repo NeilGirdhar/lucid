@@ -507,6 +507,51 @@ violate an invariant the implementation depends on, without that decision
 touching anything about fields or ordinary variable bindings — the same
 ``final`` keyword, applied one level up.
 
+Sealed classes
+~~~~~~~~~~~~~~~~
+
+``sealed`` sits between the default and ``final`` on the same axis: an
+ordinary class may be subclassed from anywhere, a ``final`` class cannot
+be subclassed at all, and a ``sealed`` class may be subclassed only by
+classes declared in the same file:
+
+.. code-block:: python
+
+   sealed class Shape:
+       def area(self) -> float
+
+   class Circle(Shape):
+       radius: float
+       def area(self) -> float:
+           return pi * self.radius ** 2
+
+   class Rectangle(Shape):
+       w: float
+       h: float
+       def area(self) -> float:
+           return self.w * self.h
+
+A file elsewhere in the project cannot add a fourth direct subclass of
+``Shape`` — verified the same way ``final`` already verifies that no
+subclass exists anywhere, just narrower in scope. The restriction applies
+only to ``Shape``'s direct subclasses: ``Circle`` and ``Rectangle`` stay
+ordinarily subclassable elsewhere unless they are separately marked
+``sealed`` or ``final``, since ``sealed`` only has to pin down ``Shape``'s
+own variant set, not freeze every subtree beneath it.
+
+A source file is already the unit ``export`` operates on
+(`Project configuration <project-configuration.rst>`_), so there is no
+separate notion of "module" for this to disagree with, the ambiguity
+languages with multi-file modules have to resolve one way or another —
+the file sealing restricts to is the same file every other module
+boundary in Lucid already uses.
+
+Sealing gives `Exhaustive pattern matching <control-flow.rst>`_ a second
+source of closed types, alongside recursive union aliases: a ``match``
+over ``Shape`` with a case for every direct subclass needs no ``case _:``,
+because the checker can see the complete set the same way it already can
+for a union.
+
 No private-name mangling
 ~~~~~~~~~~~~~~~~~~~~~~~~
 

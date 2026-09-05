@@ -168,6 +168,38 @@ alternative, every ``match`` over it that lacks a matching case becomes an
 error at the point it stops being exhaustive, rather than a bug found later
 at runtime.
 
+A union alias is not the only way to close a type. A
+`sealed class <classes.rst>`_ restricts its direct subclasses to the file
+that declares it, so the checker can enumerate them the same way it
+enumerates a union's alternatives:
+
+.. code-block:: python
+
+   sealed class Shape:
+       def area(self) -> float
+
+   class Circle(Shape):
+       radius: float
+       def area(self) -> float:
+           return pi * self.radius ** 2
+
+   class Rectangle(Shape):
+       w: float
+       h: float
+       def area(self) -> float:
+           return self.w * self.h
+
+   match shape:
+       case Circle:
+           ...
+       case Rectangle:
+           ...
+
+Unlike ``PyTree``'s alternatives, ``Circle`` and ``Rectangle`` share a
+common parent and can inherit fields and methods from it — a capability
+a plain union of unrelated types never had, since nothing ties its
+alternatives together beyond appearing in the same alias.
+
 A ``case`` pattern is just a type — ``case Type:`` narrows the subject to
 ``Type`` for that case, using the subject's own name, without introducing
 any pattern grammar of its own. That only works when the subject already is
