@@ -1227,6 +1227,15 @@ impl Parser {
             TokenKind::SlashEq => {
                 self.advance(); Some(BinaryOp::Div)
             }
+            TokenKind::DoubleSlashEq => {
+                self.advance(); Some(BinaryOp::FloorDiv)
+            }
+            TokenKind::PercentEq => {
+                self.advance(); Some(BinaryOp::Mod)
+            }
+            TokenKind::DoubleStarEq => {
+                self.advance(); Some(BinaryOp::Pow)
+            }
             _ => None,
         };
 
@@ -1863,7 +1872,10 @@ impl Parser {
                             break;
                         }
                     } else if depth == 1 {
-                        if *k == TokenKind::Slash || *k == TokenKind::Colon {
+                        if *k == TokenKind::Colon {
+                            is_type_shape = true;
+                        }
+                        if *k == TokenKind::Slash && self.tokens.get(i + 1).map(|t| t.kind == TokenKind::Comma || t.kind == TokenKind::RParen).unwrap_or(false) {
                             is_type_shape = true;
                         }
                         if *k == TokenKind::Star && self.tokens.get(i + 1).map(|t| t.kind == TokenKind::Comma).unwrap_or(false) {

@@ -139,6 +139,9 @@ pub enum TokenKind {
     MinusEq,    // -=
     StarEq,     // *=
     SlashEq,    // /=
+    PercentEq,  // %=
+    DoubleStarEq, // **=
+    DoubleSlashEq, // //=
     At,         // @
     Dot,        // .
     Ellipsis,   // ...
@@ -255,6 +258,9 @@ impl fmt::Display for TokenKind {
             TokenKind::MinusEq => write!(f, "'-='"),
             TokenKind::StarEq => write!(f, "'*='"),
             TokenKind::SlashEq => write!(f, "'/='"),
+            TokenKind::PercentEq => write!(f, "'%='"),
+            TokenKind::DoubleStarEq => write!(f, "'**='"),
+            TokenKind::DoubleSlashEq => write!(f, "'//='"),
             TokenKind::At => write!(f, "'@'"),
             TokenKind::Dot => write!(f, "'.'"),
             TokenKind::Ellipsis => write!(f, "'...'"),

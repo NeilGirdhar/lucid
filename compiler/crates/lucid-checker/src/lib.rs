@@ -80,6 +80,11 @@ impl Type {
             return true;
         }
 
+        // Any is top and bottom (gradual typing)
+        if matches!(self, Type::TypeVar(s) if s == "Any") || matches!(target, Type::TypeVar(s) if s == "Any") {
+            return true;
+        }
+
         // Union subtype: A | B <: Target iff A <: Target and B <: Target
         if let Type::Union(variants) = self {
             return variants.iter().all(|v| v.is_subtype_of(target, env));
@@ -203,6 +208,12 @@ impl TypeChecker {
         env.variables.insert("int".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Int) }, MutabilityView::ReadOnly));
         env.variables.insert("float".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Float) }, MutabilityView::ReadOnly));
         env.variables.insert("bool".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Bool) }, MutabilityView::ReadOnly));
+        env.variables.insert("list".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Class { name: "list".into(), type_args: vec![Type::TypeVar("Any".to_string())], parent: None, traits: vec![], interfaces: vec![], fields: HashMap::new(), is_sealed: false }) }, MutabilityView::ReadOnly));
+        env.variables.insert("abs".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::TypeVar("T".to_string())) }, MutabilityView::ReadOnly));
+        env.variables.insert("round".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::TypeVar("T".to_string())) }, MutabilityView::ReadOnly));
+        env.variables.insert("ord".to_string(), (Type::Function { params: vec![Type::Str], return_type: Box::new(Type::Int) }, MutabilityView::ReadOnly));
+        env.variables.insert("chr".to_string(), (Type::Function { params: vec![Type::Int], return_type: Box::new(Type::Str) }, MutabilityView::ReadOnly));
+        env.variables.insert("time".to_string(), (Type::Function { params: vec![], return_type: Box::new(Type::Float) }, MutabilityView::ReadOnly));
 
         Self { env }
     }
@@ -515,6 +526,9 @@ impl TypeChecker {
                     Type::Class { ref name, ref type_args, .. } if name == "list" => {
                         type_args.first().cloned().unwrap_or(Type::TypeVar("Any".to_string()))
                     }
+                    Type::Class { ref name, .. } if name == "range" => Type::Int,
+                    Type::Class { ref name, .. } if name == "str" => Type::Str,
+                    Type::Str => Type::Str,
                     _ => Type::TypeVar("Any".to_string()),
                 };
 
@@ -572,6 +586,34 @@ impl TypeChecker {
                 for (name, alias) in names {
                     let bound_name = alias.as_ref().unwrap_or(name).clone();
                     self.env.variables.insert(bound_name, (Type::TypeVar("Any".to_string()), MutabilityView::ReadOnly));
+                }
+                Ok(())
+            }
+            Stmt::AugAssign { target, value, span, .. } => {
+                let _ = self.type_of_expr(value)?;
+                match target {
+                    Expr::Ident { name, .. } => {
+                        if let Some((_, view)) = self.env.variables.get(name) {
+                            if *view == MutabilityView::ReadOnly || *view == MutabilityView::Immutable {
+                                return Err(TypeError {
+                                    message: format!("cannot reassign to read-only or immutable variable '{name}'"),
+                                    span: *span,
+                                });
+                            }
+                        }
+                    }
+                    Expr::Attribute { value: obj_expr, attr, .. } => {
+                        let obj_type = self.type_of_expr(obj_expr)?;
+                        if let Type::View { mutability, .. } = obj_type {
+                            if mutability == MutabilityView::ReadOnly || mutability == MutabilityView::Immutable {
+                                return Err(TypeError {
+                                    message: format!("cannot mutate attribute '{attr}' on read-only/immutable view"),
+                                    span: *span,
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 Ok(())
             }
@@ -681,13 +723,22 @@ impl TypeChecker {
                             Ok(lt) // dispatched
                         }
                     }
+                    BinaryOp::Div => Ok(Type::Float),
+                    BinaryOp::FloorDiv => Ok(Type::Int),
+                    BinaryOp::Mod => Ok(Type::Int),
+                    BinaryOp::Pow => {
+                        if lt == Type::Float || rt == Type::Float {
+                            Ok(Type::Float)
+                        } else {
+                            Ok(Type::Int)
+                        }
+                    }
                     BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => {
                         Ok(Type::Bool)
                     }
-                    BinaryOp::In | BinaryOp::NotIn => Ok(Type::Bool),
-                    BinaryOp::Mod => Ok(Type::Int),
+                    BinaryOp::In | BinaryOp::NotIn | BinaryOp::Is | BinaryOp::IsNot => Ok(Type::Bool),
                     BinaryOp::And | BinaryOp::Or => Ok(Type::Bool),
-                    _ => Ok(Type::Int),
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => Ok(Type::Int),
                 }
             }
             Expr::Unary { op, expr, .. } => {
@@ -895,6 +946,22 @@ impl TypeChecker {
                     is_sealed: false,
                 })
             }
+            Expr::Index { value, index, .. } => {
+                let val_t = self.type_of_expr(value)?;
+                if matches!(**index, Expr::Slice { .. }) {
+                    Ok(val_t)
+                } else {
+                    match val_t {
+                        Type::Class { ref name, ref type_args, .. } if name == "list" => {
+                            Ok(type_args.first().cloned().unwrap_or(Type::TypeVar("Any".to_string())))
+                        }
+                        Type::Class { ref name, .. } if name == "str" => Ok(Type::Str),
+                        Type::Str => Ok(Type::Str),
+                        _ => Ok(Type::TypeVar("Any".to_string())),
+                    }
+                }
+            }
+            Expr::Slice { .. } => Ok(Type::TypeVar("Any".to_string())),
             _ => Ok(Type::None),
         }
     }

@@ -14,7 +14,16 @@ name = "lucid-cli"
 version = "0.1.0"
 dependencies = [
  "lucid-checker",
+ "lucid-codegen",
  "lucid-runtime",
+ "lucid-syntax",
+]
+
+[[package]]
+name = "lucid-codegen"
+version = "0.1.0"
+dependencies = [
+ "lucid-checker",
  "lucid-syntax",
 ]
 

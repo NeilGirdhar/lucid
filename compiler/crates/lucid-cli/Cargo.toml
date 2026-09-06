@@ -10,4 +10,5 @@ path = "src/main.rs"
 [dependencies]
 lucid-syntax = { path = "../lucid-syntax" }
 lucid-checker = { path = "../lucid-checker" }
+lucid-codegen = { path = "../lucid-codegen" }
 lucid-runtime = { path = "../lucid-runtime" }

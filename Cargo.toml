@@ -2,6 +2,7 @@
 members = [
     "compiler/crates/lucid-syntax",
     "compiler/crates/lucid-checker",
+    "compiler/crates/lucid-codegen",
     "compiler/crates/lucid-runtime",
     "compiler/crates/lucid-cli",
 ]

@@ -1,0 +1,42 @@
+# Binary Trees Benchmark (Recursive object tree allocation and traversal)
+import time
+
+class Node:
+    def __init__(self, item, left=None, right=None):
+        self.item = item
+        self.left = left
+        self.right = right
+
+def make_tree(item, depth):
+    if depth == 0:
+        return Node(item)
+    item2 = item + item
+    depth1 = depth - 1
+    return Node(item, make_tree(item2 - 1, depth1), make_tree(item2, depth1))
+
+def check_tree(node):
+    if node.left is None:
+        return node.item
+    return node.item + check_tree(node.left) - check_tree(node.right)
+
+min_depth = 4
+max_depth = 10
+stretch_depth = max_depth + 1
+
+t0 = time.time()
+stretch_tree = make_tree(0, stretch_depth)
+print("stretch tree of depth", stretch_depth, "check:", check_tree(stretch_tree))
+
+long_lived_tree = make_tree(0, max_depth)
+
+for depth in range(min_depth, stretch_depth, 2):
+    iterations = 2 ** (max_depth - depth + min_depth)
+    check = 0
+    for i in range(1, iterations + 1):
+        check += check_tree(make_tree(i, depth)) + check_tree(make_tree(-i, depth))
+    print(iterations * 2, "trees of depth", depth, "check:", check)
+
+print("long lived tree of depth", max_depth, "check:", check_tree(long_lived_tree))
+t1 = time.time()
+
+print("binary_trees(10): done time:", t1 - t0)

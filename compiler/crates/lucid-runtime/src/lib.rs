@@ -41,6 +41,11 @@ pub enum Value {
         env: Rc<RefCell<Environment>>,
     },
     Set(Rc<RefCell<Vec<Value>>>),
+    Range {
+        start: i64,
+        stop: i64,
+        step: i64,
+    },
     Skip,
     Sentinel(String),
     Return(Box<Value>),
@@ -57,6 +62,7 @@ impl Value {
             Value::List(_) => "list",
             Value::Dict(_) => "dict",
             Value::Set(_) => "set",
+            Value::Range { .. } => "range",
             Value::Skip => "skip",
             Value::Record(_) => "record",
             Value::Object { class_name, .. } => class_name.as_str(),
@@ -114,6 +120,9 @@ impl PartialEq for Value {
             (Value::None, Value::None) => true,
             (Value::Skip, Value::Skip) => true,
             (Value::Sentinel(a), Value::Sentinel(b)) => a == b,
+            (Value::Range { start: s1, stop: e1, step: st1 }, Value::Range { start: s2, stop: e2, step: st2 }) => {
+                s1 == s2 && e1 == e2 && st1 == st2
+            }
             (Value::List(a), Value::List(b)) => *a.borrow() == *b.borrow(),
             (Value::Set(a), Value::Set(b)) => *a.borrow() == *b.borrow(),
             (Value::Dict(a), Value::Dict(b)) => *a.borrow() == *b.borrow(),
@@ -136,6 +145,13 @@ impl fmt::Debug for Value {
             Value::Str(s) => write!(f, "\"{s}\""),
             Value::None => write!(f, "none"),
             Value::Skip => write!(f, "skip"),
+            Value::Range { start, stop, step } => {
+                if *step == 1 {
+                    write!(f, "range({start}, {stop})")
+                } else {
+                    write!(f, "range({start}, {stop}, {step})")
+                }
+            }
             Value::List(items) => write!(f, "{:?}", *items.borrow()),
             Value::Set(items) => write!(f, "{{{:?}}}", *items.borrow()),
             Value::Dict(entries) => write!(f, "{:?}", *entries.borrow()),
@@ -313,6 +329,309 @@ impl Interpreter {
         }
     }
 
+    pub fn eval_binary_op(&mut self, op: &BinaryOp, lval: Value, rval: Value, span: &Span) -> Result<Value, RuntimeError> {
+        match op {
+            BinaryOp::Add => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
+                (Value::Str(a), Value::Str(b)) => Ok(Value::Str(format!("{a}{b}"))),
+                (Value::List(a), Value::List(b)) => {
+                    let mut combined = a.borrow().clone();
+                    combined.extend(b.borrow().clone());
+                    Ok(Value::List(Rc::new(RefCell::new(combined))))
+                }
+                _ => self.call_dispatch("+", &[lval, rval]),
+            },
+            BinaryOp::Sub => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 - b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a - *b as f64)),
+                _ => self.call_dispatch("-", &[lval, rval]),
+            },
+            BinaryOp::Mul => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 * b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * *b as f64)),
+                (Value::Str(s), Value::Int(n)) => Ok(Value::Str(s.repeat((*n).max(0) as usize))),
+                (Value::List(items), Value::Int(n)) => {
+                    let count = (*n).max(0) as usize;
+                    let inner = items.borrow();
+                    let mut repeated = Vec::with_capacity(inner.len() * count);
+                    for _ in 0..count {
+                        repeated.extend(inner.clone());
+                    }
+                    Ok(Value::List(Rc::new(RefCell::new(repeated))))
+                }
+                (Value::Int(n), Value::List(items)) => {
+                    let count = (*n).max(0) as usize;
+                    let inner = items.borrow();
+                    let mut repeated = Vec::with_capacity(inner.len() * count);
+                    for _ in 0..count {
+                        repeated.extend(inner.clone());
+                    }
+                    Ok(Value::List(Rc::new(RefCell::new(repeated))))
+                }
+                _ => self.call_dispatch("*", &[lval, rval]),
+            },
+            BinaryOp::Div => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => {
+                    if *b == 0 {
+                        Err(RuntimeError { message: "division by zero".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Float(*a as f64 / *b as f64))
+                    }
+                }
+                (Value::Float(a), Value::Float(b)) => {
+                    if *b == 0.0 {
+                        Err(RuntimeError { message: "division by zero".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Float(a / b))
+                    }
+                }
+                (Value::Int(a), Value::Float(b)) => {
+                    if *b == 0.0 {
+                        Err(RuntimeError { message: "division by zero".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Float(*a as f64 / b))
+                    }
+                }
+                (Value::Float(a), Value::Int(b)) => {
+                    if *b == 0 {
+                        Err(RuntimeError { message: "division by zero".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Float(a / *b as f64))
+                    }
+                }
+                _ => self.call_dispatch("/", &[lval, rval]),
+            },
+            BinaryOp::FloorDiv => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => {
+                    if *b == 0 {
+                        Err(RuntimeError { message: "division by zero in //".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Int(a / b))
+                    }
+                }
+                (Value::Float(a), Value::Float(b)) => {
+                    if *b == 0.0 {
+                        Err(RuntimeError { message: "division by zero in //".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Float((a / b).floor()))
+                    }
+                }
+                (Value::Int(a), Value::Float(b)) => {
+                    if *b == 0.0 {
+                        Err(RuntimeError { message: "division by zero in //".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Float((*a as f64 / b).floor()))
+                    }
+                }
+                (Value::Float(a), Value::Int(b)) => {
+                    if *b == 0 {
+                        Err(RuntimeError { message: "division by zero in //".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Float((a / *b as f64).floor()))
+                    }
+                }
+                _ => Err(RuntimeError { message: "unsupported operands for //".to_string(), span: *span }),
+            },
+            BinaryOp::Mod => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => {
+                    if *b == 0 {
+                        Err(RuntimeError { message: "division by zero in %".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Int(a % b))
+                    }
+                }
+                (Value::Float(a), Value::Float(b)) => {
+                    if *b == 0.0 {
+                        Err(RuntimeError { message: "division by zero in %".to_string(), span: *span })
+                    } else {
+                        Ok(Value::Float(a % b))
+                    }
+                }
+                _ => Err(RuntimeError { message: "unsupported operands for %".to_string(), span: *span }),
+            },
+            BinaryOp::Pow => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => {
+                    if *b >= 0 {
+                        if let Ok(exp) = u32::try_from(*b) {
+                            if let Some(res) = a.checked_pow(exp) {
+                                return Ok(Value::Int(res));
+                            }
+                        }
+                        Ok(Value::Float((*a as f64).powi(*b as i32)))
+                    } else {
+                        Ok(Value::Float((*a as f64).powi(*b as i32)))
+                    }
+                }
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.powf(*b))),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a.powi(*b as i32))),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float((*a as f64).powf(*b))),
+                _ => Err(RuntimeError { message: "unsupported operands for **".to_string(), span: *span }),
+            },
+            BinaryOp::BitAnd => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a & b)),
+                (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a && *b)),
+                _ => Err(RuntimeError { message: "unsupported operands for &".to_string(), span: *span }),
+            },
+            BinaryOp::BitOr => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a | b)),
+                (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
+                _ => Err(RuntimeError { message: "unsupported operands for |".to_string(), span: *span }),
+            },
+            BinaryOp::BitXor => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a ^ b)),
+                (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a ^ *b)),
+                _ => Err(RuntimeError { message: "unsupported operands for ^".to_string(), span: *span }),
+            },
+            BinaryOp::Shl => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => {
+                    if *b < 0 {
+                        Err(RuntimeError { message: "negative shift count".to_string(), span: *span })
+                    } else if *b >= 64 {
+                        Ok(Value::Int(0))
+                    } else {
+                        Ok(Value::Int(a << b))
+                    }
+                }
+                _ => Err(RuntimeError { message: "unsupported operands for <<".to_string(), span: *span }),
+            },
+            BinaryOp::Shr => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => {
+                    if *b < 0 {
+                        Err(RuntimeError { message: "negative shift count".to_string(), span: *span })
+                    } else if *b >= 64 {
+                        Ok(Value::Int(0))
+                    } else {
+                        Ok(Value::Int(a >> b))
+                    }
+                }
+                _ => Err(RuntimeError { message: "unsupported operands for >>".to_string(), span: *span }),
+            },
+            BinaryOp::Eq => match (&lval, &rval) {
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) == *b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a == (*b as f64))),
+                _ => Ok(Value::Bool(lval == rval)),
+            },
+            BinaryOp::NotEq => match (&lval, &rval) {
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) != *b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a != (*b as f64))),
+                _ => Ok(Value::Bool(lval != rval)),
+            },
+            BinaryOp::And => {
+                if !self.is_truthy(&lval) {
+                    Ok(lval)
+                } else {
+                    Ok(rval)
+                }
+            }
+            BinaryOp::Or => {
+                if self.is_truthy(&lval) {
+                    Ok(lval)
+                } else {
+                    Ok(rval)
+                }
+            }
+            BinaryOp::Lt => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a < b)),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) < *b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a < (*b as f64))),
+                (Value::Str(a), Value::Str(b)) => Ok(Value::Bool(a < b)),
+                _ => Err(RuntimeError { message: "unsupported operands for <".to_string(), span: *span }),
+            },
+            BinaryOp::Gt => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a > b)),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) > *b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a > (*b as f64))),
+                (Value::Str(a), Value::Str(b)) => Ok(Value::Bool(a > b)),
+                _ => Err(RuntimeError { message: "unsupported operands for >".to_string(), span: *span }),
+            },
+            BinaryOp::LtEq => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) <= *b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a <= (*b as f64))),
+                (Value::Str(a), Value::Str(b)) => Ok(Value::Bool(a <= b)),
+                _ => Err(RuntimeError { message: "unsupported operands for <=".to_string(), span: *span }),
+            },
+            BinaryOp::GtEq => match (&lval, &rval) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a >= b)),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) >= *b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a >= (*b as f64))),
+                (Value::Str(a), Value::Str(b)) => Ok(Value::Bool(a >= b)),
+                _ => Err(RuntimeError { message: "unsupported operands for >=".to_string(), span: *span }),
+            },
+            BinaryOp::In => {
+                let contains = match &rval {
+                    Value::List(l) => l.borrow().contains(&lval),
+                    Value::Set(s) => s.borrow().contains(&lval),
+                    Value::Dict(d) => match &lval {
+                        Value::Str(s) => d.borrow().contains_key(s),
+                        _ => false,
+                    },
+                    Value::Str(s) => match &lval {
+                        Value::Str(sub) => s.contains(sub),
+                        _ => false,
+                    },
+                    _ => return Err(RuntimeError { message: format!("'in' operator not supported for {}", rval.type_name()), span: *span }),
+                };
+                Ok(Value::Bool(contains))
+            }
+            BinaryOp::NotIn => {
+                let contains = match &rval {
+                    Value::List(l) => l.borrow().contains(&lval),
+                    Value::Set(s) => s.borrow().contains(&lval),
+                    Value::Dict(d) => match &lval {
+                        Value::Str(s) => d.borrow().contains_key(s),
+                        _ => false,
+                    },
+                    Value::Str(s) => match &lval {
+                        Value::Str(sub) => s.contains(sub),
+                        _ => false,
+                    },
+                    _ => return Err(RuntimeError { message: format!("'not in' operator not supported for {}", rval.type_name()), span: *span }),
+                };
+                Ok(Value::Bool(!contains))
+            }
+            BinaryOp::Is => {
+                let same = match (&lval, &rval) {
+                    (Value::None, Value::None) => true,
+                    (Value::None, _) | (_, Value::None) => false,
+                    (Value::Bool(a), Value::Bool(b)) => a == b,
+                    (Value::Int(a), Value::Int(b)) => a == b,
+                    (Value::Object { fields: f1, .. }, Value::Object { fields: f2, .. }) => Rc::ptr_eq(f1, f2),
+                    (Value::List(a), Value::List(b)) => Rc::ptr_eq(a, b),
+                    (Value::Dict(a), Value::Dict(b)) => Rc::ptr_eq(a, b),
+                    (Value::Set(a), Value::Set(b)) => Rc::ptr_eq(a, b),
+                    _ => lval == rval,
+                };
+                Ok(Value::Bool(same))
+            }
+            BinaryOp::IsNot => {
+                let same = match (&lval, &rval) {
+                    (Value::None, Value::None) => true,
+                    (Value::None, _) | (_, Value::None) => false,
+                    (Value::Bool(a), Value::Bool(b)) => a == b,
+                    (Value::Int(a), Value::Int(b)) => a == b,
+                    (Value::Object { fields: f1, .. }, Value::Object { fields: f2, .. }) => Rc::ptr_eq(f1, f2),
+                    (Value::List(a), Value::List(b)) => Rc::ptr_eq(a, b),
+                    (Value::Dict(a), Value::Dict(b)) => Rc::ptr_eq(a, b),
+                    (Value::Set(a), Value::Set(b)) => Rc::ptr_eq(a, b),
+                    _ => lval == rval,
+                };
+                Ok(Value::Bool(!same))
+            }
+        }
+    }
+
     fn register_builtins(&mut self) {
         // print(...)
         let print_fn = Rc::new(|args: &[Value], interp: &mut Interpreter| {
@@ -376,20 +695,7 @@ impl Interpreter {
                 n => return Err(RuntimeError { message: format!("range() takes 1 to 3 arguments, got {n}"), span: Span::default() }),
             };
 
-            let mut items = Vec::new();
-            let mut cur = start;
-            if step > 0 {
-                while cur < stop {
-                    items.push(Value::Int(cur));
-                    cur += step;
-                }
-            } else {
-                while cur > stop {
-                    items.push(Value::Int(cur));
-                    cur += step;
-                }
-            }
-            Ok(Value::List(Rc::new(RefCell::new(items))))
+            Ok(Value::Range { start, stop, step })
         });
         self.env.borrow_mut().set("range".to_string(), Value::BuiltinFunction { name: "range".to_string(), func: range_fn });
 
@@ -404,6 +710,14 @@ impl Interpreter {
                 Value::Dict(d) => Ok(Value::Int(d.borrow().len() as i64)),
                 Value::Set(s) => Ok(Value::Int(s.borrow().len() as i64)),
                 Value::Record(r) => Ok(Value::Int(r.borrow().len() as i64)),
+                Value::Range { start, stop, step } => {
+                    let count = if *step > 0 {
+                        if *stop > *start { (*stop - *start + *step - 1) / *step } else { 0 }
+                    } else {
+                        if *start > *stop { (*start - *stop + (-*step) - 1) / (-*step) } else { 0 }
+                    };
+                    Ok(Value::Int(count))
+                }
                 other => Err(RuntimeError {
                     message: format!("object of type '{}' has no len()", other.type_name()),
                     span: Span::default(),
@@ -421,6 +735,16 @@ impl Interpreter {
                 match &args[0] {
                     Value::List(l) => l.borrow().clone(),
                     Value::Set(s) => s.borrow().clone(),
+                    Value::Range { start, stop, step } => {
+                        let mut r = Vec::new();
+                        let mut cur = *start;
+                        if *step > 0 {
+                            while cur < *stop { r.push(Value::Int(cur)); cur += *step; }
+                        } else {
+                            while cur > *stop { r.push(Value::Int(cur)); cur += *step; }
+                        }
+                        r
+                    }
                     other => return Err(RuntimeError { message: format!("min() arg must be iterable, got {}", other.type_name()), span: Span::default() }),
                 }
             } else {
@@ -448,6 +772,16 @@ impl Interpreter {
                 match &args[0] {
                     Value::List(l) => l.borrow().clone(),
                     Value::Set(s) => s.borrow().clone(),
+                    Value::Range { start, stop, step } => {
+                        let mut r = Vec::new();
+                        let mut cur = *start;
+                        if *step > 0 {
+                            while cur < *stop { r.push(Value::Int(cur)); cur += *step; }
+                        } else {
+                            while cur > *stop { r.push(Value::Int(cur)); cur += *step; }
+                        }
+                        r
+                    }
                     other => return Err(RuntimeError { message: format!("max() arg must be iterable, got {}", other.type_name()), span: Span::default() }),
                 }
             } else {
@@ -474,6 +808,16 @@ impl Interpreter {
             let items: Vec<Value> = match &args[0] {
                 Value::List(l) => l.borrow().clone(),
                 Value::Set(s) => s.borrow().clone(),
+                Value::Range { start, stop, step } => {
+                    let mut r = Vec::new();
+                    let mut cur = *start;
+                    if *step > 0 {
+                        while cur < *stop { r.push(Value::Int(cur)); cur += *step; }
+                    } else {
+                        while cur > *stop { r.push(Value::Int(cur)); cur += *step; }
+                    }
+                    r
+                }
                 other => return Err(RuntimeError { message: format!("sum() iterable must be list or set, got {}", other.type_name()), span: Span::default() }),
             };
             let start = if args.len() == 2 { args[1].clone() } else { Value::Int(0) };
@@ -610,6 +954,121 @@ impl Interpreter {
         });
         self.env.borrow_mut().set("bool".to_string(), Value::BuiltinFunction { name: "bool".to_string(), func: bool_fn });
 
+        // list(x)
+        let list_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.is_empty() {
+                return Ok(Value::List(Rc::new(RefCell::new(Vec::new()))));
+            }
+            match &args[0] {
+                Value::List(l) => Ok(Value::List(Rc::new(RefCell::new(l.borrow().clone())))),
+                Value::Set(s) => Ok(Value::List(Rc::new(RefCell::new(s.borrow().clone())))),
+                Value::Range { start, stop, step } => {
+                    let mut items = Vec::new();
+                    let mut cur = *start;
+                    if *step > 0 {
+                        while cur < *stop {
+                            items.push(Value::Int(cur));
+                            cur += *step;
+                        }
+                    } else {
+                        while cur > *stop {
+                            items.push(Value::Int(cur));
+                            cur += *step;
+                        }
+                    }
+                    Ok(Value::List(Rc::new(RefCell::new(items))))
+                }
+                Value::Str(s) => Ok(Value::List(Rc::new(RefCell::new(s.chars().map(|c| Value::Str(c.to_string())).collect())))),
+                other => Err(RuntimeError { message: format!("cannot convert {} to list", other.type_name()), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("list".to_string(), Value::BuiltinFunction { name: "list".to_string(), func: list_fn });
+
+        // abs(x)
+        let abs_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: "abs() takes exactly 1 argument".into(), span: Span::default() });
+            }
+            match &args[0] {
+                Value::Int(n) => Ok(Value::Int(n.abs())),
+                Value::Float(f) => Ok(Value::Float(f.abs())),
+                other => Err(RuntimeError { message: format!("bad operand type for abs(): {}", other.type_name()), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("abs".to_string(), Value::BuiltinFunction { name: "abs".to_string(), func: abs_fn });
+
+        // round(x, [ndigits])
+        let round_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            let (num, ndigits) = match args.len() {
+                1 => (&args[0], 0i64),
+                2 => match &args[1] {
+                    Value::Int(d) => (&args[0], *d),
+                    _ => return Err(RuntimeError { message: "round() ndigits must be an int".into(), span: Span::default() }),
+                },
+                n => return Err(RuntimeError { message: format!("round() takes 1 or 2 arguments (got {n})"), span: Span::default() }),
+            };
+            match num {
+                Value::Int(n) => Ok(Value::Int(*n)),
+                Value::Float(f) => {
+                    if args.len() == 1 {
+                        Ok(Value::Int(f.round() as i64))
+                    } else {
+                        let factor = 10.0f64.powi(ndigits as i32);
+                        Ok(Value::Float((f * factor).round() / factor))
+                    }
+                }
+                other => Err(RuntimeError { message: format!("type {} doesn't define round", other.type_name()), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("round".to_string(), Value::BuiltinFunction { name: "round".to_string(), func: round_fn });
+
+        // ord(c)
+        let ord_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: "ord() takes exactly 1 argument".into(), span: Span::default() });
+            }
+            match &args[0] {
+                Value::Str(s) => {
+                    let mut chars = s.chars();
+                    if let (Some(c), None) = (chars.next(), chars.next()) {
+                        Ok(Value::Int(c as i64))
+                    } else {
+                        Err(RuntimeError { message: format!("ord() expected a character, but string of length {} found", s.len()), span: Span::default() })
+                    }
+                }
+                other => Err(RuntimeError { message: format!("ord() expected string of length 1, but {} found", other.type_name()), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("ord".to_string(), Value::BuiltinFunction { name: "ord".to_string(), func: ord_fn });
+
+        // chr(i)
+        let chr_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: "chr() takes exactly 1 argument".into(), span: Span::default() });
+            }
+            match &args[0] {
+                Value::Int(n) => {
+                    if let Some(c) = char::from_u32(*n as u32) {
+                        Ok(Value::Str(c.to_string()))
+                    } else {
+                        Err(RuntimeError { message: format!("chr() arg not in range: {n}"), span: Span::default() })
+                    }
+                }
+                other => Err(RuntimeError { message: format!("an integer is required (got type {})", other.type_name()), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("chr".to_string(), Value::BuiltinFunction { name: "chr".to_string(), func: chr_fn });
+
+        // time()
+        let time_now_fn = Rc::new(|_args: &[Value], _interp: &mut Interpreter| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            Ok(Value::Float(now))
+        });
+        self.env.borrow_mut().set("time".to_string(), Value::BuiltinFunction { name: "time".to_string(), func: time_now_fn });
+
         // Default multiple dispatch operators (+, -, *, ==, etc.)
         let add_int = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
             match (&args[0], &args[1]) {
@@ -742,7 +1201,22 @@ impl Interpreter {
             let sys_env = Rc::new(RefCell::new(Environment::new()));
             sys_env.borrow_mut().set("platform".to_string(), Value::Str(std::env::consts::OS.to_string()));
             sys_env.borrow_mut().set("version".to_string(), Value::Str("0.1.0".to_string()));
+            sys_env.borrow_mut().set("argv".to_string(), Value::List(Rc::new(RefCell::new(vec![Value::Str("lucid".to_string())]))));
             return Ok(sys_env);
+        }
+
+        if module_name == "time" {
+            let time_env = Rc::new(RefCell::new(Environment::new()));
+            let time_fn = Rc::new(|_args: &[Value], _interp: &mut Interpreter| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64();
+                Ok(Value::Float(now))
+            });
+            time_env.borrow_mut().set("time".to_string(), Value::BuiltinFunction { name: "time".to_string(), func: time_fn.clone() });
+            time_env.borrow_mut().set("monotonic".to_string(), Value::BuiltinFunction { name: "monotonic".to_string(), func: time_fn.clone() });
+            return Ok(time_env);
         }
 
         // Resolve relative module file
@@ -982,12 +1456,136 @@ impl Interpreter {
                             }),
                         }
                     }
+                    Expr::Index { value: obj_expr, index: idx_expr, span: idx_span } => {
+                        let obj = self.eval_expr(obj_expr)?;
+                        let idx = self.eval_expr(idx_expr)?;
+                        match obj {
+                            Value::List(items) => {
+                                match idx {
+                                    Value::Int(i) => {
+                                        let len = items.borrow().len() as i64;
+                                        let actual_i = if i < 0 { len + i } else { i };
+                                        if actual_i < 0 || actual_i >= len {
+                                            return Err(RuntimeError {
+                                                message: format!("list index out of range: index {i}, len {len}"),
+                                                span: *idx_span,
+                                            });
+                                        }
+                                        items.borrow_mut()[actual_i as usize] = val.clone();
+                                    }
+                                    _ => return Err(RuntimeError {
+                                        message: format!("list indices must be integers, got {}", idx.type_name()),
+                                        span: *idx_span,
+                                    }),
+                                }
+                            }
+                            Value::Dict(d) => {
+                                let key_str = match &idx {
+                                    Value::Str(s) => s.clone(),
+                                    Value::Int(n) => n.to_string(),
+                                    other => format!("{other:?}"),
+                                };
+                                d.borrow_mut().insert(key_str, val.clone());
+                            }
+                            _ => return Err(RuntimeError {
+                                message: format!("cannot index assign into {}", obj.type_name()),
+                                span: *idx_span,
+                            }),
+                        }
+                    }
                     _ => return Err(RuntimeError {
                         message: "invalid assignment target".to_string(),
                         span: *span,
                     }),
                 }
                 Ok(val)
+            }
+            Stmt::AugAssign { target, op, value, span } => {
+                let rhs = self.eval_expr(value)?;
+                if let Value::Return(_) = rhs {
+                    return Ok(rhs);
+                }
+                match target {
+                    Expr::Ident { name, span: id_span } => {
+                        let cur = self.env.borrow().get(name).ok_or_else(|| RuntimeError {
+                            message: format!("undefined variable '{name}'"),
+                            span: *id_span,
+                        })?;
+                        let new_val = self.eval_binary_op(op, cur, rhs, span)?;
+                        if !self.env.borrow_mut().mutate(name, new_val.clone()) {
+                            self.env.borrow_mut().set(name.clone(), new_val.clone());
+                        }
+                        Ok(new_val)
+                    }
+                    Expr::Index { value: obj_expr, index: idx_expr, span: idx_span } => {
+                        let obj = self.eval_expr(obj_expr)?;
+                        let idx = self.eval_expr(idx_expr)?;
+                        match obj {
+                            Value::List(items) => {
+                                match idx {
+                                    Value::Int(i) => {
+                                        let len = items.borrow().len() as i64;
+                                        let actual_i = if i < 0 { len + i } else { i };
+                                        if actual_i < 0 || actual_i >= len {
+                                            return Err(RuntimeError {
+                                                message: format!("list index out of range: index {i}, len {len}"),
+                                                span: *idx_span,
+                                            });
+                                        }
+                                        let cur = items.borrow()[actual_i as usize].clone();
+                                        let new_val = self.eval_binary_op(op, cur, rhs, span)?;
+                                        items.borrow_mut()[actual_i as usize] = new_val.clone();
+                                        Ok(new_val)
+                                    }
+                                    _ => return Err(RuntimeError {
+                                        message: format!("list indices must be integers, got {}", idx.type_name()),
+                                        span: *idx_span,
+                                    }),
+                                }
+                            }
+                            Value::Dict(d) => {
+                                let key_str = match &idx {
+                                    Value::Str(s) => s.clone(),
+                                    Value::Int(n) => n.to_string(),
+                                    other => format!("{other:?}"),
+                                };
+                                let cur = d.borrow().get(&key_str).cloned().unwrap_or(Value::Int(0));
+                                let new_val = self.eval_binary_op(op, cur, rhs, span)?;
+                                d.borrow_mut().insert(key_str, new_val.clone());
+                                Ok(new_val)
+                            }
+                            _ => return Err(RuntimeError {
+                                message: format!("cannot index mutate {}", obj.type_name()),
+                                span: *idx_span,
+                            }),
+                        }
+                    }
+                    Expr::Attribute { value: obj_expr, attr, span: attr_span } => {
+                        let obj = self.eval_expr(obj_expr)?;
+                        match obj {
+                            Value::Object { fields, is_frozen, class_name } => {
+                                if *is_frozen.borrow() {
+                                    return Err(RuntimeError {
+                                        message: format!("cannot mutate attribute '{attr}' on frozen object !{class_name}"),
+                                        span: *attr_span,
+                                    });
+                                }
+                                let cur = fields.borrow().get(attr).cloned().unwrap_or(Value::None);
+                                let new_val = self.eval_binary_op(op, cur, rhs, span)?;
+                                fields.borrow_mut().insert(attr.clone(), new_val.clone());
+                                Ok(new_val)
+                            }
+                            _ => return Err(RuntimeError {
+                                message: "cannot set attribute on non-object".to_string(),
+                                span: *attr_span,
+                            }),
+                        }
+                    }
+                    _ => Err(RuntimeError {
+                        message: "invalid augmented assignment target".to_string(),
+                        span: *span,
+                    }),
+                }
             }
             Stmt::If { condition, then_branch, elif_branches, else_branch, .. } => {
                 let cond_val = self.eval_expr(condition)?;
@@ -1007,34 +1605,61 @@ impl Interpreter {
             }
             Stmt::For { target, iterable, body, if_broken, span } => {
                 let iter_val = self.eval_expr(iterable)?;
-                let items = match iter_val {
-                    Value::List(items) => items.borrow().clone(),
-                    Value::Set(items) => items.borrow().clone(),
-                    _ => return Err(RuntimeError {
-                        message: "value is not iterable".to_string(),
-                        span: *span,
-                    }),
-                };
-
                 let mut broken = false;
-                for item in items {
-                    // Fresh iteration binding (basedpython semantics)
-                    let iter_env = Rc::new(RefCell::new(Environment::with_parent(Rc::clone(&self.env))));
-                    let prev_env = Rc::clone(&self.env);
-                    self.env = iter_env;
 
-                    self.bind_pattern(target, item, *span)?;
-                    let res = self.eval_block(body);
-                    self.env = prev_env;
+                if let Value::Range { start, stop, step } = iter_val {
+                    let mut cur = start;
+                    while (step > 0 && cur < stop) || (step < 0 && cur > stop) {
+                        let iter_env = Rc::new(RefCell::new(Environment::with_parent(Rc::clone(&self.env))));
+                        let prev_env = Rc::clone(&self.env);
+                        self.env = iter_env;
 
-                    match res {
-                        Ok(Value::Sentinel(s)) if s == "__break__" => {
-                            broken = true;
-                            break;
+                        self.bind_pattern(target, Value::Int(cur), *span)?;
+                        let res = self.eval_block(body);
+                        self.env = prev_env;
+
+                        match res {
+                            Ok(Value::Sentinel(s)) if s == "__break__" => {
+                                broken = true;
+                                break;
+                            }
+                            Ok(Value::Sentinel(s)) if s == "__continue__" => {}
+                            Ok(Value::Return(val)) => return Ok(Value::Return(val)),
+                            Ok(v) => { let _ = v; }
+                            Err(e) => return Err(e),
                         }
-                        Ok(Value::Sentinel(s)) if s == "__continue__" => continue,
-                        Ok(v) => { let _ = v; }
-                        Err(e) => return Err(e),
+                        cur += step;
+                    }
+                } else {
+                    let items = match iter_val {
+                        Value::List(items) => items.borrow().clone(),
+                        Value::Set(items) => items.borrow().clone(),
+                        _ => return Err(RuntimeError {
+                            message: "value is not iterable".to_string(),
+                            span: *span,
+                        }),
+                    };
+
+                    for item in items {
+                        // Fresh iteration binding (basedpython semantics)
+                        let iter_env = Rc::new(RefCell::new(Environment::with_parent(Rc::clone(&self.env))));
+                        let prev_env = Rc::clone(&self.env);
+                        self.env = iter_env;
+
+                        self.bind_pattern(target, item, *span)?;
+                        let res = self.eval_block(body);
+                        self.env = prev_env;
+
+                        match res {
+                            Ok(Value::Sentinel(s)) if s == "__break__" => {
+                                broken = true;
+                                break;
+                            }
+                            Ok(Value::Sentinel(s)) if s == "__continue__" => continue,
+                            Ok(Value::Return(val)) => return Ok(Value::Return(val)),
+                            Ok(v) => { let _ = v; }
+                            Err(e) => return Err(e),
+                        }
                     }
                 }
 
@@ -1060,6 +1685,7 @@ impl Interpreter {
                             break;
                         }
                         Ok(Value::Sentinel(s)) if s == "__continue__" => continue,
+                        Ok(Value::Return(val)) => return Ok(Value::Return(val)),
                         Ok(v) => { let _ = v; }
                         Err(e) => return Err(e),
                     }
@@ -1173,92 +1799,7 @@ impl Interpreter {
             Expr::Binary { op, left, right, span } => {
                 let lval = self.eval_expr(left)?;
                 let rval = self.eval_expr(right)?;
-
-                match op {
-                    BinaryOp::Add => self.call_dispatch("+", &[lval, rval]),
-                    BinaryOp::Sub => self.call_dispatch("-", &[lval, rval]),
-                    BinaryOp::Mul => self.call_dispatch("*", &[lval, rval]),
-                    BinaryOp::Div => self.call_dispatch("/", &[lval, rval]),
-                    BinaryOp::Eq => self.call_dispatch("==", &[lval, rval]),
-                    BinaryOp::NotEq => Ok(Value::Bool(lval != rval)),
-                    BinaryOp::And => {
-                        if !self.is_truthy(&lval) {
-                            Ok(lval)
-                        } else {
-                            Ok(rval)
-                        }
-                    }
-                    BinaryOp::Or => {
-                        if self.is_truthy(&lval) {
-                            Ok(lval)
-                        } else {
-                            Ok(rval)
-                        }
-                    }
-                    BinaryOp::Lt => match (&lval, &rval) {
-                        (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
-                        (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a < b)),
-                        _ => Err(RuntimeError { message: "unsupported operands for <".to_string(), span: *span }),
-                    },
-                    BinaryOp::Gt => match (&lval, &rval) {
-                        (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
-                        (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a > b)),
-                        _ => Err(RuntimeError { message: "unsupported operands for >".to_string(), span: *span }),
-                    },
-                    BinaryOp::LtEq => match (&lval, &rval) {
-                        (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
-                        (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
-                        _ => Err(RuntimeError { message: "unsupported operands for <=".to_string(), span: *span }),
-                    },
-                    BinaryOp::GtEq => match (&lval, &rval) {
-                        (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
-                        (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a >= b)),
-                        _ => Err(RuntimeError { message: "unsupported operands for >=".to_string(), span: *span }),
-                    },
-                    BinaryOp::Mod => match (&lval, &rval) {
-                        (Value::Int(a), Value::Int(b)) => {
-                            if *b == 0 {
-                                Err(RuntimeError { message: "division by zero in %".to_string(), span: *span })
-                            } else {
-                                Ok(Value::Int(a % b))
-                            }
-                        }
-                        _ => Err(RuntimeError { message: "unsupported operands for %".to_string(), span: *span }),
-                    },
-                    BinaryOp::In => {
-                        let contains = match &rval {
-                            Value::List(l) => l.borrow().contains(&lval),
-                            Value::Set(s) => s.borrow().contains(&lval),
-                            Value::Dict(d) => match &lval {
-                                Value::Str(s) => d.borrow().contains_key(s),
-                                _ => false,
-                            },
-                            Value::Str(s) => match &lval {
-                                Value::Str(sub) => s.contains(sub),
-                                _ => false,
-                            },
-                            _ => return Err(RuntimeError { message: format!("'in' operator not supported for {}", rval.type_name()), span: *span }),
-                        };
-                        Ok(Value::Bool(contains))
-                    }
-                    BinaryOp::NotIn => {
-                        let contains = match &rval {
-                            Value::List(l) => l.borrow().contains(&lval),
-                            Value::Set(s) => s.borrow().contains(&lval),
-                            Value::Dict(d) => match &lval {
-                                Value::Str(s) => d.borrow().contains_key(s),
-                                _ => false,
-                            },
-                            Value::Str(s) => match &lval {
-                                Value::Str(sub) => s.contains(sub),
-                                _ => false,
-                            },
-                            _ => return Err(RuntimeError { message: format!("'not in' operator not supported for {}", rval.type_name()), span: *span }),
-                        };
-                        Ok(Value::Bool(!contains))
-                    }
-                    _ => Err(RuntimeError { message: "unimplemented operator".to_string(), span: *span }),
-                }
+                self.eval_binary_op(op, lval, rval, span)
             }
             Expr::Unary { op, expr, span } => {
                 let val = self.eval_expr(expr)?;
@@ -1750,6 +2291,74 @@ impl Interpreter {
             }
             Expr::Index { value, index, span } => {
                 let obj = self.eval_expr(value)?;
+                if let Expr::Slice { ref start, ref stop, ref step, span: slice_span } = **index {
+                    let start_val = if let Some(ref s) = start {
+                        match self.eval_expr(s)? {
+                            Value::Int(i) => Some(i),
+                            _ => return Err(RuntimeError { message: "slice start must be an integer".into(), span: slice_span }),
+                        }
+                    } else { None };
+                    let stop_val = if let Some(ref s) = stop {
+                        match self.eval_expr(s)? {
+                            Value::Int(i) => Some(i),
+                            _ => return Err(RuntimeError { message: "slice stop must be an integer".into(), span: slice_span }),
+                        }
+                    } else { None };
+                    let step_val = if let Some(ref s) = step {
+                        match self.eval_expr(s)? {
+                            Value::Int(i) => {
+                                if i == 0 {
+                                    return Err(RuntimeError { message: "slice step cannot be zero".into(), span: slice_span });
+                                }
+                                i
+                            }
+                            _ => return Err(RuntimeError { message: "slice step must be an integer".into(), span: slice_span }),
+                        }
+                    } else { 1 };
+
+                    match obj {
+                        Value::List(l) => {
+                            let items = l.borrow();
+                            let len = items.len() as i64;
+                            let mut cur = start_val.map(|s| if s < 0 { (len + s).max(0) } else { s.min(len) }).unwrap_or(if step_val > 0 { 0 } else { len - 1 });
+                            let end = stop_val.map(|s| if s < 0 { (len + s).max(0) } else { s.min(len) }).unwrap_or(if step_val > 0 { len } else { -1 });
+                            let mut res = Vec::new();
+                            if step_val > 0 {
+                                while cur < end && cur < len {
+                                    res.push(items[cur as usize].clone());
+                                    cur += step_val;
+                                }
+                            } else {
+                                while cur > end && cur >= 0 {
+                                    res.push(items[cur as usize].clone());
+                                    cur += step_val;
+                                }
+                            }
+                            return Ok(Value::List(Rc::new(RefCell::new(res))));
+                        }
+                        Value::Str(s) => {
+                            let chars: Vec<char> = s.chars().collect();
+                            let len = chars.len() as i64;
+                            let mut cur = start_val.map(|st| if st < 0 { (len + st).max(0) } else { st.min(len) }).unwrap_or(if step_val > 0 { 0 } else { len - 1 });
+                            let end = stop_val.map(|st| if st < 0 { (len + st).max(0) } else { st.min(len) }).unwrap_or(if step_val > 0 { len } else { -1 });
+                            let mut res = String::new();
+                            if step_val > 0 {
+                                while cur < end && cur < len {
+                                    res.push(chars[cur as usize]);
+                                    cur += step_val;
+                                }
+                            } else {
+                                while cur > end && cur >= 0 {
+                                    res.push(chars[cur as usize]);
+                                    cur += step_val;
+                                }
+                            }
+                            return Ok(Value::Str(res));
+                        }
+                        _ => return Err(RuntimeError { message: format!("slice not supported on {}", obj.type_name()), span: *span }),
+                    }
+                }
+
                 let idx = self.eval_expr(index)?;
                 match (obj, idx) {
                     (Value::List(list), Value::Int(i)) => {
@@ -1766,6 +2375,21 @@ impl Interpreter {
                             });
                         }
                         Ok(vec[actual_idx as usize].clone())
+                    }
+                    (Value::Str(s), Value::Int(i)) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let actual_idx = if i < 0 {
+                            chars.len() as i64 + i
+                        } else {
+                            i
+                        };
+                        if actual_idx < 0 || actual_idx as usize >= chars.len() {
+                            return Err(RuntimeError {
+                                message: format!("index {i} out of range"),
+                                span: *span,
+                            });
+                        }
+                        Ok(Value::Str(chars[actual_idx as usize].to_string()))
                     }
                     (Value::Dict(dict), Value::Str(k)) => {
                         dict.borrow().get(&k).cloned().ok_or_else(|| RuntimeError {
@@ -1793,8 +2417,8 @@ impl Interpreter {
                             span: *span,
                         })
                     }
-                    _ => Err(RuntimeError {
-                        message: "indexing not supported on this type".to_string(),
+                    (other_obj, _) => Err(RuntimeError {
+                        message: format!("indexing not supported on {}", other_obj.type_name()),
                         span: *span,
                     }),
                 }
@@ -1883,6 +2507,16 @@ impl Interpreter {
                 let items: Vec<Value> = match iter_val {
                     Value::List(l) => l.borrow().clone(),
                     Value::Set(s) => s.borrow().clone(),
+                    Value::Range { start, stop, step } => {
+                        let mut r = Vec::new();
+                        let mut cur = start;
+                        if step > 0 {
+                            while cur < stop { r.push(Value::Int(cur)); cur += step; }
+                        } else {
+                            while cur > stop { r.push(Value::Int(cur)); cur += step; }
+                        }
+                        r
+                    }
                     _ => Vec::new(),
                 };
                 let mut results = Vec::new();
@@ -1908,6 +2542,16 @@ impl Interpreter {
                 let items: Vec<Value> = match iter_val {
                     Value::List(l) => l.borrow().clone(),
                     Value::Set(s) => s.borrow().clone(),
+                    Value::Range { start, stop, step } => {
+                        let mut r = Vec::new();
+                        let mut cur = start;
+                        if step > 0 {
+                            while cur < stop { r.push(Value::Int(cur)); cur += step; }
+                        } else {
+                            while cur > stop { r.push(Value::Int(cur)); cur += step; }
+                        }
+                        r
+                    }
                     _ => Vec::new(),
                 };
                 let mut results = Vec::new();
@@ -1933,6 +2577,16 @@ impl Interpreter {
                 let items: Vec<Value> = match iter_val {
                     Value::List(l) => l.borrow().clone(),
                     Value::Set(s) => s.borrow().clone(),
+                    Value::Range { start, stop, step } => {
+                        let mut r = Vec::new();
+                        let mut cur = start;
+                        if step > 0 {
+                            while cur < stop { r.push(Value::Int(cur)); cur += step; }
+                        } else {
+                            while cur > stop { r.push(Value::Int(cur)); cur += step; }
+                        }
+                        r
+                    }
                     _ => Vec::new(),
                 };
                 let mut results = HashMap::new();

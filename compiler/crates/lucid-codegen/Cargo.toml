@@ -1,0 +1,8 @@
+[package]
+name = "lucid-codegen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lucid-syntax = { path = "../lucid-syntax" }
+lucid-checker = { path = "../lucid-checker" }

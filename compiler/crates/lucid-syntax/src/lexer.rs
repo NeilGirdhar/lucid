@@ -246,6 +246,13 @@ impl<'a> Lexer<'a> {
                         Span::new(start_pos, start_pos + 3, start_line, start_col),
                     )));
                 }
+                if self.peek_char() == Some('=') {
+                    self.advance_char();
+                    return Ok(Some(Token::new(
+                        TokenKind::DoubleStarEq,
+                        Span::new(start_pos, start_pos + 3, start_line, start_col),
+                    )));
+                }
                 return Ok(Some(Token::new(
                     TokenKind::DoubleStar,
                     Span::new(start_pos, start_pos + 2, start_line, start_col),
@@ -303,11 +310,18 @@ impl<'a> Lexer<'a> {
             )));
         }
 
-        // //, /= or /
+        // //, //=, /= or /
         if c == '/' {
             self.advance_char();
             if self.peek_char() == Some('/') {
                 self.advance_char();
+                if self.peek_char() == Some('=') {
+                    self.advance_char();
+                    return Ok(Some(Token::new(
+                        TokenKind::DoubleSlashEq,
+                        Span::new(start_pos, start_pos + 3, start_line, start_col),
+                    )));
+                }
                 return Ok(Some(Token::new(
                     TokenKind::DoubleSlash,
                     Span::new(start_pos, start_pos + 2, start_line, start_col),
@@ -438,6 +452,22 @@ impl<'a> Lexer<'a> {
             )));
         }
 
+        // %= or %
+        if c == '%' {
+            self.advance_char();
+            if self.peek_char() == Some('=') {
+                self.advance_char();
+                return Ok(Some(Token::new(
+                    TokenKind::PercentEq,
+                    Span::new(start_pos, start_pos + 2, start_line, start_col),
+                )));
+            }
+            return Ok(Some(Token::new(
+                TokenKind::Percent,
+                Span::new(start_pos, start_pos + 1, start_line, start_col),
+            )));
+        }
+
         // Single-character punctuation
         let single_tok = match c {
             '(' => { self.open_brackets += 1; Some(TokenKind::LParen) }
@@ -449,7 +479,6 @@ impl<'a> Lexer<'a> {
             ',' => Some(TokenKind::Comma),
             ';' => Some(TokenKind::Semi),
             '@' => Some(TokenKind::At),
-            '%' => Some(TokenKind::Percent),
             '|' => Some(TokenKind::Pipe),
             '^' => Some(TokenKind::Caret),
             '~' => Some(TokenKind::Tilde),

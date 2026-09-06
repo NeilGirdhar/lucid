@@ -14,13 +14,32 @@ fn main() {
         "repl" => {
             start_repl();
         }
-        "run" => {
+        "build" => {
+            let file_arg = args.iter().skip(2).find(|a| !a.starts_with('-'));
+            let out_arg = args.iter().position(|a| a == "-o").and_then(|idx| args.get(idx + 1));
+            build_file(file_arg, out_arg, 3);
+        }
+        "emit-c" => {
             if args.len() < 3 {
-                eprintln!("Error: missing file argument for 'run'");
-                eprintln!("Usage: lucid run <file.lucid>");
+                eprintln!("Error: missing file argument for 'emit-c'");
                 exit(1);
             }
-            run_file(&args[2]);
+            emit_c_file(&args[2]);
+        }
+        "run" => {
+            let native = args.iter().any(|a| a == "--native" || a == "-n" || a == "--release");
+            let file_arg = args.iter().skip(2).find(|a| !a.starts_with('-'));
+            if let Some(f) = file_arg {
+                if native {
+                    run_native(f);
+                } else {
+                    run_file(f);
+                }
+            } else {
+                eprintln!("Error: missing file argument for 'run'");
+                eprintln!("Usage: lucid run <file.lucid> [--native]");
+                exit(1);
+            }
         }
         "check" => {
             if args.len() < 3 {
@@ -114,6 +133,126 @@ fn run_file(path_str: &str) {
         }
         Err(err) => {
             eprintln!("Runtime Error: {} at {:?}", err.message, err.span);
+            exit(1);
+        }
+    }
+}
+
+fn build_file(path_str: Option<&String>, output_path_str: Option<&String>, opt_level: usize) {
+    let path_str = match path_str {
+        Some(s) => s,
+        None => {
+            eprintln!("Error: missing file argument for 'build'");
+            eprintln!("Usage: lucid build <file.lucid> [-o <binary>]");
+            exit(1);
+        }
+    };
+    let path = Path::new(path_str);
+    let source = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: failed to read file '{path_str}': {e}");
+            exit(1);
+        }
+    };
+
+    let module = match lucid_syntax::parse(&source) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Syntax Error: {e}");
+            exit(1);
+        }
+    };
+
+    let mut checker = lucid_checker::TypeChecker::new();
+    if let Err(type_err) = checker.check_module(&module) {
+        eprintln!("Type Error: {} at {:?}", type_err.message, type_err.span);
+        exit(1);
+    }
+
+    let default_out = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let out_bin_str = output_path_str.cloned().unwrap_or(default_out);
+    let out_path = Path::new(&out_bin_str);
+
+    if let Err(err) = lucid_codegen::compile_to_native(&module, out_path, opt_level) {
+        eprintln!("Compilation Error: {}", err.message);
+        exit(1);
+    }
+
+    println!("✓ Successfully compiled {path_str} to native binary '{out_bin_str}'");
+}
+
+fn emit_c_file(path_str: &str) {
+    let path = Path::new(path_str);
+    let source = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: failed to read file '{path_str}': {e}");
+            exit(1);
+        }
+    };
+
+    let module = match lucid_syntax::parse(&source) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Syntax Error: {e}");
+            exit(1);
+        }
+    };
+
+    let mut generator = lucid_codegen::CCodeGenerator::new();
+    match generator.generate(&module) {
+        Ok(code) => println!("{code}"),
+        Err(err) => {
+            eprintln!("Codegen Error: {}", err.message);
+            exit(1);
+        }
+    }
+}
+
+fn run_native(path_str: &str) {
+    let path = Path::new(path_str);
+    let source = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: failed to read file '{path_str}': {e}");
+            exit(1);
+        }
+    };
+
+    let module = match lucid_syntax::parse(&source) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Syntax Error: {e}");
+            exit(1);
+        }
+    };
+
+    let mut checker = lucid_checker::TypeChecker::new();
+    if let Err(type_err) = checker.check_module(&module) {
+        eprintln!("Type Error: {} at {:?}", type_err.message, type_err.span);
+        exit(1);
+    }
+
+    let temp_dir = env::temp_dir();
+    let temp_bin = temp_dir.join(format!("lucid_bin_{}", std::process::id()));
+
+    if let Err(err) = lucid_codegen::compile_to_native(&module, &temp_bin, 3) {
+        eprintln!("Compilation Error: {}", err.message);
+        exit(1);
+    }
+
+    let status = std::process::Command::new(&temp_bin).status();
+    let _ = fs::remove_file(&temp_bin);
+
+    match status {
+        Ok(s) => {
+            if !s.success() {
+                exit(s.code().unwrap_or(1));
+            }
+        }
+        Err(e) => {
+            eprintln!("Error executing native binary: {e}");
             exit(1);
         }
     }
