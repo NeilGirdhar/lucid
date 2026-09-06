@@ -76,68 +76,52 @@ Continue with the specification documents. Nesting groups related documents
 under one theme; within a theme, and across the list top to bottom, each
 document builds mostly on documents already covered above it:
 
-* `Main ideas <docs/principles.rst>`_ — the nine ideas that shape the rest
-  of the language.
-* `Names, binding, and scope <docs/names.rst>`_ — ordinary binding,
-  destructuring with ``let``, final local variables, black-hole
-  assignment with ``_``, and no ``global``/``nonlocal``.
+* `Main ideas <docs/principles.rst>`_ — the nine ideas behind the language.
+* `Names, binding, and scope <docs/names.rst>`_ — binding, destructuring,
+  and scope.
 * Types, mutability, and annotations
 
-  * `Type vocabulary <docs/types.rst>`_ — what ``type`` means in Lucid
-    versus Python, visible type contracts, function types, type
-    expressions and the ``type`` keyword, recursive type aliases, match
-    types, literal types, no ``Any`` escape hatch, and Python interop
-    with ``trust``.
+  * `Type vocabulary <docs/types.rst>`_ — what a type is, and type-level
+    expressions.
   * `Mutability <docs/mutability.rst>`_ — mutable, read-only, and
     immutable views.
-  * `Generics <docs/generics.rst>`_ — definition-site variance,
-    higher-kinded parameters, and existential types.
-  * `Numeric types <docs/numeric-types.rst>`_ — exact numeric annotations
-    and capability interfaces.
+  * `Generics <docs/generics.rst>`_ — variance, higher-kinded parameters,
+    and existentials.
+  * `Numeric types <docs/numeric-types.rst>`_ — exact numeric types and
+    capability interfaces.
 
 * Modern type specification
 
-  * `Overview <docs/type-specification.rst>`_ — why Lucid separates
-    interfaces, traits, and classes, and how the three work together.
-  * `Interfaces <docs/interfaces.rst>`_ — obligations, composing field
-    and getter/setter obligations, retroactive implementation, and
-    higher-kinded interfaces.
-  * `Traits <docs/traits.rst>`_ — reusable behavior, and why Lucid
-    replaces Python's multiple inheritance with it.
-  * `Classes <docs/classes.rst>`_ — object shape, attribute access,
-    construction, caller- and name-captured call-site values, single
-    class inheritance, and sealed classes.
+  * `Overview <docs/type-specification.rst>`_ — why interfaces, traits,
+    and classes are separate.
+  * `Interfaces <docs/interfaces.rst>`_ — obligations, without state or
+    bodies.
+  * `Traits <docs/traits.rst>`_ — reusable behavior, in place of multiple
+    inheritance.
+  * `Classes <docs/classes.rst>`_ — object shape, construction, and
+    inheritance.
 
-* `Multiple dispatch <docs/dispatch.rst>`_ — why binary operators dispatch
-  on both operands, dispatch requirements in interfaces, ambiguous
-  dispatch, dispatch across projects and hierarchies, and dispatch for
-  ordinary functions.
+* `Multiple dispatch <docs/dispatch.rst>`_ — dispatch on both operands,
+  and beyond operators.
 * `Control flow and statements <docs/control-flow.rst>`_ — conditionals,
-  loops, ``if_broken``, exhaustive pattern matching, recoverable errors as
-  ordinary return types, the ``?`` propagation operator, unrecoverable
-  errors with ``raise``, and unspecified statements.
-* `Strings and collections <docs/collections.rst>`_ — string and
-  collection literals, TypedDict shapes, records instead of tuples, and
-  ``skip`` elision.
-* `Indexing <docs/indexing.rst>`_ — comma-separated indexing, no
-  ``__getitem__`` iteration fallback, and unpacking.
-* `Calls <docs/calls.rst>`_ — ``skip`` in calls, positional-before-keyword
-  argument order, partial application with ``_``, anonymous functions
-  in place of ``lambda``, and generator call expansion.
+  loops, matching, and errors.
+* `Strings and collections <docs/collections.rst>`_ — literals, records,
+  and TypedDict shapes.
+* `Indexing <docs/indexing.rst>`_ — indexing and unpacking.
+* `Calls <docs/calls.rst>`_ — call syntax, partial application, and
+  anonymous functions.
 * Parameters and decorators
 
   * `Parameters and arguments <docs/parameters.rst>`_ — the anonymous
-    class, and gathering arguments with ``Arguments`` and ``Parameters``.
+    class, and argument gathering.
   * `Decorators <docs/decorators.rst>`_ — identity-preserving ``@``, and
     decorator factories.
 
-* `Project configuration <docs/project-configuration.rst>`_ — the
-  structure of ``project.yaml`` and ``development.yaml``, and how they
-  replace ``pyproject.toml`` and ``__init__.py``.
-* `Modules, projects, and public APIs <docs/modules.rst>`_ — re-exports,
-  lazy imports, and how ``project.yaml``/``development.yaml`` fit in.
-* `Keyword reference <docs/keywords.rst>`_ — every keyword Lucid
-  preserves, discards, and adds, in one place.
+* `Project configuration <docs/project-configuration.rst>`_ —
+  ``project.yaml`` and ``development.yaml``.
+* `Modules, projects, and public APIs <docs/modules.rst>`_ — re-exports
+  and lazy imports.
+* `Keyword reference <docs/keywords.rst>`_ — every keyword, in one place.
 
 These twenty documents are the source of truth for Lucid semantics.
 
