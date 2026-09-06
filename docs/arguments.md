@@ -22,17 +22,18 @@ Lucid gathers leftover arguments into one typed class instead of two
 untyped catch-alls:
 
 ```python
-class Arguments[Y, Z: dict[str, object]]:
+class Arguments[Y, Z: ~dict[str, object]]:
     vpargs: list[Y]
     kwargs: Z
 ```
 `vpargs` holds the leftover positional arguments, homogeneously typed;
 `kwargs` holds the leftover keyword arguments, typed as a full shape —
-`{str: str}`, or a TypedDict shape when some of those keywords are
-individually named — rather than a bare per-value type. Writing
-`kwargs: str` would say each value is a `str`, not that `kwargs`
-itself is a mapping; the field has to be annotated with what it actually
-holds.
+`dict[str, str]`, or a TypedDict shape when some of those keywords are
+individually named — bounded by `~dict[str, object]` so that covariant
+read-only mappings satisfy it rather than invariant `dict` (see
+[Mutability](mutability.md)). Writing `kwargs: str` would say each
+value is a `str`, not that `kwargs` itself is a mapping; the field has to
+be annotated with what it actually holds.
 
 `Arguments` on its own is for genuinely unnamed overflow: arguments
 beyond anything a function declared, with no name available to give

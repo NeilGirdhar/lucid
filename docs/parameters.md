@@ -5,7 +5,7 @@ there's no fixed, named prefix to keep separate from the open overflow.
 `Parameters` extends it with exactly that prefix:
 
 ```python
-class Parameters[X, Y, Z: dict[str, object]](Arguments[Y, Z]):
+class Parameters[X, Y, Z: ~dict[str, object]](Arguments[Y, Z]):
     pargs: X
 ```
 Neither declaration needs a bespoke type-system primitive — both are

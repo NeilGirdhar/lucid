@@ -20,14 +20,14 @@ itself, `vpargs`/`kwargs` are empty.
 it:
 
 ```python
-class Arguments[Y, Z: dict[str, object]]:
+class Arguments[Y, Z: ~dict[str, object]]:
     vpargs: list[Y]
     kwargs: Z
 
     def __spread__(self: ~Self) -> ~Parameters[(), Y, Z]:
         return Parameters.from_arguments(self)
 
-class Parameters[X, Y, Z: dict[str, object]](Arguments[Y, Z]):
+class Parameters[X, Y, Z: ~dict[str, object]](Arguments[Y, Z]):
     pargs: X
 
     factory from_arguments(cls, args: ~Arguments[Y, Z]) -> Parameters[(), Y, Z]:
