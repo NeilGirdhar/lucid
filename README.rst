@@ -85,8 +85,9 @@ document builds mostly on documents already covered above it:
 
   * `Type vocabulary <docs/types.rst>`_ — what ``type`` means in Lucid
     versus Python, visible type contracts, function types, type
-    expressions and the ``type`` keyword, recursive type aliases, literal
-    types, no ``Any`` escape hatch, and Python interop with ``trust``.
+    expressions and the ``type`` keyword, recursive type aliases, match
+    types, literal types, no ``Any`` escape hatch, and Python interop
+    with ``trust``.
   * `Mutability <docs/mutability.rst>`_ — mutable, read-only, and
     immutable views.
   * `Generics <docs/generics.rst>`_ — definition-site variance,

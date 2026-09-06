@@ -320,12 +320,34 @@ class ``common(lhs)`` needs to call. This case only ever fires when ``A``
 and ``B`` differ — ``int64.__add__(int64, int64)`` is strictly more
 specific, the same rule that already lets ``list[A]`` beat a bare ``A``.
 
-What resolving ``promote[A, B]`` actually takes is still open: the
-checker has to treat each type's declared ``Wider`` as data for a
-graph search — the upward closure of ``A``, the upward closure of ``B``,
-their intersection, and whichever element of that intersection is
-reachable from every other element in it, erroring the way
-`Ambiguous dispatch is an error`_ already does if no such element is
-unique. That is real, new checker machinery, closer to Rust's associated
-types or Haskell's type families than anything committed to elsewhere in
-this spec — worth pursuing, but not yet a settled part of it.
+``promote[A, B]`` itself is a `match type <types.rst>`_: walk upward from
+``B``, testing at each step whether the current candidate is reachable
+by walking upward from ``A``, and stop at the first one that is —
+``B``'s own chain is visited narrowest first, so the first hit is the
+least upper bound, not just some common ancestor:
+
+.. code-block:: python
+
+   type ReachableFrom[X: Promotes, From: Promotes] = match From:
+       case X: X
+       case _: match From.Wider:
+           case Never: Never
+           case W: ReachableFrom[X, W]
+
+   type promote[A: Promotes, B: Promotes] = match ReachableFrom[B, A]:
+       case Never: match B.Wider:
+           case Never: error   # A and B share no common promotion target
+           case NextB: promote[A, NextB]
+       case found: found
+
+``ReachableFrom`` is exactly what makes ``Wider``'s branching safe:
+``float32``'s ``Wider`` is a union, so testing reachability through it
+distributes over both branches, and a ``Never`` from a branch that misses
+disappears against a hit from the branch that doesn't, the same way
+``Never | X`` always collapses to ``X``. ``int32 + complex64`` resolves
+to ``complex64`` directly this way — ``int32 → float32 → complex64`` is
+already a path, so no promotion has to reach all the way to
+``complex128`` for it. This assumes the graph a ``Promotes`` hierarchy
+declares is acyclic with a genuine top, the same well-formedness Julia's
+own ``promote_type`` quietly requires of its authors — a cycle in
+``Wider`` would make ``promote`` search forever instead of erroring.

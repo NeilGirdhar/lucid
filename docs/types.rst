@@ -161,6 +161,51 @@ Recursion is what makes a type like ``PyTree`` expressible at all: at every
 level, the shape is either a leaf, or one of the listed containers holding
 that very same shape one level down.
 
+Match types
+--------------
+
+A recursive alias like ``PyTree`` picks its shape by union — every
+alternative is listed once, up front. Sometimes the type to produce
+depends on the *structure* of another type instead: whether an
+associated type is ``Never`` or something else, whether a tuple type is
+empty or has a head and a tail. A match type is a ``type`` alias whose
+right side is ``match``, reusing the same ``match``/``case`` grammar
+`Exhaustive pattern matching <control-flow.rst>`_ already has, computing
+a type from a type instead of a value from a value:
+
+.. code-block:: python
+
+   type Ancestors[T: Promotes] = match T.Wider:
+       case Never: T
+       case W: T | Ancestors[W]
+
+Value-level ``match`` is a statement, deliberately without a case-body-
+as-implicit-expression form, because that would make an ordinary
+statement block secretly double as a value some of the time. A match
+type has no such ambiguity to guard against: it lives entirely in the
+type-expression grammar `Type expressions and the type keyword`_
+already describes, and every case's only job, ever, is to produce one
+type — so each case is a bare type expression, no block form needed.
+Pattern capture follows the same convention Python's own structural
+pattern matching already uses: a name that already names something is an
+exact match (``case Never:``), and a name that doesn't is a fresh
+capture, bound to whatever the subject actually was for use on the right
+(``case W:``).
+
+A captured name can itself be a union — ``T.Wider`` is a union whenever
+a type widens in more than one direction (see `Promotion <dispatch.rst>`_)
+— and a fresh-capture case runs once per member of that union, unioning
+the results, the same distribution TypeScript's own conditional types
+already do over a union subject. This is what lets ``Ancestors`` recurse
+correctly through a branch instead of getting stuck treating the whole
+union as one opaque type. Combined with ``Never`` already being union's
+identity element — a type with no values contributes nothing to a union,
+so ``Never | X`` is just ``X``, true of any bottom type in any type
+system that has one — distribution gives an existential test for free:
+if a fresh-capture case produces ``Never`` down every branch, the
+distributed result is ``Never``; if it produces something else down even
+one branch, that survives, since every ``Never`` alongside it disappears.
+
 Literal types
 -----------------------------
 
