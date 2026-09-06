@@ -121,7 +121,7 @@ document builds mostly on documents already covered above it:
     decorator factories.
 
 * `Project configuration <docs/project-configuration.rst>`_ —
-  ``project.yaml`` and ``development.yaml``.
+  ``project.yaml``, ``development.yaml``, and ``lucid.lock``.
 * `Modules, projects, and public APIs <docs/modules.rst>`_ — re-exports
   and lazy imports.
 * `Keyword reference <docs/keywords.rst>`_ — every keyword, in one place.
