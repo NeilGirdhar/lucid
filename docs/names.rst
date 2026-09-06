@@ -40,10 +40,11 @@ than an assignment target, so the binding itself stays the ordinary
 basedpython's ``:=`` is needed to mark it twice.
 
 The pattern has to be one the checker can already prove: ``origin``'s
-static type must already be (a subtype of) ``Point``, the same way an
-unconditional destructure has no ``case _:`` to fall back to if it were
-wrong. A value whose type could be one of several variants needs
-`Exhaustive pattern matching <control-flow.rst>`_ instead, which handles
+static type must already be (a subtype of) ``Point`` — ``let`` has
+nothing to fall back to if the pattern turns out not to fit. A value
+that could be one of several different variants needs a different,
+exhaustive form of matching instead, covered later in this reading order
+(`Exhaustive pattern matching <control-flow.rst>`_), built to handle
 "this could be any of these" — ``let`` is only for "this already is one
 specific thing, pull it apart." Anonymous records destructure the same
 way, by their own declared order:
@@ -67,10 +68,11 @@ or a parameter:
    def distance(Point(x1, y1), Point(x2, y2)) -> float:
        ...
 
-`Exhaustive pattern matching <control-flow.rst>`__'s own ``case`` gains
-the same grammar for the same reason: ``case Point(x, y):`` narrows and
-destructures in one step, instead of narrowing in ``case`` and then
-destructuring in a separate ``let`` right after it.
+The same grammar extends to ``match``'s own ``case``, covered later in
+this reading order (`Exhaustive pattern matching <control-flow.rst>`__):
+``case Point(x, y):`` narrows and destructures in one step there, rather
+than narrowing in ``case`` and then destructuring in a separate ``let``
+right after it.
 
 Final local variables
 -------------------------

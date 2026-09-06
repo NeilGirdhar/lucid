@@ -171,23 +171,11 @@ at runtime.
 A union alias is not the only way to close a type. A
 `sealed class <classes.rst>`_ restricts its direct subclasses to the file
 that declares it, so the checker can enumerate them the same way it
-enumerates a union's alternatives:
+enumerates a union's alternatives — unlike a plain union's alternatives,
+sealed subclasses also share a common parent, and can inherit fields and
+methods from it:
 
 .. code-block:: python
-
-   sealed class Shape:
-       def area(self) -> float
-
-   class Circle(Shape):
-       radius: float
-       def area(self) -> float:
-           return pi * self.radius ** 2
-
-   class Rectangle(Shape):
-       w: float
-       h: float
-       def area(self) -> float:
-           return self.w * self.h
 
    match shape:
        case Circle:
@@ -195,10 +183,9 @@ enumerates a union's alternatives:
        case Rectangle:
            ...
 
-Unlike ``PyTree``'s alternatives, ``Circle`` and ``Rectangle`` share a
-common parent and can inherit fields and methods from it — a capability
-a plain union of unrelated types never had, since nothing ties its
-alternatives together beyond appearing in the same alias.
+needs no ``case _:`` if ``Shape`` is sealed with exactly those two direct
+subclasses, the same exhaustiveness ``PyTree``'s ``match`` above already
+gets from being a closed union.
 
 A bare ``case Type:`` pattern just narrows — the subject keeps its own
 name, narrowed to ``Type`` for that case, with nothing pulled out of it.

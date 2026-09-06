@@ -166,18 +166,21 @@ Match types
 
 A recursive alias like ``PyTree`` picks its shape by union — every
 alternative is listed once, up front. Sometimes the type to produce
-depends on the *structure* of another type instead: whether an
-associated type is ``Never`` or something else, whether a tuple type is
-empty or has a head and a tail. A match type is a ``type`` alias whose
-right side is ``match``, reusing the same ``match``/``case`` grammar
-`Exhaustive pattern matching <control-flow.rst>`_ already has, computing
-a type from a type instead of a value from a value:
+depends on the *structure* of another type instead: whether a list is
+nested another level deeper, or already down to its leaf. A match type
+is a ``type`` alias whose right side is ``match``, reusing the same
+``match``/``case`` grammar `Exhaustive pattern matching <control-flow.rst>`_
+already has, computing a type from a type instead of a value from a
+value:
 
 .. code-block:: python
 
-   type Ancestors[T: Promotes] = match T.Wider:
-       case Never: T
-       case W: T | Ancestors[W]
+   type Elem[T] = match T:
+       case list[Inner]: Elem[Inner]
+       case Leaf: Leaf
+
+``Elem[list[list[int]]]`` is ``int``: each case peels off one layer of
+nesting and recurses, until what is left is not a ``list`` at all.
 
 Value-level ``match`` is a statement, deliberately without a case-body-
 as-implicit-expression form, because that would make an ordinary
@@ -188,20 +191,24 @@ already describes, and every case's only job, ever, is to produce one
 type — so each case is a bare type expression, no block form needed.
 Pattern capture follows the same convention Python's own structural
 pattern matching already uses: a name that already names something is an
-exact match (``case Never:``), and a name that doesn't is a fresh
-capture, bound to whatever the subject actually was for use on the right
-(``case W:``).
+exact match (``case list[Inner]:`` matches the shape ``list`` exactly),
+and a name that doesn't is a fresh capture, bound to whatever the
+subject actually was for use on the right (``Inner``, or ``Leaf`` for
+whatever falls through to the second case).
 
-A captured name can itself be a union — ``T.Wider`` is a union whenever
-a type widens in more than one direction (see `Promotion <dispatch.rst>`_)
-— and a fresh-capture case runs once per member of that union, unioning
-the results, the same distribution TypeScript's own conditional types
-already do over a union subject. This is what lets ``Ancestors`` recurse
-correctly through a branch instead of getting stuck treating the whole
-union as one opaque type. Combined with ``Never`` already being union's
-identity element — a type with no values contributes nothing to a union,
-so ``Never | X`` is just ``X``, true of any bottom type in any type
-system that has one — distribution gives an existential test for free:
+A captured name can itself be a union — a subject typed ``A | B`` makes
+any fresh capture over it a capture of ``A | B`` as a whole — and a
+fresh-capture case runs once per member of a union subject, unioning the
+results, the same distribution TypeScript's own conditional types
+already do. This is what lets a recursive match type work through a
+branching structure instead of getting stuck treating the whole union as
+one opaque type: `Promotion <dispatch.rst>`_, later in the reading
+order, puts exactly this to use for a type that branches in more than
+one direction. Combined with ``Never`` already
+being union's identity element — a type with no values contributes
+nothing to a union, so ``Never | X`` is just ``X``, true of any bottom
+type in any type system that has one — distribution gives an
+existential test for free:
 if a fresh-capture case produces ``Never`` down every branch, the
 distributed result is ``Never``; if it produces something else down even
 one branch, that survives, since every ``Never`` alongside it disappears.
