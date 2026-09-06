@@ -125,7 +125,7 @@ document builds mostly on documents already covered above it:
   and lazy imports.
 * `Keyword reference <docs/keywords.rst>`_ — every keyword, in one place.
 
-These twenty-one documents are the source of truth for Lucid semantics.
+These documents are the source of truth for Lucid semantics.
 
 Current slogan
 --------------
