@@ -32,9 +32,10 @@ decorator author has to remember to call it inside their own decorator, on
 every decorator, or the replacement silently carries the wrong identity.
 
 Lucid makes ``@`` itself responsible for identity instead of the decorator.
-Applying ``@`` always carries the pre-decoration function's name, qualname,
-doc, module, and signature onto whatever the decorator returns, along with
-a link back to the original:
+Applying ``@`` always carries the pre-decoration function's name,
+``__path__`` (see `No __module__ or __qualname__
+<project-configuration.rst>`_), doc, and signature onto whatever the
+decorator returns, along with a link back to the original:
 
 .. code-block:: python
 

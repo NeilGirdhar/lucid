@@ -153,6 +153,61 @@ already exposes to itself into something the outside world can reach
 too, but it cannot reach past a leading underscore to expose what the
 project keeps to itself.
 
+No ``__module__`` or ``__qualname__``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Python spreads a symbol's location across two attributes: ``__module__``
+(the dotted module it was defined in) and ``__qualname__`` (its lexical
+nesting within that module, for anything declared inside a class or
+function). Two attributes for one concept is two chances for them to
+disagree, and both encode wherever a symbol happens to be *defined* —
+exactly the internal layout `Public API`_ already keeps out of everything
+else a project exposes.
+
+Lucid folds both into one, ``__path__: !DottedPath``. ``DottedPath`` is a
+``Sequence[str]`` of the location's segments — indexing and slicing it
+work exactly like any other sequence of strings — and its ``__str__``
+joins them with dots, so printing a path and inspecting its segments are
+just two views of the same value. It is frozen (``!``, see
+`Mutable, read-only, and immutable views <mutability.rst>`_) because a
+symbol's location does not change after it is computed. ``__name__``
+stays exactly as it already is, the bare identifier, always equal to
+``path[-1]``:
+
+.. code-block:: python
+
+   str(slow_query.__path__)  # "acme_inference.queries.slow_query"
+   slow_query.__path__[-1]   # "slow_query"
+   slow_query.__name__       # "slow_query"
+
+Every function, class, interface, trait, and module has a ``__path__``. By
+default it holds the symbol's own defining location — project name, then
+module path, then lexical nesting — exactly what ``__module__`` and
+``__qualname__`` used to spell out between them. Flattening the two into
+one sequence does mean the boundary between them is gone: for a method
+nested inside a class, ``__path__`` no longer says which prefix was the
+module and which was the class nesting, the way ``__module__`` and
+``__qualname__`` separately did. Nothing in Lucid needs that boundary —
+the segments as a whole, or just the trailing name, cover every actual
+use — and the rare code that wants "which module is this in" asks the
+containing module directly rather than parsing a path apart. A symbol
+named in ``export:`` gets its ``__path__``
+overridden instead, to the path the tree actually declares for it, so a
+symbol's visible identity matches how the outside world reaches it rather
+than wherever it happens to live inside the project:
+
+.. code-block:: python
+
+   str(User.__path__)  # "acme_inference.models.User" -- the export path,
+                        # not wherever .models.User actually lives
+
+Computing the override costs one pass over the manifest, not a search per
+symbol. The ``export:`` tree is already a trie: one path segment per
+level, an internal dotted location at every leaf. Walking it once builds
+the reverse of it too — a hash table from each leaf's internal location to
+the segment list leading there — and that table is exactly the set of
+overrides applied to produce every exported symbol's ``__path__``.
+
 Local aliases
 ~~~~~~~~~~~~~
 
