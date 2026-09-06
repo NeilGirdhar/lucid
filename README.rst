@@ -98,8 +98,10 @@ document builds mostly on documents already covered above it:
     bodies.
   * `Traits <docs/traits.rst>`_ — reusable behavior, in place of multiple
     inheritance.
-  * `Classes <docs/classes.rst>`_ — object shape, construction, and
+  * `Classes <docs/classes.rst>`_ — object shape, members, and
     inheritance.
+  * `Construction <docs/construction.rst>`_ — factories, field
+    reflection, and call-site captured values.
 
 * `Multiple dispatch <docs/dispatch.rst>`_ — dispatch on both operands,
   and beyond operators.
@@ -123,7 +125,7 @@ document builds mostly on documents already covered above it:
   and lazy imports.
 * `Keyword reference <docs/keywords.rst>`_ — every keyword, in one place.
 
-These twenty documents are the source of truth for Lucid semantics.
+These twenty-one documents are the source of truth for Lucid semantics.
 
 Current slogan
 --------------

@@ -56,7 +56,7 @@ every program pays for.
 
 It needs no bespoke definition either — it is an ordinary
 ``Sentinel``, the same well-identified singleton any other module can
-reach for (see `Name-captured identifiers <classes.rst>`_):
+reach for (see `Name-captured identifiers <construction.rst>`_):
 
 .. code-block:: python
 

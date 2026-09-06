@@ -176,7 +176,7 @@ class's own fields and does the obvious thing: ``Eq`` compares them all,
 ``Ord`` compares them in field-declaration order, ``Hashable`` combines
 their hashes.
 
-`Field reflection with fields <classes.rst>`_ yields a class's own fields
+`Field reflection with fields <construction.rst>`_ yields a class's own fields
 in declaration order — the same walk the generated constructor and
 ``replace`` already do — which is what lets each trait below be one real,
 shared body instead of something synthesized fresh per class:

@@ -195,7 +195,7 @@ The same sigil spreads a value back out at a call site by calling a
 method every class has — ``__spread__`` — and using the ``Parameters``
 instance it returns. Every class gets one generated for free, the same
 way every class already gets a generated ``__init__`` and ``replace``
-factory (`Factory construction <classes.rst>`_). By default,
+factory (`Factory construction <construction.rst>`_). By default,
 ``__spread__`` wraps the instance as its own fixed prefix, with nothing
 variadic:
 
@@ -238,7 +238,7 @@ positionally in ``Parameters``'s own field order: inherited fields first
 ``Parameters`` adds — the same top-to-bottom order the class hierarchy
 declares them in. ``pargs=()`` is fixed by this factory specifically, the
 same way ``Point.origin()`` (`Factory construction
-<classes.rst>`__) fixes ``x=0.0, y=0.0`` while still
+<construction.rst>`__) fixes ``x=0.0, y=0.0`` while still
 constructing the exact class generically over whatever else varies.
 ``Parameters`` is already the target shape its own ``__spread__`` needs
 to produce, so it just returns itself.

@@ -11,7 +11,7 @@ examples inside it.
 
 - `README.rst`—the hub: the core principle, a worked example, and a nested
   tree of links to every document under `docs/`, grouped by theme.
-- `docs/*.rst`—twenty specification documents, each scoped to one topic.
+- `docs/*.rst`—twenty-one specification documents, each scoped to one topic.
   The tree in `README.rst` orders them to minimize forward references: a
   document should mostly build on documents already covered above it, not
   ones introduced later. A handful of forward pointers are intentional,
