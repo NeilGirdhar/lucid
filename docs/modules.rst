@@ -27,15 +27,25 @@ down, private to its class instead of its file; see
 
 This is Python's own convention, finally enforced. Python's single
 leading underscore is a request nothing checks — ``from module import
-_private`` already works — and ``__all__`` only narrows what ``from
-module import *`` sees, leaving a direct import of anything else
-untouched. Lucid has neither gap: reaching for a private name is a
-checked error, the same way everywhere it can happen, with no second,
-separately maintained list to fall out of sync with the first.
+_private`` already works regardless. Lucid closes that gap: reaching for
+a private name is a checked error, the same way everywhere it can
+happen.
 
 Which of a project's names are visible *outside* it, to another project
 depending on this one, is a different question with one answer, in one
 place: `Public API <project-configuration.rst>`_.
+
+No ``__all__``
+~~~~~~~~~~~~~~~~~
+
+``__all__`` only narrows what ``from module import *`` sees; a direct
+import of anything else in the module reaches it regardless, so a
+module's real public surface and its ``__all__`` list can say two
+different things. Lucid has no wildcard import for a second list to
+narrow in the first place (see `Lazy imports`_ below), and the one list
+that does exist — private names decided by a leading ``_``, checked
+everywhere — cannot fall out of sync with itself the way a
+separately-maintained ``__all__`` can with the module it describes.
 
 Lazy imports
 ----------------
