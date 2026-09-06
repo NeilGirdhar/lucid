@@ -66,7 +66,8 @@ This example shows several core language mechanics in one place:
 * traits provide reusable bodies
 * stored fields are declared in the class body
 * factories construct exact, fully initialized objects
-* getters expose computed attributes without descriptors
+* getters expose computed attributes without descriptors, attribute
+  access stays structural rather than programmable through hooks
 * mutable, read-only, and immutable views are visible in annotations
 
 Documentation
@@ -126,8 +127,3 @@ document builds mostly on documents already covered above it:
 * `Keyword reference <docs/keywords.rst>`_ — every keyword, in one place.
 
 These documents are the source of truth for Lucid semantics.
-
-Current slogan
---------------
-
-    Classes store data. Interfaces specify obligations. Traits provide reusable behavior. Factories construct exact classes. Attribute access is structural, not magical. Exports define the public API.
