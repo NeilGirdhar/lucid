@@ -117,7 +117,7 @@ struct to a C extension (such as NumPy or PyTorch) requires no copying, no
 proxying, and zero marshaling. Furthermore, by targeting Python 3.13's
 free-threading (PEP 703) and immortal objects (PEP 683), Lucid runs
 multithreaded code across all CPU cores without the Global Interpreter Lock,
-and maps its transitively frozen `T` values to immortal objects so that
+and maps its transitively frozen `!T` values to immortal objects so that
 foreign code never incurs atomic reference-counting contention across threads.
 See [Casting](casting.md#toll-free-python-313-abi-bridging).
 

@@ -64,7 +64,7 @@ Calls and data sharing exploit three modern Python 3.13 runtime features:
   (`nogil`) runtime. Multithreaded Lucid programs run across all CPU cores in
   true parallel without acquiring a Global Interpreter Lock when calling foreign
   Python or C code.
-- **Immortal objects (PEP 683)**: Lucid's transitively frozen `T` values
+- **Immortal objects (PEP 683)**: Lucid's transitively frozen `!T` values
   ([Mutability](mutability.md)) map directly to Python 3.13 immortal
   objects. Because immortal objects have fixed reference counts that the runtime
   never modifies, foreign Python and C code can share frozen Lucid values across
