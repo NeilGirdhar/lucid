@@ -5,17 +5,37 @@ Modules, projects, and public APIs
    :depth: 2
    :local:
 
-Explicit re-exports
+Module-private names
 ------------------------
 
-Packages can re-export public names:
+A name starting with ``_`` is private to where it is declared: a leading
+underscore on a definition at the top level of a file keeps it out of
+every other file in the project. Everything else is visible project-wide
+by default — no keyword marks it public.
 
 .. code-block:: python
 
-   from .models export User
-   from .parsing export parse_user
+   def _parse_line(line: str) -> Row:        # this file only
+       ...
 
-This keeps the public API local to the definition or re-export site.
+   def parse_file(path: Path) -> list[Row]:  # every file in the project
+       ...
+
+A member named with a leading ``_`` follows the same rule one level
+down, private to its class instead of its file; see
+`Private members <classes.rst>`_.
+
+This is Python's own convention, finally enforced. Python's single
+leading underscore is a request nothing checks — ``from module import
+_private`` already works — and ``__all__`` only narrows what ``from
+module import *`` sees, leaving a direct import of anything else
+untouched. Lucid has neither gap: reaching for a private name is a
+checked error, the same way everywhere it can happen, with no second,
+separately maintained list to fall out of sync with the first.
+
+Which of a project's names are visible *outside* it, to another project
+depending on this one, is a different question with one answer, in one
+place: `Public API <project-configuration.rst>`_.
 
 Lazy imports
 ----------------

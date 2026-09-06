@@ -18,9 +18,10 @@ zero-deprecation release cadence that lets Lucid choose the cleaner rule
 instead of the Python-compatible one throughout the language.
 
 Object state is declared in the class body. Construction returns fully built
-objects. Public module APIs are marked with ``export``. Interfaces declare
-obligations, traits provide reusable behavior, and binary operators dispatch on
-both operands. Generic parameters carry definition-site variance with ``+K``,
+objects. A definition is visible everywhere in the project by default; a
+leading ``_`` makes it private instead. Interfaces declare obligations,
+traits provide reusable behavior, and binary operators dispatch on both
+operands. Generic parameters carry definition-site variance with ``+K``,
 ``-K``, and ``=K``. Mutable, read-only, and immutable views are visible in the
 type spelling with ``T``, ``&T``, and ``!T``.
 
@@ -29,26 +30,26 @@ Example
 
 .. code-block:: python
 
-   export interface Scorable[+K]:
+   interface Scorable[+K]:
        def score(self, item: K) -> float
 
-   export trait ScoreBands[+K](Scorable[K]):
+   trait ScoreBands[+K](Scorable[K]):
        def is_confident(self, item: K) -> bool:
            return self.score(item) >= 0.8
 
-   export class InferenceModel[=K](Scorable[K], ScoreBands[K]):
+   class InferenceModel[=K](Scorable[K], ScoreBands[K]):
        weights: Tensor
        labels: list[K]
-       scores: dict[K, float]
+       _scores: dict[K, float]
 
        factory from_checkpoint(cls, path: Path, labels: list[K]):
            weights = Tensor.load(path)
            return construct(weights, labels, {:})
 
        def score(self, item: K) -> float:
-           if item not in self.scores:
-               self.scores[item] = self.weights.dot(encode(item))
-           return self.scores[item]
+           if item not in self._scores:
+               self._scores[item] = self.weights.dot(encode(item))
+           return self._scores[item]
 
        getter label_count(self) -> int:
            return len(self.labels)
@@ -61,7 +62,8 @@ Example
 
 This example shows several core language mechanics in one place:
 
-* exported definitions are explicitly public
+* ``_scores`` is private to the class; everything else here is visible
+  project-wide with no keyword needed
 * interfaces require behavior with a bodyless member, no marker keyword needed
 * traits provide reusable bodies
 * stored fields are declared in the class body
@@ -122,8 +124,8 @@ document builds mostly on documents already covered above it:
 
 * `Project configuration <docs/project-configuration.rst>`_ —
   ``project.yaml``, ``development.yaml``, and ``lucid.lock``.
-* `Modules, projects, and public APIs <docs/modules.rst>`_ — re-exports
-  and lazy imports.
+* `Modules, projects, and public APIs <docs/modules.rst>`_ —
+  module-private names, and lazy imports.
 * `Keyword reference <docs/keywords.rst>`_ — every keyword, in one place.
 
 These documents are the source of truth for Lucid semantics.

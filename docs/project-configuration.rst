@@ -135,8 +135,9 @@ lint tooling, do not belong here; they are declared in ``development.yaml``'s
 Public API
 ~~~~~~~~~~
 
-``export`` is a tree that mirrors the paths a project makes public, the
-project-level counterpart to the ``export`` keyword used inside a module:
+``export`` is a tree mapping the paths a project makes public to where
+they actually live — the one place a project's externally visible
+surface is declared, full stop:
 
 .. code-block:: yaml
 
@@ -145,6 +146,12 @@ project-level counterpart to the ``export`` keyword used inside a module:
        User: .models.User
      parsing:
        parse_user: .parsing.parse_user
+
+Only a name that is not itself `module- or class-private <modules.rst>`_
+can appear on the right: ``export`` promotes something the project
+already exposes to itself into something the outside world can reach
+too, but it cannot reach past a leading underscore to expose what the
+project keeps to itself.
 
 Local aliases
 ~~~~~~~~~~~~~

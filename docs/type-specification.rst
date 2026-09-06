@@ -12,8 +12,9 @@ model with three kinds of type specification: interfaces, traits, and classes.
 
 Lucid separates user-defined type specification into three kinds.
 
-Definitions are private by default. Public type definitions are marked with
-``export`` at the definition or re-export site.
+Definitions are visible everywhere in the project by default; a leading
+``_`` makes one private instead — see
+`Module-private names <modules.rst>`_.
 
 Each kind gets its own document: `Interfaces <interfaces.rst>`_ specify
 obligations without storing data or providing bodies. `Traits <traits.rst>`_

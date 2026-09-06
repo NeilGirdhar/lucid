@@ -30,16 +30,15 @@ preserved Python keywords are:
 New Lucid keywords
 -----------------------
 
-Lucid adds keywords for explicit module boundaries, construction,
-call-site capture, destructuring, class member kinds, closing off
-rebinding or further class inheritance or overriding, explicit
-overrides, declining generated behavior, abstraction, dispatch, external
-interface implementation, type expressions, existential quantification,
-exhaustive pattern matching, and elision:
+Lucid adds keywords for construction, call-site capture, destructuring,
+class member kinds, closing off rebinding or further class inheritance
+or overriding, explicit overrides, declining generated behavior,
+abstraction, dispatch, external interface implementation, type
+expressions, existential quantification, exhaustive pattern matching,
+and elision:
 
 .. code-block:: text
 
-   export
    classmethod classvar factory construct
    caller from_var_name
    let
@@ -56,6 +55,15 @@ exhaustive pattern matching, and elision:
    if_broken
    skip
    _
+
+An earlier draft added ``export`` here, marking a public definition at
+its own declaration. That needed a keyword at every public definition
+plus a project-wide manifest repeating the same paths a second time.
+Visibility is now decided by the name alone — see
+`Module-private names <modules.rst>`_ — and the manifest is the only
+place the externally visible surface is declared, in
+`Public API <project-configuration.rst>`_ — so no keyword is needed at
+the definition site at all.
 
 Discarded Python keywords
 -----------------------------

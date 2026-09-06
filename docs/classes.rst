@@ -382,12 +382,12 @@ ordinarily subclassable elsewhere unless they are separately marked
 ``sealed`` or ``final``, since ``sealed`` only has to pin down ``Shape``'s
 own variant set, not freeze every subtree beneath it.
 
-A source file is already the unit ``export`` operates on
-(`Project configuration <project-configuration.rst>`_), so there is no
-separate notion of "module" for this to disagree with, the ambiguity
-languages with multi-file modules have to resolve one way or another —
-the file sealing restricts to is the same file every other module
-boundary in Lucid already uses.
+A source file is already the unit module-private names are scoped to
+(`Module-private names <modules.rst>`_), so there is no separate notion
+of "module" for this to disagree with, the ambiguity languages with
+multi-file modules have to resolve one way or another — the file sealing
+restricts to is the same file every other module boundary in Lucid
+already uses.
 
 Sealing gives `Exhaustive pattern matching <control-flow.rst>`_ a second
 source of closed types, alongside recursive union aliases: a ``match``
@@ -412,6 +412,30 @@ resolved explicitly. Because class shape is declared and inherited member
 collisions can therefore be reported directly, Lucid does not need automatic
 name mangling. Declare and use ``a`` as ``self.a``; ``self.__a`` is not a
 special spelling for private state.
+
+Private members
+~~~~~~~~~~~~~~~~~~
+
+A member named with a leading ``_`` is private to the class: readable
+and writable from the class's own methods, and from nowhere else, not
+even other files in the same project.
+
+.. code-block:: python
+
+   class Cache:
+       _entries: dict[str, float]
+
+       def get(self, key: str) -> float | none:
+           return self._entries.get(key)
+
+   cache = Cache({:})
+   cache._entries  # error: _entries is private to Cache
+
+Python's single leading underscore is a convention nothing enforces —
+``cache._entries`` already works fine, the same as any other attribute.
+Lucid checks it: the name alone is the complete, checked declaration,
+the same way it already is for a module-private definition at the top
+level of a file (see `Module-private names <modules.rst>`__).
 
 No metaclasses
 ~~~~~~~~~~~~~~
