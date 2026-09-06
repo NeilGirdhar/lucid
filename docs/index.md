@@ -38,7 +38,7 @@ habit.**
 * no repeated boilerplate for one job
     * Python's `*args`, `**kwargs`, and a `ParamSpec` to forward them
       typed collapse into one gathered value:
-      `***rest: Arguments[str, {str: str}]`
+      `***rest: Arguments[str, dict[str, str]]`
 * no cost for the common case
     * mutable by default, no `~`; visible by default, only a leading
       `_` costs anything

@@ -103,3 +103,26 @@ type — it reads nothing like the `def` it describes. Lucid spells it
 `(A, B) -> R`, matching Kotlin: the same `->` a `def`'s own return type
 already uses, with the same grammar an ordinary signature uses for
 names, zoning, or variadic gathering. See [Function types](types.md).
+
+## Toll-free Python 3.13+ interop
+
+Alternative implementations of Python (such as PyPy and GraalPy)
+historically suffered 2x–10x slowdowns when interacting with C extensions
+because their memory layouts diverged from CPython, requiring costly proxy
+objects, pointer pinning, and state synchronization.
+
+Lucid targets Python 3.13+ exclusively, aligning its heap object memory layout
+directly with CPython's `PyObject` binary prefix. Passing a Lucid array or
+struct to a C extension (such as NumPy or PyTorch) requires no copying, no
+proxying, and zero marshaling. Furthermore, by targeting Python 3.13's
+free-threading (PEP 703) and immortal objects (PEP 683), Lucid runs
+multithreaded code across all CPU cores without the Global Interpreter Lock,
+and maps its transitively frozen `T` values to immortal objects so that
+foreign code never incurs atomic reference-counting contention across threads.
+See [Casting](casting.md#toll-free-python-313-abi-bridging).
+
+These principles work together: explicit structure and zero-deprecation clear
+away Python's dynamic ambiguities, letting static typing, multiple dispatch,
+and toll-free interop achieve native speed without losing Python's readability.
+The remaining documents specify each mechanism in detail, starting with
+[Binding](names.md).
