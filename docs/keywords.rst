@@ -33,9 +33,9 @@ New Lucid keywords
 Lucid adds keywords for construction, call-site capture, destructuring,
 class member kinds, closing off rebinding or further class inheritance
 or overriding, explicit overrides, declining generated behavior,
-abstraction, dispatch, external interface implementation, type
-expressions, existential quantification, exhaustive pattern matching,
-and elision:
+guaranteed-cleanup context managers, abstraction, dispatch, external
+interface implementation, type expressions, existential quantification,
+exhaustive pattern matching, and elision:
 
 .. code-block:: text
 
@@ -45,6 +45,7 @@ and elision:
    getter setter
    final sealed override
    without
+   contextmanager
    interface trait
    dispatch
    implement

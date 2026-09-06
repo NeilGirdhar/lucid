@@ -108,8 +108,13 @@ document builds mostly on documents already covered above it:
 
 * `Multiple dispatch <docs/dispatch.rst>`_ — dispatch on both operands,
   and beyond operators.
-* `Control flow and statements <docs/control-flow.rst>`_ — conditionals,
-  loops, matching, and errors.
+* Control flow
+
+  * `Control flow and statements <docs/control-flow.rst>`_ — conditionals,
+    loops, matching, and errors.
+  * `Context managers <docs/context-managers.rst>`_ — the
+    ``contextmanager`` modifier.
+
 * `Strings and collections <docs/collections.rst>`_ — literals, records,
   and TypedDict shapes.
 * `Indexing <docs/indexing.rst>`_ — indexing and unpacking.

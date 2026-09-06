@@ -173,7 +173,8 @@ Between ``export`` and ``local-alias``, a project has no remaining need for
 Library initialization
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-``library-context`` names a context manager, holding the setup work that
+``library-context`` names a context manager (see
+`Context managers <context-managers.rst>`_), holding the setup work that
 Python would otherwise run as side effects in ``__init__.py``, such as
 configuring an underlying native library:
 
