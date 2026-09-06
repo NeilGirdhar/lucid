@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "compiler/crates/lucid-syntax",
+    "compiler/crates/lucid-checker",
+    "compiler/crates/lucid-runtime",
+    "compiler/crates/lucid-cli",
+]
+resolver = "2"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = "thin"

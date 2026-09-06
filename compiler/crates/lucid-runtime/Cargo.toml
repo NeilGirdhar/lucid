@@ -1,0 +1,8 @@
+[package]
+name = "lucid-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lucid-syntax = { path = "../lucid-syntax" }
+lucid-checker = { path = "../lucid-checker" }

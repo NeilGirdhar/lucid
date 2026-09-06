@@ -1,3 +1,6 @@
-/site/
-/.venv/
+target/
+*.pyc
 __pycache__/
+/.venv/
+/site/
+.cargo-ok

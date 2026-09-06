@@ -1,0 +1,13 @@
+[package]
+name = "lucid-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "lucid"
+path = "src/main.rs"
+
+[dependencies]
+lucid-syntax = { path = "../lucid-syntax" }
+lucid-checker = { path = "../lucid-checker" }
+lucid-runtime = { path = "../lucid-runtime" }

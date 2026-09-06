@@ -1,0 +1,29 @@
+class Circle:
+    radius: int
+
+class Rectangle:
+    width: int
+    height: int
+
+dispatch def area(c: Circle) -> int:
+    return c.radius * c.radius
+
+dispatch def area(r: Rectangle) -> int:
+    return r.width * r.height
+
+c = Circle(10)
+r = Rectangle(4, 5)
+
+print("Circle area:", area(c))
+print("Rectangle area:", area(r))
+
+# Transitive immutability
+frozen_c = freeze(c)
+print("Frozen circle:", frozen_c)
+
+# Loop with if_broken
+for x in [1, 2, 3]:
+    if x == 2:
+        break
+if_broken:
+    print("Loop was broken at 2!")
