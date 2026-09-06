@@ -192,6 +192,17 @@ impl TypeChecker {
         env.variables.insert("Sentinel".to_string(), (Type::Function { params: Vec::new(), return_type: Box::new(Type::TypeVar("Sentinel".to_string())) }, MutabilityView::ReadOnly));
         env.variables.insert("Cell".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::TypeVar("Cell".to_string())) }, MutabilityView::ReadOnly));
         env.variables.insert("range".to_string(), (Type::Function { params: vec![Type::Int], return_type: Box::new(Type::Class { name: "range".into(), type_args: vec![], parent: None, traits: vec![], interfaces: vec![], fields: HashMap::new(), is_sealed: false }) }, MutabilityView::ReadOnly));
+        env.variables.insert("len".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Int) }, MutabilityView::ReadOnly));
+        env.variables.insert("min".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::TypeVar("T".to_string())) }, MutabilityView::ReadOnly));
+        env.variables.insert("max".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::TypeVar("T".to_string())) }, MutabilityView::ReadOnly));
+        env.variables.insert("sum".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Int) }, MutabilityView::ReadOnly));
+        env.variables.insert("read_file".to_string(), (Type::Function { params: vec![Type::Str], return_type: Box::new(Type::Str) }, MutabilityView::ReadOnly));
+        env.variables.insert("write_file".to_string(), (Type::Function { params: vec![Type::Str, Type::Str], return_type: Box::new(Type::None) }, MutabilityView::ReadOnly));
+        env.variables.insert("env_var".to_string(), (Type::Function { params: vec![Type::Str], return_type: Box::new(Type::Str) }, MutabilityView::ReadOnly));
+        env.variables.insert("str".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Str) }, MutabilityView::ReadOnly));
+        env.variables.insert("int".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Int) }, MutabilityView::ReadOnly));
+        env.variables.insert("float".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Float) }, MutabilityView::ReadOnly));
+        env.variables.insert("bool".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::Bool) }, MutabilityView::ReadOnly));
 
         Self { env }
     }
@@ -550,6 +561,20 @@ impl TypeChecker {
                 }
                 Ok(())
             }
+            Stmt::Import { module, alias, .. } => {
+                let bound_name = alias.clone().unwrap_or_else(|| {
+                    module.rsplit('.').next().unwrap_or(module).to_string()
+                });
+                self.env.variables.insert(bound_name, (Type::TypeVar("module".to_string()), MutabilityView::ReadOnly));
+                Ok(())
+            }
+            Stmt::FromImport { names, .. } => {
+                for (name, alias) in names {
+                    let bound_name = alias.as_ref().unwrap_or(name).clone();
+                    self.env.variables.insert(bound_name, (Type::TypeVar("Any".to_string()), MutabilityView::ReadOnly));
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -659,6 +684,8 @@ impl TypeChecker {
                     BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => {
                         Ok(Type::Bool)
                     }
+                    BinaryOp::In | BinaryOp::NotIn => Ok(Type::Bool),
+                    BinaryOp::Mod => Ok(Type::Int),
                     BinaryOp::And | BinaryOp::Or => Ok(Type::Bool),
                     _ => Ok(Type::Int),
                 }
@@ -774,7 +801,7 @@ impl TypeChecker {
                         if let Some(field_type) = fields.get(attr) {
                             Ok(field_type.clone())
                         } else {
-                            Ok(Type::None)
+                            Ok(Type::TypeVar("Any".to_string()))
                         }
                     }
                     Type::View { ref inner, .. } => {
@@ -783,9 +810,9 @@ impl TypeChecker {
                                 return Ok(field_type.clone());
                             }
                         }
-                        Ok(Type::None)
+                        Ok(Type::TypeVar("Any".to_string()))
                     }
-                    _ => Ok(Type::None),
+                    _ => Ok(Type::TypeVar("Any".to_string())),
                 }
             }
             Expr::AnonymousDef { params, return_type, .. } => {

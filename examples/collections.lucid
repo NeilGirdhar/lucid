@@ -1,0 +1,22 @@
+# Working with Collections and Builtins in Lucid
+
+# 1. Ranges and list comprehensions
+squares = [x * x for x in range(1, 6)]
+print("Squares:", squares)
+print("Sum of squares:", sum(squares))
+print("Min:", min(squares), "Max:", max(squares))
+
+# 2. Dictionary comprehensions and methods
+lookup = {str(x): x * 10 for x in range(4)}
+print("Dict keys:", lookup.keys())
+print("Dict values:", lookup.values())
+print("Lookup '2':", lookup.get("2", 0))
+
+# 3. Set operations and membership tests
+evens = {x for x in range(10) if x % 2 == 0}
+print("Is 4 in evens?", 4 in evens)
+print("Is 5 not in evens?", 5 not in evens)
+
+evens.add(10)
+evens.remove(0)
+print("Evens count:", len(evens))

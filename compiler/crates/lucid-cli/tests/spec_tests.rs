@@ -506,3 +506,71 @@ f = def: fixed
     assert!(chk.is_ok());
     assert!(evl.is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// 21. Standard Builtins & Method Integration
+// ---------------------------------------------------------------------------
+#[test]
+fn test_builtins_and_methods_integration() {
+    let src = r#"
+nums = [x * 2 for x in range(5)]
+total = sum(nums)
+count = len(nums)
+smallest = min(nums)
+biggest = max(nums)
+
+words = "lucid is expressive and fast".split()
+upper_words = [w.upper() for w in words if len(w) > 3]
+slug = "-".join(upper_words)
+"#;
+    let val = eval_ok(src);
+    assert_eq!(val, Value::Str("LUCID-EXPRESSIVE-FAST".to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// 22. Multi-file Module Imports
+// ---------------------------------------------------------------------------
+#[test]
+fn test_multi_file_module_imports() {
+    use std::fs;
+    let temp_dir = std::env::temp_dir().join("lucid_test_imports");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let helper_path = temp_dir.join("helper.lucid");
+    let main_path = temp_dir.join("main.lucid");
+
+    fs::write(&helper_path, r#"
+export def add_ten(x: int) -> int:
+    return x + 10
+
+export multiplier = 3
+"#).unwrap();
+
+    fs::write(&main_path, r#"
+from .helper import add_ten, multiplier
+import .helper as h
+
+res1 = add_ten(5)
+res2 = multiplier * 2
+res3 = h.multiplier * 3
+final_res = res1 + res2 + res3
+"#).unwrap();
+
+    let source = fs::read_to_string(&main_path).unwrap();
+    let module = parse(&source).unwrap();
+
+    let mut checker = TypeChecker::new();
+    assert!(checker.check_module(&module).is_ok());
+
+    let mut interp = Interpreter::new();
+    interp.set_current_file(Some(main_path.clone()));
+    let eval_res = interp.eval_module(&module);
+    assert!(eval_res.is_ok(), "Evaluation failed: {:?}", eval_res.err());
+
+    let final_res = interp.env.borrow().get("final_res").unwrap();
+    // res1 = 15, res2 = 6, res3 = 9 => 15 + 6 + 9 = 30
+    assert_eq!(final_res, Value::Int(30));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

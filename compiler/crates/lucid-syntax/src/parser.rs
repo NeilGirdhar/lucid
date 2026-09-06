@@ -855,7 +855,19 @@ impl Parser {
 
     fn parse_raw_function(&mut self, is_dispatch: bool, decorators: Vec<Expr>) -> Result<FunctionDef, ParseError> {
         let start = self.peek().span;
-        let name = self.expect_ident()?;
+        let name = if is_dispatch {
+            match self.peek_kind() {
+                TokenKind::Plus => { self.advance(); "+".to_string() }
+                TokenKind::Minus => { self.advance(); "-".to_string() }
+                TokenKind::Star => { self.advance(); "*".to_string() }
+                TokenKind::Slash => { self.advance(); "/".to_string() }
+                TokenKind::Percent => { self.advance(); "%".to_string() }
+                TokenKind::EqEq => { self.advance(); "==".to_string() }
+                _ => self.expect_ident()?,
+            }
+        } else {
+            self.expect_ident()?
+        };
         let type_params = self.parse_optional_type_params()?;
         let params = self.parse_param_list()?;
 
@@ -1091,7 +1103,11 @@ impl Parser {
     fn parse_import_stmt(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
         self.expect(&TokenKind::Import)?;
-        let module = self.parse_dotted_name()?;
+        let mut module = String::new();
+        while self.match_tok(&TokenKind::Dot) {
+            module.push('.');
+        }
+        module.push_str(&self.parse_dotted_name()?);
         let alias = if self.match_tok(&TokenKind::As) {
             Some(self.expect_ident()?)
         } else {
@@ -1106,7 +1122,7 @@ impl Parser {
         self.expect(&TokenKind::From)?;
 
         let mut module = String::new();
-        if self.match_tok(&TokenKind::Dot) {
+        while self.match_tok(&TokenKind::Dot) {
             module.push('.');
         }
         module.push_str(&self.parse_dotted_name()?);
@@ -1896,9 +1912,9 @@ impl Parser {
                 if self.match_tok(&TokenKind::For) {
                     let target = self.parse_comp_target()?;
                     self.expect(&TokenKind::In)?;
-                    let iter = self.parse_expr()?;
+                    let iter = self.parse_logical_or()?;
                     let condition = if self.match_tok(&TokenKind::If) {
-                        Some(Box::new(self.parse_expr()?))
+                        Some(Box::new(self.parse_logical_or()?))
                     } else {
                         None
                     };
@@ -1966,9 +1982,9 @@ impl Parser {
                 if self.match_tok(&TokenKind::For) {
                     let target = self.parse_comp_target()?;
                     self.expect(&TokenKind::In)?;
-                    let iter = self.parse_expr()?;
+                    let iter = self.parse_logical_or()?;
                     let condition = if self.match_tok(&TokenKind::If) {
-                        Some(Box::new(self.parse_expr()?))
+                        Some(Box::new(self.parse_logical_or()?))
                     } else {
                         None
                     };
@@ -2016,9 +2032,9 @@ impl Parser {
                     if self.match_tok(&TokenKind::For) {
                         let target = self.parse_comp_target()?;
                         self.expect(&TokenKind::In)?;
-                        let iter = self.parse_expr()?;
+                        let iter = self.parse_logical_or()?;
                         let condition = if self.match_tok(&TokenKind::If) {
-                            Some(Box::new(self.parse_expr()?))
+                            Some(Box::new(self.parse_logical_or()?))
                         } else {
                             None
                         };
@@ -2050,9 +2066,9 @@ impl Parser {
                 } else if self.match_tok(&TokenKind::For) {
                     let target = self.parse_comp_target()?;
                     self.expect(&TokenKind::In)?;
-                    let iter = self.parse_expr()?;
+                    let iter = self.parse_logical_or()?;
                     let condition = if self.match_tok(&TokenKind::If) {
-                        Some(Box::new(self.parse_expr()?))
+                        Some(Box::new(self.parse_logical_or()?))
                     } else {
                         None
                     };

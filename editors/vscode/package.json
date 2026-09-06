@@ -1,0 +1,35 @@
+{
+  "name": "lucid-language",
+  "displayName": "Lucid Language Support",
+  "description": "Syntax highlighting and language configuration for the Lucid programming language",
+  "version": "0.1.0",
+  "publisher": "lucid-lang",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lucid",
+        "aliases": [
+          "Lucid",
+          "lucid"
+        ],
+        "extensions": [
+          ".lucid"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lucid",
+        "scopeName": "source.lucid",
+        "path": "./syntaxes/lucid.tmLanguage.json"
+      }
+    ]
+  }
+}

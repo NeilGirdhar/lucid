@@ -1,0 +1,20 @@
+# Multiple dispatch operator overloading in Lucid
+
+class Vector2D:
+    x: int
+    y: int
+
+dispatch def +(a: Vector2D, b: Vector2D) -> Vector2D:
+    return Vector2D(a.x + b.x, a.y + b.y)
+
+dispatch def *(v: Vector2D, scalar: int) -> Vector2D:
+    return Vector2D(v.x * scalar, v.y * scalar)
+
+v1 = Vector2D(2, 4)
+v2 = Vector2D(3, 1)
+
+v3 = v1 + v2
+print("v1 + v2:", v3.x, v3.y)
+
+v4 = v1 * 3
+print("v1 * 3:", v4.x, v4.y)

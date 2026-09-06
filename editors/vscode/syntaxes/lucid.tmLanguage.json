@@ -1,0 +1,167 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lucid",
+  "scopeName": "source.lucid",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#constants" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#classes" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.lucid",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.double.lucid",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            { "name": "constant.character.escape.lucid", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.triple.single.lucid",
+          "begin": "'''",
+          "end": "'''",
+          "patterns": [
+            { "name": "constant.character.escape.lucid", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.double.lucid",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.lucid", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.single.lucid",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "name": "constant.character.escape.lucid", "match": "\\\\." }
+          ]
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.lucid",
+          "match": "\\b(true|false|none|skip)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.lucid",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.lucid",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.lucid",
+          "match": "\\b0[oO][0-7_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.lucid",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.lucid",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.declaration.lucid",
+          "match": "\\b(class|trait|interface|def|factory|dispatch|sealed|final|without|where|let|export|import|from|as)\\b"
+        },
+        {
+          "name": "keyword.control.flow.lucid",
+          "match": "\\b(if|elif|else|while|for|in|not\\s+in|if_broken|return|with|pass|break|continue|raise|try|except|finally|match|case)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.lucid",
+          "match": "\\b(and|or|not|is)\\b"
+        },
+        {
+          "name": "support.function.builtin.lucid",
+          "match": "\\b(print|freeze|range|len|min|max|sum|read_file|write_file|env_var|construct|trust)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.lucid",
+          "match": "\\b(int|float|bool|str|none|list|dict|set|record|tuple|Cell|Sentinel)\\b"
+        },
+        {
+          "name": "entity.name.type.class.lucid",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "match": "\\b(def|dispatch\\s+def)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.lucid" },
+            "2": { "name": "entity.name.function.lucid" }
+          }
+        }
+      ]
+    },
+    "classes": {
+      "patterns": [
+        {
+          "match": "\\b(class|trait|interface)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.lucid" },
+            "2": { "name": "entity.name.type.class.lucid" }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.error-propagation.lucid",
+          "match": "\\?"
+        },
+        {
+          "name": "keyword.operator.mutability.lucid",
+          "match": "[!&]"
+        },
+        {
+          "name": "keyword.operator.arithmetic.lucid",
+          "match": "(\\+|-|\\*|/|%|//|\\*\\*)"
+        },
+        {
+          "name": "keyword.operator.comparison.lucid",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.assignment.lucid",
+          "match": "(=|\\+=|-=|\\*=|/=|%=)"
+        }
+      ]
+    }
+  }
+}

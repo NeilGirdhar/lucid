@@ -1,25 +1,20 @@
+# Recoverable error handling with ? in Lucid
+
 class NotFoundError:
     message: str
 
-class PermissionError:
+class InvalidInputError:
     message: str
 
-def fetch_record(id: int) -> int | NotFoundError | PermissionError:
-    if id == 0:
-        return NotFoundError("record 0 not found")
-    if id < 0:
-        return PermissionError("negative id not allowed")
-    return id * 10
+def parse_positive(s: str):
+    val = int(s)
+    if val <= 0:
+        return InvalidInputError("number must be positive")
+    return val
 
-def process_record(id: int) -> int | NotFoundError | PermissionError:
-    val = fetch_record(id)?
-    return val + 1
+def double_input(s: str):
+    val = parse_positive(s)?
+    return val * 2
 
-r1 = process_record(5)
-print("Processed id 5:", r1)
-
-err1 = process_record(0)
-print("Processed id 0:", err1)
-
-err2 = process_record(-1)
-print("Processed id -1:", err2)
+print("Success result:", double_input("21"))
+print("Error result:  ", double_input("-5"))

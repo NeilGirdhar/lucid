@@ -1,0 +1,12 @@
+# Hello World in Lucid
+
+def greet(name: str) -> str:
+    return "Hello, " + name + "!"
+
+message = greet("Lucid Programmer")
+print(message)
+
+# String manipulations
+words = "lucid is clean and expressive".split()
+capitalized = [w.upper() for w in words]
+print("Joined:", " ".join(capitalized))

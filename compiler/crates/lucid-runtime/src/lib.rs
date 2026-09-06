@@ -36,6 +36,10 @@ pub enum Value {
         name: String,
         func: Rc<dyn Fn(&[Value], &mut Interpreter) -> Result<Value, RuntimeError>>,
     },
+    Module {
+        name: String,
+        env: Rc<RefCell<Environment>>,
+    },
     Set(Rc<RefCell<Vec<Value>>>),
     Skip,
     Sentinel(String),
@@ -58,6 +62,7 @@ impl Value {
             Value::Object { class_name, .. } => class_name.as_str(),
             Value::Function { .. } => "function",
             Value::BuiltinFunction { .. } => "builtin_function",
+            Value::Module { .. } => "module",
             Value::Sentinel(name) => name.as_str(),
             Value::Return(val) => val.type_name(),
         }
@@ -86,6 +91,11 @@ impl Value {
                     item.freeze();
                 }
             }
+            Value::Module { env, .. } => {
+                for item in env.borrow().bindings.values() {
+                    item.freeze();
+                }
+            }
             Value::Return(val) => val.freeze(),
             _ => {}
         }
@@ -108,6 +118,7 @@ impl PartialEq for Value {
             (Value::Set(a), Value::Set(b)) => *a.borrow() == *b.borrow(),
             (Value::Dict(a), Value::Dict(b)) => *a.borrow() == *b.borrow(),
             (Value::Record(a), Value::Record(b)) => *a.borrow() == *b.borrow(),
+            (Value::Module { name: n1, .. }, Value::Module { name: n2, .. }) => n1 == n2,
             (Value::Object { class_name: n1, fields: f1, .. }, Value::Object { class_name: n2, fields: f2, .. }) => {
                 n1 == n2 && *f1.borrow() == *f2.borrow()
             }
@@ -135,6 +146,7 @@ impl fmt::Debug for Value {
             }
             Value::Function { name, .. } => write!(f, "<def {name}>"),
             Value::BuiltinFunction { name, .. } => write!(f, "<builtin {name}>"),
+            Value::Module { name, .. } => write!(f, "<module '{name}'>"),
             Value::Sentinel(s) => write!(f, "{s}"),
             Value::Return(val) => write!(f, "return {:?}", val),
         }
@@ -235,12 +247,37 @@ pub struct ClassDef {
     pub span: Span,
 }
 
+fn compare_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, RuntimeError> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Ok(x.cmp(y)),
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).ok_or_else(|| RuntimeError {
+            message: "cannot compare NaN in min/max".into(),
+            span: Span::default(),
+        }),
+        (Value::Int(x), Value::Float(y)) => (*x as f64).partial_cmp(y).ok_or_else(|| RuntimeError {
+            message: "cannot compare NaN in min/max".into(),
+            span: Span::default(),
+        }),
+        (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)).ok_or_else(|| RuntimeError {
+            message: "cannot compare NaN in min/max".into(),
+            span: Span::default(),
+        }),
+        (Value::Str(x), Value::Str(y)) => Ok(x.cmp(y)),
+        _ => Err(RuntimeError {
+            message: format!("unsupported comparison between {} and {}", a.type_name(), b.type_name()),
+            span: Span::default(),
+        }),
+    }
+}
+
 pub struct Interpreter {
     pub env: Rc<RefCell<Environment>>,
     pub classes: HashMap<String, ClassDef>,
     pub traits: HashMap<String, Vec<TraitMember>>,
     pub dispatch: DispatchTable,
     pub output: Vec<String>,
+    pub current_file: Option<std::path::PathBuf>,
+    pub module_cache: HashMap<std::path::PathBuf, Rc<RefCell<Environment>>>,
 }
 
 impl Interpreter {
@@ -252,10 +289,16 @@ impl Interpreter {
             traits: HashMap::new(),
             dispatch: DispatchTable::default(),
             output: Vec::new(),
+            current_file: None,
+            module_cache: HashMap::new(),
         };
 
         interp.register_builtins();
         interp
+    }
+
+    pub fn set_current_file(&mut self, path: Option<std::path::PathBuf>) {
+        self.current_file = path;
     }
 
     pub fn call_dispatch(&mut self, name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
@@ -309,6 +352,263 @@ impl Interpreter {
             }
         });
         self.env.borrow_mut().set("Cell".to_string(), Value::BuiltinFunction { name: "Cell".to_string(), func: cell_fn });
+
+        // range(stop) / range(start, stop, [step])
+        let range_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            let (start, stop, step) = match args.len() {
+                1 => match &args[0] {
+                    Value::Int(stop) => (0, *stop, 1),
+                    _ => return Err(RuntimeError { message: "range() stop must be an int".into(), span: Span::default() }),
+                },
+                2 => match (&args[0], &args[1]) {
+                    (Value::Int(start), Value::Int(stop)) => (*start, *stop, 1),
+                    _ => return Err(RuntimeError { message: "range() arguments must be ints".into(), span: Span::default() }),
+                },
+                3 => match (&args[0], &args[1], &args[2]) {
+                    (Value::Int(start), Value::Int(stop), Value::Int(step)) => {
+                        if *step == 0 {
+                            return Err(RuntimeError { message: "range() step cannot be zero".into(), span: Span::default() });
+                        }
+                        (*start, *stop, *step)
+                    }
+                    _ => return Err(RuntimeError { message: "range() arguments must be ints".into(), span: Span::default() }),
+                },
+                n => return Err(RuntimeError { message: format!("range() takes 1 to 3 arguments, got {n}"), span: Span::default() }),
+            };
+
+            let mut items = Vec::new();
+            let mut cur = start;
+            if step > 0 {
+                while cur < stop {
+                    items.push(Value::Int(cur));
+                    cur += step;
+                }
+            } else {
+                while cur > stop {
+                    items.push(Value::Int(cur));
+                    cur += step;
+                }
+            }
+            Ok(Value::List(Rc::new(RefCell::new(items))))
+        });
+        self.env.borrow_mut().set("range".to_string(), Value::BuiltinFunction { name: "range".to_string(), func: range_fn });
+
+        // len(x)
+        let len_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: format!("len() takes exactly 1 argument (got {})", args.len()), span: Span::default() });
+            }
+            match &args[0] {
+                Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
+                Value::List(l) => Ok(Value::Int(l.borrow().len() as i64)),
+                Value::Dict(d) => Ok(Value::Int(d.borrow().len() as i64)),
+                Value::Set(s) => Ok(Value::Int(s.borrow().len() as i64)),
+                Value::Record(r) => Ok(Value::Int(r.borrow().len() as i64)),
+                other => Err(RuntimeError {
+                    message: format!("object of type '{}' has no len()", other.type_name()),
+                    span: Span::default(),
+                }),
+            }
+        });
+        self.env.borrow_mut().set("len".to_string(), Value::BuiltinFunction { name: "len".to_string(), func: len_fn });
+
+        // min(x) / min(a, b, ...)
+        let min_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.is_empty() {
+                return Err(RuntimeError { message: "min() expects at least 1 argument".into(), span: Span::default() });
+            }
+            let items: Vec<Value> = if args.len() == 1 {
+                match &args[0] {
+                    Value::List(l) => l.borrow().clone(),
+                    Value::Set(s) => s.borrow().clone(),
+                    other => return Err(RuntimeError { message: format!("min() arg must be iterable, got {}", other.type_name()), span: Span::default() }),
+                }
+            } else {
+                args.to_vec()
+            };
+            if items.is_empty() {
+                return Err(RuntimeError { message: "min() arg is an empty sequence".into(), span: Span::default() });
+            }
+            let mut current_min = items[0].clone();
+            for item in &items[1..] {
+                if compare_values(item, &current_min)? == std::cmp::Ordering::Less {
+                    current_min = item.clone();
+                }
+            }
+            Ok(current_min)
+        });
+        self.env.borrow_mut().set("min".to_string(), Value::BuiltinFunction { name: "min".to_string(), func: min_fn });
+
+        // max(x) / max(a, b, ...)
+        let max_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.is_empty() {
+                return Err(RuntimeError { message: "max() expects at least 1 argument".into(), span: Span::default() });
+            }
+            let items: Vec<Value> = if args.len() == 1 {
+                match &args[0] {
+                    Value::List(l) => l.borrow().clone(),
+                    Value::Set(s) => s.borrow().clone(),
+                    other => return Err(RuntimeError { message: format!("max() arg must be iterable, got {}", other.type_name()), span: Span::default() }),
+                }
+            } else {
+                args.to_vec()
+            };
+            if items.is_empty() {
+                return Err(RuntimeError { message: "max() arg is an empty sequence".into(), span: Span::default() });
+            }
+            let mut current_max = items[0].clone();
+            for item in &items[1..] {
+                if compare_values(item, &current_max)? == std::cmp::Ordering::Greater {
+                    current_max = item.clone();
+                }
+            }
+            Ok(current_max)
+        });
+        self.env.borrow_mut().set("max".to_string(), Value::BuiltinFunction { name: "max".to_string(), func: max_fn });
+
+        // sum(iterable, [start])
+        let sum_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.is_empty() || args.len() > 2 {
+                return Err(RuntimeError { message: "sum() takes 1 or 2 arguments".into(), span: Span::default() });
+            }
+            let items: Vec<Value> = match &args[0] {
+                Value::List(l) => l.borrow().clone(),
+                Value::Set(s) => s.borrow().clone(),
+                other => return Err(RuntimeError { message: format!("sum() iterable must be list or set, got {}", other.type_name()), span: Span::default() }),
+            };
+            let start = if args.len() == 2 { args[1].clone() } else { Value::Int(0) };
+            let mut total = start;
+            for item in items {
+                total = match (&total, &item) {
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                    (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b),
+                    (Value::Float(a), Value::Int(b)) => Value::Float(a + *b as f64),
+                    _ => return Err(RuntimeError { message: "sum() items must be numbers".into(), span: Span::default() }),
+                };
+            }
+            Ok(total)
+        });
+        self.env.borrow_mut().set("sum".to_string(), Value::BuiltinFunction { name: "sum".to_string(), func: sum_fn });
+
+        // read_file(path)
+        let read_file_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: "read_file() takes exactly 1 argument (path)".into(), span: Span::default() });
+            }
+            let path = match &args[0] {
+                Value::Str(p) => p,
+                _ => return Err(RuntimeError { message: "read_file() path must be a string".into(), span: Span::default() }),
+            };
+            match std::fs::read_to_string(path) {
+                Ok(contents) => Ok(Value::Str(contents)),
+                Err(e) => Err(RuntimeError { message: format!("read_file('{path}') failed: {e}"), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("read_file".to_string(), Value::BuiltinFunction { name: "read_file".to_string(), func: read_file_fn });
+
+        // write_file(path, content)
+        let write_file_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 2 {
+                return Err(RuntimeError { message: "write_file() takes exactly 2 arguments (path, content)".into(), span: Span::default() });
+            }
+            let path = match &args[0] {
+                Value::Str(p) => p,
+                _ => return Err(RuntimeError { message: "write_file() path must be a string".into(), span: Span::default() }),
+            };
+            let content = match &args[1] {
+                Value::Str(c) => c,
+                _ => return Err(RuntimeError { message: "write_file() content must be a string".into(), span: Span::default() }),
+            };
+            match std::fs::write(path, content) {
+                Ok(()) => Ok(Value::None),
+                Err(e) => Err(RuntimeError { message: format!("write_file('{path}') failed: {e}"), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("write_file".to_string(), Value::BuiltinFunction { name: "write_file".to_string(), func: write_file_fn });
+
+        // env_var(name, [default])
+        let env_var_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.is_empty() || args.len() > 2 {
+                return Err(RuntimeError { message: "env_var() takes 1 or 2 arguments (name, [default])".into(), span: Span::default() });
+            }
+            let name = match &args[0] {
+                Value::Str(n) => n,
+                _ => return Err(RuntimeError { message: "env_var() name must be a string".into(), span: Span::default() }),
+            };
+            match std::env::var(name) {
+                Ok(v) => Ok(Value::Str(v)),
+                Err(_) => {
+                    if args.len() == 2 {
+                        Ok(args[1].clone())
+                    } else {
+                        Ok(Value::None)
+                    }
+                }
+            }
+        });
+        self.env.borrow_mut().set("env_var".to_string(), Value::BuiltinFunction { name: "env_var".to_string(), func: env_var_fn });
+
+        // str(x)
+        let str_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: "str() takes exactly 1 argument".into(), span: Span::default() });
+            }
+            match &args[0] {
+                Value::Str(s) => Ok(Value::Str(s.clone())),
+                Value::Int(n) => Ok(Value::Str(n.to_string())),
+                Value::Float(f) => Ok(Value::Str(f.to_string())),
+                Value::Bool(b) => Ok(Value::Str(b.to_string())),
+                Value::None => Ok(Value::Str("none".to_string())),
+                other => Ok(Value::Str(format!("{other:?}"))),
+            }
+        });
+        self.env.borrow_mut().set("str".to_string(), Value::BuiltinFunction { name: "str".to_string(), func: str_fn });
+
+        // int(x)
+        let int_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: "int() takes exactly 1 argument".into(), span: Span::default() });
+            }
+            match &args[0] {
+                Value::Int(n) => Ok(Value::Int(*n)),
+                Value::Float(f) => Ok(Value::Int(*f as i64)),
+                Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
+                Value::Str(s) => s.trim().parse::<i64>().map(Value::Int).map_err(|e| RuntimeError {
+                    message: format!("invalid literal for int(): '{s}' ({e})"),
+                    span: Span::default(),
+                }),
+                other => Err(RuntimeError { message: format!("int() cannot convert {}", other.type_name()), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("int".to_string(), Value::BuiltinFunction { name: "int".to_string(), func: int_fn });
+
+        // float(x)
+        let float_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: "float() takes exactly 1 argument".into(), span: Span::default() });
+            }
+            match &args[0] {
+                Value::Float(f) => Ok(Value::Float(*f)),
+                Value::Int(n) => Ok(Value::Float(*n as f64)),
+                Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
+                Value::Str(s) => s.trim().parse::<f64>().map(Value::Float).map_err(|e| RuntimeError {
+                    message: format!("invalid literal for float(): '{s}' ({e})"),
+                    span: Span::default(),
+                }),
+                other => Err(RuntimeError { message: format!("float() cannot convert {}", other.type_name()), span: Span::default() }),
+            }
+        });
+        self.env.borrow_mut().set("float".to_string(), Value::BuiltinFunction { name: "float".to_string(), func: float_fn });
+
+        // bool(x)
+        let bool_fn = Rc::new(|args: &[Value], interp: &mut Interpreter| {
+            if args.len() != 1 {
+                return Err(RuntimeError { message: "bool() takes exactly 1 argument".into(), span: Span::default() });
+            }
+            Ok(Value::Bool(interp.is_truthy(&args[0])))
+        });
+        self.env.borrow_mut().set("bool".to_string(), Value::BuiltinFunction { name: "bool".to_string(), func: bool_fn });
 
         // Default multiple dispatch operators (+, -, *, ==, etc.)
         let add_int = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
@@ -367,6 +667,154 @@ impl Interpreter {
         self.dispatch.register("==".to_string(), vec!["object".to_string(), "object".to_string()], eq_fn);
     }
 
+    pub fn load_module(&mut self, module_name: &str, span: Span) -> Result<Rc<RefCell<Environment>>, RuntimeError> {
+        if module_name == "math" {
+            let math_env = Rc::new(RefCell::new(Environment::new()));
+            math_env.borrow_mut().set("pi".to_string(), Value::Float(std::f64::consts::PI));
+            math_env.borrow_mut().set("e".to_string(), Value::Float(std::f64::consts::E));
+            math_env.borrow_mut().set("sqrt".to_string(), Value::BuiltinFunction {
+                name: "sqrt".to_string(),
+                func: Rc::new(|args, _interp| {
+                    if args.len() != 1 { return Err(RuntimeError { message: "sqrt() takes 1 argument".into(), span: Span::default() }); }
+                    let val = match &args[0] {
+                        Value::Int(n) => *n as f64,
+                        Value::Float(f) => *f,
+                        _ => return Err(RuntimeError { message: "sqrt() arg must be a number".into(), span: Span::default() }),
+                    };
+                    Ok(Value::Float(val.sqrt()))
+                }),
+            });
+            math_env.borrow_mut().set("sin".to_string(), Value::BuiltinFunction {
+                name: "sin".to_string(),
+                func: Rc::new(|args, _interp| {
+                    if args.len() != 1 { return Err(RuntimeError { message: "sin() takes 1 argument".into(), span: Span::default() }); }
+                    let val = match &args[0] { Value::Int(n) => *n as f64, Value::Float(f) => *f, _ => return Err(RuntimeError { message: "sin() arg must be a number".into(), span: Span::default() }) };
+                    Ok(Value::Float(val.sin()))
+                }),
+            });
+            math_env.borrow_mut().set("cos".to_string(), Value::BuiltinFunction {
+                name: "cos".to_string(),
+                func: Rc::new(|args, _interp| {
+                    if args.len() != 1 { return Err(RuntimeError { message: "cos() takes 1 argument".into(), span: Span::default() }); }
+                    let val = match &args[0] { Value::Int(n) => *n as f64, Value::Float(f) => *f, _ => return Err(RuntimeError { message: "cos() arg must be a number".into(), span: Span::default() }) };
+                    Ok(Value::Float(val.cos()))
+                }),
+            });
+            math_env.borrow_mut().set("tan".to_string(), Value::BuiltinFunction {
+                name: "tan".to_string(),
+                func: Rc::new(|args, _interp| {
+                    if args.len() != 1 { return Err(RuntimeError { message: "tan() takes 1 argument".into(), span: Span::default() }); }
+                    let val = match &args[0] { Value::Int(n) => *n as f64, Value::Float(f) => *f, _ => return Err(RuntimeError { message: "tan() arg must be a number".into(), span: Span::default() }) };
+                    Ok(Value::Float(val.tan()))
+                }),
+            });
+            math_env.borrow_mut().set("floor".to_string(), Value::BuiltinFunction {
+                name: "floor".to_string(),
+                func: Rc::new(|args, _interp| {
+                    if args.len() != 1 { return Err(RuntimeError { message: "floor() takes 1 argument".into(), span: Span::default() }); }
+                    let val = match &args[0] { Value::Int(n) => *n, Value::Float(f) => f.floor() as i64, _ => return Err(RuntimeError { message: "floor() arg must be a number".into(), span: Span::default() }) };
+                    Ok(Value::Int(val))
+                }),
+            });
+            math_env.borrow_mut().set("ceil".to_string(), Value::BuiltinFunction {
+                name: "ceil".to_string(),
+                func: Rc::new(|args, _interp| {
+                    if args.len() != 1 { return Err(RuntimeError { message: "ceil() takes 1 argument".into(), span: Span::default() }); }
+                    let val = match &args[0] { Value::Int(n) => *n, Value::Float(f) => f.ceil() as i64, _ => return Err(RuntimeError { message: "ceil() arg must be a number".into(), span: Span::default() }) };
+                    Ok(Value::Int(val))
+                }),
+            });
+            math_env.borrow_mut().set("abs".to_string(), Value::BuiltinFunction {
+                name: "abs".to_string(),
+                func: Rc::new(|args, _interp| {
+                    if args.len() != 1 { return Err(RuntimeError { message: "abs() takes 1 argument".into(), span: Span::default() }); }
+                    match &args[0] {
+                        Value::Int(n) => Ok(Value::Int(n.abs())),
+                        Value::Float(f) => Ok(Value::Float(f.abs())),
+                        _ => Err(RuntimeError { message: "abs() arg must be a number".into(), span: Span::default() }),
+                    }
+                }),
+            });
+            return Ok(math_env);
+        }
+
+        if module_name == "sys" {
+            let sys_env = Rc::new(RefCell::new(Environment::new()));
+            sys_env.borrow_mut().set("platform".to_string(), Value::Str(std::env::consts::OS.to_string()));
+            sys_env.borrow_mut().set("version".to_string(), Value::Str("0.1.0".to_string()));
+            return Ok(sys_env);
+        }
+
+        // Resolve relative module file
+        let dot_count = module_name.chars().take_while(|&c| c == '.').count();
+        let rest = &module_name[dot_count..];
+        let rel_path = rest.replace('.', "/");
+
+        let current_dir = if let Some(ref cf) = self.current_file {
+            cf.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        };
+
+        let mut base_dir = current_dir;
+        if dot_count > 1 {
+            for _ in 1..dot_count {
+                if let Some(parent) = base_dir.parent() {
+                    base_dir = parent.to_path_buf();
+                }
+            }
+        }
+
+        let mut candidate = base_dir.join(format!("{rel_path}.lucid"));
+        if !candidate.exists() {
+            candidate = base_dir.join(format!("{rel_path}/mod.lucid"));
+        }
+        if !candidate.exists() {
+            candidate = base_dir.join(format!("{rel_path}/__init__.lucid"));
+        }
+        if !candidate.exists() && dot_count == 0 {
+            if let Ok(cwd) = std::env::current_dir() {
+                let alt = cwd.join(format!("{rel_path}.lucid"));
+                if alt.exists() {
+                    candidate = alt;
+                }
+            }
+        }
+
+        if !candidate.exists() {
+            return Err(RuntimeError {
+                message: format!("cannot find module '{module_name}' (looked at {})", candidate.display()),
+                span,
+            });
+        }
+
+        let canon = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+        if let Some(cached) = self.module_cache.get(&canon) {
+            return Ok(Rc::clone(cached));
+        }
+
+        let source = std::fs::read_to_string(&canon).map_err(|e| RuntimeError {
+            message: format!("failed to read module file '{}': {e}", canon.display()),
+            span,
+        })?;
+
+        let parsed = lucid_syntax::parse(&source).map_err(|e| RuntimeError {
+            message: format!("syntax error in module '{}': {e}", canon.display()),
+            span,
+        })?;
+
+        let mut sub_interp = Interpreter::new();
+        sub_interp.current_file = Some(canon.clone());
+        sub_interp.module_cache = self.module_cache.clone();
+        sub_interp.eval_module(&parsed)?;
+
+        let env = sub_interp.env;
+        self.module_cache = sub_interp.module_cache;
+        self.module_cache.insert(canon, Rc::clone(&env));
+
+        Ok(env)
+    }
+
     pub fn eval_module(&mut self, module: &Module) -> Result<Value, RuntimeError> {
         let mut last_val = Value::None;
         for stmt in &module.statements {
@@ -420,7 +868,7 @@ impl Interpreter {
 
                 if func.is_dispatch {
                     let f_name = func.name.clone();
-                    let param_types = func.params.iter().map(|p| {
+                    let param_types: Vec<String> = func.params.iter().map(|p| {
                         p.type_annotation.as_ref().map(|t| match t {
                             TypeExpr::Named { name, .. } => name.clone(),
                             _ => "object".to_string(),
@@ -429,9 +877,23 @@ impl Interpreter {
 
                     let func_clone = func.clone();
                     let closure = Rc::clone(&self.env);
-                    self.dispatch.register(f_name.clone(), param_types, Rc::new(move |args, interp| {
+                    let dispatch_fn = Rc::new(move |args: &[Value], interp: &mut Interpreter| {
                         interp.call_function(&func_clone, args, Rc::clone(&closure))
-                    }));
+                    });
+
+                    self.dispatch.register(f_name.clone(), param_types.clone(), dispatch_fn.clone());
+
+                    if f_name == "__add__" {
+                        self.dispatch.register("+".to_string(), param_types.clone(), dispatch_fn.clone());
+                    } else if f_name == "__sub__" {
+                        self.dispatch.register("-".to_string(), param_types.clone(), dispatch_fn.clone());
+                    } else if f_name == "__mul__" {
+                        self.dispatch.register("*".to_string(), param_types.clone(), dispatch_fn.clone());
+                    } else if f_name == "__truediv__" || f_name == "__div__" {
+                        self.dispatch.register("/".to_string(), param_types.clone(), dispatch_fn.clone());
+                    } else if f_name == "__eq__" {
+                        self.dispatch.register("==".to_string(), param_types.clone(), dispatch_fn.clone());
+                    }
 
                     let name_for_call = f_name.clone();
                     let dispatch_wrapper = Value::BuiltinFunction {
@@ -547,6 +1009,7 @@ impl Interpreter {
                 let iter_val = self.eval_expr(iterable)?;
                 let items = match iter_val {
                     Value::List(items) => items.borrow().clone(),
+                    Value::Set(items) => items.borrow().clone(),
                     _ => return Err(RuntimeError {
                         message: "value is not iterable".to_string(),
                         span: *span,
@@ -646,6 +1109,30 @@ impl Interpreter {
                 }
                 self.eval_block(body)
             }
+            Stmt::Import { module, alias, span } => {
+                let mod_env = self.load_module(module, *span)?;
+                let bound_name = alias.clone().unwrap_or_else(|| {
+                    module.rsplit('.').next().unwrap_or(module).to_string()
+                });
+                let mod_val = Value::Module {
+                    name: bound_name.clone(),
+                    env: mod_env,
+                };
+                self.env.borrow_mut().set(bound_name, mod_val);
+                Ok(Value::None)
+            }
+            Stmt::FromImport { module, names, span, .. } => {
+                let mod_env = self.load_module(module, *span)?;
+                for (name, alias) in names {
+                    let val = mod_env.borrow().get(name).ok_or_else(|| RuntimeError {
+                        message: format!("cannot import name '{name}' from module '{module}'"),
+                        span: *span,
+                    })?;
+                    let bound_name = alias.as_ref().unwrap_or(name).clone();
+                    self.env.borrow_mut().set(bound_name, val);
+                }
+                Ok(Value::None)
+            }
             Stmt::Pass(_) => Ok(Value::None),
             Stmt::Expr(expr) => self.eval_expr(expr),
             _ => Ok(Value::None),
@@ -718,6 +1205,58 @@ impl Interpreter {
                         (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a > b)),
                         _ => Err(RuntimeError { message: "unsupported operands for >".to_string(), span: *span }),
                     },
+                    BinaryOp::LtEq => match (&lval, &rval) {
+                        (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+                        (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
+                        _ => Err(RuntimeError { message: "unsupported operands for <=".to_string(), span: *span }),
+                    },
+                    BinaryOp::GtEq => match (&lval, &rval) {
+                        (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+                        (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a >= b)),
+                        _ => Err(RuntimeError { message: "unsupported operands for >=".to_string(), span: *span }),
+                    },
+                    BinaryOp::Mod => match (&lval, &rval) {
+                        (Value::Int(a), Value::Int(b)) => {
+                            if *b == 0 {
+                                Err(RuntimeError { message: "division by zero in %".to_string(), span: *span })
+                            } else {
+                                Ok(Value::Int(a % b))
+                            }
+                        }
+                        _ => Err(RuntimeError { message: "unsupported operands for %".to_string(), span: *span }),
+                    },
+                    BinaryOp::In => {
+                        let contains = match &rval {
+                            Value::List(l) => l.borrow().contains(&lval),
+                            Value::Set(s) => s.borrow().contains(&lval),
+                            Value::Dict(d) => match &lval {
+                                Value::Str(s) => d.borrow().contains_key(s),
+                                _ => false,
+                            },
+                            Value::Str(s) => match &lval {
+                                Value::Str(sub) => s.contains(sub),
+                                _ => false,
+                            },
+                            _ => return Err(RuntimeError { message: format!("'in' operator not supported for {}", rval.type_name()), span: *span }),
+                        };
+                        Ok(Value::Bool(contains))
+                    }
+                    BinaryOp::NotIn => {
+                        let contains = match &rval {
+                            Value::List(l) => l.borrow().contains(&lval),
+                            Value::Set(s) => s.borrow().contains(&lval),
+                            Value::Dict(d) => match &lval {
+                                Value::Str(s) => d.borrow().contains_key(s),
+                                _ => false,
+                            },
+                            Value::Str(s) => match &lval {
+                                Value::Str(sub) => s.contains(sub),
+                                _ => false,
+                            },
+                            _ => return Err(RuntimeError { message: format!("'not in' operator not supported for {}", rval.type_name()), span: *span }),
+                        };
+                        Ok(Value::Bool(!contains))
+                    }
                     _ => Err(RuntimeError { message: "unimplemented operator".to_string(), span: *span }),
                 }
             }
@@ -856,6 +1395,133 @@ impl Interpreter {
                             })
                         }
                     }
+                    Value::Module { name: mod_name, env } => {
+                        if let Some(val) = env.borrow().get(attr) {
+                            Ok(val)
+                        } else {
+                            Err(RuntimeError {
+                                message: format!("module '{mod_name}' has no attribute '{attr}'"),
+                                span: *span,
+                            })
+                        }
+                    }
+                    Value::Str(s) => {
+                        if attr == "split" {
+                            let s = s.clone();
+                            return Ok(Value::BuiltinFunction {
+                                name: "split".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    let pieces: Vec<Value> = if args.is_empty() {
+                                        s.split_whitespace().map(|p| Value::Str(p.to_string())).collect()
+                                    } else if let Value::Str(sep) = &args[0] {
+                                        s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect()
+                                    } else {
+                                        return Err(RuntimeError { message: "split separator must be a string".into(), span: Span::default() });
+                                    };
+                                    Ok(Value::List(Rc::new(RefCell::new(pieces))))
+                                }),
+                            });
+                        }
+                        if attr == "join" {
+                            let sep = s.clone();
+                            return Ok(Value::BuiltinFunction {
+                                name: "join".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 1 {
+                                        return Err(RuntimeError { message: "join() takes exactly 1 argument (iterable)".into(), span: Span::default() });
+                                    }
+                                    let items: Vec<String> = match &args[0] {
+                                        Value::List(l) => l.borrow().iter().map(|v| match v {
+                                            Value::Str(s) => s.clone(),
+                                            other => format!("{other:?}"),
+                                        }).collect(),
+                                        Value::Set(s) => s.borrow().iter().map(|v| match v {
+                                            Value::Str(s) => s.clone(),
+                                            other => format!("{other:?}"),
+                                        }).collect(),
+                                        _ => return Err(RuntimeError { message: "join() argument must be a list or set".into(), span: Span::default() }),
+                                    };
+                                    Ok(Value::Str(items.join(&sep)))
+                                }),
+                            });
+                        }
+                        if attr == "strip" || attr == "trim" {
+                            let s = s.clone();
+                            return Ok(Value::BuiltinFunction {
+                                name: attr.to_string(),
+                                func: Rc::new(move |_args, _interp| {
+                                    Ok(Value::Str(s.trim().to_string()))
+                                }),
+                            });
+                        }
+                        if attr == "replace" {
+                            let s = s.clone();
+                            return Ok(Value::BuiltinFunction {
+                                name: "replace".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 2 {
+                                        return Err(RuntimeError { message: "replace() takes exactly 2 arguments (from, to)".into(), span: Span::default() });
+                                    }
+                                    match (&args[0], &args[1]) {
+                                        (Value::Str(from), Value::Str(to)) => Ok(Value::Str(s.replace(from, to))),
+                                        _ => Err(RuntimeError { message: "replace() arguments must be strings".into(), span: Span::default() }),
+                                    }
+                                }),
+                            });
+                        }
+                        if attr == "startswith" {
+                            let s = s.clone();
+                            return Ok(Value::BuiltinFunction {
+                                name: "startswith".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 1 {
+                                        return Err(RuntimeError { message: "startswith() takes exactly 1 argument (prefix)".into(), span: Span::default() });
+                                    }
+                                    match &args[0] {
+                                        Value::Str(prefix) => Ok(Value::Bool(s.starts_with(prefix))),
+                                        _ => Err(RuntimeError { message: "startswith() prefix must be a string".into(), span: Span::default() }),
+                                    }
+                                }),
+                            });
+                        }
+                        if attr == "endswith" {
+                            let s = s.clone();
+                            return Ok(Value::BuiltinFunction {
+                                name: "endswith".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 1 {
+                                        return Err(RuntimeError { message: "endswith() takes exactly 1 argument (suffix)".into(), span: Span::default() });
+                                    }
+                                    match &args[0] {
+                                        Value::Str(suffix) => Ok(Value::Bool(s.ends_with(suffix))),
+                                        _ => Err(RuntimeError { message: "endswith() suffix must be a string".into(), span: Span::default() }),
+                                    }
+                                }),
+                            });
+                        }
+                        if attr == "lower" {
+                            let s = s.clone();
+                            return Ok(Value::BuiltinFunction {
+                                name: "lower".to_string(),
+                                func: Rc::new(move |_args, _interp| {
+                                    Ok(Value::Str(s.to_lowercase()))
+                                }),
+                            });
+                        }
+                        if attr == "upper" {
+                            let s = s.clone();
+                            return Ok(Value::BuiltinFunction {
+                                name: "upper".to_string(),
+                                func: Rc::new(move |_args, _interp| {
+                                    Ok(Value::Str(s.to_uppercase()))
+                                }),
+                            });
+                        }
+                        Err(RuntimeError {
+                            message: format!("str has no attribute '{attr}'"),
+                            span: *span,
+                        })
+                    }
                     Value::List(l) => {
                         if attr == "append" {
                             let l_clone = Rc::clone(&l);
@@ -869,8 +1535,210 @@ impl Interpreter {
                                 }),
                             });
                         }
+                        if attr == "pop" {
+                            let l_clone = Rc::clone(&l);
+                            return Ok(Value::BuiltinFunction {
+                                name: "pop".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    let mut vec = l_clone.borrow_mut();
+                                    if vec.is_empty() {
+                                        return Err(RuntimeError { message: "pop from empty list".into(), span: Span::default() });
+                                    }
+                                    if args.is_empty() {
+                                        Ok(vec.pop().unwrap())
+                                    } else if let Value::Int(idx) = &args[0] {
+                                        let i = if *idx < 0 { vec.len() as i64 + *idx } else { *idx };
+                                        if i < 0 || i as usize >= vec.len() {
+                                            return Err(RuntimeError { message: format!("pop index {idx} out of range"), span: Span::default() });
+                                        }
+                                        Ok(vec.remove(i as usize))
+                                    } else {
+                                        Err(RuntimeError { message: "pop index must be an int".into(), span: Span::default() })
+                                    }
+                                }),
+                            });
+                        }
+                        if attr == "insert" {
+                            let l_clone = Rc::clone(&l);
+                            return Ok(Value::BuiltinFunction {
+                                name: "insert".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 2 {
+                                        return Err(RuntimeError { message: "insert() takes exactly 2 arguments (index, item)".into(), span: Span::default() });
+                                    }
+                                    if let Value::Int(idx) = &args[0] {
+                                        let mut vec = l_clone.borrow_mut();
+                                        let len = vec.len() as i64;
+                                        let i = if *idx < 0 { (len + *idx).max(0) as usize } else { (*idx).min(len) as usize };
+                                        vec.insert(i, args[1].clone());
+                                        Ok(Value::None)
+                                    } else {
+                                        Err(RuntimeError { message: "insert index must be an int".into(), span: Span::default() })
+                                    }
+                                }),
+                            });
+                        }
+                        if attr == "extend" {
+                            let l_clone = Rc::clone(&l);
+                            return Ok(Value::BuiltinFunction {
+                                name: "extend".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 1 {
+                                        return Err(RuntimeError { message: "extend() takes exactly 1 argument (iterable)".into(), span: Span::default() });
+                                    }
+                                    match &args[0] {
+                                        Value::List(other) => {
+                                            l_clone.borrow_mut().extend(other.borrow().iter().cloned());
+                                            Ok(Value::None)
+                                        }
+                                        Value::Set(other) => {
+                                            l_clone.borrow_mut().extend(other.borrow().iter().cloned());
+                                            Ok(Value::None)
+                                        }
+                                        _ => Err(RuntimeError { message: "extend argument must be a list or set".into(), span: Span::default() }),
+                                    }
+                                }),
+                            });
+                        }
+                        if attr == "clear" {
+                            let l_clone = Rc::clone(&l);
+                            return Ok(Value::BuiltinFunction {
+                                name: "clear".to_string(),
+                                func: Rc::new(move |_args, _interp| {
+                                    l_clone.borrow_mut().clear();
+                                    Ok(Value::None)
+                                }),
+                            });
+                        }
                         Err(RuntimeError {
                             message: format!("list has no attribute '{attr}'"),
+                            span: *span,
+                        })
+                    }
+                    Value::Dict(d) => {
+                        if attr == "get" {
+                            let d_clone = Rc::clone(&d);
+                            return Ok(Value::BuiltinFunction {
+                                name: "get".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.is_empty() || args.len() > 2 {
+                                        return Err(RuntimeError { message: "get() takes 1 or 2 arguments (key, [default])".into(), span: Span::default() });
+                                    }
+                                    let key_str = match &args[0] {
+                                        Value::Str(s) => s.clone(),
+                                        other => format!("{other:?}"),
+                                    };
+                                    if let Some(val) = d_clone.borrow().get(&key_str) {
+                                        Ok(val.clone())
+                                    } else if args.len() == 2 {
+                                        Ok(args[1].clone())
+                                    } else {
+                                        Ok(Value::None)
+                                    }
+                                }),
+                            });
+                        }
+                        if attr == "keys" {
+                            let d_clone = Rc::clone(&d);
+                            return Ok(Value::BuiltinFunction {
+                                name: "keys".to_string(),
+                                func: Rc::new(move |_args, _interp| {
+                                    let keys: Vec<Value> = d_clone.borrow().keys().cloned().map(Value::Str).collect();
+                                    Ok(Value::List(Rc::new(RefCell::new(keys))))
+                                }),
+                            });
+                        }
+                        if attr == "values" {
+                            let d_clone = Rc::clone(&d);
+                            return Ok(Value::BuiltinFunction {
+                                name: "values".to_string(),
+                                func: Rc::new(move |_args, _interp| {
+                                    let vals: Vec<Value> = d_clone.borrow().values().cloned().collect();
+                                    Ok(Value::List(Rc::new(RefCell::new(vals))))
+                                }),
+                            });
+                        }
+                        if attr == "items" {
+                            let d_clone = Rc::clone(&d);
+                            return Ok(Value::BuiltinFunction {
+                                name: "items".to_string(),
+                                func: Rc::new(move |_args, _interp| {
+                                    let items: Vec<Value> = d_clone.borrow().iter().map(|(k, v)| {
+                                        Value::List(Rc::new(RefCell::new(vec![Value::Str(k.clone()), v.clone()])))
+                                    }).collect();
+                                    Ok(Value::List(Rc::new(RefCell::new(items))))
+                                }),
+                            });
+                        }
+                        if attr == "contains" {
+                            let d_clone = Rc::clone(&d);
+                            return Ok(Value::BuiltinFunction {
+                                name: "contains".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 1 {
+                                        return Err(RuntimeError { message: "contains() takes exactly 1 argument (key)".into(), span: Span::default() });
+                                    }
+                                    let key_str = match &args[0] {
+                                        Value::Str(s) => s.clone(),
+                                        other => format!("{other:?}"),
+                                    };
+                                    Ok(Value::Bool(d_clone.borrow().contains_key(&key_str)))
+                                }),
+                            });
+                        }
+                        Err(RuntimeError {
+                            message: format!("dict has no attribute '{attr}'"),
+                            span: *span,
+                        })
+                    }
+                    Value::Set(s) => {
+                        if attr == "add" {
+                            let s_clone = Rc::clone(&s);
+                            return Ok(Value::BuiltinFunction {
+                                name: "add".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 1 {
+                                        return Err(RuntimeError { message: "add() takes exactly 1 argument (item)".into(), span: Span::default() });
+                                    }
+                                    let mut vec = s_clone.borrow_mut();
+                                    if !vec.contains(&args[0]) {
+                                        vec.push(args[0].clone());
+                                    }
+                                    Ok(Value::None)
+                                }),
+                            });
+                        }
+                        if attr == "remove" {
+                            let s_clone = Rc::clone(&s);
+                            return Ok(Value::BuiltinFunction {
+                                name: "remove".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 1 {
+                                        return Err(RuntimeError { message: "remove() takes exactly 1 argument (item)".into(), span: Span::default() });
+                                    }
+                                    let mut vec = s_clone.borrow_mut();
+                                    if let Some(pos) = vec.iter().position(|x| x == &args[0]) {
+                                        vec.remove(pos);
+                                    }
+                                    Ok(Value::None)
+                                }),
+                            });
+                        }
+                        if attr == "contains" {
+                            let s_clone = Rc::clone(&s);
+                            return Ok(Value::BuiltinFunction {
+                                name: "contains".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if args.len() != 1 {
+                                        return Err(RuntimeError { message: "contains() takes exactly 1 argument (item)".into(), span: Span::default() });
+                                    }
+                                    let vec = s_clone.borrow();
+                                    Ok(Value::Bool(vec.contains(&args[0])))
+                                }),
+                            });
+                        }
+                        Err(RuntimeError {
+                            message: format!("set has no attribute '{attr}'"),
                             span: *span,
                         })
                     }
@@ -1390,5 +2258,122 @@ r2 = get_doubled("missing")
             Value::Object { class_name, .. } => assert_eq!(class_name, "NotFoundError"),
             other => panic!("expected NotFoundError, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_builtins_range_len_min_max_sum() {
+        let src = r#"
+r = range(5)
+l = len(r)
+m1 = min(r)
+m2 = max(r)
+s = sum(r)
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        let _ = interp.eval_module(&module).unwrap();
+
+        assert_eq!(interp.env.borrow().get("l").unwrap(), Value::Int(5));
+        assert_eq!(interp.env.borrow().get("m1").unwrap(), Value::Int(0));
+        assert_eq!(interp.env.borrow().get("m2").unwrap(), Value::Int(4));
+        assert_eq!(interp.env.borrow().get("s").unwrap(), Value::Int(10));
+    }
+
+    #[test]
+    fn test_string_methods() {
+        let src = r#"
+s = "  hello world  "
+stripped = s.strip()
+parts = stripped.split(" ")
+joined = "-".join(parts)
+up = joined.upper()
+sw = up.startswith("HEL")
+ew = up.endswith("RLD")
+rep = up.replace("WORLD", "LUCID")
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        let _ = interp.eval_module(&module).unwrap();
+
+        assert_eq!(interp.env.borrow().get("stripped").unwrap(), Value::Str("hello world".into()));
+        assert_eq!(interp.env.borrow().get("joined").unwrap(), Value::Str("hello-world".into()));
+        assert_eq!(interp.env.borrow().get("up").unwrap(), Value::Str("HELLO-WORLD".into()));
+        assert_eq!(interp.env.borrow().get("sw").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("ew").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("rep").unwrap(), Value::Str("HELLO-LUCID".into()));
+    }
+
+    #[test]
+    fn test_list_dict_set_methods() {
+        let src = r#"
+# List methods
+items = [1, 2]
+items.append(3)
+items.extend([4, 5])
+items.insert(0, 0)
+popped = items.pop()
+
+# Dict methods
+d = {"a": 10, "b": 20}
+has_a = d.contains("a")
+val_b = d.get("b", 0)
+val_c = d.get("c", 99)
+
+# Set methods
+s = {1, 2}
+s.add(3)
+s.remove(1)
+has_3 = s.contains(3)
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        let _ = interp.eval_module(&module).unwrap();
+
+        assert_eq!(interp.env.borrow().get("popped").unwrap(), Value::Int(5));
+        assert_eq!(interp.env.borrow().get("has_a").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("val_b").unwrap(), Value::Int(20));
+        assert_eq!(interp.env.borrow().get("val_c").unwrap(), Value::Int(99));
+        assert_eq!(interp.env.borrow().get("has_3").unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn test_membership_and_comparisons() {
+        let src = r#"
+in_list = 2 in [1, 2, 3]
+not_in_list = 5 not in [1, 2, 3]
+in_str = "ell" in "hello"
+le = 5 <= 10
+ge = 10 >= 5
+rem = 17 % 5
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        let _ = interp.eval_module(&module).unwrap();
+
+        assert_eq!(interp.env.borrow().get("in_list").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("not_in_list").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("in_str").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("le").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("ge").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("rem").unwrap(), Value::Int(2));
+    }
+
+    #[test]
+    fn test_module_loading_and_math() {
+        let src = r#"
+import math
+from math import sqrt, pi
+
+sq = sqrt(16)
+p = pi > 3.0
+abs_val = math.abs(-42)
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        let _ = interp.eval_module(&module).unwrap();
+
+        assert_eq!(interp.env.borrow().get("sq").unwrap(), Value::Float(4.0));
+        assert_eq!(interp.env.borrow().get("p").unwrap(), Value::Bool(true));
+        assert_eq!(interp.env.borrow().get("abs_val").unwrap(), Value::Int(42));
     }
 }
