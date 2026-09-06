@@ -172,6 +172,7 @@ pub struct TypeEnvironment {
     pub current_return_type: Option<Type>,
 }
 
+#[derive(Clone)]
 pub struct TypeChecker {
     pub env: TypeEnvironment,
 }
@@ -185,6 +186,12 @@ impl TypeChecker {
         env.classes.insert("bool".to_string(), Type::Bool);
         env.classes.insert("str".to_string(), Type::Str);
         env.classes.insert("none".to_string(), Type::None);
+
+        env.variables.insert("print".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::None) }, MutabilityView::ReadOnly));
+        env.variables.insert("freeze".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::TypeVar("T".to_string())) }, MutabilityView::ReadOnly));
+        env.variables.insert("Sentinel".to_string(), (Type::Function { params: Vec::new(), return_type: Box::new(Type::TypeVar("Sentinel".to_string())) }, MutabilityView::ReadOnly));
+        env.variables.insert("Cell".to_string(), (Type::Function { params: vec![Type::TypeVar("T".to_string())], return_type: Box::new(Type::TypeVar("Cell".to_string())) }, MutabilityView::ReadOnly));
+        env.variables.insert("range".to_string(), (Type::Function { params: vec![Type::Int], return_type: Box::new(Type::Class { name: "range".into(), type_args: vec![], parent: None, traits: vec![], interfaces: vec![], fields: HashMap::new(), is_sealed: false }) }, MutabilityView::ReadOnly));
 
         Self { env }
     }
@@ -350,13 +357,13 @@ impl TypeChecker {
             Stmt::Export(inner) => self.check_statement(inner),
             Stmt::Function(func) => {
                 let ret_type = if let Some(ref r) = func.return_type {
-                    self.resolve_type_expr(r)?
+                    Some(self.resolve_type_expr(r)?)
                 } else {
-                    Type::None
+                    None
                 };
 
                 let prev_ret = self.env.current_return_type.take();
-                self.env.current_return_type = Some(ret_type.clone());
+                self.env.current_return_type = ret_type;
 
                 let mut local_vars = self.env.variables.clone();
                 for param in &func.params {
@@ -529,6 +536,20 @@ impl TypeChecker {
                 }
                 Ok(())
             }
+            Stmt::With { items, body, .. } => {
+                for item in items {
+                    let ctx_ty = self.type_of_expr(&item.context_expr)?;
+                    if let Some(ref target) = item.target {
+                        if let Pattern::Ident(name, _) = target {
+                            self.env.variables.insert(name.clone(), (ctx_ty, MutabilityView::Mutable));
+                        }
+                    }
+                }
+                for s in body {
+                    self.check_statement(s)?;
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -544,7 +565,9 @@ impl TypeChecker {
                 let mut uncovered = variants.clone();
                 for arm in arms {
                     match &arm.pattern {
-                        Pattern::Ident(name, _) => {
+                        Pattern::Ident(name, _)
+                        | Pattern::Type(TypeExpr::Named { name, .. }, _)
+                        | Pattern::ClassDestructure { class_name: name, .. } => {
                             uncovered.retain(|v| match v {
                                 Type::Class { name: c_name, .. } => c_name != name,
                                 Type::Int if name == "int" => false,
@@ -554,6 +577,9 @@ impl TypeChecker {
                                 Type::None if name == "none" => false,
                                 _ => true,
                             });
+                        }
+                        Pattern::Wildcard(_) => {
+                            uncovered.clear();
                         }
                         _ => {}
                     }
@@ -570,8 +596,14 @@ impl TypeChecker {
                 if let Some(subclasses) = self.env.sealed_subclasses.get(name) {
                     let mut uncovered = subclasses.clone();
                     for arm in arms {
-                        if let Pattern::Ident(c_name, _) = &arm.pattern {
-                            uncovered.retain(|sub| sub != c_name);
+                        match &arm.pattern {
+                            Pattern::Ident(c_name, _) | Pattern::ClassDestructure { class_name: c_name, .. } => {
+                                uncovered.retain(|sub| sub != c_name);
+                            }
+                            Pattern::Wildcard(_) => {
+                                uncovered.clear();
+                            }
+                            _ => {}
                         }
                     }
                     if !uncovered.is_empty() {
@@ -596,6 +628,7 @@ impl TypeChecker {
                 LiteralValue::Str(_) => Type::Str,
                 LiteralValue::None => Type::None,
                 LiteralValue::Sentinel(s) => Type::TypeVar(s.clone()),
+                LiteralValue::Ellipsis => Type::None,
             }),
             Expr::Ident { name, span } => {
                 if let Some((t, _)) = self.env.variables.get(name) {
@@ -688,10 +721,29 @@ impl TypeChecker {
             Expr::Trust { target_type, .. } => {
                 self.resolve_type_expr(target_type)
             }
+            Expr::Skip(_) => Ok(Type::Never),
+            Expr::IfExpr { condition, then_branch, else_branch, .. } => {
+                let _ = self.type_of_expr(condition)?;
+                let then_t = self.type_of_expr(then_branch)?;
+                let else_t = self.type_of_expr(else_branch)?;
+                Ok(Type::make_union(vec![then_t, else_t]))
+            }
             Expr::List { elements, .. } => {
-                let elem_types: Vec<Type> = elements.iter().map(|e| self.type_of_expr(e).unwrap_or(Type::Never)).collect();
+                let elem_types: Vec<Type> = elements.iter().filter(|e| !matches!(e, Expr::Skip(_))).map(|e| self.type_of_expr(e).unwrap_or(Type::Never)).collect();
                 Ok(Type::Class {
                     name: "list".to_string(),
+                    type_args: vec![Type::make_union(elem_types)],
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                })
+            }
+            Expr::Set { elements, .. } => {
+                let elem_types: Vec<Type> = elements.iter().filter(|e| !matches!(e, Expr::Skip(_))).map(|e| self.type_of_expr(e).unwrap_or(Type::Never)).collect();
+                Ok(Type::Class {
+                    name: "set".to_string(),
                     type_args: vec![Type::make_union(elem_types)],
                     parent: None,
                     traits: Vec::new(),
@@ -735,6 +787,86 @@ impl TypeChecker {
                     }
                     _ => Ok(Type::None),
                 }
+            }
+            Expr::AnonymousDef { params, return_type, .. } => {
+                let ptypes: Vec<Type> = params.iter().map(|p| {
+                    if let Some(ref te) = p.type_annotation {
+                        self.resolve_type_expr(te).unwrap_or(Type::None)
+                    } else {
+                        Type::None
+                    }
+                }).collect();
+                let ret_t = if let Some(ref te) = return_type {
+                    self.resolve_type_expr(te).unwrap_or(Type::None)
+                } else {
+                    Type::None
+                };
+                Ok(Type::Function { params: ptypes, return_type: Box::new(ret_t) })
+            }
+            Expr::Type(te) => self.resolve_type_expr(te),
+            Expr::ListComp { element, target, iter, .. } => {
+                let iter_t = self.type_of_expr(iter).unwrap_or(Type::None);
+                let elem_t = match iter_t {
+                    Type::Class { ref type_args, .. } if !type_args.is_empty() => type_args[0].clone(),
+                    _ => Type::None,
+                };
+                let mut sub = self.clone();
+                if let Pattern::Ident(name, _) = target {
+                    sub.env.variables.insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                }
+                let et = sub.type_of_expr(element).unwrap_or(Type::None);
+                Ok(Type::Class {
+                    name: "list".to_string(),
+                    type_args: vec![et],
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                })
+            }
+            Expr::SetComp { element, target, iter, .. } => {
+                let iter_t = self.type_of_expr(iter).unwrap_or(Type::None);
+                let elem_t = match iter_t {
+                    Type::Class { ref type_args, .. } if !type_args.is_empty() => type_args[0].clone(),
+                    _ => Type::None,
+                };
+                let mut sub = self.clone();
+                if let Pattern::Ident(name, _) = target {
+                    sub.env.variables.insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                }
+                let et = sub.type_of_expr(element).unwrap_or(Type::None);
+                Ok(Type::Class {
+                    name: "set".to_string(),
+                    type_args: vec![et],
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                })
+            }
+            Expr::DictComp { key, value, target, iter, .. } => {
+                let iter_t = self.type_of_expr(iter).unwrap_or(Type::None);
+                let elem_t = match iter_t {
+                    Type::Class { ref type_args, .. } if !type_args.is_empty() => type_args[0].clone(),
+                    _ => Type::None,
+                };
+                let mut sub = self.clone();
+                if let Pattern::Ident(name, _) = target {
+                    sub.env.variables.insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                }
+                let kt = sub.type_of_expr(key).unwrap_or(Type::None);
+                let vt = sub.type_of_expr(value).unwrap_or(Type::None);
+                Ok(Type::Class {
+                    name: "dict".to_string(),
+                    type_args: vec![kt, vt],
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                })
             }
             _ => Ok(Type::None),
         }
@@ -799,6 +931,13 @@ impl TypeChecker {
                     mutability: mutability.clone(),
                     inner: Box::new(resolved_inner),
                 })
+            }
+            TypeExpr::Match { arms, .. } => {
+                let mut resolved_arms = Vec::new();
+                for (_, res) in arms {
+                    resolved_arms.push(self.resolve_type_expr(res)?);
+                }
+                Ok(Type::make_union(resolved_arms))
             }
             _ => Ok(Type::Never),
         }

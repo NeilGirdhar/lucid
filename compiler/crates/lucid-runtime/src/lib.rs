@@ -36,6 +36,8 @@ pub enum Value {
         name: String,
         func: Rc<dyn Fn(&[Value], &mut Interpreter) -> Result<Value, RuntimeError>>,
     },
+    Set(Rc<RefCell<Vec<Value>>>),
+    Skip,
     Sentinel(String),
     Return(Box<Value>),
 }
@@ -50,6 +52,8 @@ impl Value {
             Value::None => "none",
             Value::List(_) => "list",
             Value::Dict(_) => "dict",
+            Value::Set(_) => "set",
+            Value::Skip => "skip",
             Value::Record(_) => "record",
             Value::Object { class_name, .. } => class_name.as_str(),
             Value::Function { .. } => "function",
@@ -68,6 +72,11 @@ impl Value {
                 }
             }
             Value::List(items) => {
+                for item in items.borrow().iter() {
+                    item.freeze();
+                }
+            }
+            Value::Set(items) => {
                 for item in items.borrow().iter() {
                     item.freeze();
                 }
@@ -93,8 +102,10 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::None, Value::None) => true,
+            (Value::Skip, Value::Skip) => true,
             (Value::Sentinel(a), Value::Sentinel(b)) => a == b,
             (Value::List(a), Value::List(b)) => *a.borrow() == *b.borrow(),
+            (Value::Set(a), Value::Set(b)) => *a.borrow() == *b.borrow(),
             (Value::Dict(a), Value::Dict(b)) => *a.borrow() == *b.borrow(),
             (Value::Record(a), Value::Record(b)) => *a.borrow() == *b.borrow(),
             (Value::Object { class_name: n1, fields: f1, .. }, Value::Object { class_name: n2, fields: f2, .. }) => {
@@ -113,7 +124,9 @@ impl fmt::Debug for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Str(s) => write!(f, "\"{s}\""),
             Value::None => write!(f, "none"),
+            Value::Skip => write!(f, "skip"),
             Value::List(items) => write!(f, "{:?}", *items.borrow()),
+            Value::Set(items) => write!(f, "{{{:?}}}", *items.borrow()),
             Value::Dict(entries) => write!(f, "{:?}", *entries.borrow()),
             Value::Record(fields) => write!(f, "record {:?}", *fields.borrow()),
             Value::Object { class_name, fields, is_frozen } => {
@@ -215,6 +228,7 @@ pub struct ClassDef {
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub bases: Vec<TypeExpr>,
+    pub without_traits: Vec<String>,
     pub body: Vec<ClassMember>,
     pub is_sealed: bool,
     pub is_final: bool,
@@ -224,6 +238,7 @@ pub struct ClassDef {
 pub struct Interpreter {
     pub env: Rc<RefCell<Environment>>,
     pub classes: HashMap<String, ClassDef>,
+    pub traits: HashMap<String, Vec<TraitMember>>,
     pub dispatch: DispatchTable,
     pub output: Vec<String>,
 }
@@ -234,6 +249,7 @@ impl Interpreter {
         let mut interp = Self {
             env,
             classes: HashMap::new(),
+            traits: HashMap::new(),
             dispatch: DispatchTable::default(),
             output: Vec::new(),
         };
@@ -283,6 +299,16 @@ impl Interpreter {
             Ok(Value::Sentinel("Sentinel".to_string()))
         });
         self.env.borrow_mut().set("Sentinel".to_string(), Value::BuiltinFunction { name: "Sentinel".to_string(), func: sentinel_fn });
+
+        // Cell(val)
+        let cell_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if let Some(first) = args.first() {
+                Ok(first.clone())
+            } else {
+                Ok(Value::None)
+            }
+        });
+        self.env.borrow_mut().set("Cell".to_string(), Value::BuiltinFunction { name: "Cell".to_string(), func: cell_fn });
 
         // Default multiple dispatch operators (+, -, *, ==, etc.)
         let add_int = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
@@ -356,11 +382,12 @@ impl Interpreter {
         match stmt {
             Stmt::Export(inner) => self.eval_statement(inner),
             Stmt::ClassDef { .. } => {
-                if let Stmt::ClassDef { name, type_params, bases, body, is_sealed, is_final, span } = stmt.clone() {
+                if let Stmt::ClassDef { name, type_params, bases, without_traits, body, is_sealed, is_final, span, .. } = stmt.clone() {
                     self.classes.insert(name.clone(), ClassDef {
                         name: name.clone(),
                         type_params,
                         bases,
+                        without_traits,
                         body,
                         is_sealed,
                         is_final,
@@ -377,6 +404,10 @@ impl Interpreter {
                     };
                     self.env.borrow_mut().set(name, class_val);
                 }
+                Ok(Value::None)
+            }
+            Stmt::TraitDef { name, body, .. } => {
+                self.traits.insert(name.clone(), body.clone());
                 Ok(Value::None)
             }
             Stmt::Function(func) => {
@@ -426,8 +457,8 @@ impl Interpreter {
                     Value::None
                 };
 
-                self.bind_pattern(pattern, val, *span)?;
-                Ok(Value::None)
+                self.bind_pattern(pattern, val.clone(), *span)?;
+                Ok(val)
             }
             Stmt::Assignment { target, value, span } => {
                 let val = self.eval_expr(value)?;
@@ -437,7 +468,38 @@ impl Interpreter {
                 match target {
                     Expr::Ident { name, .. } => {
                         if !self.env.borrow_mut().mutate(name, val.clone()) {
-                            self.env.borrow_mut().set(name.clone(), val);
+                            self.env.borrow_mut().set(name.clone(), val.clone());
+                        }
+                    }
+                    Expr::Record { fields, .. } => {
+                        let items: Vec<Value> = match val {
+                            Value::List(ref l) => l.borrow().clone(),
+                            Value::Record(ref r) => {
+                                let mut sorted_keys: Vec<_> = r.borrow().keys().cloned().collect();
+                                sorted_keys.sort();
+                                sorted_keys.iter().map(|k| r.borrow().get(k).unwrap().clone()).collect()
+                            }
+                            _ => Vec::new(),
+                        };
+                        for ((_, field_expr), item) in fields.iter().zip(items) {
+                            if let Expr::Ident { name, .. } = field_expr {
+                                if !self.env.borrow_mut().mutate(name, item.clone()) {
+                                    self.env.borrow_mut().set(name.clone(), item);
+                                }
+                            }
+                        }
+                    }
+                    Expr::List { elements, .. } => {
+                        let items: Vec<Value> = match val {
+                            Value::List(ref l) => l.borrow().clone(),
+                            _ => Vec::new(),
+                        };
+                        for (elem_expr, item) in elements.iter().zip(items) {
+                            if let Expr::Ident { name, .. } = elem_expr {
+                                if !self.env.borrow_mut().mutate(name, item.clone()) {
+                                    self.env.borrow_mut().set(name.clone(), item);
+                                }
+                            }
                         }
                     }
                     Expr::Attribute { value: obj_expr, attr, .. } => {
@@ -450,7 +512,7 @@ impl Interpreter {
                                         span: *span,
                                     });
                                 }
-                                fields.borrow_mut().insert(attr.clone(), val);
+                                fields.borrow_mut().insert(attr.clone(), val.clone());
                             }
                             _ => return Err(RuntimeError {
                                 message: "cannot set attribute on non-object".to_string(),
@@ -463,7 +525,7 @@ impl Interpreter {
                         span: *span,
                     }),
                 }
-                Ok(Value::None)
+                Ok(val)
             }
             Stmt::If { condition, then_branch, elif_branches, else_branch, .. } => {
                 let cond_val = self.eval_expr(condition)?;
@@ -575,6 +637,15 @@ impl Interpreter {
             }
             Stmt::Break(_) => Ok(Value::Sentinel("__break__".to_string())),
             Stmt::Continue(_) => Ok(Value::Sentinel("__continue__".to_string())),
+            Stmt::With { items, body, .. } => {
+                for item in items {
+                    let ctx_val = self.eval_expr(&item.context_expr)?;
+                    if let Some(ref target) = item.target {
+                        self.bind_pattern(target, ctx_val, item.context_expr.span())?;
+                    }
+                }
+                self.eval_block(body)
+            }
             Stmt::Pass(_) => Ok(Value::None),
             Stmt::Expr(expr) => self.eval_expr(expr),
             _ => Ok(Value::None),
@@ -604,6 +675,7 @@ impl Interpreter {
                 LiteralValue::Str(s) => Value::Str(s.clone()),
                 LiteralValue::None => Value::None,
                 LiteralValue::Sentinel(s) => Value::Sentinel(s.clone()),
+                LiteralValue::Ellipsis => Value::None,
             }),
             Expr::Ident { name, span } => {
                 self.env.borrow().get(name).ok_or_else(|| RuntimeError {
@@ -667,13 +739,27 @@ impl Interpreter {
                         Value::Int(n) => Ok(Value::Int(!n)),
                         _ => Err(RuntimeError { message: "unsupported operand for ~".to_string(), span: *span }),
                     },
+                    UnaryOp::Spread | UnaryOp::GatherSpread => Ok(val),
                 }
             }
             Expr::Call { func, args, span } => {
                 let func_val = self.eval_expr(func)?;
                 let mut evaluated_args = Vec::new();
                 for arg in args {
-                    evaluated_args.push(self.eval_expr(&arg.value)?);
+                    if arg.is_spread {
+                        let val = self.eval_expr(&arg.value)?;
+                        match val {
+                            Value::List(l) => evaluated_args.extend(l.borrow().clone()),
+                            Value::Dict(d) => {
+                                for (_, v) in d.borrow().iter() {
+                                    evaluated_args.push(v.clone());
+                                }
+                            }
+                            other => evaluated_args.push(other),
+                        }
+                    } else {
+                        evaluated_args.push(self.eval_expr(&arg.value)?);
+                    }
                 }
 
                 match func_val {
@@ -703,9 +789,14 @@ impl Interpreter {
                 if let Value::Return(_) = val {
                     return Ok(val);
                 }
-                // If value is an Error object, return early out of enclosing function; else unwrap
+                // If value is an Error object or error string, return early out of enclosing function; else unwrap
                 if let Value::Object { ref class_name, .. } = val {
                     if class_name.ends_with("Error") {
+                        return Ok(Value::Return(Box::new(val)));
+                    }
+                }
+                if let Value::Str(ref s) = val {
+                    if s.starts_with("error:") {
                         return Ok(Value::Return(Box::new(val)));
                     }
                 }
@@ -714,8 +805,39 @@ impl Interpreter {
             Expr::Attribute { value, attr, span } => {
                 let obj = self.eval_expr(value)?;
                 match obj {
-                    Value::Object { fields, .. } => {
+                    Value::Object { fields, is_frozen, class_name } => {
                         if let Some(val) = fields.borrow().get(attr) {
+                            if let Value::Function { name, params, body, closure } = val {
+                                if !params.is_empty() && params[0].name == "self" {
+                                    let bound_self = Value::Object {
+                                        class_name: class_name.clone(),
+                                        fields: Rc::clone(&fields),
+                                        is_frozen: Rc::clone(&is_frozen),
+                                    };
+                                    let p = params.clone();
+                                    let b = body.clone();
+                                    let c = Rc::clone(closure);
+                                    return Ok(Value::BuiltinFunction {
+                                        name: name.clone(),
+                                        func: Rc::new(move |args, interp| {
+                                            let mut call_args = vec![bound_self.clone()];
+                                            call_args.extend_from_slice(args);
+                                            let call_env = Rc::new(RefCell::new(Environment::with_parent(Rc::clone(&c))));
+                                            for (param, arg_val) in p.iter().zip(call_args) {
+                                                call_env.borrow_mut().set(param.name.clone(), arg_val);
+                                            }
+                                            let prev = Rc::clone(&interp.env);
+                                            interp.env = call_env;
+                                            let res = interp.eval_block(&b);
+                                            interp.env = prev;
+                                            match res {
+                                                Ok(Value::Return(v)) => Ok(*v),
+                                                other => other,
+                                            }
+                                        }),
+                                    });
+                                }
+                            }
                             Ok(val.clone())
                         } else {
                             Err(RuntimeError {
@@ -724,30 +846,138 @@ impl Interpreter {
                             })
                         }
                     }
+                    Value::Record(fields) => {
+                        if let Some(val) = fields.borrow().get(attr) {
+                            Ok(val.clone())
+                        } else {
+                            Err(RuntimeError {
+                                message: format!("record has no field '{attr}'"),
+                                span: *span,
+                            })
+                        }
+                    }
+                    Value::List(l) => {
+                        if attr == "append" {
+                            let l_clone = Rc::clone(&l);
+                            return Ok(Value::BuiltinFunction {
+                                name: "append".to_string(),
+                                func: Rc::new(move |args, _interp| {
+                                    if let Some(item) = args.first() {
+                                        l_clone.borrow_mut().push(item.clone());
+                                    }
+                                    Ok(Value::None)
+                                }),
+                            });
+                        }
+                        Err(RuntimeError {
+                            message: format!("list has no attribute '{attr}'"),
+                            span: *span,
+                        })
+                    }
                     _ => Err(RuntimeError {
                         message: "attribute access on non-object".to_string(),
                         span: *span,
                     }),
                 }
             }
+            Expr::Index { value, index, span } => {
+                let obj = self.eval_expr(value)?;
+                let idx = self.eval_expr(index)?;
+                match (obj, idx) {
+                    (Value::List(list), Value::Int(i)) => {
+                        let vec = list.borrow();
+                        let actual_idx = if i < 0 {
+                            vec.len() as i64 + i
+                        } else {
+                            i
+                        };
+                        if actual_idx < 0 || actual_idx as usize >= vec.len() {
+                            return Err(RuntimeError {
+                                message: format!("index {i} out of range"),
+                                span: *span,
+                            });
+                        }
+                        Ok(vec[actual_idx as usize].clone())
+                    }
+                    (Value::Dict(dict), Value::Str(k)) => {
+                        dict.borrow().get(&k).cloned().ok_or_else(|| RuntimeError {
+                            message: format!("key '{k}' not found"),
+                            span: *span,
+                        })
+                    }
+                    (Value::Record(fields), Value::Int(i)) => {
+                        let key = format!("{i}");
+                        fields.borrow().get(&key).cloned().ok_or_else(|| RuntimeError {
+                            message: format!("record field index {i} not found"),
+                            span: *span,
+                        })
+                    }
+                    (Value::Record(fields), Value::Str(k)) => {
+                        fields.borrow().get(&k).cloned().ok_or_else(|| RuntimeError {
+                            message: format!("record field '{k}' not found"),
+                            span: *span,
+                        })
+                    }
+                    (Value::Dict(dict), other) => {
+                        let k = format!("{other:?}");
+                        dict.borrow().get(&k).cloned().ok_or_else(|| RuntimeError {
+                            message: format!("key '{k}' not found"),
+                            span: *span,
+                        })
+                    }
+                    _ => Err(RuntimeError {
+                        message: "indexing not supported on this type".to_string(),
+                        span: *span,
+                    }),
+                }
+            }
+            Expr::Record { fields, .. } => {
+                let mut map = HashMap::new();
+                for (idx, (opt_name, expr)) in fields.iter().enumerate() {
+                    let val = self.eval_expr(expr)?;
+                    let name = opt_name.clone().unwrap_or_else(|| format!("{idx}"));
+                    map.insert(name, val);
+                }
+                Ok(Value::Record(Rc::new(RefCell::new(map))))
+            }
             Expr::List { elements, .. } => {
                 let mut vals = Vec::new();
                 for e in elements {
-                    vals.push(self.eval_expr(e)?);
+                    let val = self.eval_expr(e)?;
+                    if !matches!(val, Value::Skip) {
+                        vals.push(val);
+                    }
                 }
                 Ok(Value::List(Rc::new(RefCell::new(vals))))
             }
             Expr::Dict { entries, .. } => {
                 let mut map = HashMap::new();
                 for (k, v) in entries {
-                    let k_str = match self.eval_expr(k)? {
+                    let k_val = self.eval_expr(k)?;
+                    if matches!(k_val, Value::Skip) {
+                        continue;
+                    }
+                    let v_val = self.eval_expr(v)?;
+                    if matches!(v_val, Value::Skip) {
+                        continue;
+                    }
+                    let k_str = match k_val {
                         Value::Str(s) => s,
                         other => format!("{:?}", other),
                     };
-                    let v_val = self.eval_expr(v)?;
                     map.insert(k_str, v_val);
                 }
                 Ok(Value::Dict(Rc::new(RefCell::new(map))))
+            }
+            Expr::Set { elements, .. } => {
+                let mut set_vals = Vec::new();
+                for e in elements {
+                    let val = self.eval_expr(e)?;
+                    if !matches!(val, Value::Skip) && !set_vals.contains(&val) {
+                        set_vals.push(val);
+                    }
+                }
+                Ok(Value::Set(Rc::new(RefCell::new(set_vals))))
             }
             Expr::Construct { args, span: _ } => {
                 let mut field_values = HashMap::new();
@@ -771,6 +1001,101 @@ impl Interpreter {
             Expr::Trust { expr, .. } => {
                 self.eval_expr(expr)
             }
+            Expr::Skip(_) => Ok(Value::Skip),
+            Expr::IfExpr { condition, then_branch, else_branch, .. } => {
+                let cond_val = self.eval_expr(condition)?;
+                if self.is_truthy(&cond_val) {
+                    self.eval_expr(then_branch)
+                } else {
+                    self.eval_expr(else_branch)
+                }
+            }
+            Expr::ListComp { element, target, iter, condition, .. } => {
+                let iter_val = self.eval_expr(iter)?;
+                let items: Vec<Value> = match iter_val {
+                    Value::List(l) => l.borrow().clone(),
+                    Value::Set(s) => s.borrow().clone(),
+                    _ => Vec::new(),
+                };
+                let mut results = Vec::new();
+                for item in items {
+                    self.bind_pattern(target, item, Span::default())?;
+                    let keep = if let Some(cond) = condition {
+                        let c = self.eval_expr(cond)?;
+                        self.is_truthy(&c)
+                    } else {
+                        true
+                    };
+                    if keep {
+                        let val = self.eval_expr(element)?;
+                        if !matches!(val, Value::Skip) {
+                            results.push(val);
+                        }
+                    }
+                }
+                Ok(Value::List(Rc::new(RefCell::new(results))))
+            }
+            Expr::SetComp { element, target, iter, condition, .. } => {
+                let iter_val = self.eval_expr(iter)?;
+                let items: Vec<Value> = match iter_val {
+                    Value::List(l) => l.borrow().clone(),
+                    Value::Set(s) => s.borrow().clone(),
+                    _ => Vec::new(),
+                };
+                let mut results = Vec::new();
+                for item in items {
+                    self.bind_pattern(target, item, Span::default())?;
+                    let keep = if let Some(cond) = condition {
+                        let c = self.eval_expr(cond)?;
+                        self.is_truthy(&c)
+                    } else {
+                        true
+                    };
+                    if keep {
+                        let val = self.eval_expr(element)?;
+                        if !matches!(val, Value::Skip) && !results.contains(&val) {
+                            results.push(val);
+                        }
+                    }
+                }
+                Ok(Value::Set(Rc::new(RefCell::new(results))))
+            }
+            Expr::DictComp { key, value, target, iter, condition, .. } => {
+                let iter_val = self.eval_expr(iter)?;
+                let items: Vec<Value> = match iter_val {
+                    Value::List(l) => l.borrow().clone(),
+                    Value::Set(s) => s.borrow().clone(),
+                    _ => Vec::new(),
+                };
+                let mut results = HashMap::new();
+                for item in items {
+                    self.bind_pattern(target, item, Span::default())?;
+                    let keep = if let Some(cond) = condition {
+                        let c = self.eval_expr(cond)?;
+                        self.is_truthy(&c)
+                    } else {
+                        true
+                    };
+                    if keep {
+                        let k = match self.eval_expr(key)? {
+                            Value::Str(s) => s,
+                            other => format!("{other:?}"),
+                        };
+                        let v = self.eval_expr(value)?;
+                        results.insert(k, v);
+                    }
+                }
+                Ok(Value::Dict(Rc::new(RefCell::new(results))))
+            }
+            Expr::Type(_) => Ok(Value::None),
+            Expr::AnonymousDef { params, body, .. } => {
+                Ok(Value::Function {
+                    name: "<def>".to_string(),
+                    params: params.clone(),
+                    body: body.clone(),
+                    closure: Rc::clone(&self.env),
+                })
+            }
             _ => Ok(Value::None),
         }
     }
@@ -787,6 +1112,38 @@ impl Interpreter {
         for member in &class_def.body {
             if let ClassMember::Field(f) = member {
                 field_names.push(f.name.clone());
+            }
+        }
+
+        // Inherited trait methods
+        for base in &class_def.bases {
+            if let TypeExpr::Named { name: trait_name, .. } = base {
+                if !class_def.without_traits.contains(trait_name) {
+                    if let Some(trait_body) = self.traits.get(trait_name) {
+                        for member in trait_body {
+                            if let TraitMember::Method(m) = member {
+                                fields.insert(m.name.clone(), Value::Function {
+                                    name: m.name.clone(),
+                                    params: m.params.clone(),
+                                    body: m.body.clone(),
+                                    closure: Rc::clone(&self.env),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Declared class methods
+        for member in &class_def.body {
+            if let ClassMember::Method(m) = member {
+                fields.insert(m.name.clone(), Value::Function {
+                    name: m.name.clone(),
+                    params: m.params.clone(),
+                    body: m.body.clone(),
+                    closure: Rc::clone(&self.env),
+                });
             }
         }
 
@@ -866,6 +1223,19 @@ impl Interpreter {
                 (LiteralValue::None, Value::None) => true,
                 _ => false,
             },
+            Pattern::Type(te, _) => match te {
+                TypeExpr::Named { name, .. } => match value {
+                    Value::List(_) if name == "list" => true,
+                    Value::Dict(_) if name == "dict" => true,
+                    Value::Object { class_name, .. } if class_name == name => true,
+                    Value::Int(_) if name == "int" => true,
+                    Value::Float(_) if name == "float" => true,
+                    Value::Str(_) if name == "str" => true,
+                    Value::Bool(_) if name == "bool" => true,
+                    _ => false,
+                },
+                _ => true,
+            },
             _ => false,
         }
     }
@@ -878,7 +1248,9 @@ impl Interpreter {
             Value::Str(s) => !s.is_empty(),
             Value::None => false,
             Value::List(l) => !l.borrow().is_empty(),
+            Value::Set(s) => !s.borrow().is_empty(),
             Value::Dict(d) => !d.borrow().is_empty(),
+            Value::Skip => false,
             _ => true,
         }
     }

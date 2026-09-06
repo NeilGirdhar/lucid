@@ -36,12 +36,9 @@ fn main() {
             eval_string(&args[2]);
         }
         "test-spec" => {
-            let docs_path = if args.len() >= 3 {
-                PathBuf::from(&args[2])
-            } else {
-                PathBuf::from("docs")
-            };
-            test_spec_docs(&docs_path);
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            let docs_path = args.iter().skip(2).find(|a| !a.starts_with('-')).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("docs"));
+            test_spec_docs(&docs_path, verbose);
         }
         "--help" | "-h" | "help" => {
             print_help();
@@ -175,7 +172,7 @@ fn eval_string(source: &str) {
     }
 }
 
-fn test_spec_docs(docs_dir: &Path) {
+fn test_spec_docs(docs_dir: &Path, verbose: bool) {
     println!("Testing Lucid specification code snippets from: {}", docs_dir.display());
     let mut rst_files = Vec::new();
     if Path::new("README.rst").exists() {
@@ -195,6 +192,7 @@ fn test_spec_docs(docs_dir: &Path) {
 
     let mut total_blocks = 0;
     let mut parsed_blocks = 0;
+    let mut typechecked_blocks = 0;
 
     for rst_file in &rst_files {
         let content = match fs::read_to_string(rst_file) {
@@ -203,11 +201,26 @@ fn test_spec_docs(docs_dir: &Path) {
         };
 
         let blocks = extract_rst_code_blocks(&content);
-        for block in blocks {
+        for (idx, block) in blocks.into_iter().enumerate() {
             total_blocks += 1;
-            // Attempt parse
-            if lucid_syntax::parse(&block).is_ok() {
-                parsed_blocks += 1;
+            match lucid_syntax::parse(&block) {
+                Ok(module) => {
+                    parsed_blocks += 1;
+                    let mut checker = lucid_checker::TypeChecker::new();
+                    if checker.check_module(&module).is_ok() {
+                        typechecked_blocks += 1;
+                    } else if verbose {
+                        let err = checker.check_module(&module).unwrap_err();
+                        println!("! Typecheck failed in {} block #{}: {}", rst_file.display(), idx + 1, err.message);
+                    }
+                }
+                Err(err) => {
+                    if verbose {
+                        println!("✗ Parse failed in {} block #{}: {}", rst_file.display(), idx + 1, err);
+                        let first_line = block.lines().next().unwrap_or("").trim();
+                        println!("    Snippet: {first_line}");
+                    }
+                }
             }
         }
     }
@@ -215,7 +228,8 @@ fn test_spec_docs(docs_dir: &Path) {
     println!("Specification validation complete:");
     println!("  RST files scanned: {}", rst_files.len());
     println!("  Code blocks found: {total_blocks}");
-    println!("  Valid Lucid modules parsed: {parsed_blocks}");
+    println!("  Valid Lucid modules parsed: {parsed_blocks} / {total_blocks} ({:.1}%)", (parsed_blocks as f64 / total_blocks as f64) * 100.0);
+    println!("  Type checked without errors: {typechecked_blocks} / {parsed_blocks}");
 }
 
 fn extract_rst_code_blocks(rst: &str) -> Vec<String> {
@@ -227,11 +241,12 @@ fn extract_rst_code_blocks(rst: &str) -> Vec<String> {
         let line = lines[i];
         let trimmed = line.trim();
 
-        if trimmed.starts_with(".. code-block:: python")
+        let is_code = trimmed.starts_with(".. code-block:: python")
             || trimmed.starts_with(".. code-block:: lucid")
             || trimmed == "::"
-            || trimmed.ends_with("::")
-        {
+            || (trimmed.ends_with("::") && !trimmed.starts_with(".. "));
+
+        if is_code {
             let mut block_lines = Vec::new();
             i += 1;
             // Skip empty lines

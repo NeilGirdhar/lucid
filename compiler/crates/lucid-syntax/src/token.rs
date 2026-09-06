@@ -135,6 +135,11 @@ pub enum TokenKind {
     Shr,        // >>
     Walrus,     // :=
     Eq,         // =
+    PlusEq,     // +=
+    MinusEq,    // -=
+    StarEq,     // *=
+    SlashEq,    // /=
+    At,         // @
     Dot,        // .
     Ellipsis,   // ...
     Comma,      // ,
@@ -246,6 +251,11 @@ impl fmt::Display for TokenKind {
             TokenKind::Shr => write!(f, "'>>'"),
             TokenKind::Walrus => write!(f, "':='"),
             TokenKind::Eq => write!(f, "'='"),
+            TokenKind::PlusEq => write!(f, "'+='"),
+            TokenKind::MinusEq => write!(f, "'-='"),
+            TokenKind::StarEq => write!(f, "'*='"),
+            TokenKind::SlashEq => write!(f, "'/='"),
+            TokenKind::At => write!(f, "'@'"),
             TokenKind::Dot => write!(f, "'.'"),
             TokenKind::Ellipsis => write!(f, "'...'"),
             TokenKind::Comma => write!(f, "','"),

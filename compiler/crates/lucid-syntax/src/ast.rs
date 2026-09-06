@@ -19,6 +19,7 @@ pub struct TypeParam {
     pub name: String,
     pub variance: Variance,
     pub bound: Option<TypeExpr>,
+    pub is_higher_kinded: bool,
     pub span: Span,
 }
 
@@ -69,6 +70,11 @@ pub enum TypeExpr {
         inner: Box<TypeExpr>,
         span: Span,
     },
+    Match {
+        subject: Vec<TypeExpr>,
+        arms: Vec<(TypeExpr, TypeExpr)>,
+        span: Span,
+    },
     Wildcard(Span),
     Never(Span),
 }
@@ -84,6 +90,7 @@ impl TypeExpr {
             TypeExpr::Literal { span, .. } => *span,
             TypeExpr::Existential { span, .. } => *span,
             TypeExpr::Reification { span, .. } => *span,
+            TypeExpr::Match { span, .. } => *span,
             TypeExpr::Wildcard(span) => *span,
             TypeExpr::Never(span) => *span,
         }
@@ -98,6 +105,7 @@ pub enum LiteralValue {
     Bool(bool),
     None,
     Sentinel(String),
+    Ellipsis,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,6 +142,8 @@ pub enum UnaryOp {
     Neg,
     Not,
     Invert,
+    Spread,
+    GatherSpread,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,6 +151,7 @@ pub struct Arg {
     pub name: Option<String>,
     pub value: Expr,
     pub is_spread: bool,
+    pub is_dict_spread: bool, // **kwargs
     pub is_gather_spread: bool, // *** spread
     pub span: Span,
 }
@@ -148,6 +159,7 @@ pub struct Arg {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub name: String,
+    pub pattern: Option<Pattern>,
     pub type_annotation: Option<TypeExpr>,
     pub default: Option<Expr>,
     pub is_positional_only: bool,
@@ -202,6 +214,12 @@ pub enum Expr {
         index: Box<Expr>,
         span: Span,
     },
+    Slice {
+        start: Option<Box<Expr>>,
+        stop: Option<Box<Expr>>,
+        step: Option<Box<Expr>>,
+        span: Span,
+    },
     Record {
         fields: Vec<(Option<String>, Expr)>,
         span: Span,
@@ -234,6 +252,35 @@ pub enum Expr {
         span: Span,
     },
     Skip(Span),
+    Type(TypeExpr),
+    ListComp {
+        element: Box<Expr>,
+        target: Pattern,
+        iter: Box<Expr>,
+        condition: Option<Box<Expr>>,
+        span: Span,
+    },
+    SetComp {
+        element: Box<Expr>,
+        target: Pattern,
+        iter: Box<Expr>,
+        condition: Option<Box<Expr>>,
+        span: Span,
+    },
+    DictComp {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        target: Pattern,
+        iter: Box<Expr>,
+        condition: Option<Box<Expr>>,
+        span: Span,
+    },
+    IfExpr {
+        condition: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -248,6 +295,7 @@ impl Expr {
             Expr::Propagate { span, .. } => *span,
             Expr::Attribute { span, .. } => *span,
             Expr::Index { span, .. } => *span,
+            Expr::Slice { span, .. } => *span,
             Expr::Record { span, .. } => *span,
             Expr::List { span, .. } => *span,
             Expr::Dict { span, .. } => *span,
@@ -256,6 +304,11 @@ impl Expr {
             Expr::Trust { span, .. } => *span,
             Expr::Freeze { span, .. } => *span,
             Expr::Skip(span) => *span,
+            Expr::Type(t) => t.span(),
+            Expr::ListComp { span, .. } => *span,
+            Expr::SetComp { span, .. } => *span,
+            Expr::DictComp { span, .. } => *span,
+            Expr::IfExpr { span, .. } => *span,
         }
     }
 }
@@ -272,6 +325,21 @@ pub enum Pattern {
     RecordDestructure(Vec<(Option<String>, Pattern)>, Span),
     Tuple(Vec<Pattern>, Span),
     Wildcard(Span),
+    Type(TypeExpr, Span),
+}
+
+impl Pattern {
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Ident(_, s) => *s,
+            Pattern::Literal(_, s) => *s,
+            Pattern::ClassDestructure { span, .. } => *span,
+            Pattern::RecordDestructure(_, s) => *s,
+            Pattern::Tuple(_, s) => *s,
+            Pattern::Wildcard(s) => *s,
+            Pattern::Type(_, s) => *s,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -349,6 +417,14 @@ pub enum ClassMember {
     Setter(SetterDef),
     ClassMethod(FunctionDef),
     ClassVar(FieldDef),
+    TypeAlias {
+        name: String,
+        type_params: Vec<TypeParam>,
+        value: TypeAliasValue,
+        span: Span,
+    },
+    Pass(Span),
+    Ellipsis(Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -384,6 +460,19 @@ pub enum InterfaceMember {
         return_type: Option<TypeExpr>,
         span: Span,
     },
+    FieldSig {
+        name: String,
+        type_annotation: TypeExpr,
+        is_final: bool,
+        span: Span,
+    },
+    AssociatedTypeSig {
+        name: String,
+        bound: Option<TypeExpr>,
+        span: Span,
+    },
+    Pass(Span),
+    Ellipsis(Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -391,6 +480,8 @@ pub enum TraitMember {
     Method(FunctionDef),
     Getter(GetterDef),
     Setter(SetterDef),
+    Pass(Span),
+    Ellipsis(Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -403,12 +494,19 @@ pub enum TypeAliasValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct WithItem {
+    pub context_expr: Expr,
+    pub target: Option<Pattern>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Export(Box<Stmt>),
     ClassDef {
         name: String,
         type_params: Vec<TypeParam>,
         bases: Vec<TypeExpr>,
+        without_traits: Vec<String>,
         body: Vec<ClassMember>,
         is_sealed: bool,
         is_final: bool,
@@ -446,6 +544,12 @@ pub enum Stmt {
         type_annotation: Option<TypeExpr>,
         value: Option<Expr>,
         is_let: bool,
+        is_final: bool,
+        span: Span,
+    },
+    With {
+        items: Vec<WithItem>,
+        body: Vec<Stmt>,
         span: Span,
     },
     Assignment {

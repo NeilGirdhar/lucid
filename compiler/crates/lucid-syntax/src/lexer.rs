@@ -89,9 +89,7 @@ impl<'a> Lexer<'a> {
         }
 
         // Handle indentation at start of line
-        if self.at_line_start {
-            self.at_line_start = false;
-
+        while self.at_line_start {
             let (start_pos, start_line, start_col) = self.current_pos();
             let mut indent_spaces = 0;
 
@@ -112,16 +110,28 @@ impl<'a> Lexer<'a> {
             // Check if line is blank or just comment
             let next_c = self.chars.get(temp_cursor).map(|&(_, c)| c);
             if next_c == Some('\n') || next_c == Some('\r') || next_c == Some('#') || next_c.is_none() {
-                // Ignore indentation on empty/comment lines
-                // Just advance past spaces
-                while let Some(c) = self.peek_char() {
-                    if c == ' ' || c == '\t' {
-                        self.advance_char();
-                    } else {
-                        break;
+                // Ignore indentation on empty/comment lines: consume blank/comment and advance to next line
+                self.cursor = temp_cursor;
+                if let Some(c) = self.peek_char() {
+                    if c == '#' {
+                        while let Some(ch) = self.peek_char() {
+                            if ch == '\n' { break; }
+                            self.advance_char();
+                        }
                     }
                 }
-            } else if self.open_brackets == 0 {
+                if self.peek_char() == Some('\r') { self.advance_char(); }
+                if self.peek_char() == Some('\n') { self.advance_char(); }
+                if self.cursor >= self.chars.len() {
+                    self.at_line_start = false;
+                    break;
+                }
+                continue;
+            }
+
+            self.at_line_start = false;
+
+            if self.open_brackets == 0 {
                 // Advance past the indent characters
                 while let Some(c) = self.peek_char() {
                     if c == ' ' || c == '\t' {
@@ -167,6 +177,7 @@ impl<'a> Lexer<'a> {
                     }
                 }
             }
+            break;
         }
 
         // Skip horizontal whitespace
@@ -223,7 +234,7 @@ impl<'a> Lexer<'a> {
         }
 
         // Multi-character operator check:
-        // ***, **, *
+        // ***, **, *=, *
         if c == '*' {
             self.advance_char();
             if self.peek_char() == Some('*') {
@@ -240,13 +251,36 @@ impl<'a> Lexer<'a> {
                     Span::new(start_pos, start_pos + 2, start_line, start_col),
                 )));
             }
+            if self.peek_char() == Some('=') {
+                self.advance_char();
+                return Ok(Some(Token::new(
+                    TokenKind::StarEq,
+                    Span::new(start_pos, start_pos + 2, start_line, start_col),
+                )));
+            }
             return Ok(Some(Token::new(
                 TokenKind::Star,
                 Span::new(start_pos, start_pos + 1, start_line, start_col),
             )));
         }
 
-        // -> or -
+        // += or +
+        if c == '+' {
+            self.advance_char();
+            if self.peek_char() == Some('=') {
+                self.advance_char();
+                return Ok(Some(Token::new(
+                    TokenKind::PlusEq,
+                    Span::new(start_pos, start_pos + 2, start_line, start_col),
+                )));
+            }
+            return Ok(Some(Token::new(
+                TokenKind::Plus,
+                Span::new(start_pos, start_pos + 1, start_line, start_col),
+            )));
+        }
+
+        // ->, -= or -
         if c == '-' {
             self.advance_char();
             if self.peek_char() == Some('>') {
@@ -256,19 +290,33 @@ impl<'a> Lexer<'a> {
                     Span::new(start_pos, start_pos + 2, start_line, start_col),
                 )));
             }
+            if self.peek_char() == Some('=') {
+                self.advance_char();
+                return Ok(Some(Token::new(
+                    TokenKind::MinusEq,
+                    Span::new(start_pos, start_pos + 2, start_line, start_col),
+                )));
+            }
             return Ok(Some(Token::new(
                 TokenKind::Minus,
                 Span::new(start_pos, start_pos + 1, start_line, start_col),
             )));
         }
 
-        // // or /
+        // //, /= or /
         if c == '/' {
             self.advance_char();
             if self.peek_char() == Some('/') {
                 self.advance_char();
                 return Ok(Some(Token::new(
                     TokenKind::DoubleSlash,
+                    Span::new(start_pos, start_pos + 2, start_line, start_col),
+                )));
+            }
+            if self.peek_char() == Some('=') {
+                self.advance_char();
+                return Ok(Some(Token::new(
+                    TokenKind::SlashEq,
                     Span::new(start_pos, start_pos + 2, start_line, start_col),
                 )));
             }
@@ -400,7 +448,7 @@ impl<'a> Lexer<'a> {
             '}' => { self.open_brackets = self.open_brackets.saturating_sub(1); Some(TokenKind::RBrace) }
             ',' => Some(TokenKind::Comma),
             ';' => Some(TokenKind::Semi),
-            '+' => Some(TokenKind::Plus),
+            '@' => Some(TokenKind::At),
             '%' => Some(TokenKind::Percent),
             '|' => Some(TokenKind::Pipe),
             '^' => Some(TokenKind::Caret),
@@ -539,6 +587,13 @@ impl<'a> Lexer<'a> {
                 }
             } else {
                 break;
+            }
+        }
+
+        if let Some(c) = self.peek_char() {
+            if c == 'j' || c == 'J' {
+                is_float = true;
+                self.advance_char();
             }
         }
 
