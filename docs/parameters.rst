@@ -76,11 +76,11 @@ there's a fixed, named prefix to keep separate from the open overflow:
 
 .. code-block:: python
 
-   class Arguments[Y, Z: dict[str, object]]:
+   class Arguments[Y, Z: &dict[str, object]]:
        vpargs: list[Y]
        kwargs: Z
 
-   class Parameters[X, Y, Z: dict[str, object]](Arguments[Y, Z]):
+   class Parameters[X, Y, Z: &dict[str, object]](Arguments[Y, Z]):
        pargs: X
 
 Neither declaration needs a bespoke type-system primitive — both are
@@ -89,13 +89,14 @@ ordinary way (see
 `Class inheritance and runtime hooks <classes.rst>`_).
 ``vpargs`` holds the leftover positional arguments, homogeneously typed;
 ``kwargs`` holds the leftover keyword arguments, typed as a full shape —
-``{str: str}``, or a TypedDict shape when some of those keywords are
-individually named — rather than a bare per-value type. Writing
-``kwargs: str`` would say each value is a ``str``, not that ``kwargs``
-itself is a mapping; the field has to be annotated with what it actually
-holds. ``pargs`` holds whatever fixed, possibly zoned prefix a signature
-has, typed as an `Anonymous class`_ itself when it needs its own
-positional-only or ordinary zoning.
+``dict[str, str]``, or a TypedDict shape when some of those keywords are
+individually named — bounded by ``&dict[str, object]`` so that covariant
+read-only mappings satisfy it rather than invariant ``dict`` (see
+`Mutability <mutability.rst>`__). Writing ``kwargs: str`` would say each
+value is a ``str``, not that ``kwargs`` itself is a mapping; the field has to
+be annotated with what it actually holds. ``pargs`` holds whatever fixed,
+possibly zoned prefix a signature has, typed as an `Anonymous class`_ itself
+when it needs its own positional-only or ordinary zoning.
 
 ``Arguments`` on its own is for genuinely unnamed overflow: arguments
 beyond anything a function declared, with no name available to give them,
@@ -164,7 +165,7 @@ directly as an ``Arguments`` value rather than as two separate parameters:
 
 .. code-block:: python
 
-   def query(path: Path, ***rest: Arguments[str, {str: str}]) -> Response:
+   def query(path: Path, ***rest: Arguments[str, dict[str, str]]) -> Response:
        ...
 
 ``***`` can mark at most one parameter, and it must be last — there is
@@ -178,15 +179,20 @@ there is no fixed prefix left for a ``pargs`` field to hold.
 For an ordinary class (see `Anonymous class`_ and `Decorators <decorators.rst>`__),
 ``***name: SomeClass`` gathers one-to-one: each of ``SomeClass``'s fields
 corresponds to exactly one of the function's own remaining parameters, in
-whichever positional or keyword zone that class itself declares.
-``pargs``, ``vpargs``, and ``kwargs`` are recognized field names that mean
-something else: rather than expecting parameters literally named that,
-the gather binds ``pargs`` to whatever fixed prefix remains, one-to-one,
-the ordinary way, and aggregates however many leftover positional and
-keyword arguments the caller actually supplied — an unbounded number —
-into ``vpargs`` and ``kwargs``. That's the one place ``Arguments`` and
-``Parameters`` aren't just ordinary classes: the aggregating behavior is
-tied specifically to those field names.
+whichever positional or keyword zone that class itself declares. When
+``SomeClass`` is ``Arguments``, ``Parameters``, or a class that inherits
+from either, gathering instead binds by role: ``pargs`` binds to whatever
+fixed prefix remains, the ordinary way, and however many leftover
+positional and keyword arguments the caller actually supplied — an
+unbounded number — aggregate into ``vpargs`` and ``kwargs``. This is
+decided by ``SomeClass``'s type, checked statically the same way
+``construct`` is recognized by the compiler rather than looked up as an
+ordinary call (`Factory construction <classes.rst>`_): an unrelated class
+that happens to declare a field named ``pargs``, ``vpargs``, or ``kwargs``
+still gathers one-to-one, because it isn't an ``Arguments``. That's the
+one place ``Arguments`` and ``Parameters`` aren't just ordinary classes:
+the aggregating behavior belongs to those two classes specifically, not to
+any class that reuses their field names.
 
 Spread
 ~~~~~~~~~
@@ -195,7 +201,7 @@ The same sigil spreads a value back out at a call site by calling a
 method every class has — ``__spread__`` — and using the ``Parameters``
 instance it returns. Every class gets one generated for free, the same
 way every class already gets a generated ``__init__`` and ``replace``
-factory (`Factory construction <classes.rst>`_). By default,
+factory (`Factory construction <classes.rst>`__). By default,
 ``__spread__`` wraps the instance as its own fixed prefix, with nothing
 variadic:
 
@@ -213,14 +219,14 @@ it:
 
 .. code-block:: python
 
-   class Arguments[Y, Z: dict[str, object]]:
+   class Arguments[Y, Z: &dict[str, object]]:
        vpargs: list[Y]
        kwargs: Z
 
        def __spread__(self: &Self) -> &Parameters[(), Y, Z]:
            return Parameters.from_arguments(self)
 
-   class Parameters[X, Y, Z: dict[str, object]](Arguments[Y, Z]):
+   class Parameters[X, Y, Z: &dict[str, object]](Arguments[Y, Z]):
        pargs: X
 
        factory from_arguments(cls, args: &Arguments[Y, Z]) -> Parameters[(), Y, Z]:

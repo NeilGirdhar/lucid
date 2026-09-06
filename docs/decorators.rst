@@ -53,13 +53,18 @@ a link back to the original:
    slow_query.__name__  # "slow_query" — guaranteed by @, not opted into
 
 ``P``, bounded by ``Parameters`` rather than a bespoke ParamSpec, is
-inferred at each ``@timed`` application to whatever shape ``f``'s real
-parameter list turns out to be — here, ``(id: int)`` — which is what lets
-``wrapper`` receive and forward exactly the arguments ``f`` accepts. A
-bare, unparenthesized name on a `function type's <types.rst>`_ left side,
-like ``P`` here, stands for a whole parameter shape not yet known —
-distinct from ``(A, B) -> R``'s parenthesized list of already-concrete
-types.
+inferred at each ``@timed`` application to a ``Parameters`` wrapping
+whatever shape ``f``'s real parameter list turns out to be — here,
+``Parameters[(id: int), Never, {:}]``, ``pargs`` holding ``(id: int)``
+with nothing variadic. Because ``P`` is a ``Parameters``, ``***args: P``
+in ``wrapper``'s own signature gathers by role
+(`Parameters and arguments <parameters.rst>`_) instead of one-to-one, so
+``wrapper`` receives and forwards exactly the arguments ``f`` accepts
+regardless of what they turn out to be, and ``f(***args)`` spreads them back
+out the same way. A bare, unparenthesized name on a
+`function type's <types.rst>`_ left side, like ``P`` here, stands for a whole
+parameter shape not yet known — distinct from ``(A, B) -> R``'s parenthesized
+list of already-concrete types.
 
 There is nothing to forget: identity preservation is not a convention a
 decorator can skip, it is what ``@`` means. A decorator that genuinely
