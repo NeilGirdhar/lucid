@@ -1,17 +1,17 @@
 # Lucid Architecture: Compiler, Runtime, and Execution Pipeline
 
-Lucid is a statically-typed language combining Python's syntax elegance with compile-time type safety, Julia-style multiple dispatch, explicit mutability views, and result-based error handling.
+Lucid combines Python-like syntax with compile-time type safety, multiple dispatch for binary operations, explicit mutability views (`T`, `&T`, `!T`), and result-based error handling.
 
-This document describes how Lucid works internally: its compilation pipeline, static checking guarantees, native AOT code generation, reference interpreter, and memory layout.
+This document describes how Lucid executes code: its compilation pipeline, static checking guarantees, native AOT code generation, reference interpreter, and memory layout.
 
 ---
 
 ## 1. System Overview
 
-Lucid provides **two execution engines** built on top of a shared parser and static type checker:
+Lucid provides two execution backends built on a shared parser and static type checker:
 
-1. **Ahead-of-Time (AOT) Native Compiler (`lucid-codegen`)**: Generates optimized C99 machine code compiled with GCC/Clang (`-O3`), utilizing unboxed 64-bit hardware registers, hardware call stacks, and flat contiguous memory buffers. Achieves a **13.7x geometric mean speedup over CPython 3.14** across benchmark workloads.
-2. **Reference Tree-Walking Interpreter (`lucid-runtime`)**: A dynamic evaluation engine and REPL with zero external compiler dependencies, ideal for rapid prototyping, interactive debugging, and language specification testing.
+1. **Ahead-of-Time (AOT) Native Compiler (`lucid-codegen`)**: Generates C99 code compiled with GCC or Clang (`-O3`), using unboxed 64-bit hardware registers, hardware stack frames, and contiguous memory buffers. Achieves a 13.7x geometric mean speedup over CPython 3.14 across standard benchmark workloads.
+2. **Reference Tree-Walking Interpreter (`lucid-runtime`)**: A dynamic evaluation engine and REPL with zero external compiler dependencies, used for interactive evaluation, testing, and debugging.
 
 ```mermaid
 flowchart TD
@@ -60,7 +60,7 @@ The parser uses recursive descent with precedence climbing for binary operators.
 - **Three user-defined types**: Distinct AST representations for `interface` (pure obligations), `trait` (stateless reusable behavior), and `class` (owned fields and single inheritance).
 - **Mutability views**: Explicit type annotations for mutable references (`T`), read-only views (`&T`), and deeply immutable instances (`!T`).
 - **Multiple dispatch**: `dispatch def` syntax declaring symmetric multimethods.
-- **Result propagation**: Postfix `?` operator for early error propagation without exception unwinding.
+- **Result propagation**: Postfix `?` operator propagating error values without stack unwinding.
 
 ### Stage 3: Static Analysis & Invariant Checking
 Before any execution or code generation, `lucid-checker` validates language guarantees:

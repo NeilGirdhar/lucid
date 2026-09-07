@@ -1,14 +1,14 @@
 # Compiler and runtime architecture
 
 Lucid separates language validation from code execution. The toolchain
-processes a program through three distinct stages: syntactic analysis,
-static verification, and execution.
+processes a program through three distinct stages: syntactic analysis, static
+verification, and execution.
 
-Execution offers two complementary backends: an ahead-of-time native compiler
-that generates optimized machine code through C99, and a tree-walking
-reference interpreter for rapid development and interactive evaluation.
+Execution provides two backends: an ahead-of-time native compiler that emits
+optimized machine code through C99, and a tree-walking reference interpreter
+for interactive evaluation and debugging.
 
-The system is structured as a Cargo workspace in `compiler/crates/`:
+The implementation is structured as a Cargo workspace in `compiler/crates/`:
 
 * `lucid-syntax`: Lexer, token stream, and recursive-descent parser.
 * `lucid-checker`: Static semantic analysis, type checking, and invariant
@@ -24,17 +24,15 @@ The system is structured as a Cargo workspace in `compiler/crates/`:
 Every source file moves through a linear front-end pipeline before entering an
 execution backend:
 
-1. *Source text*: A UTF-8 text file containing Lucid statements and expressions.
-2. *Token stream*: The lexer converts source text into tokens, translating
-   indentation changes into synthetic indentation tokens.
-3. *Abstract syntax tree*: The parser groups tokens into typed syntax tree nodes
-   representing modules, declarations, statements, and expressions.
-4. *Semantic analysis*: The type checker verifies contracts, validates single
-   inheritance, checks pattern exhaustiveness, and confirms mutability
+1. The lexer scans UTF-8 source text, translates whitespace indentation into
+   indent and dedent tokens, and produces a token stream.
+2. The parser organizes tokens into a typed abstract syntax tree rooted in a
+   module declaration.
+3. The static checker verifies types, validates single inheritance, enforces
+   interface contracts, checks pattern exhaustiveness, and checks mutability
    permissions.
-5. *Code generation or interpretation*: The program either compiles to a
-   native ELF binary through C99 or evaluates directly in the reference
-   runtime.
+4. The execution driver dispatches the verified tree either to the native code
+   generator or to the reference interpreter.
 
 ## Front-end: syntax and parser
 
@@ -47,13 +45,14 @@ indentation depths. It maintains an internal stack of active indentation
 levels:
 
 * When a line begins at a greater indentation depth than the stack top, the
-  lexer emits an *indent token* and pushes the new depth.
+  lexer pushes the new depth and emits an *indent token*, which marks an
+  enclosing block.
 * When a line begins at a lesser indentation depth, the lexer pops depths until
   matching the active level, emitting a *dedent token* for each popped depth.
 * When indentation does not match any enclosing level on the stack, the lexer
   reports an indentation error.
 
-This indentation mechanism removes the need for braces while retaining unambiguous
+This indentation mechanism removes the need for braces while preserving unambiguous
 block structure.
 
 ### Syntactic parsing
@@ -63,7 +62,7 @@ expressions. It produces an abstract syntax tree rooted in the `Module` node.
 
 The syntax tree preserves language semantics:
 
-* Separate declaration nodes for `interface`, `trait`, and `class` types,
+* Distinct declaration nodes for `interface`, `trait`, and `class` types,
   enforcing the separation between obligations, reusable behavior, and owned
   state.
 * Explicit mutability annotations on type references: mutable `T`, read-only
@@ -89,31 +88,31 @@ undefined attribute accesses at compile time.
 
 The checker enforces structural rules defined in the specification:
 
-* *Interface satisfaction*: An interface defines obligations without method
-  bodies or fields. The checker verifies that any concrete type claiming to
-  implement an interface provides matching method signatures.
-* *Trait composition*: A trait provides reusable method bodies without fields.
-  The checker ensures traits compose without colliding implementations.
-* *Single class inheritance*: A class contains owned fields and constructors.
-  The checker rejects any class declaration declaring more than one parent
-  class.
+* An *interface* specifies abstract obligations without method bodies or
+  state. The checker verifies that any concrete class declaring conformance
+  implements every required method with an identical signature.
+* A *trait* provides reusable method bodies without fields. The checker
+  ensures traits compose into classes without conflicting method
+  implementations.
+* A *class* defines owned state and constructors. The checker rejects any
+  class declaration specifying more than one parent class.
 
 ### Pattern exhaustiveness
 
 The `match` statement requires complete pattern coverage over variant types
 and algebraic shapes. The checker analyzes all match branches against the
-target type. If an unhandled case exists, compilation halts with an error
-pointing to the missing pattern.
+target type. When an unhandled case exists, compilation halts with an error
+identifying the missing pattern.
 
 ### Mutability verification
 
 Lucid tracks mutability permissions through three view types:
 
-* *Mutable reference*: Written as `T`; permits field mutation.
-* *Read-only view*: Written as `&T`; forbids mutating attributes through
+* A *mutable reference*, written as `T`, permits field mutation.
+* A *read-only view*, written as `&T`, forbids mutating attributes through
   this reference while permitting reads.
-* *Deeply immutable object*: Written as `!T`; guarantees the instance and all
-  transitively reachable state cannot mutate.
+* A *deeply immutable object*, written as `!T`, guarantees that neither the
+  instance nor any transitively reachable field mutates.
 
 The checker rejects attribute mutation statements whenever the target
 expression evaluates to a read-only view or a deeply immutable object.
@@ -134,7 +133,7 @@ lucid build program.lucid -o program
 ```
 
 The code generator emits a standalone C99 source file and invokes `gcc -O3`
-with link-time optimizations to produce an ELF executable.
+with link-time optimizations to produce a machine binary.
 
 ### Unboxed hardware representations
 
@@ -195,8 +194,8 @@ The interpreter maintains lexical environment frames. When entering a scope,
 the runtime allocates an environment record holding local variables and a
 pointer to the parent scope.
 
-The reference interpreter executes source files immediately without requiring
-a C compiler:
+The reference interpreter executes source files directly without requiring a C
+compiler:
 
 ```bash
 lucid run program.lucid
@@ -210,7 +209,7 @@ The interpreter powers the interactive read-eval-print loop:
 lucid repl
 ```
 
-The REPL persists definitions across input lines, allowing interactive
+The REPL persists definitions across input lines, allowing immediate
 experimentation with algorithms, traits, and types.
 
 ## Developer tooling and commands
@@ -239,12 +238,12 @@ against CPython 3.14 across ten standard compute benchmarks.
 Across all ten benchmarks, the native AOT compiler achieves a 13.7x geometric
 mean speedup over CPython 3.14:
 
-* **Spectral norm**: 40.3x faster than CPython 3.14 due to flat array layout
-  and inner loop vectorization.
-* **Fibonacci recursion**: 36.5x faster than CPython 3.14 due to native
-  hardware stack frames.
-* **Mandelbrot**: 18.2x faster than CPython 3.14 through unboxed 64-bit floating
-  point operations.
+* Spectral norm: 40.3x faster than CPython 3.14 due to flat array layout and
+  inner loop vectorization.
+* Fibonacci recursion: 36.5x faster than CPython 3.14 due to native hardware
+  stack frames.
+* Mandelbrot: 18.2x faster than CPython 3.14 through unboxed 64-bit
+  floating-point operations.
 
 Detailed measurements, benchmark implementations, and replication scripts
 reside in the benchmark suite documentation in `BENCHMARKS.md`.
