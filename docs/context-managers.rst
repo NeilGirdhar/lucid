@@ -184,3 +184,82 @@ None of this touches the calling side: ``with expr:`` and
 ``with expr as name:`` work exactly as they already do, on anything
 ``contextmanager`` produces or any class declaring
 ``contextmanager def __cm__(self):``.
+
+No exactly-once callback parameter
+------------------------------------------
+
+Some languages give a callback parameter its own exactly-once
+obligation instead — a marker meaning "the checker verifies this
+argument is called exactly once on every path that completes the
+function normally," for transaction commits, lock releases, and other
+one-shot completion protocols:
+
+.. code-block:: python
+
+   def with_transaction(once commit: () -> None):
+       do_work()
+       commit()
+
+Lucid has no such marker, because bracketing already covers every case
+where the obligation is checkable at all.
+
+A synchronous exactly-once obligation already has a scope: the
+``with``-block itself.
+
+.. code-block:: python
+
+   contextmanager def transaction(conn: Connection):
+       conn.begin()
+       try:
+           yield conn
+           conn.commit()
+       except:
+           conn.rollback()
+           raise
+
+There is no ``commit`` callback to invoke, so there is nothing to
+forget, and nothing to call twice — the block's own boundary is the
+one and only commit point, guaranteed the same way ``yield`` running
+exactly once already is.
+
+A deferred obligation — call this once a result arrives, potentially
+from outside the current call stack entirely — also has a scope. It is
+just not a lexical one: it is the coroutine suspended at ``await``.
+``result = await some_async_operation()`` already means "resume this
+one suspended activation exactly once, when the result is ready,"
+without a callback ever appearing in the caller's own code. What is
+left after that — bridging a genuinely external, callback-based API (an
+OS completion port, a driver's function-pointer callback) into
+something awaitable — is a small, ordinary value, not a discipline
+every function needs:
+
+.. code-block:: python
+
+   class Once[P: Parameters, R]:
+       fn: P -> R
+       called: bool = false
+
+       def __call__(self, ***args: P) -> R:
+           if self.called:
+               raise RuntimeError("called more than once")
+           self.called = true
+           return self.fn(***args)
+
+   @Once
+   def resume(result: Result) -> none:
+       ...
+
+   driver.register_completion(resume)
+
+Even this only ever enforces "not called twice" — ``called`` has
+nowhere to raise from if ``resume`` is simply dropped and never called
+at all. Detecting "never called" needs either a scope to check at
+closing — which is exactly the ``with``-block case above — or a
+finalizer that runs when a dropped callback was never invoked, and
+Lucid has no ``__del__`` for that, for the same non-determinism reasons
+already given (`No __del__ <classes.rst>`_).
+
+So every real "make sure this runs exactly once" reduces to a scope
+Lucid already has: synchronous, ``contextmanager``; asynchronous,
+``await``. A callback parameter marked exactly-once would only restate
+one of the two, with a weaker guarantee at the far end.
