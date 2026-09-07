@@ -83,13 +83,15 @@ fn print_help() {
     println!("    lucid [COMMAND] [OPTIONS]");
     println!();
     println!("COMMANDS:");
-    println!("    repl             Start interactive REPL (default when no arguments)");
-    println!("    run <file>       Parse, typecheck, and evaluate a Lucid source file");
-    println!("    check <file>     Parse and typecheck a Lucid source file");
-    println!("    eval <code>      Evaluate a Lucid code snippet string");
-    println!("    test-spec [dir]  Extract and validate code snippets from RST specification docs");
-    println!("    help             Display this help message");
-    println!("    version          Show version information");
+    println!("    repl                  Start interactive REPL (default when no arguments)");
+    println!("    build <file> [-o bin] Compile source file to an optimized native binary");
+    println!("    run <file> [--native] Run a Lucid source file (interpreted or natively compiled)");
+    println!("    check <file>          Parse and typecheck a Lucid source file");
+    println!("    emit-c <file>         Emit generated C99 code for a Lucid source file");
+    println!("    eval <code>           Evaluate a Lucid code snippet string");
+    println!("    test-spec [dir]       Extract and validate code snippets from RST specification docs");
+    println!("    help                  Display this help message");
+    println!("    version               Show version information");
 }
 
 fn run_file(path_str: &str) {

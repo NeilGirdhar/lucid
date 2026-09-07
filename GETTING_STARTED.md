@@ -46,14 +46,34 @@ USAGE:
     lucid [COMMAND] [OPTIONS]
 
 COMMANDS:
-    repl             Start interactive REPL (default when no arguments)
-    run <file>       Parse, typecheck, and evaluate a Lucid source file
-    check <file>     Parse and typecheck a Lucid source file
-    eval <code>      Evaluate a Lucid code snippet string
-    test-spec [dir]  Extract and validate code snippets from RST specification docs
-    help             Display this help message
-    version          Show version information
+    repl                 Start interactive REPL (default when no arguments)
+    build <file> [-o bin] Compile source file to an optimized native binary
+    run <file> [--native] Run a Lucid source file (interpreted or natively compiled)
+    check <file>         Parse and typecheck a Lucid source file
+    emit-c <file>        Emit generated C99 code for a Lucid source file
+    eval <code>          Evaluate a Lucid code snippet string
+    test-spec [dir]      Extract and validate code snippets from RST specification docs
+    help                 Display this help message
+    version              Show version information
 ```
+
+### Compiling to Native Executables
+
+Lucid includes an ahead-of-time (AOT) native compiler that translates Lucid code
+to optimized machine code via C99 and GCC (`-O3`), with unboxed 64-bit hardware
+types and flat contiguous memory buffers:
+
+```bash
+# Compile to a standalone binary
+lucid build examples/hello.lucid -o hello
+./hello
+
+# Or compile and run directly in one step
+lucid run --native examples/hello.lucid
+```
+
+For technical details on how the compiler and runtime function, see
+[Compiler and Runtime Architecture](docs/architecture.rst) and [Benchmark Performance](BENCHMARKS.md).
 
 ### Interactive REPL
 
@@ -84,9 +104,9 @@ Type :help for assistance, :exit or :quit to leave.
 - `:reset` — Reset the environment and type checker.
 - `:exit` (or `:quit`) — Exit the REPL.
 
-### Running Files
+### Running Files (Interpreted)
 
-Execute a Lucid source file (`.lucid`):
+Execute a Lucid source file (`.lucid`) using the reference tree-walking interpreter:
 
 ```bash
 lucid run examples/hello.lucid

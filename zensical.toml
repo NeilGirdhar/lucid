@@ -81,6 +81,7 @@ nav = [
     { "Builtins" = "builtins.md" },
     { "Removed builtins" = "removed-builtins.md" },
   ] },
+  { "Architecture" = "architecture.md" },
   { "Rejected features" = "rejected-features.md" },
 ]
 
