@@ -245,19 +245,37 @@ every function needs:
            self.called = true
            return self.fn(***args)
 
+       contextmanager classmethod guard(cls, fn: P -> R):
+           once = construct(fn)
+           yield once
+           if not once.called:
+               raise RuntimeError("never called")
+
    @Once
    def resume(result: Result) -> none:
        ...
 
    driver.register_completion(resume)
 
-Even this only ever enforces "not called twice" — ``called`` has
+Bare ``@Once`` only ever enforces "not called twice" — ``called`` has
 nowhere to raise from if ``resume`` is simply dropped and never called
-at all. Detecting "never called" needs either a scope to check at
-closing — which is exactly the ``with``-block case above — or a
-finalizer that runs when a dropped callback was never invoked, and
-Lucid has no ``__del__`` for that, for the same non-determinism reasons
-already given (`No __del__ <classes.rst>`_).
+at all. Detecting "never called" still needs a scope to check at
+closing, but it does not have to be ``await``'s: a driver API that
+promises to invoke its callback synchronously, before some registering
+or pumping call returns, gives ``Once.guard`` a ``with``-block to check
+against, closing the gap for exactly that case:
+
+.. code-block:: python
+
+   with Once.guard(resume) as guarded:
+       driver.register_completion(guarded)
+       driver.pump_until_idle()   # resume is guaranteed to fire before this returns
+
+For a callback that genuinely fires later, from further outside than
+any scope in this function reaches — the fully deferred case ``await``
+already covers — there is still no boundary to check "never called"
+against, and no finalizer to fall back on, for the same non-determinism
+reasons already given (`No __del__ <classes.rst>`_).
 
 So every real "make sure this runs exactly once" reduces to a scope
 Lucid already has: synchronous, ``contextmanager``; asynchronous,
