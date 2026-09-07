@@ -101,6 +101,40 @@ hatch this document already closes off for everyday code; a genuinely
 unknown foreign signature stays ``object``, claimed with ``trust`` like
 any other untyped value crossing the interop boundary.
 
+Intersection types
+-----------------------
+
+``A & B`` is the type of values satisfying both ``A`` and ``B`` — the
+dual of the union ``A | B`` already used throughout this document.
+Lucid's interfaces are nominal (`Modern type specification
+<type-specification.rst>`__): a class must name every interface it
+implements, so a value assembled from two independently declared
+interfaces has nowhere to go without either a purpose-declared class
+combining both up front, or a type that can say "both, whichever value
+actually provides them":
+
+.. code-block:: python
+
+   def render(shape: Drawable & Serializable) -> bytes:
+       ...
+
+   handlers: list[HasName & HasId]
+
+``&`` already has a meaning in Lucid — the read-only mutability view
+prefix, ``&Self``, ``&dict[K, +V]``. The two coexist the same way unary
+and binary ``-`` already do everywhere: a leading ``&`` with nothing
+before it is the view marker; an ``&`` with an operand on both sides is
+intersection. ``&Drawable & Serializable`` parses as ``(&Drawable) &
+Serializable``, the same left-to-right precedence that makes ``-x + y``
+mean ``(-x) + y`` rather than ``-(x + y)``; wanting the other grouping
+needs the same fix as there, explicit parentheses —
+``&(Drawable & Serializable)``.
+
+Neither ``&`` nor ``|`` has a keyword alternate. ``and`` and ``or``
+stay exactly what they already are — value-level boolean operators —
+and are never meaningful in a type position; there is one spelling for
+each combinator, not two.
+
 Type expressions and the ``type`` keyword
 ---------------------------------------------
 

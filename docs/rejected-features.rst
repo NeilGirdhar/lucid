@@ -190,3 +190,36 @@ It is also the one place a parameter would become implicit. Lucid
 keeps ``self`` explicit and named everywhere else, including inside
 ``contextmanager def __cm__(self):`` — an implicit receiver would be
 the exception, not an extension of an existing pattern.
+
+Gradual, any-arity callable type (Python, basedpython)
+------------------------------------------------------------------
+
+Python's ``Callable[..., R]`` (basedpython's ``(...) -> R``) types a
+callable whose parameter shape is left completely unchecked — accepts
+anything, the checker doesn't look. `Function types <types.rst>`_
+already rejects this: it is exactly the ``Any``-shaped escape hatch
+the rest of the type system closes off for everyday code, so Lucid has
+no dedicated syntax for it. A genuinely unknown foreign signature
+stays ``object``, claimed with ``trust`` like any other untyped value
+crossing an interop boundary — recorded here because an ``any
+Parameters -> R`` composition was briefly added to `parameters.rst
+<parameters.rst>`_ as a supposedly-free way to spell this, without
+checking this decision first, and had to be reverted.
+
+``and``/``or`` as type operators (basedpython)
+------------------------------------------------------
+
+basedpython accepts the keywords ``or``/``and`` in annotation
+positions as alternate spellings of ``|``/``&`` — ``A or B`` means
+``A | B``, ``A and B`` means ``A & B`` — alongside the symbolic forms,
+lowering ``and`` to a separate ``Intersection[...]`` generic import
+with no native runtime equivalent.
+
+Lucid has neither the alternate spelling nor the separate named type.
+`Intersection types <types.rst>`_ are ``&``, the direct dual of the
+``|`` already used everywhere for unions; ``and``/``or`` stay exactly
+what they already are, value-level boolean operators, never meaningful
+in a type position. Two spellings for the same combinator is exactly
+the kind of choice ``@overload``'s stub-versus-implementation split
+already cost Python — one spelling per idea, not a canonical form and
+an alternate a reader also has to learn.
