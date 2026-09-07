@@ -164,6 +164,36 @@ still a plain ``T`` that some other part of the program can still reach
 and mutate. A shallow freeze would just be a second name for ``&T``,
 which already covers "this one reference can't write to it."
 
+Sharing, reuse, and cycles
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``freeze`` behaves as though it always copies, but two things follow from
+what a recursive, sharing-aware copy actually has to do.
+
+First, sharing survives. If two fields hold the same mutable sub-object
+before freezing, they hold the same frozen sub-object after — one frozen
+value, still referenced twice, not two independent copies. Losing that
+would silently break any code that compares frozen values by identity,
+and would duplicate storage for structure the original never duplicated.
+
+Second, copying itself is only ever an implementation of the "nothing can
+see it change underneath it" guarantee, not the guarantee itself. Once
+nothing else in the program still holds a live mutable alias to a piece
+of state, freezing it needs no copy — reusing the storage in place is
+unobservable, since the only thing that could have exposed the reuse is
+gone. `Freezing is deep`_ describes what every frozen value must behave
+as if true; reuse is the implementation taking that "as if" literally
+whenever it costs nothing to.
+
+Neither of these has an answer for a cycle. A mutable structure with a
+back-reference — a child pointing back to its parent, say — has no
+scalar to bottom out at: freezing the parent needs the child already
+frozen, and freezing the child needs the parent already frozen. Rather
+than returning a value that is only partly frozen, or looping forever,
+``freeze`` raises when the graph it is given is cyclic. A frozen value
+that is not fully, honestly immutable is worse than no frozen value at
+all.
+
 Equality, ordering, and hashing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

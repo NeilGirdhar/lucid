@@ -42,6 +42,42 @@ into an invariant one, breaking users who never touched their code. Writing
 the marker up front makes the author choose the intended contract, rather
 than letting it shift underneath callers as the interface evolves.
 
+Getting variance wrong
+----------------------------
+
+Marking a parameter with the wrong variance does not fail to compile —
+it type-checks right up until something depends on the mistake. Suppose
+``Consumer`` above were declared covariant instead of contravariant:
+
+.. code-block:: python
+
+   interface Consumer[+K]:      # wrong: put(value: K) only consumes K
+       def put(self, value: K) -> none
+
+   class Dog(Animal): ...
+   class Cat(Animal): ...
+
+   def feed(c: Consumer[Animal]) -> none:
+       c.put(Cat())
+
+   dog_feeder: Consumer[Dog] = ...
+   feed(dog_feeder)  # accepted under +K: Consumer[Dog] <: Consumer[Animal]
+
+``dog_feeder`` only knows how to ``put`` a ``Dog``, but ``+K`` makes
+``Consumer[Dog]`` a subtype of ``Consumer[Animal]``, so ``feed`` can pass
+it a ``Cat``. Covariance is sound only for a parameter that appears in
+*output* positions; ``put``'s ``value: K`` is a pure input, so the
+soundness direction runs the other way. ``-K`` gives the checker the
+subtyping relation that actually matches the capability on offer:
+``Consumer[Animal] <: Consumer[Dog]``, since something that can consume
+any ``Animal`` can stand in wherever something that consumes only ``Dog``
+is needed — the same shape as a function parameter itself.
+
+A parameter used both ways — read back out somewhere, fed in somewhere
+else — cannot be sound at either variance and needs ``=K``, invariant,
+the same reasoning ``Cell[=K]`` above already applies to a field that is
+both read and written.
+
 Higher-kinded parameters
 -----------------------------
 
