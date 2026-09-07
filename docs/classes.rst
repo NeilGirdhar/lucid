@@ -140,9 +140,21 @@ field or an explicit setter.
 No ``__del__``
 ~~~~~~~~~~~~~~
 
-Lucid does not include ``__del__`` finalizers. Cleanup should be explicit in the
-API that owns the resource, instead of being hidden behind object destruction
-timing.
+Lucid implements the bracketing pattern — acquire, use, release — with
+`context managers <context-managers.rst>`_, not RAII-style cleanup tied
+to an object's lifetime. Python's ``__del__`` is non-deterministic — the
+garbage collector decides when, or whether, to run it — so a file
+descriptor, socket, or lock can leak for the rest of the process. Lucid
+has no ``__del__``.
+
+A Swift-style ``deinit``, run when an object's last reference drops,
+looks like a fix, but "last reference" is only well-defined once the
+language tracks reference counts or ownership for every value, and
+copying anything that owns a resource has to be restricted so two
+owners can't both release it. A context manager gets the same
+determinism from a lexical scope instead: cleanup runs at the
+``with``-block's boundary, visible at the call site, with none of that
+machinery needed.
 
 Class members
 -----------------
