@@ -106,12 +106,11 @@ Intersection types
 
 ``A & B`` is the type of values satisfying both ``A`` and ``B`` — the
 dual of the union ``A | B`` already used throughout this document.
-Lucid's interfaces are nominal (`Modern type specification
-<type-specification.rst>`__): a class must name every interface it
-implements, so a value assembled from two independently declared
-interfaces has nowhere to go without either a purpose-declared class
-combining both up front, or a type that can say "both, whichever value
-actually provides them":
+Lucid's interfaces are nominal (`Main ideas <principles.rst>`_): a
+promise is made only where a class header names it, so a value
+assembled from two independently declared interfaces has nowhere to go
+without either a purpose-declared class combining both up front, or a
+type that can say "both, whichever value actually provides them":
 
 .. code-block:: python
 

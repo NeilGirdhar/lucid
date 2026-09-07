@@ -234,9 +234,9 @@ what "unbounded" means for that particular step's sign.
 
 This replaces a raised ``ZeroDivisionError`` with an ordinary,
 checkable value — the same trade `Errors: results and exceptions
-<control-flow.rst>`_ already makes everywhere else a recoverable
-outcome is involved, extended to the one place integer arithmetic
-still had an unchecked exception instead of one.
+<control-flow.rst>`_ makes everywhere else a recoverable outcome is
+involved, later in this reading order, extended to the one place
+integer arithmetic still had an unchecked exception instead of one.
 
 Exact ``complex``
 -------------------

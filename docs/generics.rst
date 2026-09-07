@@ -239,9 +239,10 @@ real, named, universally-quantified parameter — the two are duals of each
 other, one saying "works for every ``F``," the other "holds some particular
 ``F``, unspecified."
 
-This costs nothing at runtime. Every value already carries its own concrete
-class — the same fact `Multiple dispatch <dispatch.rst>`_ already relies
-on — so a value of type ``any Functor[X]`` needs no extra representation;
+This costs nothing at runtime. Every value already carries its own
+concrete class, a fact `Multiple dispatch <dispatch.rst>`_ relies on
+too, later in this reading order — so a value of type ``any
+Functor[X]`` needs no extra representation;
 whatever concretely `implement <interfaces.rst>`_\ s ``Functor`` is
 already dispatchable the ordinary way. The only new thing ``any`` asks of
 the checker is to accept any concrete ``F[X]`` under one annotation for a
