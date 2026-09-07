@@ -107,6 +107,22 @@ what they will be (see `Decorators <decorators.rst>`_). ``Parameters`` is usable
 bound the same way ``dict`` or ``Functor`` are, and a plain nominal
 class's unzoned field shape satisfies it as the simplest case.
 
+A callable value whose parameter shape is genuinely unknown, or not
+worth naming — Python's ``Callable[..., R]`` — needs no dedicated
+syntax of its own. ``Parameters`` already needs type arguments the
+same way ``Functor`` does, so an unsubscripted, existentially
+quantified use of it (`Existential types <generics.rst>`_) already
+says exactly this:
+
+.. code-block:: python
+
+   handler: any Parameters -> R
+
+``any Parameters`` stands for some concrete ``Parameters[X, Y, Z]``
+shape, caller's choice, unspecified — accepting any argument list at
+all, the same as ``Callable[..., R]``, without a second, gradual-only
+spelling living alongside the ordinary one.
+
 A signature's full shape, open-ended content included, can be written
 inline by extending `Anonymous class`_'s grammar with its two remaining
 zones: a bare, unnamed type followed by ``...`` for the variadic
