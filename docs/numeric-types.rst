@@ -215,6 +215,23 @@ sentinel type, they pass anywhere an ``int`` already does — a
 way ``float("inf")`` already gets used as a sentinel today, with no
 special-casing needed at the call site.
 
+``range``'s own ``stop`` parameter is a plain ``int``, not
+``int | none``, for exactly this reason: an unbounded range is just
+``range(start, int.inf, step)``, and every existing termination rule
+already produces the right answer without a separate case for it.
+Counting up needs nothing new — ``current < int.inf`` holds forever.
+Counting down toward an unbounded upper stop terminates immediately,
+correctly, from that same comparison:
+
+.. code-block:: python
+
+   range(0, int.inf, 1)     # counts up forever
+   range(10, int.inf, -1)   # empty: 10 > int.inf is never true
+
+``none`` cannot do either of those — it takes no part in a comparison
+at all, so both directions would need their own branch to special-case
+what "unbounded" means for that particular step's sign.
+
 This replaces a raised ``ZeroDivisionError`` with an ordinary,
 checkable value — the same trade `Errors: results and exceptions
 <control-flow.rst>`_ already makes everywhere else a recoverable
