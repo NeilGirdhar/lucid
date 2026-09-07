@@ -346,11 +346,48 @@ Unspecified simple statements
 -----------------------------------
 
 This sketch has not yet specified Lucid's full behavior for ``assert``,
-``del`` on a plain name, ``break``, or ``continue``. Two narrower cases of
-``del`` are already settled: it is a compile-time error on a declared
-field (see `No del on fields <classes.rst>`_), and removed entirely in
-favor of explicit methods on a mapping or sequence index (see
-`No __delitem__ <indexing.rst>`_).
+``break``, or ``continue``. ``del`` itself is fully settled: it is a
+compile-time error on a declared field (see `No del on fields
+<classes.rst>`_), removed entirely in favor of explicit methods on a
+mapping or sequence index (see `No __delitem__ <indexing.rst>`_), and
+retained for exactly one purpose beyond those — see below.
+
+``del`` ends a name's lifetime early
+------------------------------------------
+
+Python's ``del`` on a plain name removes it from the local namespace;
+using it afterward raises ``NameError`` at that point, dynamically, the
+same way any other undefined-name lookup would. Lucid keeps ``del`` for
+exactly this one purpose — ending one or more local names' lifetimes
+before their enclosing scope ends — but checks it statically instead:
+using a name after ``del`` has ended its lifetime is a compile-time
+error, the same as using a name that was never bound.
+
+.. code-block:: python
+
+   def total(prices: list[float]) -> float:
+       result = sum(prices)
+       del prices     # prices' lifetime ends here, checked
+       return result
+
+   def total_bad(prices: list[float]) -> float:
+       result = sum(prices)
+       del prices
+       return result + len(prices)  # error: prices' lifetime already ended
+
+A single ``del`` can end several names at once, comma-separated:
+
+.. code-block:: python
+
+   del first, second, third
+
+This gives ``del`` a real purpose distinct from letting a scope end
+naturally: telling the checker, and the next reader, exactly where a
+large or sensitive value's useful life stops — a large buffer dropped
+before the rest of a long function runs, or a credential ended as soon as
+it's used — enforced the same way every other name-visibility rule in
+`Names, binding, and scope <names.rst>`_ already is, rather than left as
+a comment nobody checks.
 
 ``pass`` keeps its ordinary Python meaning: a statement that does
 nothing, standing in wherever the grammar requires a statement and the
