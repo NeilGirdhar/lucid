@@ -155,3 +155,38 @@ dangling read, because the guard sits between every caller and the
 resource, unconditionally. Static escape analysis exists to catch what
 a runtime guard cannot; here, encapsulation already made the runtime
 guard sufficient.
+
+Receiver-typed callables (basedpython, Kotlin)
+------------------------------------------------------
+
+basedpython adds an implicit-receiver form for callable types, borrowed
+from Kotlin: a type written before the parameter list becomes an
+implicit receiver rather than an ordinary parameter, so a value of that
+type is available inside the body as ``self``/``this``, unqualified:
+
+.. code-block:: python
+
+   greet: int.() -> str   # a callable that runs against an int receiver
+
+Kotlin uses this for DSL-building — ``buildString { append("a");
+append("b") }`` reads cleanly because the block runs *as* a
+``StringBuilder``, not *with* one passed in and qualified on every
+call.
+
+The payoff needs one more ingredient Lucid does not have: a
+multi-statement block passed inline as an argument. `Anonymous
+functions <calls.rst>`_ are deliberately restricted to a single
+expression, to avoid the same "a block that sometimes doubles as a
+value" ambiguity ``match`` already avoids. Without an inline
+multi-statement block, receiver typing loses its actual payoff — for a
+single expression, ``def(sb): sb.append(x)`` and whatever a
+receiver-typed equivalent would spell are barely different, one
+qualifier apart. Anything longer already needs a named, top-level
+``def`` regardless, and a named function's own ``self`` is already
+explicit and unqualified inside its own body — the same ergonomic win,
+achieved the way every other method in Lucid already achieves it.
+
+It is also the one place a parameter would become implicit. Lucid
+keeps ``self`` explicit and named everywhere else, including inside
+``contextmanager def __cm__(self):`` — an implicit receiver would be
+the exception, not an extension of an existing pattern.
