@@ -79,6 +79,21 @@ definition is also not part of Lucid; class shape is closed. Assigning
        def set(self, name: str, value: object):
            self.fields[name] = value
 
+No ``del`` on fields
+~~~~~~~~~~~~~~~~~~~~
+
+A field is part of its class's fixed shape, not an optional slot present
+only when set — deleting one would leave an object whose layout no
+longer matches its own class, the same violation `Classes have visible
+state`_ already rules out for adding one. ``del obj.field`` is a
+compile-time error for every declared field, checked the same way
+assigning an undeclared one already is:
+
+.. code-block:: python
+
+   p = Point(1.0, 2.0)
+   del p.x  # error: fields are fixed, not deletable
+
 No descriptors
 ~~~~~~~~~~~~~~
 

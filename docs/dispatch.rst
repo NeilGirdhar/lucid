@@ -257,6 +257,25 @@ open the way an ``@overload`` cluster never is: a third party can add
 same extensibility `Dispatch across projects and hierarchies`_ already
 described.
 
+Applicability includes how many arguments a call passes, not just their
+types — every example above happens to keep that fixed, but nothing
+requires it. A call with two arguments is simply not applicable to a
+dispatch definition with one parameter, the same way a call with a
+``str`` argument is not applicable to a definition typed for ``bytes``;
+different-arity definitions can never be ambiguous with each other, since
+a given call is applicable to at most one arity to begin with.
+
+.. code-block:: python
+
+   def dispatch pop(self) -> T:
+       ...
+
+   def dispatch pop(self, i: int) -> T:
+       ...
+
+   def dispatch pop(self, i: int, j: int) -> list[T]:
+       ...
+
 Promotion
 ------------
 

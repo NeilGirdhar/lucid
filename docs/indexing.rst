@@ -110,6 +110,55 @@ sequence protocol. Indexing and iteration are separate capabilities. A type
 is iterable only if it implements or inherits from ``Iterable``, and that
 check is finally trustworthy.
 
+No ``__delitem__``
+-------------------------
+
+Python desugars ``del d[key]`` to ``d.__delitem__(key)`` — a third
+indexing dunder, reached through a statement instead of a call, for an
+operation every mapping or sequence type already needs to expose some
+other way: ``dict.pop`` and ``set.remove`` exist because "did it work"
+and "what was removed" matter more often than bare deletion says. The
+same dunder handles a sequence slice too — ``del lst[i:j]`` calls
+``lst.__delitem__(slice(i, j))`` — so a single removal, a slice removal,
+and a mapping removal all route through one overloaded method reached
+only through statement syntax. Lucid removes ``__delitem__`` and every
+``del x[...]`` form with it. Removing a key or an element is an ordinary
+method call, and removing a range is a third, ``dispatch``-resolved case
+of the same method rather than a separate operation:
+
+.. code-block:: python
+
+   del d[key]      # not part of Lucid
+   d.pop(key)      # removes key, returns its value
+
+   del lst[i]      # not part of Lucid
+   lst.pop(i)      # removes the element at i, returns it
+
+   del lst[i:j]        # not part of Lucid
+   lst.pop(i, j)       # removes the range [i, j), returns it as a list
+
+``lst.pop(i)`` and ``lst.pop(i, j)`` are two ``dispatch`` definitions, not
+one method with an optional second parameter — they return different
+types (``T`` versus ``list[T]``), the same reason `No @overload
+<dispatch.rst>`_ replaces ``@overload`` with ``dispatch`` rather than a
+default argument: a caller who wrote ``pop(i, j)`` should get a
+``list[T]`` back without narrowing a union it never needed.
+
+``pop`` is not the whole story: it addresses by key or index, the same
+handle ``del`` already needed, so it is the direct replacement wherever
+``del`` applied. Removing by value instead — no index in hand, or none to
+have, the way a set has none at all — is a different lookup and keeps its
+own method, ``remove``:
+
+.. code-block:: python
+
+   lst.remove(value)  # removes the first occurrence of value
+   s.remove(item)      # the only way to take a specific item out of a set
+
+Indexing keeps exactly the two dunders ``x[...]`` and ``x[...] = value``
+actually desugar to, ``__getitem__`` and ``__setitem__``; nothing reached
+through the syntax goes further than what the syntax itself spells out.
+
 Unpacking
 ------------
 
