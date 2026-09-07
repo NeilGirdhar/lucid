@@ -277,12 +277,47 @@ using an ordinary value as a type, the opposite direction from ``type
 ``none`` already relies on this every time it appears in a union like
 ``Item | none``: that ``none`` means the type containing only the ``none``
 singleton, which is exactly ``Literal[none]``, written without the wrapper
-because ``none`` is common enough to earn the shorthand. Other singleton
-values do not get that exemption and are written out in full:
+because ``none`` is common enough to earn the shorthand.
+
+Every other literal earns the same shorthand, not just ``none``: a
+bare integer, string, boolean, float, or complex literal written in a
+type position already means ``Literal[value]``, with nothing to
+spell out:
+
+.. code-block:: python
+
+   mode: 1 | 2 | 3
+   status: "ok" | "error"
+   flag: True
+
+means exactly:
+
+.. code-block:: python
+
+   mode: Literal[1, 2, 3]
+   status: Literal["ok", "error"]
+   flag: Literal[True]
+
+None of this is ambiguous with what ``1 | 2 | 3`` means as a value,
+because an annotation is already parsed as a type expression
+(`Type expressions and the type keyword`_), not an ordinary one — the
+same separation that already lets ``&``, ``|``, and ``not`` mean
+something different there than they do in a value. The shorthand is
+for a literal written fresh, not for every singleton value a name
+happens to refer to: ``iteration.done`` still needs the wrapper
+spelled out, since it names an existing value rather than writing one:
 
 .. code-block:: python
 
    type IterResult[T] = T | Literal[iteration.done]
+
+Python's own ``Literal`` cannot hold a ``float`` or ``complex`` value
+at all — PEP 586 restricts it to ``None``, ``int``, ``bool``, ``str``,
+``bytes``, and enum members, so a checker wanting ``1.5`` as a type has
+to widen it to plain ``float`` and lose the precision, or reach for a
+project-specific opt-in to get it back. Lucid's ``Literal`` has no such
+restriction — a float or complex literal promotes exactly like any
+other, with nothing to opt into.
 
 No ``Any`` escape hatch
 -----------------------------
