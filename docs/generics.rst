@@ -153,6 +153,35 @@ freezing constrains what a value's fields *store*, not which methods
 exist or how they use ``K``, so ``!T``'s callable member set is exactly
 ``~T``'s. One marker on the mutable declaration settles all three views.
 
+Leaving a type parameter unspecified
+------------------------------------------
+
+Python's bare ``list``, with no type argument, is usually treated as
+``list[Any]`` — and ``Any`` disables checking for both reads and
+writes, not just the one where information is actually missing. Lucid
+has no ``Any`` for a bare name to fall back to, so leaving a type
+parameter unspecified can mean something sound instead, computed by
+the same per-parameter variance already used above: a covariant
+parameter reads as ``object``; a contravariant one is ``Never``,
+accepting nothing; an invariant one — ``list``'s own case, since it is
+both read and written — reads as ``object`` and cannot be written at
+all:
+
+.. code-block:: python
+
+   def describe(items: list) -> str:
+       return str(items[0])   # fine: element type unspecified, reads as object
+       items[0] = 1            # error: list is invariant, and unspecified here
+
+This gives an unspecified ``list`` the same three-way split ``~T``/
+``!T`` already have above, just triggered by omission instead of a
+view marker: whatever a parameter's variance would force a view to
+become, leaving it out entirely forces the same way. Some languages
+need a separate, deliberately-chosen spelling for exactly this — a
+sound alternative to a bare name's own unsound default. Lucid has no
+unsound default to be distinct from, so there is nothing separate to
+opt into: leaving a parameter unspecified already means it.
+
 Higher-kinded parameters
 -----------------------------
 
