@@ -37,7 +37,7 @@ Example
        def is_confident(self, item: K) -> bool:
            return self.score(item) >= 0.8
 
-   class InferenceModel[=K](Scorable[K], ScoreBands[K]):
+   class InferenceModel[+=K](Scorable[K], ScoreBands[K]):
        weights: Tensor
        labels: list[K]
        _scores: dict[K, float]

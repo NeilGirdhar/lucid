@@ -84,20 +84,23 @@ an object it does not own:
 Safe covariance
 ~~~~~~~~~~~~~~~~~~
 
-Variance is computed separately for each view. Mutable types are usually
-invariant because they both produce and consume their type parameters, but
-read-only and immutable views can often be covariant — this is exactly the
-covariance the parameter dilemma above needed, made sound because the view
-itself blocks writes. The same pattern applies to any type family with these
-three views: the mutable variant is typically invariant, while the
-read-only and immutable views can each be declared with the narrowest
-variance their own operations support:
+Mutable types are usually invariant, because they both produce and
+consume their type parameters — but a read-only or immutable view drops
+every mutating member, and often loses whichever use forced invariance
+in the first place. That is exactly the covariance the parameter dilemma
+above needed, made sound because the view itself blocks writes. One
+marker on the mutable declaration settles the variance of all three
+views; see `Variance under &T and !T <generics.rst>`_ for the full rule
+and why it never needs more than one:
 
 .. code-block:: text
 
-   InferenceModel[=K]
-   &InferenceModel[+K]
-   !InferenceModel[+K]
+   InferenceModel[+=K]
+
+which reads as: invariant while mutable — ``score`` writes to
+``self._scores``, consuming ``K`` — but covariant once read-only or
+immutable, since the write that forced invariance is gone and only
+``labels: list[K]``'s read remains.
 
 Read-only dictionaries
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -122,13 +125,23 @@ both accepts keys for lookup and produces keys through views such as
 surface to ask for read-only dictionary access, and they only get the variance
 that ``Mapping`` happened to declare.
 
-Lucid keeps these as views of the same collection abstraction and computes
-variance from each view's actual operations. Mutable ``dict`` stays invariant.
-A full read-only dictionary view such as ``&dict[K, +V]`` is covariant in the
-value type while keeping the key type invariant if the view both consumes and
-produces keys. A narrower view that only produces keys or values can expose
-different variance. Code does not need a separate ``Mapping`` type just to ask
-for a read-only dictionary-shaped view.
+Lucid keeps these as views of the same collection abstraction instead,
+with one declaration governing all three:
+
+.. code-block:: text
+
+   dict[=K, +=V]
+
+``K`` stays invariant everywhere: both of its uses — ``get``'s lookup and
+``keys()``'s enumeration — are non-mutating, so both survive onto the
+read-only view unchanged, and invariance survives with them. ``V`` is
+only ever produced by a non-mutating member (``get``) and only ever
+consumed by a mutating one (``__setitem__``), so the read-only view
+drops the one member forcing invariance and loosens to ``+V``. A
+narrower view that exposes only keys or only values can land on
+different variance again, for the same reason. Code does not need a
+separate ``Mapping`` type just to ask for a read-only dictionary-shaped
+view.
 
 Immutable view
 ----------------
