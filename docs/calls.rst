@@ -145,6 +145,17 @@ write between ``def`` and ``:`` when there are no parameters to name:
 
    log(info_level, def: f"Some string {blah()}")
 
+Passing an anonymous function to defer or conditionally skip a
+computation, the way ``log`` does above, is easy to overuse. A parameter
+that expects one looks, at the call site, exactly like a parameter that
+expects an ordinary value — a reader has to check the signature to know
+whether ``def: expensive()`` always runs or might not, which is
+surprising if the deferred expression has a side effect and not just a
+cost. Reach for it where a callee's whole point is "maybe don't compute
+this," the way a disabled log level already is; an ordinary parameter,
+evaluated up front like any other argument, stays the default everywhere
+else.
+
 An anonymous ``def`` has no block form and no ``return`` — one expression
 is the whole body, full stop. Anything that needs more than one statement
 needs a name. This is the same discipline
