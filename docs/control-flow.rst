@@ -49,6 +49,19 @@ mistyped name, to be found at runtime:
        if x is int: ...   # error: none and int share no value
        if w is str: ...   # error: Widget and str share no value
 
+The type tested is the subject's own narrowed type, which is often
+sharper than its declaration — `a constructor call infers as final A
+<types.rst>`_, not plain ``A``, so the check catches a subclass test
+that can never hold too, not only an unrelated type:
+
+.. code-block:: python
+
+   class Dog(Animal): ...
+
+   def g():
+       a = Animal()
+       if a is Dog: ...   # error: an exactly-Animal value is never a Dog
+
 ``==`` is unchanged: it still resolves through `Multiple dispatch
 <dispatch.rst>`_, exactly as before. Only ``is``/``is not`` and
 ``===``/``!==`` change meaning.

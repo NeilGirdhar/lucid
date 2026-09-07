@@ -319,6 +319,48 @@ project-specific opt-in to get it back. Lucid's ``Literal`` has no such
 restriction — a float or complex literal promotes exactly like any
 other, with nothing to opt into.
 
+Constructor calls infer as ``final``
+------------------------------------------
+
+A call naming the class it constructs can only ever produce an
+instance of exactly that class — building a subclass instead needs its
+own constructor call, ``B()``, not ``A()``. Lucid infers this
+precisely: ``A()``'s type is ``final A``, not plain ``A``:
+
+.. code-block:: python
+
+   class A: ...
+
+   a = A()   # final A
+
+This is the constructor counterpart of literal inference: ``1`` infers
+as ``Literal[1]`` and widens to ``int`` wherever a declaration governs
+it, and ``final A`` widens to ``A`` in exactly the same places:
+
+.. code-block:: python
+
+   class B(A): ...
+
+   class C:
+       x: A = A()
+
+   def g(c: C):
+       c.x = B()   # ok — C.x's declared type is A, not final A
+
+   items: list[A] = [A()]   # list[A], not list[final A]
+
+The extra precision buys disjointness. A value whose class is exactly
+``A`` cannot also be a ``str``, and cannot be some subclass of ``A``
+either, so both possibilities narrow away — which is what lets the
+non-overlapping check in `Identity and instance checks
+<control-flow.rst>`_ catch a test that can never hold, not just
+against an unrelated type but against ``A``'s own subclasses:
+
+.. code-block:: python
+
+   a = A()
+   if a is B: ...   # error: an exactly-A value is never a B
+
 No ``Any`` escape hatch
 -----------------------------
 
