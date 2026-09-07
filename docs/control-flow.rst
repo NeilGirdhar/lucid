@@ -342,15 +342,17 @@ recoverable errors being ordinary return types. Checking the broken-
 invariant case too would just be ceremony around something no caller is
 meant to routinely handle in the first place.
 
-Unspecified simple statements
+Simple statements
 -----------------------------------
 
-This sketch has not yet specified Lucid's full behavior for ``assert``,
-``break``, or ``continue``. ``del`` itself is fully settled: it is a
-compile-time error on a declared field (see `No del on fields
-<classes.rst>`_), removed entirely in favor of explicit methods on a
-mapping or sequence index (see `No __delitem__ <indexing.rst>`_), and
-retained for exactly one purpose beyond those — see below.
+This sketch has not yet specified Lucid's full behavior for ``break`` or
+``continue``. ``del`` and ``assert`` are both fully settled elsewhere.
+``del`` is a compile-time error on a declared field (see `No del on
+fields <classes.rst>`_), removed entirely in favor of explicit methods on
+a mapping or sequence index (see `No __delitem__ <indexing.rst>`_), and
+retained for exactly one purpose beyond those — see below. ``assert`` is
+no longer a statement at all; it is an ordinary function, made possible
+by `Lazy parameters <lazy-parameters.rst>`_.
 
 ``del`` ends a name's lifetime early
 ------------------------------------------
