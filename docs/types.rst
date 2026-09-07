@@ -182,16 +182,16 @@ that matter:
 
 .. code-block:: python
 
-   type Shape = !InferenceModel[str]
-   value: Shape = freeze(model)
+   type Config = !InferenceModel[str]
+   value: Config = freeze(model)
 
    form = type list[str]                                # an ordinary value: a reified type
    handlers = {"json": JSONHandler, "xml": XMLHandler}   # an ordinary dict, not a type
 
-An ordinary assignment such as ``Shape = {"name": str, "year": int}``, without
+An ordinary assignment such as ``Config = {"name": str, "year": int}``, without
 ``type``, parses its right-hand side as an ordinary expression: it produces a
 plain dict whose values happen to be type objects, it does not register
-``Shape`` as a type alias, and its ``{}`` does not get TypedDict-shape
+``Config`` as a type alias, and its ``{}`` does not get TypedDict-shape
 parsing. Which grammar applies is always visible at the point where a name is
 bound, rather than depending on where the name is used later.
 
