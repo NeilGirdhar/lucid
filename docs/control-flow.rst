@@ -346,10 +346,15 @@ Unspecified simple statements
 -----------------------------------
 
 This sketch has not yet specified Lucid's full behavior for ``assert``,
-``pass``, ``del``, ``break``, or ``continue``, beyond two settled cases:
-``del`` on a declared field is a compile-time error (see
-`No del on fields <classes.rst>`_), and ``del`` on a mapping or sequence
-index is removed entirely in favor of explicit removal methods (see
+``del`` on a plain name, ``break``, or ``continue``. Two narrower cases of
+``del`` are already settled: it is a compile-time error on a declared
+field (see `No del on fields <classes.rst>`_), and removed entirely in
+favor of explicit methods on a mapping or sequence index (see
 `No __delitem__ <indexing.rst>`_).
-The ``skip`` keyword is an expression-level elision marker, not a replacement
-for the statement-level ``pass`` placeholder.
+
+``pass`` keeps its ordinary Python meaning: a statement that does
+nothing, standing in wherever the grammar requires a statement and the
+author has none to write. That makes it the statement-level counterpart
+to ``skip``, `an expression-level elision marker <calls.rst>`_ — the two
+fill the same kind of gap one level apart, and neither replaces the
+other.
