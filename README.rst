@@ -131,8 +131,8 @@ document builds mostly on documents already covered above it:
   ``project.yaml``, ``development.yaml``, and ``lucid.lock``.
 * `Modules, projects, and public APIs <docs/modules.rst>`_ —
   module-private names, and lazy imports.
+* `Keyword reference <docs/keywords.rst>`_ — every keyword, in one place.
 * `Rejected features <docs/rejected-features.rst>`_ — other languages'
   features that turned out to already be covered.
-* `Keyword reference <docs/keywords.rst>`_ — every keyword, in one place.
 
 These documents are the source of truth for Lucid semantics.
