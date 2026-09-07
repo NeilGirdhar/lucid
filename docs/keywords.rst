@@ -23,7 +23,7 @@ preserved Python keywords are:
 
 .. code-block:: text
 
-   and as async await break class continue def del elif else except
+   and as assert async await break class continue def del elif else except
    finally for from if import in is not or pass raise return try while
    with yield
 
@@ -77,13 +77,9 @@ and ``No nonlocal`` rules in
 
    global nonlocal
    lambda
-   assert
 
 ``else`` is not discarded as a keyword. Lucid removes loop ``else`` clauses,
 but ``else`` remains available for the Python-like constructs that still use
 it. ``lambda`` is discarded because it is redundant, not because anonymous
 functions are gone: an unnamed ``def`` is one (see
 `Anonymous functions <calls.rst>`_), needing no keyword of its own.
-``assert`` is discarded the same way, for the same reason: it is an
-ordinary function now, not special statement grammar, made possible by
-`Lazy parameters <lazy-parameters.rst>`_.

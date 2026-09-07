@@ -124,8 +124,6 @@ document builds mostly on documents already covered above it:
 
   * `Parameters and arguments <docs/parameters.rst>`_ — the anonymous
     class, and argument gathering.
-  * `Lazy parameters <docs/lazy-parameters.rst>`_ — deferring an
-    argument's evaluation to whether it's needed.
   * `Decorators <docs/decorators.rst>`_ — identity-preserving ``@``, and
     decorator factories.
 
