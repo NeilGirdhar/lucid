@@ -178,6 +178,21 @@ the fields they asked for; more legible, since every field is read by name
 instead of by position; and simpler, since there is no separate
 tuple-versus-list question to answer for every new piece of data.
 
+Having no tuple type closes off an unrelated footgun for free.
+``assert`` reads enough like a function call that wrapping its arguments
+in parentheses, the way any other call gets formatted, is a natural
+mistake:
+
+.. code-block:: python
+
+   assert (x == y, "x and y should match")   # always true in Python
+
+A non-empty tuple is always truthy, so the assertion silently never
+fires — a mistake so common Python's own linters specifically watch for
+it. Lucid cannot reproduce it: ``(x == y, "x and y should match")``
+would have to build a tuple to be silently truthy, and there is no
+tuple type left to build one with.
+
 Unpacking
 ~~~~~~~~~~~~
 
