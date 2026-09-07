@@ -23,7 +23,7 @@ leading ``_`` makes it private instead. Interfaces declare obligations,
 traits provide reusable behavior, and binary operators dispatch on both
 operands. Generic parameters carry definition-site variance with ``+K``,
 ``-K``, and ``=K``. Mutable, read-only, and immutable views are visible in the
-type spelling with ``T``, ``&T``, and ``!T``.
+type spelling with ``T``, ``~T``, and ``!T``.
 
 Example
 -------
@@ -54,7 +54,7 @@ Example
        getter label_count(self) -> int:
            return len(self.labels)
 
-   def evaluate(model: &InferenceModel[str], item: str) -> float:
+   def evaluate(model: ~InferenceModel[str], item: str) -> float:
        return model.score(item)
 
    model: InferenceModel[str] = InferenceModel.from_checkpoint("model.bin", ["cat", "dog"])

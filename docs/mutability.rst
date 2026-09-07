@@ -10,7 +10,7 @@ variants of the same abstraction are declared as one type family, spelled
 with a marker on the short, unqualified name:
 
 - ``T`` — mutable, the default. Code can read and write it.
-- ``&T`` — read-only view. Code can observe it but cannot mutate it, and
+- ``~T`` — read-only view. Code can observe it but cannot mutate it, and
   cannot rely on it being permanently immutable.
 - ``!T`` — immutable. Code can rely on stability for operations such as
   hashing, memoization, and persistent sharing.
@@ -19,7 +19,7 @@ with a marker on the short, unqualified name:
 
    working: InferenceModel[str] = InferenceModel(weights, metadata, {:})
    stable: !InferenceModel[str] = freeze(working)
-   view: &InferenceModel[str] = working
+   view: ~InferenceModel[str] = working
 
 Python's ``collections.abc`` needs a separate, hand-written class for each
 capability level: ``Mapping`` declares the read-only methods, and
@@ -41,18 +41,18 @@ call them:
    view["a"]  # 2 -- "read-only", but not stable
 
 Lucid generates the family instead of asking an author to hand-write it.
-Declare a type once, with its ordinary mutable methods, and ``&T`` and
-``!T`` both follow from that single declaration: ``&T`` is the same
+Declare a type once, with its ordinary mutable methods, and ``~T`` and
+``!T`` both follow from that single declaration: ``~T`` is the same
 interface with every mutating operation removed, and ``!T``, produced by
 ``freeze``, is the runtime-frozen instance of it. Both are subtypes of
-``&T`` because both satisfy its reduced interface — the mutable original
+``~T`` because both satisfy its reduced interface — the mutable original
 by simply having more methods than it needs to, the frozen form by
-actually being what ``&T`` only promised to look like:
+actually being what ``~T`` only promised to look like:
 
 .. code-block:: text
 
-   InferenceModel[K]  <: &InferenceModel[K]
-   !InferenceModel[K] <: &InferenceModel[K]
+   InferenceModel[K]  <: ~InferenceModel[K]
+   !InferenceModel[K] <: ~InferenceModel[K]
 
 Read-only view
 ----------------
@@ -65,16 +65,16 @@ options. Make it invariant, and a function that only reads ``Animal``\ s
 can't accept a ``list[Cat]`` argument even though reading is always safe.
 Make it covariant instead, and nothing stops the function from writing a
 ``Dog`` into what is actually the caller's ``list[Cat]``, corrupting it.
-``&T`` escapes that dilemma: it is the natural type for a parameter that
+``~T`` escapes that dilemma: it is the natural type for a parameter that
 only reads its argument, and because both ``T`` and ``!T`` are subtypes of
-``&T``, a single ``&T``-typed parameter accepts a mutable value, an
+``~T``, a single ``~T``-typed parameter accepts a mutable value, an
 immutable value, or another read-only view, with no conversion at the call
 site — while the callee gets a compile-time guarantee that it cannot mutate
 an object it does not own:
 
 .. code-block:: python
 
-   def report(model: &InferenceModel[str]) -> str:
+   def report(model: ~InferenceModel[str]) -> str:
        return f"{model.label_count} labels"
 
    report(working)  # mutable
@@ -90,7 +90,7 @@ every mutating member, and often loses whichever use forced invariance
 in the first place. That is exactly the covariance the parameter dilemma
 above needed, made sound because the view itself blocks writes. One
 marker on the mutable declaration settles the variance of all three
-views; see `Variance under &T and !T <generics.rst>`_ for the full rule
+views; see `Variance under ~T and !T <generics.rst>`_ for the full rule
 and why it never needs more than one:
 
 .. code-block:: text
@@ -113,7 +113,7 @@ read-only view can safely widen the produced value type:
 .. code-block:: python
 
    cats: dict[str, Cat] = {:}
-   animals: &dict[str, Animal] = cats
+   animals: ~dict[str, Animal] = cats
 
    animal = animals["ada"]
    animals["turing"] = Dog()  # error: read-only view
@@ -174,7 +174,7 @@ other values with no mutable state to begin with. Nothing shallower would
 honor the guarantee this section opened with: "nothing holding a ``!T``
 can ever see it change underneath it" is false the moment one field is
 still a plain ``T`` that some other part of the program can still reach
-and mutate. A shallow freeze would just be a second name for ``&T``,
+and mutate. A shallow freeze would just be a second name for ``~T``,
 which already covers "this one reference can't write to it."
 
 Sharing, reuse, and cycles
@@ -278,9 +278,9 @@ both presuppose the equality they must stay consistent with — while
 ``Ord`` and ``Hashable`` can each be declined on their own, independently
 of the other.
 
-``T`` and ``&T`` are never hashable no matter what ``Eq``/``Ord``/
+``T`` and ``~T`` are never hashable no matter what ``Eq``/``Ord``/
 ``Hashable`` say, for the reason `Read-only view`_ already gave for
-mutation: ``T``'s storage can still change, and ``&T`` views an object
+mutation: ``T``'s storage can still change, and ``~T`` views an object
 that can still change through some other reference. Only ``!T`` can
 actually call ``__hash__``, which is why ``Hashable`` requires
 ``self: !Self`` rather than the ordinary default. Because freezing is
@@ -316,7 +316,7 @@ impossible to actually hash. ``!Hashable`` asks for both at once:
 Scalars such as ``str`` and ``int`` are ``!Hashable`` with no separate
 frozen form to reach for, since they have no mutating methods to
 distinguish ``T`` from ``!T`` in the first place — the same reason
-``&float`` was already "mainly useful for uniform view syntax" rather
+``~float`` was already "mainly useful for uniform view syntax" rather
 than a real second form (see `Numeric types <numeric-types.rst>`__).
 
 Containers supply their own bodies

@@ -138,9 +138,9 @@ By contrast, a ``float`` annotation means exactly ``float``:
    scale = 2              # error: int is not float
    scale = float(2)
 
-``&float`` is the read-only view of ``float``. It does not mean
+``~float`` is the read-only view of ``float``. It does not mean
 ``int | float`` and does not turn integer values into floating-point values.
-Scalar values are already immutable in practice, so ``&float`` is mainly useful
+Scalar values are already immutable in practice, so ``~float`` is mainly useful
 for uniform view syntax in generic APIs; it is not the way to spell
 float-like input.
 

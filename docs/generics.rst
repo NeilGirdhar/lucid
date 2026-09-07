@@ -78,16 +78,16 @@ else — cannot be sound at either variance and needs ``=K``, invariant,
 the same reasoning ``Cell[=K]`` above already applies to a field that is
 both read and written.
 
-Variance under ``&T`` and ``!T``
+Variance under ``~T`` and ``!T``
 --------------------------------------
 
 A variance marker is written once, on the mutable type, but a type with
 `mutable, read-only, and immutable views <mutability.rst>`_ has three
-variances to account for, not one. ``&T``'s members are always a subset
+variances to account for, not one. ``~T``'s members are always a subset
 of ``T``'s — every mutating method drops out, nothing is ever added — so
 removing members can only remove a use of the parameter, never introduce
 one. That gives a directional result: if ``T[K]`` is ``+K`` or ``-K``,
-``&T[K]`` and ``!T[K]`` are forced to match it exactly, since a subset of
+``~T[K]`` and ``!T[K]`` are forced to match it exactly, since a subset of
 "no member consumes ``K``" is still "no member consumes ``K``," and the
 same holds for "no member produces it." There is nothing left to compute
 or declare in either case.
@@ -95,21 +95,21 @@ or declare in either case.
 Only ``=K``, invariant, leaves the views open. Invariance means some
 member produces ``K`` and some member consumes it — possibly the same
 member, possibly two different ones — and whether those survive onto
-``&T`` depends on whether they happen to be mutating:
+``~T`` depends on whether they happen to be mutating:
 
 .. code-block:: python
 
    class Bag[=K]:
-       def contains(self: &Self, item: K) -> bool:   # non-mutating, consumes K
+       def contains(self: ~Self, item: K) -> bool:   # non-mutating, consumes K
            ...
 
        def pop(self) -> K:                             # mutating, produces K
            ...
 
 ``Bag`` is invariant: ``pop`` produces ``K``, ``contains`` consumes it.
-``&Bag`` drops ``pop`` — mutating — and keeps ``contains`` — it doesn't
+``~Bag`` drops ``pop`` — mutating — and keeps ``contains`` — it doesn't
 mutate anything — so the only surviving use of ``K`` is as an input.
-``&Bag[-K]`` is sound: something that can check membership against any
+``~Bag[-K]`` is sound: something that can check membership against any
 ``Animal`` can stand in wherever checking membership against only
 ``Dog`` is needed. `Read-only dictionaries <mutability.rst>`_ shows the
 opposite outcome for the same reason in reverse — a mutating consumer
@@ -131,7 +131,7 @@ marker for them:
 
    * - Marker
      - Mutable
-     - ``&T`` / ``!T``
+     - ``~T`` / ``!T``
    * - ``+K``
      - covariant
      - covariant (forced)
@@ -148,10 +148,10 @@ marker for them:
      - invariant
      - contravariant
 
-``&T`` and ``!T`` always land on the same variance as each other:
+``~T`` and ``!T`` always land on the same variance as each other:
 freezing constrains what a value's fields *store*, not which methods
 exist or how they use ``K``, so ``!T``'s callable member set is exactly
-``&T``'s. One marker on the mutable declaration settles all three views.
+``~T``'s. One marker on the mutable declaration settles all three views.
 
 Higher-kinded parameters
 -----------------------------

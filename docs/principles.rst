@@ -140,7 +140,7 @@ something to trust from a docstring.
 Type relationships live where abstractions are defined. Generic parameters
 carry definition-site variance with ``+K``, ``-K``, and ``=K``. Mutable,
 read-only, and immutable views are visible in the type spelling with ``T``,
-``&T``, and ``!T``. See `Generics <generics.rst>`_,
+``~T``, and ``!T``. See `Generics <generics.rst>`_,
 `Mutability <mutability.rst>`_, and
 `Modern type specification <type-specification.rst>`_.
 

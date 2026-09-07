@@ -201,7 +201,7 @@ variadic:
 
 .. code-block:: python
 
-   def __spread__(self: &Self) -> &Parameters[Self, Never, {:}]:
+   def __spread__(self: ~Self) -> ~Parameters[Self, Never, {:}]:
        return Parameters((), {:}, self)
 
 which is why an ordinary class like `Decorators <decorators.rst>`__'s ``(name: str, loud:
@@ -217,16 +217,16 @@ it:
        vpargs: list[Y]
        kwargs: Z
 
-       def __spread__(self: &Self) -> &Parameters[(), Y, Z]:
+       def __spread__(self: ~Self) -> ~Parameters[(), Y, Z]:
            return Parameters.from_arguments(self)
 
    class Parameters[X, Y, Z: dict[str, object]](Arguments[Y, Z]):
        pargs: X
 
-       factory from_arguments(cls, args: &Arguments[Y, Z]) -> Parameters[(), Y, Z]:
+       factory from_arguments(cls, args: ~Arguments[Y, Z]) -> Parameters[(), Y, Z]:
            return construct(args.vpargs, args.kwargs, ())
 
-       def __spread__(self: &Self) -> &Self:
+       def __spread__(self: ~Self) -> ~Self:
            return self
 
 ``Arguments`` converts itself into the ``Parameters`` it structurally is

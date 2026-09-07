@@ -120,20 +120,40 @@ actually provides them":
 
    handlers: list[HasName & HasId]
 
-``&`` already has a meaning in Lucid — the read-only mutability view
-prefix, ``&Self``, ``&dict[K, +V]``. The two coexist the same way unary
-and binary ``-`` already do everywhere: a leading ``&`` with nothing
-before it is the view marker; an ``&`` with an operand on both sides is
-intersection. ``&Drawable & Serializable`` parses as ``(&Drawable) &
-Serializable``, the same left-to-right precedence that makes ``-x + y``
-mean ``(-x) + y`` rather than ``-(x + y)``; wanting the other grouping
-needs the same fix as there, explicit parentheses —
-``&(Drawable & Serializable)``.
+``&`` means only this — the read-only mutability view prefix used
+everywhere else in this document (``~Self``, ``~dict[K, +V]``) was
+moved to ``~`` for exactly this reason, so ``&`` never has to carry two
+meanings at once.
 
 Neither ``&`` nor ``|`` has a keyword alternate. ``and`` and ``or``
 stay exactly what they already are — value-level boolean operators —
 and are never meaningful in a type position; there is one spelling for
 each combinator, not two.
+
+Negation types
+------------------
+
+``not T`` in a type position is the type that excludes ``T`` — every
+value that is not one:
+
+.. code-block:: python
+
+   def f(x: not int) -> none:
+       ...
+
+   f("a")   # ok
+   f(1)     # error
+
+``not`` already exists, as ordinary boolean negation; a type position
+reads it as type negation instead, the same way this document's own
+type-expression grammar already gives several other tokens a second
+meaning by position rather than by a second word — ``type``, disambiguated
+the same way (`What type means in Lucid`_). ``not int | str`` and
+``not (int | str)`` differ exactly the way they read: the first excludes
+only ``int``, leaving ``str`` untouched by the negation, the second
+excludes the whole union. Nesting follows the same rule as every other
+type combinator here: parenthesize to bind negation across ``|`` or
+``&``; unparenthesized, it binds to the type immediately next to it.
 
 Type expressions and the ``type`` keyword
 ---------------------------------------------
@@ -141,7 +161,7 @@ Type expressions and the ``type`` keyword
 Wherever a type is expected — variable, parameter, and return annotations,
 generic parameter lists, interface member signatures — Lucid parses a *type
 expression* rather than an ordinary expression. Most syntax means the same
-thing in both grammars (``dict[str, int]``, ``&T``, ``!T``, and
+thing in both grammars (``dict[str, int]``, ``~T``, ``!T``, and
 ``Producer[+K]`` all evaluate identically either way), but a type expression
 can use forms that mean something else, or nothing at all, as an ordinary
 expression — for example the TypedDict shape literal in

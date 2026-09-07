@@ -167,7 +167,7 @@ whether a name exists to capture, the same way it already knows whether
        factory __init__(cls):
            return construct(from_var_name)
 
-       def __repr__(self: &Self) -> str:
+       def __repr__(self: ~Self) -> str:
            return f"<Sentinel {self.name}>"
 
    missing = Sentinel()   # <Sentinel missing>

@@ -46,7 +46,7 @@ capability — read access, write access, or both — and satisfaction follows
 the same width-subtyping already used for mutable, read-only, and immutable
 views (`Mutable, read-only, and immutable views <mutability.rst>`__): whatever
 provides at least the capability asked for satisfies the obligation, the
-same way a mutable ``T`` is usable wherever the narrower ``&T`` is expected.
+same way a mutable ``T`` is usable wherever the narrower ``~T`` is expected.
 
 A stored field provides both read and write access, so it satisfies a
 ``getter``-only obligation, a ``setter``-only obligation, or a plain field
