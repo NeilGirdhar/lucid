@@ -171,6 +171,56 @@ IEEE 754 float shares: ``float.nan != float.nan``. That is a fact about
 the value, inherited from the standard ``float`` already follows, not a
 Lucid-specific exception to ``Eq``'s usual reflexivity.
 
+Infinity and NaN for ``int``
+---------------------------------
+
+``int`` is arbitrary-precision — it grows to whatever size a value
+needs, with no fixed width to run out of. That already means adding
+``int.inf``/``int.nan`` costs nothing a fixed-width integer would have
+to pay: there is no bit pattern to reserve and no legitimate value to
+give up, since the representation is free to carry an extra tag
+alongside its digits, the same way it already carries a sign. A
+reserved tag can never collide with a real integer — exactly the
+property that lets ``float.nan``/``float.inf`` work safely, and the
+one a fixed-width integer would not have.
+
+.. code-block:: python
+
+   class int:
+       classvar inf: int
+       classvar nan: int
+
+Floor division and modulo by zero — the two ``int`` operations with no
+defined answer today — produce them instead of raising:
+
+.. code-block:: python
+
+   5 // 0    # int.inf
+   -5 // 0   # -int.inf
+   0 // 0    # int.nan
+   5 % 0     # int.nan
+
+True division, ``/``, already promotes both operands to ``float``
+before dividing (`Exact float and float-like input`_), so ``5 / 0``
+was already ``float.inf``; this only fills in the two operators that
+stay ``int``-typed and, until now, had no answer at all. ``int.inf``
+and ``int.nan`` propagate through further arithmetic and compare the
+same way their ``float`` counterparts do, ``int.nan != int.nan``
+included — matching a contract callers already learned once, rather
+than a second, subtly different one just for ``int``.
+
+Because both are ordinary ``int`` values, not a separate wrapper or
+sentinel type, they pass anywhere an ``int`` already does — a
+``limit: int = int.inf`` default meaning "unlimited" reads the same
+way ``float("inf")`` already gets used as a sentinel today, with no
+special-casing needed at the call site.
+
+This replaces a raised ``ZeroDivisionError`` with an ordinary,
+checkable value — the same trade `Errors: results and exceptions
+<control-flow.rst>`_ already makes everywhere else a recoverable
+outcome is involved, extended to the one place integer arithmetic
+still had an unchecked exception instead of one.
+
 Exact ``complex``
 -------------------
 
