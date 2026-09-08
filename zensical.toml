@@ -1,0 +1,91 @@
+[project]
+site_url = "https://neilgirdhar.github.io/lucid/"
+site_name = "Lucid"
+site_description = "A Python-like language sketch with cleaner type, dispatch, object, and compatibility rules."
+repo_url = "https://github.com/NeilGirdhar/lucid"
+repo_name = "NeilGirdhar/lucid"
+edit_uri = "edit/main/docs/"
+docs_dir = "docs"
+
+nav = [
+  { "Home" = "index.md" },
+  { "Main ideas" = "principles.md" },
+  { "Names, binding, and scope" = "names.md" },
+  { "Types, mutability, and annotations" = [
+    { "Type vocabulary" = "types.md" },
+    { "Mutability" = "mutability.md" },
+    { "Generics" = "generics.md" },
+    { "Numeric types" = "numeric-types.md" },
+  ] },
+  { "Modern type specification" = [
+    { "Overview" = "type-specification.md" },
+    { "Traits" = "traits.md" },
+    { "Classes" = "classes.md" },
+    { "Construction" = "construction.md" },
+  ] },
+  { "Multiple dispatch" = "dispatch.md" },
+  { "Control flow" = [
+    { "Control flow and statements" = "control-flow.md" },
+    { "Context managers" = "context-managers.md" },
+  ] },
+  { "Strings and collections" = "collections.md" },
+  { "Indexing" = "indexing.md" },
+  { "Calls" = "calls.md" },
+  { "Parameters and decorators" = [
+    { "Parameters and arguments" = "parameters.md" },
+    { "Decorators" = "decorators.md" },
+  ] },
+  { "Project configuration" = "project-configuration.md" },
+  { "Modules, projects, and public APIs" = "modules.md" },
+  { "Keyword reference" = "keywords.md" },
+  { "Rejected features" = "rejected-features.md" },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.code.copy",
+  "content.code.select",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+toc.permalink = true
+pymdownx.betterem = {}
+pymdownx.details = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.magiclink = {}
+pymdownx.superfences = {}
