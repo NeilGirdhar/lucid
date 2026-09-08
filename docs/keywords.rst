@@ -30,9 +30,9 @@ preserved Python keywords are:
 New Lucid keywords
 -----------------------
 
-Lucid adds keywords for construction, call-site capture, destructuring,
-class member kinds, closing off rebinding or further class inheritance
-or overriding, explicit overrides, declining generated behavior,
+Lucid adds keywords for construction, destructuring, class member
+kinds, closing off rebinding or further class inheritance or
+overriding, explicit overrides, declining generated behavior,
 guaranteed-cleanup context managers, abstraction, dispatch, external
 trait implementation, type expressions, existential quantification,
 exhaustive pattern matching, and elision:
@@ -40,7 +40,6 @@ exhaustive pattern matching, and elision:
 .. code-block:: text
 
    classmethod classvar factory construct
-   caller from_var_name
    let
    getter setter
    final sealed override
@@ -65,6 +64,15 @@ Visibility is now decided by the name alone — see
 place the externally visible surface is declared, in
 `Public API <project-configuration.rst>`_ — so no keyword is needed at
 the definition site at all.
+
+An earlier draft also added ``caller`` and ``from_var_name`` here, two
+bare reserved words for two rare, unrelated call-site captures. Both
+are now ordinary-looking intrinsic classmethod calls instead,
+``SourceLocation.caller()`` and ``VarName.from_assignment()`` (see
+`Call-site captured values <construction.rst>`_) — recognized by name
+on their two built-in types the way Rust's ``Location::caller()`` is
+recognized without needing a keyword either, so two reserved words
+became zero.
 
 An earlier draft also had ``interface`` alongside ``trait`` — a
 separate kind whose members were always bodyless, obligations only,
