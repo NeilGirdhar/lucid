@@ -143,18 +143,45 @@ write between ``def`` and ``:`` when there are no parameters to name:
 
 .. code-block:: python
 
-   log(info_level, def: f"Some string {blah()}")
+   log.debug(def: f"Some string {blah()}")
 
-Passing an anonymous function to defer or conditionally skip a
-computation, the way ``log`` does above, is easy to overuse. A parameter
-that expects one looks, at the call site, exactly like a parameter that
-expects an ordinary value — a reader has to check the signature to know
-whether ``def: expensive()`` always runs or might not, which is
-surprising if the deferred expression has a side effect and not just a
-cost. Reach for it where a callee's whole point is "maybe don't compute
-this," the way a disabled log level already is; an ordinary parameter,
-evaluated up front like any other argument, stays the default everywhere
-else.
+Writing ``def:`` at the call site is visible, not a hidden cost: a
+reader sees immediately that the argument may not run, and a linter can
+insert it automatically wherever a parameter's declared type calls for
+one. A parameter that is sometimes cheap enough to build eagerly and
+sometimes not accepts either shape directly, ``str | () -> str``,
+rather than forcing every caller through the deferred form even when
+there is nothing expensive to defer:
+
+.. code-block:: python
+
+   def debug(self, message: str | () -> str) -> none:
+       if self.level <= Level.debug:
+           match message:
+               case str:
+                   self.emit(message)
+               case _:
+                   self.emit(message())
+
+   log.debug("starting up")                      # cheap: plain str
+   log.debug(def: f"state: {expensive_dump()}")   # expensive: deferred
+
+The same shape fits any check whose message is sometimes free and
+sometimes not — a ``precondition``-style helper takes ``str | () ->
+str`` for exactly the same reason ``debug`` does:
+
+.. code-block:: python
+
+   def precondition(ok: bool, message: str | () -> str) -> none:
+       if not ok:
+           match message:
+               case str:
+                   raise AssertionError(message)
+               case _:
+                   raise AssertionError(message())
+
+   precondition(x > 0, "x must be positive")
+   precondition(x > 0, def: f"x must be positive, got {expensive_repr(x)}")
 
 An anonymous ``def`` has no block form and no ``return`` — one expression
 is the whole body, full stop. Anything that needs more than one statement
