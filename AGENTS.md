@@ -3,21 +3,30 @@
 These instructions apply to coding agents working in this repository.
 
 This repo contains the specification for Lucid, a Python-like language
-design sketch, written as RST documents. There is no compiler or
-interpreter here — the "code" is the specification prose and the worked
-examples inside it.
+design sketch, written as Markdown documents built into a site with
+[Zensical](https://zensical.org/). There is no compiler or interpreter
+here — the "code" is the specification prose and the worked examples
+inside it.
 
 ## Project structure
 
-- `README.rst`—the hub: the core principle, a worked example, and a nested
-  tree of links to every document under `docs/`, grouped by theme.
-- `docs/*.rst`—one specification document per topic.
-  The tree in `README.rst` orders them to minimize forward references: a
+- `README.md`—a short pointer for GitHub's own repo view: the core
+  principle and a link into the real hub.
+- `docs/index.md`—the real hub: the core principle, a worked example, and
+  a nested tree of links to every document under `docs/`, grouped by
+  theme. This is also the site's homepage.
+- `docs/*.md`—one specification document per topic.
+  `zensical.toml`'s `nav` orders them to minimize forward references: a
   document should mostly build on documents already covered above it, not
   ones introduced later. A handful of forward pointers are intentional,
   where two topics genuinely reference each other for comparison (e.g.
   generics/traits, dispatch/control-flow); the reverse direction of
-  each such pair is already satisfied.
+  each such pair is already satisfied. Keep `docs/index.md`'s
+  documentation list and `zensical.toml`'s `nav` in sync — they describe
+  the same tree.
+- `zensical.toml`—site config and navigation tree.
+- `.github/workflows/docs.yml`—builds and deploys the site to GitHub
+  Pages on every push to `main`.
 
 ## Core design pillars
 
@@ -37,46 +46,32 @@ examples inside it.
   instructions, which is the standing justification for choosing the
   cleaner rule over the Python-compatible one throughout the spec.
 
-`docs/principles.rst` is the canonical statement of these and the
+`docs/principles.md` is the canonical statement of these and the
 reasoning behind each.
 
-## RST conventions
+## Markdown conventions
 
-- Name files kebab-case (`type-specification.rst`, not
-  `type_specification.rst`).
-- Heading levels are consistent across every file: `=` title, `-` section,
-  `~` subsection, `^` sub-subsection.
-- Every file opens with a `.. contents:: Table of contents` directive
-  (`:depth:` matched to how many levels the file actually uses, `:local:`).
+- Name files kebab-case (`type-specification.md`, not
+  `type_specification.md`).
+- Heading levels are consistent across every file: `#` title, `##` section,
+  `###` subsection, `####` sub-subsection. Zensical generates each page's
+  table of contents from these automatically — no directive needed.
 - Cross-references always name the target file explicitly:
-  `` `Link text <file.rst>`_ ``. If the same link text is used more than
-  once anywhere in a file (even pointing to different targets), every
-  occurrence after the first must use an anonymous reference
-  (`` `Link text <file.rst>`__ ``) or docutils reports a duplicate-target
-  warning.
-- After any edit, verify the whole repository still parses cleanly:
+  `[Link text](file.md)`. Markdown has no duplicate-target warning the way
+  RST did, so the same link text can repeat freely, pointing at the same
+  or different targets, with no anonymous-reference workaround needed.
+- A same-file reference to a heading uses that heading's anchor:
+  `[Link text](#heading-slug)`, where the slug is the heading text
+  lowercased, punctuation stripped, spaces turned to hyphens.
+- After any edit, verify the whole site still builds cleanly:
 
   ```
-  uv run --with docutils --with pygments python3 -c "
-  import io
-  from docutils.core import publish_doctree
-  import glob
-  files = ['README.rst'] + sorted(glob.glob('docs/*.rst'))
-  any_issue = False
-  for f in files:
-      text = open(f).read()
-      stream = io.StringIO()
-      publish_doctree(text, source_path=f, settings_overrides={'report_level':1,'halt_level':5,'warning_stream':stream})
-      msg = stream.getvalue()
-      if msg.strip():
-          any_issue = True
-          print(f'--- {f} ---'); print(msg)
-  print('DONE - issues found' if any_issue else 'ALL CLEAN, NO WARNINGS')
-  "
+  uv run zensical build --clean --strict
   ```
 
-  A clean run is the bar for "done," not just "no exception raised" —
-  check for warnings, not only errors.
+  Strict mode aborts the build on any warning (a broken link, an
+  unresolved reference) — a clean run is the bar for "done," not just "no
+  exception raised."
 - Every design claim in the spec should be grounded: motivate a rule with
   a concrete Python (or other language) failure mode before stating
   Lucid's fix, the way the existing documents do throughout.
