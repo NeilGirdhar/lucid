@@ -4,43 +4,39 @@ Modern type specification
 Lucid modernizes how user-defined types are specified. Python spreads this work
 across classes, dataclasses, ABCs, protocols, mixins, descriptors, properties,
 constructors, metaclasses, and special methods. Lucid replaces that scattered
-model with three kinds of type specification: interfaces, traits, and classes.
+model with two kinds of type specification: traits and classes.
 
 .. contents:: Table of contents
    :depth: 2
    :local:
 
-Lucid separates user-defined type specification into three kinds.
+Lucid separates user-defined type specification into two kinds.
 
 Definitions are visible everywhere in the project by default; a leading
 ``_`` makes one private instead — see
 `Module-private names <modules.rst>`_.
 
-Each kind gets its own document: `Interfaces <interfaces.rst>`_ specify
-obligations without storing data or providing bodies. `Traits <traits.rst>`_
-provide reusable method bodies without owning state. `Classes <classes.rst>`_
-own concrete state, construction, and identity. The rest of this page shows
-why Python mixes the three together, and how the three work together once
-they're kept separate.
+Each kind gets its own document: `Traits <traits.rst>`_ specify
+obligations, reusable method bodies, or both, without owning state.
+`Classes <classes.rst>`_ own concrete state, construction, and identity.
+The rest of this page shows why Python mixes the two together, and how
+they work together once they're kept apart.
 
-Interfaces, traits, and inheritance
+Traits and inheritance
 -----------------------------------
 
-Interfaces, traits, and classes work together when a small required core can
-support rich reusable behavior. A cache only has to say how to fetch, store, and
-report freshness; traits can build higher-level behavior from those obligations:
+A trait and a class work together when a small required core can support
+rich reusable behavior on top of it. A cache only has to say how to fetch,
+store, and report freshness; the same declaration can build higher-level
+behavior directly on those obligations:
 
 .. code-block:: python
 
-   interface Cache[=K, =V]:
+   trait Cache[=K, =V]:
        def get(self, key: K) -> V | none
        def put(self, key: K, value: V) -> none
        def is_fresh(self, key: K) -> bool
 
-   interface Sized:
-       def __len__(self) -> int
-
-   trait CacheLookup[K, V](Cache[K, V]):
        def get_or_put(self, key: K, build: () -> V) -> V:
            cached = self.get(key)
            if cached is not none and self.is_fresh(key):
@@ -49,11 +45,13 @@ report freshness; traits can build higher-level behavior from those obligations:
            self.put(key, value)
            return value
 
-   trait SizedCacheSummary(Sized):
+   trait Sized:
+       def __len__(self) -> int
+
        getter empty(self) -> bool:
            return self.__len__() == 0
 
-   class MemoryCache[K: !Hashable, V](Cache[K, V], Sized, CacheLookup[K, V], SizedCacheSummary):
+   class MemoryCache[K: !Hashable, V](Cache[K, V], Sized):
        entries: dict[K, V] = {:}
        fresh: set[K] = {}
 
