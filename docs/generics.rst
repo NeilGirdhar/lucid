@@ -23,10 +23,10 @@ changed on future edits, before the API is accepted.
 
 .. code-block:: python
 
-   interface Producer[+K]:
+   trait Producer[+K]:
        def get(self) -> K
 
-   interface Consumer[-K]:
+   trait Consumer[-K]:
        def put(self, value: K) -> none
 
    class Cell[=K]:
@@ -36,11 +36,11 @@ Python's generic variance is often hidden in library declarations or stubs,
 inferred from the current member set rather than written down. Lucid puts
 variance on the definition instead because variance is part of the public
 contract: if a checker infers it from the current members, an ordinary edit
-to an interface can silently change assignability for downstream code —
-adding a method that consumes ``K`` can turn an inferred covariant interface
+to a trait can silently change assignability for downstream code —
+adding a method that consumes ``K`` can turn an inferred covariant trait
 into an invariant one, breaking users who never touched their code. Writing
 the marker up front makes the author choose the intended contract, rather
-than letting it shift underneath callers as the interface evolves.
+than letting it shift underneath callers as the trait evolves.
 
 Getting variance wrong
 ----------------------------
@@ -51,7 +51,7 @@ it type-checks right up until something depends on the mistake. Suppose
 
 .. code-block:: python
 
-   interface Consumer[+K]:      # wrong: put(value: K) only consumes K
+   trait Consumer[+K]:      # wrong: put(value: K) only consumes K
        def put(self, value: K) -> none
 
    class Dog(Animal): ...
@@ -213,17 +213,17 @@ explicit variance markers already exist to rule out.
 Existential types
 -----------------------------
 
-An ordinary interface can already be used directly as a type — ``count:
+An ordinary trait can already be used directly as a type — ``count:
 SupportsIndex`` already means "any type satisfying ``SupportsIndex``, caller's
 choice, checker doesn't care which." That is existential quantification,
 even though it is ordinary enough that nothing here has called it that
 until now.
 
-It stops working for a higher-kinded interface like ``Functor``, because
+It stops working for a higher-kinded trait like ``Functor``, because
 ``Functor`` is not itself a complete type — the same reason bare ``list``
 is not. What a recursive alias like ``PyTree`` wants to say is "a value of
 type ``F[PyTree[L]]``, for *some* ``F`` satisfying ``Functor``," which
-bundles two things an ordinary interface-as-type never had to: the
+bundles two things an ordinary trait-as-type never had to: the
 constraint, and what it is applied to. ``any`` spells that:
 
 .. code-block:: python
@@ -243,9 +243,9 @@ This costs nothing at runtime. Every value already carries its own
 concrete class, a fact `Multiple dispatch <dispatch.rst>`_ relies on
 too, later in this reading order — so a value of type ``any
 Functor[X]`` needs no extra representation;
-whatever concretely `implement <interfaces.rst>`_\ s ``Functor`` is
+whatever concretely `implement <traits.rst>`_\ s ``Functor`` is
 already dispatchable the ordinary way. The only new thing ``any`` asks of
 the checker is to accept any concrete ``F[X]`` under one annotation for a
-higher-kinded interface, the same courtesy it already extends to ordinary
+higher-kinded trait, the same courtesy it already extends to ordinary
 ones.
 

@@ -66,13 +66,13 @@ declaration says.
 Dispatch requirements
 --------------------------------------
 
-Interfaces can require one element of a multiple-dispatch operation by
+A trait can require one element of a multiple-dispatch operation by
 writing a ``dispatch`` member without a body, the same as any other
-interface member:
+trait obligation:
 
 .. code-block:: python
 
-   interface Addable:
+   trait Addable:
        def dispatch __add__(lhs: Self, rhs: Self) -> Self
 
 A concrete implementation satisfies that requirement when the generic operation
@@ -166,7 +166,7 @@ whatever type shows up at that level:
 Each case only has to be correct on its own — there is no single signature
 that has to hold for every case at once, present and future, the way a
 bounded generic parameter would require (see
-`Higher-kinded interfaces <interfaces.rst>`_ for that alternative,
+`Higher-kinded traits <traits.rst>`_ for that alternative,
 and when it is worth the extra cost). The leaf case's ``tree: A`` is fully
 generic, not narrowed to some concrete leaf type, and that does not
 conflict with the two cases above it: ``list[A]`` and ``dict[X, A]`` are
@@ -295,7 +295,7 @@ variance and mutability views, not something computed by running code:
 
 .. code-block:: python
 
-   interface Promotes:
+   trait Promotes:
        type Wider
 
    class float32(Promotes):

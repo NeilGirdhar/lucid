@@ -6,7 +6,7 @@ Classes
    :local:
 
 Classes define concrete state, construction, and identity. A class can
-satisfy interfaces, use traits, and use *class inheritance* to extend at
+use any number of traits and use *class inheritance* to extend at
 most one other class, but stored fields and construction belong to the
 class.
 
@@ -27,9 +27,9 @@ factory is defined. Construction is not split across allocation, mutation, and
 post-initialization hooks — see `Construction <construction.rst>`_ for the
 full factory model.
 
-Classes own data and concrete behavior. Interfaces declare obligations. Traits
-provide reusable method bodies. Trait conflicts are resolved explicitly by the
-class.
+Classes own data and concrete behavior. Traits declare obligations, provide
+reusable method bodies, or both. Conflicting trait defaults are resolved
+explicitly by the class.
 
 Object shape and attribute access
 ---------------------------------
@@ -347,8 +347,8 @@ One class parent
 ~~~~~~~~~~~~~~~~~
 
 *Class inheritance* is limited to one parent: a class may have at most one
-class parent. A class header can combine one class parent, any number of
-interfaces, and any number of traits.
+class parent. A class header can combine one class parent with any
+number of traits.
 
 .. code-block:: python
 
@@ -431,11 +431,10 @@ introduced by different classes, especially in multiple-inheritance
 hierarchies.
 
 A class can have at most one class parent. The restriction is not about the
-parent being non-abstract — it is that a class, unlike an interface or a
-trait, owns stored data, and combining stored data from more than one parent
-is exactly what produces the collisions above. Interfaces do not provide
-storage, traits do not own stored state, and trait member conflicts must be
-resolved explicitly. Because class shape is declared and inherited member
+parent being non-abstract — it is that a class, unlike a trait, owns
+stored data, and combining stored data from more than one parent
+is exactly what produces the collisions above. Traits do not own stored
+state, and conflicting trait defaults must be resolved explicitly. Because class shape is declared and inherited member
 collisions can therefore be reported directly, Lucid does not need automatic
 name mangling. Declare and use ``a`` as ``self.a``; ``self.__a`` is not a
 special spelling for private state.

@@ -8,7 +8,7 @@ Numeric types
 Annotations for concrete numeric types are exact: ``bool`` means ``bool``,
 ``int`` means ``int``, ``float`` means ``float``, and ``complex`` means
 ``complex``. Code that intentionally wants a broader numeric promise uses a
-capability interface or an explicit union.
+capability trait or an explicit union.
 
 No numeric tower
 ------------------
@@ -29,7 +29,7 @@ The tower also makes annotations less literal. If ``Real`` is used because
 ``float`` feels too narrow, the API may accidentally accept integers, booleans,
 fractions, decimals, or third-party numeric objects even when the implementation
 only works for a smaller operation set. Lucid replaces the tower with exact
-concrete annotations and small, focused capability interfaces.
+concrete annotations and small, focused capability traits.
 
 Exact ``bool``
 ----------------
@@ -77,14 +77,14 @@ Types that want truth behavior define ``__bool__``.
 
 .. code-block:: python
 
-   interface Truthy:
+   trait Truthy:
        def __bool__(self) -> bool
 
 A sized type can opt in explicitly:
 
 .. code-block:: python
 
-   interface Sized:
+   trait Sized:
        def __len__(self) -> int
 
    trait SizedTruthy(Sized, Truthy):
@@ -270,36 +270,36 @@ reaching for a broad tower class.
    def rounded(x: SupportsRound[int]) -> int:
        return round(x)
 
-Capability interfaces
+Capability traits
 -----------------------
 
-The numeric capability interfaces are builtins and are always available
-without import. They are ordinary nominal interfaces, not structural ones:
+The numeric capability traits are builtins and are always available
+without import. They are ordinary nominal traits, not structural ones:
 a type satisfies ``SupportsInt`` because its class header explicitly declares
-it, the same way any user-defined class declares any other interface —
+it, the same way any user-defined class declares any other trait —
 ``int`` itself explicitly inherits from ``SupportsInt`` (and the other
-capability interfaces it satisfies), rather than qualifying merely by
+capability traits it satisfies), rather than qualifying merely by
 happening to define a matching method.
 
 .. code-block:: python
 
-   interface SupportsInt:
+   trait SupportsInt:
        def __int__(self) -> int
 
-   interface SupportsFloat:
+   trait SupportsFloat:
        def __float__(self) -> float
 
-   interface SupportsComplex:
+   trait SupportsComplex:
        def __complex__(self) -> complex
 
-   interface SupportsIndex:
+   trait SupportsIndex:
        # Exact indexability, not just explicit int(x) conversion.
        def __index__(self) -> int
 
-   interface SupportsAbs[+K]:
+   trait SupportsAbs[+K]:
        def __abs__(self) -> K
 
-   interface SupportsRound[+K]:
+   trait SupportsRound[+K]:
        def __round__(self, ndigits: int | none = none) -> K
 
    class int(SupportsInt, SupportsFloat, SupportsIndex):

@@ -33,7 +33,7 @@ and ``is not`` become instance checks, and identity moves to ``===`` and
    * - ``x !== y``
      - not identity
 
-A right-hand side naming a class, interface, trait, or union alias is a
+A right-hand side naming a class, trait, or union alias is a
 type — the swap above applies. A right-hand side whose own static type
 is an *instance*, not a class, keeps plain identity instead: ``none`` is
 the ordinary case, so ``x is none`` and ``x is not none`` read exactly
@@ -85,7 +85,7 @@ return a value instead:
 
    type IterResult[T] = T | Literal[iteration.done]
 
-   interface Iterator[+T]:
+   trait Iterator[+T]:
        def __next__(self) -> IterResult[T]
 
 ``iteration.done`` is a singleton value, not a class — the same shape as
@@ -268,7 +268,7 @@ already a bare name, and has nothing to do otherwise: writing
 
 A bare ``_`` matches anything, satisfying exhaustiveness for a match over a
 type that is not a closed union at all. Matching against a non-closed type
-— ``object``, an interface, anything without a known, finite set of
+— ``object``, a trait, anything without a known, finite set of
 alternatives — cannot be checked for exhaustiveness the way ``PyTree`` can,
 and requires an explicit ``case _:`` for the same reason a Rust ``match``
 over an integer needs one: there is no finite set of cases to exhaust.

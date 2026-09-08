@@ -36,7 +36,7 @@ The word itself appears in exactly these roles in Lucid, and no others:
   any type expression evaluated to a value, class or not. This is prose
   vocabulary, not syntax.
 - **Type expression**, as a grammar — the parsing mode that applies in
-  annotation positions, generic parameter lists, and interface member
+  annotation positions, generic parameter lists, and trait member
   signatures (see `Type expressions and the type keyword`_), as opposed to
   the ordinary expression grammar used everywhere else. Also not syntax by
   itself — it names which grammar is in effect at a given position.
@@ -55,7 +55,7 @@ Visible type contracts
 
 Lucid's annotation syntax is Python's, unchanged: a colon after a name
 annotates a field, a parameter, or a local variable, and ``->`` annotates a
-function's return value. Interface requirements are annotated the same way
+function's return value. Trait obligations are annotated the same way
 (see `Modern type specification <type-specification.rst>`_).
 
 .. code-block:: python
@@ -106,9 +106,9 @@ Intersection types
 
 ``A & B`` is the type of values satisfying both ``A`` and ``B`` — the
 dual of the union ``A | B`` already used throughout this document.
-Lucid's interfaces are nominal (`Main ideas <principles.rst>`_): a
+Lucid's traits are nominal (`Main ideas <principles.rst>`_): a
 promise is made only where a class header names it, so a value
-assembled from two independently declared interfaces has nowhere to go
+assembled from two independently declared traits has nowhere to go
 without either a purpose-declared class combining both up front, or a
 type that can say "both, whichever value actually provides them":
 
@@ -158,7 +158,7 @@ Type expressions and the ``type`` keyword
 ---------------------------------------------
 
 Wherever a type is expected — variable, parameter, and return annotations,
-generic parameter lists, interface member signatures — Lucid parses a *type
+generic parameter lists, trait member signatures — Lucid parses a *type
 expression* rather than an ordinary expression. Most syntax means the same
 thing in both grammars (``dict[str, int]``, ``~T``, ``!T``, and
 ``Producer[+K]`` all evaluate identically either way), but a type expression
@@ -376,8 +376,8 @@ way: anything is assignable to an ``object``-typed slot, but only what
 called on one, until it is narrowed back to something more specific. That
 is exactly the check ``Any`` skips.
 
-``any Interface`` (see `Existential types <generics.rst>`_) looks similar and is not: it
-erases which concrete type implements ``Interface``, not whether the value
+``any Trait`` (see `Existential types <generics.rst>`_) looks similar and is not: it
+erases which concrete type implements ``Trait``, not whether the value
 is checked at all. A value of type ``any Functor[X]`` is fully verified
 against everything ``Functor`` declares — nothing more, nothing less — the
 same guarantee ``object`` gives, just narrower. Composing the two, ``any
@@ -419,7 +419,7 @@ what is being trusted, and where, every time.
 has no such restriction — it can assert any type in place of any other,
 anywhere, purely between values that are already fully typed on the Python
 side, with nothing foreign involved at all. Lucid has no equivalent
-general-purpose ``cast``, on purpose: interfaces are nominal specifically so
+general-purpose ``cast``, on purpose: traits are nominal specifically so
 that satisfying one is an explicit, checked act rather than an accidental
 shape match, and an unrestricted cast would let any code route around that
 check between two ordinary, already-sound Lucid values — ``trust[Dog](some_cat)``

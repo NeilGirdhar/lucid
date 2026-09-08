@@ -180,7 +180,7 @@ stays exactly as it already is, the bare identifier, always equal to
    slow_query.__path__[-1]   # "slow_query"
    slow_query.__name__       # "slow_query"
 
-Every function, class, interface, trait, and module has a ``__path__``. By
+Every function, class, trait, and module has a ``__path__``. By
 default it holds the symbol's own defining location — project name, then
 module path, then lexical nesting — exactly what ``__module__`` and
 ``__qualname__`` used to spell out between them. Flattening the two into

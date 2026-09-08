@@ -213,9 +213,9 @@ Equality, ordering, and hashing
 Lucid generates three things for every class by default, the same way it
 generates a default constructor when ``__init__`` is left unspecified
 (see `Classes <classes.rst>`_): structural ``Eq``, structural ``Ord``,
-and hashability. All three are traits, not interfaces — each provides a
-real body, not just an obligation, because each just iterates over the
-class's own fields and does the obvious thing: ``Eq`` compares them all,
+and hashability. All three are traits that provide a real body rather
+than just an obligation, because each just iterates over the class's
+own fields and does the obvious thing: ``Eq`` compares them all,
 ``Ord`` compares them in field-declaration order, ``Hashable`` combines
 their hashes.
 
