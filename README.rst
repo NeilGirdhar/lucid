@@ -10,7 +10,7 @@ Core principle:
     rule when compatibility no longer has to win.
 
 Lucid borrows Python's readable surface syntax, Java-style single class
-inheritance plus multiple interfaces, Scala-style definition-site type
+inheritance plus multiple traits, Scala-style definition-site type
 information, Julia-style multiple dispatch, basedpython's fresh
 per-iteration loop bindings, Kotlin-style function types, and Rust's
 split between recoverable and unrecoverable errors — made possible by a
@@ -19,25 +19,24 @@ instead of the Python-compatible one throughout the language.
 
 Object state is declared in the class body. Construction returns fully built
 objects. A definition is visible everywhere in the project by default; a
-leading ``_`` makes it private instead. Interfaces declare obligations,
-traits provide reusable behavior, and binary operators dispatch on both
-operands. Generic parameters carry definition-site variance with ``+K``,
-``-K``, and ``=K``. Mutable, read-only, and immutable views are visible in the
-type spelling with ``T``, ``~T``, and ``!T``.
+leading ``_`` makes it private instead. Traits declare obligations,
+provide reusable behavior, or both at once, and binary operators dispatch
+on both operands. Generic parameters carry definition-site variance with
+``+K``, ``-K``, and ``=K``. Mutable, read-only, and immutable views are
+visible in the type spelling with ``T``, ``~T``, and ``!T``.
 
 Example
 -------
 
 .. code-block:: python
 
-   interface Scorable[+K]:
+   trait Scorable[+K]:
        def score(self, item: K) -> float
 
-   trait ScoreBands[+K](Scorable[K]):
        def is_confident(self, item: K) -> bool:
            return self.score(item) >= 0.8
 
-   class InferenceModel[+=K](Scorable[K], ScoreBands[K]):
+   class InferenceModel[+=K](Scorable[K]):
        weights: Tensor
        labels: list[K]
        _scores: dict[K, float]
@@ -64,8 +63,8 @@ This example shows several core language mechanics in one place:
 
 * ``_scores`` is private to the class; everything else here is visible
   project-wide with no keyword needed
-* interfaces require behavior with a bodyless member, no marker keyword needed
-* traits provide reusable bodies
+* a trait member with no body is a requirement, one with a body is
+  reusable behavior — no marker keyword needed for either
 * stored fields are declared in the class body
 * factories construct exact, fully initialized objects
 * getters expose computed attributes without descriptors, attribute
@@ -91,16 +90,14 @@ document builds mostly on documents already covered above it:
   * `Generics <docs/generics.rst>`_ — variance, higher-kinded parameters,
     and existentials.
   * `Numeric types <docs/numeric-types.rst>`_ — exact numeric types and
-    capability interfaces.
+    capability traits.
 
 * Modern type specification
 
-  * `Overview <docs/type-specification.rst>`_ — why interfaces, traits,
-    and classes are separate.
-  * `Interfaces <docs/interfaces.rst>`_ — obligations, without state or
-    bodies.
-  * `Traits <docs/traits.rst>`_ — reusable behavior, in place of multiple
-    inheritance.
+  * `Overview <docs/type-specification.rst>`_ — why traits and classes
+    are separate.
+  * `Traits <docs/traits.rst>`_ — obligations and reusable behavior, in
+    place of multiple inheritance.
   * `Classes <docs/classes.rst>`_ — object shape, members, and
     inheritance.
   * `Construction <docs/construction.rst>`_ — factories, field

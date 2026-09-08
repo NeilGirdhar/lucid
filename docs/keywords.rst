@@ -34,7 +34,7 @@ Lucid adds keywords for construction, call-site capture, destructuring,
 class member kinds, closing off rebinding or further class inheritance
 or overriding, explicit overrides, declining generated behavior,
 guaranteed-cleanup context managers, abstraction, dispatch, external
-interface implementation, type expressions, existential quantification,
+trait implementation, type expressions, existential quantification,
 exhaustive pattern matching, and elision:
 
 .. code-block:: text
@@ -46,7 +46,7 @@ exhaustive pattern matching, and elision:
    final sealed override
    without
    contextmanager
-   interface trait
+   trait
    dispatch
    implement
    type
@@ -65,6 +65,18 @@ Visibility is now decided by the name alone — see
 place the externally visible surface is declared, in
 `Public API <project-configuration.rst>`_ — so no keyword is needed at
 the definition site at all.
+
+An earlier draft also had ``interface`` alongside ``trait`` — a
+separate kind whose members were always bodyless, obligations only,
+never reusable behavior. Whether a trait member is an obligation or a
+default already follows from something checked either way, the
+presence or absence of a body, so a second keyword was only ever
+saying which bucket the whole block belonged to, not adding a
+distinction the checker needed. Merging removed the one case that
+distinction actually cost something: a capability with a small
+required core and one or two obvious defaults on top no longer needs
+two cross-referencing declarations for what is really one idea (see
+`Traits <traits.rst>`_).
 
 Discarded Python keywords
 -----------------------------

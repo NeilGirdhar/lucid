@@ -82,8 +82,8 @@ needs both a base class that inherits from ``ABC`` and an
 Lucid closes each by construction: ``@`` always preserves identity
 (`Preserving identity <decorators.rst>`_); class shape is closed by
 default, with nothing to opt into (`No undeclared fields <classes.rst>`_);
-a bodyless interface member is already an obligation (`Interfaces
-<interfaces.rst>`_).
+a bodyless trait member is already an obligation (`Traits
+<traits.rst>`_).
 
 Explicit over implicit
 --------------------------
@@ -94,9 +94,9 @@ code; ``typing.Protocol`` grants conformance to code that never asked for
 it; an unannotated generic parameter's variance is inferred from whatever
 the class currently does.
 
-Lucid closes each off: interfaces are nominal, so a promise is made only
-where a class header names it (`No structural interfaces
-<interfaces.rst>`_); ``final`` and ``override`` must be written, never
+Lucid closes each off: traits are nominal, so a promise is made only
+where a class header names it (`No structural traits
+<traits.rst>`_); ``final`` and ``override`` must be written, never
 inferred (`Explicit overrides <traits.rst>`_); attribute access has no
 interception hooks (`Classes <classes.rst>`_). Nothing about a piece of
 code's behavior should depend on something declared elsewhere the reader
@@ -113,16 +113,14 @@ call reaches, cooperative ``super()`` only works if every class in the
 chain agrees on a calling convention, and two state-owning parents can
 leave no sensible way to construct the result.
 
-Java already split part of this apart, deliberately, against C++'s
-diamond problem: one class parent, any number of interfaces. Lucid keeps
-that split and separates out the piece Java still folds into
-interfaces — reusable method bodies. A class may extend at most one other
-class, since only a class owns stored state and only state creates the
-collision; it can satisfy any number of interfaces, since an interface
-owns no state, just obligations; and it can use any number of traits for
-reusable behavior, kept apart from interfaces rather than living inside
-them as default methods. See
-`Interfaces <interfaces.rst>`__, `Traits <traits.rst>`_, and
+Java already split this apart, deliberately, against C++'s diamond
+problem: one class parent, any number of interfaces, each free to mix
+required methods with reusable default ones. Lucid keeps exactly that
+split, naming the non-state-owning kind ``trait``. A class may extend
+at most one other class, since only a class owns stored state and only
+state creates the collision; it can use any number of traits, since a
+trait owns no state, whatever mix of obligations and reusable defaults
+it declares. See `Traits <traits.rst>`__ and
 `One class parent <classes.rst>`_.
 
 Scala-style type information
@@ -131,7 +129,7 @@ Scala-style type information
 Putting type relationships at the definition site instead of inferring
 them makes each one a checked, versioned part of a type's public contract.
 Variance inferred from usage can flip unintentionally — a method that
-consumes a type parameter can turn an inferred covariant interface
+consumes a type parameter can turn an inferred covariant trait
 invariant, breaking downstream code that never touched it. Mutability
 views give the same guarantee for a different question: whether a
 function can mutate what you hand it is visible in its signature, not

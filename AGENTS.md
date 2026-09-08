@@ -16,16 +16,16 @@ examples inside it.
   document should mostly build on documents already covered above it, not
   ones introduced later. A handful of forward pointers are intentional,
   where two topics genuinely reference each other for comparison (e.g.
-  generics/interfaces, dispatch/control-flow); the reverse direction of
+  generics/traits, dispatch/control-flow); the reverse direction of
   each such pair is already satisfied.
 
 ## Core design pillars
 
-- Three kinds of user-defined type: `interface` (obligations, no state, no
-  bodies), `trait` (reusable bodies, no state), `class` (owned state,
-  construction, at most one class parent).
+- Two kinds of user-defined type: `trait` (obligations, reusable bodies,
+  or both, no state) and `class` (owned state, construction, at most one
+  class parent).
 - Definition-site variance (`+K`/`-K`/`=K`) and mutability views
-  (`T`/`&T`/`!T`) visible in the type spelling.
+  (`T`/`~T`/`!T`) visible in the type spelling.
 - Julia-style multiple dispatch for binary operators; no reflected methods,
   no `NotImplemented` negotiation.
 - Recoverable errors as ordinary return types, checked exhaustively via
