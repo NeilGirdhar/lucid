@@ -185,7 +185,7 @@ def dispatch tree_reduce[A, B](tree: A, f: (B, A) -> B, init: B) -> B:
     return f(init, tree)
 ```
 If the set of container shapes is fixed and known instead of open to third
-parties, [Exhaustive pattern matching](control-flow.md) is the better
+parties, [Exhaustive pattern matching](match.md) is the better
 fit: it checks that every shape is handled, which an open set of dispatch
 cases cannot do, at the cost of not being extensible the way this version
 is.

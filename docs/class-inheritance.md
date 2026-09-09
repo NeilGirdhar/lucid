@@ -70,7 +70,7 @@ multi-file modules have to resolve one way or another — the file sealing
 restricts to is the same file every other module boundary in Lucid
 already uses.
 
-Sealing gives [Exhaustive pattern matching](control-flow.md) a second
+Sealing gives [Exhaustive pattern matching](match.md) a second
 source of closed types, alongside recursive union aliases: a `match`
 over `Shape` with a case for every direct subclass needs no `case _:`,
 because the checker can see the complete set the same way it already can

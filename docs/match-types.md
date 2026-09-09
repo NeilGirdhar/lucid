@@ -5,7 +5,7 @@ alternative is listed once, up front. Sometimes the type to produce
 depends on the *structure* of another type instead: whether a list is
 nested another level deeper, or already down to its leaf. A match type
 is a `type` alias whose right side is `match`, reusing the same
-`match`/`case` grammar [Exhaustive pattern matching](control-flow.md)
+`match`/`case` grammar [Exhaustive pattern matching](match.md)
 already has, computing a type from a type instead of a value from a
 value:
 

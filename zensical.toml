@@ -37,8 +37,11 @@ nav = [
     { "Multiple dispatch" = "dispatch.md" },
     { "Call-site captured values" = "call-site-captured-values.md" },
   ] },
-  { "Control flow" = [
+  { "Statements" = [
     { "Control flow and statements" = "control-flow.md" },
+    { "Match" = "match.md" },
+    { "Results" = "results.md" },
+    { "Exceptions" = "exceptions.md" },
     { "Context managers" = "context-managers.md" },
   ] },
   { "Containers" = [

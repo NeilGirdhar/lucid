@@ -9,7 +9,7 @@ assignment behavior such as setters and item assignment.
 Assignment binds one name to one value; it has no way to pull several
 named fields out of a class instance in one statement. [Destructuring
 with `let`](destructuring.md) and [Destructuring with
-`match`](control-flow.md#destructuring-with-match) cover the two forms
+`match`](match.md#destructuring-with-match) cover the two forms
 that do.
 
 ## Final local variables

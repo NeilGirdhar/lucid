@@ -160,7 +160,7 @@ exhaustively the same way any other union is, with `?` as sugar to
 propagate it without Go's `if err != nil` boilerplate; `raise` stays,
 narrowed to broken invariants, unchecked, since nothing about them is
 meant to be routinely handled. See
-[Errors: results and exceptions](control-flow.md).
+[Results](results.md) and [Exceptions](exceptions.md).
 
 ## Basedpython-style loop bindings
 

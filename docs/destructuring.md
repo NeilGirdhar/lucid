@@ -27,7 +27,7 @@ The pattern has to be one the checker can already prove: `origin`'s
 static type must already be (a subtype of) `Point` — `let` has
 nothing to fall back to if the pattern turns out not to fit. A value
 that could be one of several different variants needs [Destructuring
-with match](control-flow.md#destructuring-with-match) instead, built
+with match](match.md#destructuring-with-match) instead, built
 to handle "this could be any of these" — `let` is only for "this
 already is one specific thing, pull it apart." Anonymous records
 destructure the same way, by their own declared order:

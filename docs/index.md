@@ -124,10 +124,16 @@ document builds mostly on documents already covered above it:
   * [Call-site captured values](call-site-captured-values.md) —
     reading a call's own location or assignment target.
 
-* Control flow
+* Statements
 
   * [Control flow and statements](control-flow.md) — conditionals,
-    loops, matching, and errors.
+    loops, and identity checks.
+  * [Match](match.md) — destructuring and exhaustive pattern
+    matching.
+  * [Results](results.md) — recoverable errors as ordinary return
+    types, and the `?` operator.
+  * [Exceptions](exceptions.md) — `raise`, narrowed to broken
+    invariants.
   * [Context managers](context-managers.md) — the
     `contextmanager` modifier.
 

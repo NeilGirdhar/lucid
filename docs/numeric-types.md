@@ -220,9 +220,10 @@ at all, so both directions would need their own branch to special-case
 what "unbounded" means for that particular step's sign.
 
 This replaces a raised `ZeroDivisionError` with an ordinary,
-checkable value — the same trade [Errors: results and exceptions](control-flow.md) makes everywhere else a recoverable outcome is
-involved, later in this reading order, extended to the one place
-integer arithmetic still had an unchecked exception instead of one.
+checkable value — the same trade [Results](results.md) makes everywhere
+else a recoverable outcome is involved, later in this reading order,
+extended to the one place integer arithmetic still had an unchecked
+exception instead of one.
 
 ## Capability traits
 

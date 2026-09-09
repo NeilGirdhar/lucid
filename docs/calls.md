@@ -61,7 +61,7 @@ have long struggled to treat it as the `Callable` it behaves like.
 Lucid reuses `_` for this — the same "unspecified" marker already used
 for black-hole assignment (see [Ordinary binding](names.md))
 and the match wildcard (see
-[Exhaustive pattern matching](control-flow.md)), now in a call's
+[Exhaustive pattern matching](match.md)), now in a call's
 argument list. An argument position filled with `_` is not a value; it
 leaves that position open, and the call itself becomes a new callable
 awaiting whatever positions were left unfilled:
@@ -164,7 +164,7 @@ precondition(x > 0, def: f"x must be positive, got {expensive_repr(x)}")
 An anonymous `def` has no block form and no `return` — one expression
 is the whole body, full stop. Anything that needs more than one statement
 needs a name. This is the same discipline
-[Exhaustive pattern matching](control-flow.md) already enforces for
+[Exhaustive pattern matching](match.md) already enforces for
 `match`: a block that sometimes doubles as a value, depending on what
 its last line happens to be, is exactly the ambiguity Lucid avoids
 everywhere else, and an anonymous `def` with a block body would be that
