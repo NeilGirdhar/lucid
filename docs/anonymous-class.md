@@ -34,8 +34,7 @@ keyword-only until the positional zone is finished.
 
 A signature with an unbounded, unnamed tail — the case a decorator's
 generic forwarding needs, or a genuine overflow catch-all — extends this
-grammar further; see [Gathering arguments with Arguments and
-Parameters](parameters.md#gathering-arguments-with-arguments-and-parameters).
+grammar further; see [Parameters](parameters.md).
 
 [Class members](class-members.md) covers the named kind's own
 vocabulary — fields, methods, getters, setters, and the rest.

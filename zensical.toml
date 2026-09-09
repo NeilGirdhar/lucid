@@ -48,7 +48,10 @@ nav = [
   ] },
   { "Calls" = "calls.md" },
   { "Parameters and decorators" = [
-    { "Parameters and arguments" = "parameters.md" },
+    { "Arguments" = "arguments.md" },
+    { "Parameters" = "parameters.md" },
+    { "Gather" = "gather.md" },
+    { "Spread" = "spread.md" },
     { "Decorators" = "decorators.md" },
   ] },
   { "Project configuration" = "project-configuration.md" },

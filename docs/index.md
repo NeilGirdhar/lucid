@@ -143,8 +143,14 @@ document builds mostly on documents already covered above it:
   anonymous functions.
 * Parameters and decorators
 
-  * [Parameters and arguments](parameters.md) — gathering and
-    spreading leftover arguments with `Arguments`/`Parameters`.
+  * [Arguments](arguments.md) — gathering leftover arguments into
+    one typed class.
+  * [Parameters](parameters.md) — the fixed-prefix counterpart,
+    and a signature's full inline shape.
+  * [Gather](gather.md) — naming a function's own catch-all with
+    `***`.
+  * [Spread](spread.md) — forwarding a gathered bundle back out
+    with `***`.
   * [Decorators](decorators.md) — identity-preserving `@`, and
     decorator factories.
 
