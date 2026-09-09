@@ -1,11 +1,13 @@
 # The Lucid language
 
+## Motivation
+
 Lucid is a language for LLMs: a Python-like language sketch designed to be as
 easy for an LLM to read and write correctly as for a human — which turns out
 to mean holding to the same properties good human-readable code already
 wants, just refusing to let any of them slide.
 
-Core properties:
+## Guiding principles
 
 * **Succinct.** A simple idea is written simply, with nothing carried along
   out of habit:
