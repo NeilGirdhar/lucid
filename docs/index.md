@@ -103,7 +103,7 @@ never has to mean "too small to use."**
 ## Example
 
 ```python
-trait Scorable[out K]:
+trait Scorable[in K]:
     def score(self, item: K) -> float
 
     def is_confident(self, item: K) -> bool:
@@ -126,11 +126,14 @@ class InferenceModel[~in out K](Scorable[K]):
     getter label_count(self) -> int:
         return len(self.labels)
 
-def evaluate(model: ~InferenceModel[str], item: str) -> float:
+def evaluate(model: InferenceModel[str], item: str) -> float:
     return model.score(item)
 
 model: InferenceModel[str] = InferenceModel.from_checkpoint("model.bin", ["cat", "dog"])
 stable: !InferenceModel[str] = freeze(model)
+view: ~InferenceModel[str] = model
+view.label_count            # fine: a getter is read-only by construction
+view.score("cat")           # error: score mutates, view is read-only
 ```
 This example shows several core language mechanics in one place:
 
