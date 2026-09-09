@@ -12,10 +12,23 @@ path = "/api/" + "users"
 ```
 ## Strings are not sequences
 
-Python's `str` satisfies `Sequence[str]`, since a string is itself a
-sequence of one-character strings. So a function asking for a sequence or
-iterable of strings also accepts a single string, and nothing about that is
-a type error:
+Python's `str` satisfies `Sequence[str]` — `isinstance("abc",
+Sequence)` is `True` — but it does not keep the contract satisfying
+`Sequence` is supposed to promise. `Sequence.__contains__` means "some
+element equals this value": `x in seq` should hold exactly when
+`s[i] == x` for some index `i`. `str.__contains__` does substring
+search instead — `"abc" in "abcdef"` is `True`, even though no single
+index `i` has `s[i] == "abc"`; every element of the "sequence" is a
+one-character string, and `"abc"` is not one. `index` and `count`
+break the same contract the same way, finding and counting substrings
+rather than equal elements. `str` does not even define `__reversed__`
+— `reversed("abc")` works anyway, but only by falling back to
+`__len__`/`__getitem__`, not because `str` actually implements the
+method `Sequence` advertises.
+
+So a function asking for a sequence or iterable of strings also
+accepts a single string, and nothing about that is a type error, even
+though the string doesn't behave like one once inside:
 
 ```python
 def render_lines(lines: Sequence[str]) -> str:
@@ -23,12 +36,21 @@ def render_lines(lines: Sequence[str]) -> str:
 
 render_lines("hello")  # type-checks, returns "h\ne\nl\nl\no"
 ```
-A caller who forgot to wrap a single string in a list gets an object that
-type-checks and runs, silently producing garbled output instead of a caught
-mistake. Lucid keeps `str` narrower: it is `Container[str]` and
-`Sized`, but not `Iterable[str]`, `Collection[str]`, or
-`Sequence[str]`. Strings do not provide `__iter__`, so the same mistake
-is a type error instead of a silent, wrong result:
+A caller who forgot to wrap a single string in a list gets an object
+that type-checks and runs, silently producing garbled output instead
+of a caught mistake. The same gap causes a second, well-known bug:
+code that recurses over anything `Sequence`-shaped — flattening
+nested lists, say — has to special-case `str` explicitly or it
+recurses forever, since a one-character string is itself a
+`Sequence[str]` whose only element is another one-character string.
+
+Lucid keeps `str` narrower: it is `Container[str]` and `Sized`, but
+not `Iterable[str]`, `Collection[str]`, or `Sequence[str]`. Strings do
+not provide `__iter__`, so the same mistake is a type error instead of
+a silent, wrong result — and `"abc" is Sequence` is simply `False`,
+closing the gap Python's `isinstance("abc", Sequence)` leaves open,
+a result Python's own community has asked for repeatedly, for exactly
+the contract violations above:
 
 ```python
 def render_lines(lines: Iterable[str]) -> str:
@@ -36,8 +58,12 @@ def render_lines(lines: Iterable[str]) -> str:
 
 render_lines("hello")  # error: str is not Iterable[str]
 ```
-Code that wants a character sequence asks for the `chars` property explicitly.
-`chars` returns a read-only sequence view, `~Sequence[str]`:
+Code that wants a character sequence asks for the `chars` property
+explicitly. `chars` returns a read-only sequence view, `~Sequence[str]`,
+that keeps `Sequence`'s actual contract: containment, `index`, and
+`count` test for an equal one-character element, not a substring, and
+`reversed(chars)` works because `chars` genuinely implements
+`__reversed__`, not because of a fallback:
 
 ```python
 text: str = "hello"
@@ -47,14 +73,19 @@ for ch in text:          # error
 
 chars: ~Sequence[str] = text.chars
 chars[0]
+"e" in chars     # True: some element equals "e"
+"el" in chars    # False: no element equals "el" -- chars holds one-character str
 
 for ch in text.chars:
     ...
 ```
-String containment and length do not require string iteration:
+`str` keeps its own `in`, `index`, and `count` — substring search and
+counting, a real and useful job in its own right, just not the one
+`Sequence` promises, and not one that needs `chars` to reach:
 
 ```python
-"e" in text
+"e" in text     # True: substring search
+"el" in text    # True: substring search
 len(text)
 ```
 ## No `%` string formatting
