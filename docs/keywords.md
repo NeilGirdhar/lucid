@@ -6,10 +6,28 @@ ordinary keyword vocabulary.
 
 ## Preserved Python keywords
 
-The preserved Python keywords are `and`, `as`, `assert`, `async`,
-`await`, `break`, `class`, `continue`, `def`, `del`, `elif`, `else`,
-`except`, `finally`, `for`, `from`, `if`, `import`, `in`, `is`, `not`,
-`or`, `pass`, `raise`, `return`, `try`, `while`, `with`, and `yield`.
+The preserved Python keywords, linked where this specification gives
+one new or narrowed meaning:
+[`and`](type-operations.md#intersection-types),
+[`as`](match.md#exhaustive-pattern-matching), [`assert`](assert.md),
+`async`, `await`,
+[`break`](for-and-while.md#if_broken-loop-clauses),
+[`class`](types.md#what-class-means-in-lucid),
+[`continue`](for-and-while.md#unspecified-simple-statements),
+[`def`](calls.md#anonymous-functions),
+[`del`](names.md#del-ends-a-names-lifetime-early),
+[`elif`](match.md#exhaustive-pattern-matching),
+[`else`](for-and-while.md#no-loop-else), [`except`](exceptions.md),
+[`finally`](exceptions.md), [`for`](for-and-while.md),
+[`from`](import.md), [`if`](if.md), [`import`](import.md), `in`,
+[`is`](identity-checks.md), [`not`](type-operations.md#negation-types),
+[`or`](type-operations.md#intersection-types),
+[`pass`](for-and-while.md#unspecified-simple-statements),
+[`raise`](exceptions.md),
+[`return`](match.md#exhaustive-pattern-matching),
+[`try`](exceptions.md), [`while`](for-and-while.md),
+[`with`](with.md), and
+[`yield`](context-managers.md#one-modifier-one-shape).
 
 ## New Lucid keywords
 
