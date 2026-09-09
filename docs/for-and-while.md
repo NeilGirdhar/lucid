@@ -20,13 +20,18 @@ type IterResult[T] = T | Literal[iteration.done]
 trait Iterator[+T]:
     def __next__(self) -> IterResult[T]
 
-def next[T](it: ~Iterator[T]) -> IterResult[T]:
+def next[T](it: Iterator[T]) -> IterResult[T]:
     return it.__next__()
 ```
 `next` is the ordinary way to advance an iterator by hand, outside a
 `for` loop — a thin wrapper, the same relationship `len` already has
 to `__len__`, so nothing consuming an iterator has to touch the dunder
-directly. `__next__` is dunder-spelled for both reasons a protocol
+directly. `it` takes `Iterator[T]`, not the read-only `~Iterator[T]`
+[Read-only methods with `~Self`](class-members.md#read-only-methods-with-self)
+usually prefers: advancing an iterator moves it forward, an ordinary
+mutation of the iterator's own position, even though `__next__` returns
+a value the same way a read-only method would. `__next__` is
+dunder-spelled for both reasons a protocol
 member ever is here: the reason `__eq__` is, since a class could
 otherwise separately want an ordinary `.next` meaning something else
 entirely (a linked-list node's own next node, say); and the reason

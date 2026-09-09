@@ -42,17 +42,17 @@ classes declared in the same file:
 
 ```python
 sealed class Shape:
-    def area(self) -> float
+    def area(self: ~Self) -> float
 
 class Circle(Shape):
     radius: float
-    def area(self) -> float:
+    def area(self: ~Self) -> float:
         return pi * self.radius ** 2
 
 class Rectangle(Shape):
     w: float
     h: float
-    def area(self) -> float:
+    def area(self: ~Self) -> float:
         return self.w * self.h
 ```
 A file elsewhere in the project cannot add a fourth direct subclass of
@@ -102,7 +102,7 @@ even other files in the same project.
 class Cache:
     _entries: dict[str, float]
 
-    def get(self, key: str) -> float | none:
+    def get(self: ~Self, key: str) -> float | none:
         return self._entries.get(key)
 
 cache = Cache({:})

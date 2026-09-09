@@ -67,16 +67,16 @@ Types that want truth behavior define `__bool__`.
 
 ```python
 trait Truthy:
-    def __bool__(self) -> bool
+    def __bool__(self: ~Self) -> bool
 ```
 A sized type can opt in explicitly:
 
 ```python
 trait Sized:
-    def __len__(self) -> int
+    def __len__(self: ~Self) -> int
 
 trait SizedTruthy(Sized, Truthy):
-    def __bool__(self) -> bool:
+    def __bool__(self: ~Self) -> bool:
         return self.__len__() != 0
 ```
 ## Exact `int`
@@ -237,23 +237,23 @@ happening to define a matching method.
 
 ```python
 trait SupportsInt:
-    def __int__(self) -> int
+    def __int__(self: ~Self) -> int
 
 trait SupportsFloat:
-    def __float__(self) -> float
+    def __float__(self: ~Self) -> float
 
 trait SupportsComplex:
-    def __complex__(self) -> complex
+    def __complex__(self: ~Self) -> complex
 
 trait SupportsIndex:
     # Exact indexability, not just explicit int(x) conversion.
-    def __index__(self) -> int
+    def __index__(self: ~Self) -> int
 
 trait SupportsAbs[+K]:
-    def __abs__(self) -> K
+    def __abs__(self: ~Self) -> K
 
 trait SupportsRound[+K]:
-    def __round__(self, ndigits: int | none = none) -> K
+    def __round__(self: ~Self, ndigits: int | none = none) -> K
 
 class int(SupportsInt, SupportsFloat, SupportsComplex, SupportsIndex):
     ...

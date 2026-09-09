@@ -17,7 +17,7 @@ changed on future edits, before the API is accepted.
 
 ```python
 trait Producer[+K]:
-    def get(self) -> K
+    def get(self: ~Self) -> K
 
 trait Consumer[-K]:
     def put(self, value: K) -> none

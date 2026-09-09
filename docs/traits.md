@@ -15,12 +15,12 @@ freely — nothing marks the difference except whether a body follows:
 
 ```python
 trait Sized:
-    def __len__(self) -> int
+    def __len__(self: ~Self) -> int
 
 trait Cache[=K, =V]:
-    def get(self, key: K) -> V | none
+    def get(self: ~Self, key: K) -> V | none
     def put(self, key: K, value: V) -> none
-    def is_fresh(self, key: K) -> bool
+    def is_fresh(self: ~Self, key: K) -> bool
 
     def get_or_put(self, key: K, build: () -> V) -> V:
         cached = self.get(key)
@@ -91,14 +91,14 @@ whichever default provides it — nothing to resolve:
 
 ```python
 trait Renderable:
-    def render(self) -> str
+    def render(self: ~Self) -> str
 
 trait DebugRenderable(Renderable):
-    def debug(self) -> str:
+    def debug(self: ~Self) -> str:
         return "<debug " + self.render() + ">"
 
 class Widget(Renderable, DebugRenderable):
-    def render(self) -> str:
+    def render(self: ~Self) -> str:
         return "widget"
 ```
 `Widget` provides `render`, which satisfies `Renderable`'s
@@ -113,15 +113,15 @@ it explicitly:
 
 ```python
 trait A:
-    def greet(self) -> str:
+    def greet(self: ~Self) -> str:
         return "hello from A"
 
 trait B:
-    def greet(self) -> str:
+    def greet(self: ~Self) -> str:
         return "hello from B"
 
 class C(A, B):
-    override def greet(self) -> str:
+    override def greet(self: ~Self) -> str:
         return A.greet(self)
 ```
 ## Field, getter, and setter obligations compose
@@ -369,7 +369,7 @@ definition:
 
 ```python
 implement Sized for ThirdPartyBuffer:
-    def __len__(self) -> int:
+    def __len__(self: ~Self) -> int:
         return self.byte_count
 ```
 `ThirdPartyBuffer` did not declare `Sized` when it was defined; this

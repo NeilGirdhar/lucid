@@ -26,9 +26,9 @@ behavior directly on those obligations:
 
 ```python
 trait Cache[=K, =V]:
-    def get(self, key: K) -> V | none
+    def get(self: ~Self, key: K) -> V | none
     def put(self, key: K, value: V) -> none
-    def is_fresh(self, key: K) -> bool
+    def is_fresh(self: ~Self, key: K) -> bool
 
     def get_or_put(self, key: K, build: () -> V) -> V:
         cached = self.get(key)
@@ -39,7 +39,7 @@ trait Cache[=K, =V]:
         return value
 
 trait Sized:
-    def __len__(self) -> int
+    def __len__(self: ~Self) -> int
 
     getter empty(self) -> bool:
         return self.__len__() == 0
@@ -48,17 +48,17 @@ class MemoryCache[K: !Hashable, V](Cache[K, V], Sized):
     entries: dict[K, V] = {:}
     fresh: set[K] = {}
 
-    def get(self, key: K) -> V | none:
+    def get(self: ~Self, key: K) -> V | none:
         return self.entries.get(key)
 
     def put(self, key: K, value: V) -> none:
         self.entries[key] = value
         self.fresh.add(key)
 
-    def is_fresh(self, key: K) -> bool:
+    def is_fresh(self: ~Self, key: K) -> bool:
         return key in self.fresh
 
-    def __len__(self) -> int:
+    def __len__(self: ~Self) -> int:
         return len(self.entries)
 
 cache = MemoryCache[str, User]()

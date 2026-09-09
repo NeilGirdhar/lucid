@@ -59,7 +59,7 @@ p.z = 3.0  # error: z is not a declared field
 class Record:
     fields: dict[str, object]
 
-    def get(self, name: str) -> object | none:
+    def get(self: ~Self, name: str) -> object | none:
         return self.fields.get(name)
 
     def set(self, name: str, value: object):
