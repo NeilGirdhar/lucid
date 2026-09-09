@@ -221,20 +221,33 @@ binds `P`. Mirroring value-parameter zoning into type-parameter lists
 would be a second way to spell zoning Lucid already has one spelling
 for.
 
-The same reasoning covers three more pieces of the same proposal:
-forwarding a captured parameter shape (basedpython's `*P`/`**P`) is
+The same reasoning covers the rest of the proposal, with one wrinkle.
+Forwarding a captured parameter shape (basedpython's `*P`/`**P`) is
 already `***args: P` on the gathering side and `f(***args)` on the
-spreading side, both demonstrated in `timed`; `Concatenate[int, P]`
-(prepending a fixed argument ahead of a forwarded shape) is a value-level
-concern, not a type-level splice — a wrapper that needs to inject an
-argument just passes it explicitly alongside `***args` when it calls
-`f`, the same way [any other spread composes with an explicit
-argument](construction.md); and basedpython's `Fn.parameters`/`Fn.returns`
-attribute-style projection off a single callable-typed parameter is
-needed only if a signature is captured as one combined `Fn` to begin
-with — Lucid's own convention captures the same signature as two
-separate parameters, `P: Parameters` and `R`, from the start, so there
-is nothing later to project back apart.
+spreading side, both demonstrated in `timed`. `Concatenate[int, P]`
+(prepending a fixed argument ahead of a forwarded shape) needs no
+dedicated type either — just `***` reused in type position the same
+way [Shape](shape.md) already reuses slicing there and
+[literal arithmetic](type-operations.md#arithmetic-on-literal-types)
+already reuses `+`/`-`/`*`: `***P` inside a function type's parameter
+list splices `P`'s captured shape in among fixed, concrete types:
+
+```python
+def prepend_context[P: Parameters, R](f: P -> R) -> (int, ***P) -> R:
+    def wrapper(ctx: int, ***args: P) -> R:
+        return f(***args)
+    return wrapper
+```
+The parameter list is already an ordinary sequence position, and
+`***P` already means "splice this shape in here" everywhere else it
+appears — no `Concatenate` needed to say the same thing a second way.
+
+Basedpython's `Fn.parameters`/`Fn.returns` attribute-style projection
+off a single callable-typed parameter is needed only if a signature is
+captured as one combined `Fn` to begin with — Lucid's own convention
+captures the same signature as two separate parameters, `P: Parameters`
+and `R`, from the start, so there is nothing later to project back
+apart.
 
 ## `and`/`or` as type operators (basedpython)
 
