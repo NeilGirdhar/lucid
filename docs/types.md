@@ -1,19 +1,24 @@
 # Type vocabulary
 
+## What `class` means in Lucid
+
+Python's builtin `type` returns a value's class, and `type[X]` in an
+annotation means specifically a class object — two of the three things
+Python overloads onto one word. A Lucid `class` is that narrow sense
+given its own name: the direct analogue of a Python class — nominal,
+data-owning, producing instances through construction.
+
 ## What `type` means in Lucid
 
-Python overloads the word "type." The builtin `type` returns a value's
-class; `type[X]` in an annotation means specifically a class object; and
-"type" used loosely in "type annotation" or "type checker" means something
-broader than either — any type expression, class or not. Static type
+The third sense Python overloads onto the same word is looser still:
+"type" used in "type annotation" or "type checker" means something
+broader than a class — any type expression, class or not. Static type
 checkers eventually needed a name for that broader sense on its own:
 `TypeForm` — a type expression, evaluated to a value, whether or not it
 happens to be a single class.
 
-Lucid keeps that distinction, but gives each sense its own name instead of
-overloading one word for both. A Lucid `class` is the narrow sense — the
-direct analogue of a Python class: nominal, data-owning, producing instances
-through construction. A Lucid *type* is the broad sense — the analogue of
+Lucid gives this sense its own name too, instead of overloading one
+word for both: a Lucid *type* is the broad sense — the analogue of
 `TypeForm`, not of `class` or `type[X]`. Most Lucid types are not
 classes at all: `int | none`, `!list[int]`, `dict[str, int]`, an
 anonymous record `(x: int, y: int)`, and a TypedDict shape `{...}` are
@@ -24,25 +29,19 @@ like any other value.
 
 Every `class` is a type. Not every type is a `class`.
 
-The word itself appears in exactly these roles in Lucid, and no others:
-
-- **The category** — "a type," used the way this section has been using it:
-  any type expression evaluated to a value, class or not. This is prose
-  vocabulary, not syntax.
-- **Type expression**, as a grammar — the parsing mode that applies in
-  annotation positions, generic parameter lists, and trait member
-  signatures (see [Type expressions](#type-expressions)), as opposed to
-  the ordinary expression grammar used everywhere else. Also not syntax by
-  itself — it names which grammar is in effect at a given position.
-- `type Name = <type expression>` — the alias statement, giving a type
-  expression a name usable in future type positions.
-- `type <type expression>` — the prefix operator, reifying a type
-  expression into an ordinary value — a type form — usable in ordinary
-  expression positions.
-
-Only the last two are actual keyword uses; both are the same keyword,
+The word itself appears in exactly these roles in Lucid, and no
+others — only the last two are actual keyword uses, the same keyword
 disambiguated by position rather than by two different words the way
-Python's `type`/`type[X]`/`TypeForm` are.
+Python's `type`/`type[X]`/`TypeForm` are:
+
+- **The category** — "a type," used the way this section has been using
+  it: any type expression evaluated to a value, class or not. This is
+  prose vocabulary, not syntax.
+- **Type expression**, as a grammar — covered next.
+- `type Name = <type expression>` — the alias statement, covered in
+  [Type aliases](#type-aliases).
+- `type <type expression>` — the prefix operator, covered in
+  [Reifying a type expression](#reifying-a-type-expression).
 
 ## Visible type contracts
 
@@ -158,28 +157,17 @@ can use forms that mean something else, or nothing at all, as an ordinary
 expression — for example the TypedDict shape literal in
 [Strings and collections](collections.md).
 
-## The `type` keyword
+## Type aliases
 
-The `type` keyword crosses between the two grammars, in the two directions
-that matter:
-
-`type Name = <type expression>`
-    A type alias statement. The right-hand side is parsed as a type
-    expression, and `Name` becomes usable in future type positions exactly
-    as if the aliased expression had been written inline there.
-
-`type <type expression>`
-    A prefix operator usable inside an ordinary expression. It parses its
-    operand as a type expression and evaluates it to a first-class *type
-    form*: an ordinary value, usable wherever ordinary values are, for example
-    when passing a type to a metaprogramming function.
+`type Name = <type expression>` is a type alias statement, the first of
+the `type` keyword's two directions across the grammar boundary. The
+right-hand side is parsed as a type expression, and `Name` becomes
+usable in future type positions exactly as if the aliased expression
+had been written inline there:
 
 ```python
 type Config = !InferenceModel[str]
 value: Config = freeze(model)
-
-form = type list[str]                                # an ordinary value: a reified type
-handlers = {"json": JSONHandler, "xml": XMLHandler}   # an ordinary dict, not a type
 ```
 An ordinary assignment such as `Config = {"name": str, "year": int}`, without
 `type`, parses its right-hand side as an ordinary expression: it produces a
@@ -204,6 +192,20 @@ leaves: PyTree[int] = [1, {"a": 2, "b": [3, 4]}, 5]
 Recursion is what makes a type like `PyTree` expressible at all: at every
 level, the shape is either a leaf, or one of the listed containers holding
 that very same shape one level down.
+
+## Reifying a type expression
+
+`type <type expression>` is a prefix operator, the `type` keyword's
+other direction across the grammar boundary — usable inside an
+ordinary expression instead of a statement of its own. It parses its
+operand as a type expression and evaluates it to a first-class *type
+form*: an ordinary value, usable wherever ordinary values are, for
+example when passing a type to a metaprogramming function:
+
+```python
+form = type list[str]                                # an ordinary value: a reified type
+handlers = {"json": JSONHandler, "xml": XMLHandler}   # an ordinary dict, not a type
+```
 
 ## Match types
 
