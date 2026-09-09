@@ -40,7 +40,7 @@ For a full list of preserved, discarded, and new keywords, see
 Lucid code should stay as easy to read and write as ordinary Python:
 indentation matters, definitions are direct, common control flow is
 familiar, and simple programs need no ceremony. See
-[Names, binding, and scope](names.md) and
+[Binding, destructuring, and scope](names.md) and
 [Control flow and statements](control-flow.md).
 
 ### Succinct code

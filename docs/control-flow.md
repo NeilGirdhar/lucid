@@ -211,8 +211,9 @@ gets from being a closed union.
 
 A bare `case Type:` pattern just narrows — the subject keeps its own
 name, narrowed to `Type` for that case, with nothing pulled out of it.
-`case Type(a, b):` does both at once, narrowing and destructuring the
-same way [Destructuring with let](names.md) does outside a `match`.
+`case Type(a, b):` does both at once — the positional destructuring
+covered in [Destructuring with match](names.md), the same rule `let`
+uses outside a `match`.
 Narrowing by name only works when the subject already is a name, the way
 `tree` is above. When it is some other expression — a call, an
 attribute access, anything without a name of its own to reuse — `match`
@@ -395,7 +396,7 @@ naturally: telling the checker, and the next reader, exactly where a
 large or sensitive value's useful life stops — a large buffer dropped
 before the rest of a long function runs, or a credential ended as soon as
 it's used — enforced the same way every other name-visibility rule in
-[Names, binding, and scope](names.md) already is, rather than left as
+[Binding, destructuring, and scope](names.md) already is, rather than left as
 a comment nobody checks.
 
 `pass` keeps its ordinary Python meaning: a statement that does

@@ -1,4 +1,4 @@
-# Names, binding, and scope
+# Binding, destructuring, and scope
 
 ## Ordinary binding
 
@@ -6,12 +6,18 @@ Names bind through definitions, imports, assignments, and parameters.
 Assignment binds names, updates declared fields, or delegates to explicit
 assignment behavior such as setters and item assignment.
 
-## Destructuring with `let`
+## Destructuring
 
 Assignment binds one name to one value; it has no way to pull several
-named fields out of a class instance in one statement. `let` binds a
-class's fields directly, by position — the same order a factory call
-already uses to construct one:
+named fields out of a class instance in one statement. Destructuring
+pulls several bindings out of one value at once, by position — the
+same order a factory call already uses to construct that value. Lucid
+has two forms, sharing that one rule: `let` outside a `match`, `case`
+inside one.
+
+### Destructuring with `let`
+
+`let` binds a class's fields directly, by position:
 
 ```python
 let Point(x, y) = origin
@@ -33,12 +39,11 @@ basedpython's `:=` is needed to mark it twice.
 The pattern has to be one the checker can already prove: `origin`'s
 static type must already be (a subtype of) `Point` — `let` has
 nothing to fall back to if the pattern turns out not to fit. A value
-that could be one of several different variants needs a different,
-exhaustive form of matching instead, covered later in this reading order
-([Exhaustive pattern matching](control-flow.md)), built to handle
-"this could be any of these" — `let` is only for "this already is one
-specific thing, pull it apart." Anonymous records destructure the same
-way, by their own declared order:
+that could be one of several different variants needs the exhaustive
+form covered next, built to handle "this could be any of these" —
+`let` is only for "this already is one specific thing, pull it
+apart." Anonymous records destructure the same way, by their own
+declared order:
 
 ```python
 let (x, y) = midpoint   # midpoint: (x: int, y: int)
@@ -56,11 +61,29 @@ or a parameter:
 def distance(Point(x1, y1), Point(x2, y2)) -> float:
     ...
 ```
-The same grammar extends to `match`'s own `case`, covered later in
-this reading order ([Exhaustive pattern matching](control-flow.md)):
-`case Point(x, y):` narrows and destructures in one step there, rather
-than narrowing in `case` and then destructuring in a separate `let`
-right after it.
+
+### Destructuring with `match`
+
+`case Type(a, b):` destructures the same way `let` does — the same
+positional, field-order correspondence — but as one arm of a `match`
+instead of a standalone statement, narrowing the subject to `Type` and
+pulling its fields out in the same step:
+
+```python
+match shape:
+    case Point(x, y):
+        ...
+```
+The difference from `let` is exactly the difference between the two
+forms' jobs: `let` requires the pattern to already be proven, with
+nothing to fall back to; `match` exists for a subject that could be
+any of several variants, and checks that every one is covered.
+`match`'s own grammar — the narrowing-only form `case Type:` with
+nothing pulled out, exhaustiveness checking, and the rest — is covered
+later in this reading order
+([Exhaustive pattern matching](control-flow.md)); this is only the
+destructuring half, which needs nothing from that section to make
+sense on its own.
 
 ## Final local variables
 
