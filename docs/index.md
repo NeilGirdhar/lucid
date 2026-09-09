@@ -13,22 +13,53 @@ Core principle:
 Four properties follow from that:
 
 * **Succinct.** A simple idea is written simply, with nothing carried along
-  out of habit.
+  out of habit:
+
+    * no repeated boilerplate for one job
+        * Python's `*args`, `**kwargs`, and a `ParamSpec` to forward them
+          typed collapse into one gathered value:
+          `***rest: Arguments[str, {str: str}]`
+    * no cost for the common case
+        * mutable by default, no `~`; visible by default, only a leading
+          `_` costs anything
+    * no separate machinery for what the grammar already expresses
+        * `functools.partial(score, weights)` becomes `score(weights, _)`
+          — an ordinary call, with a hole
+
 * **Clear.** Nothing about a piece of code's behavior depends on something
   declared elsewhere the reader never saw:
 
+    * no second way to spell the same thing
+        * `tuple`, `namedtuple`, `dataclass`, and a plain class all do the
+          same job in Python; Lucid keeps one — an ordinary `class`,
+          already a dataclass
     * no action at a distance
-    * no operator that quietly means two different things
-    * no well-known footgun a reader has to already know to dodge
-    * no second way to spell something already spelled one way
+        * no `__getattr__`, no descriptors, no metaclasses — attribute
+          access can't be intercepted by code declared somewhere else
+          entirely
+    * no operator that means two different things
+        * `&` means only intersection; the read-only view marker that
+          might have used it moved to `~` instead
+    * no well-known footgun to dodge
+        * `assert (x == y, "message")` is always true in Python — a
+          non-empty tuple is truthy, and Lucid has no tuple type left to
+          build one with
 
 * **Checked.** A mistake is caught where it is made, not learned three calls
   later at runtime:
 
-    * exhaustive matches
     * no silent escape hatch out of the type system
+        * there is no `Any`; `object` accepts anything but permits only
+          what `object` itself promises, until it's narrowed back down
+    * exhaustive matches
+        * leaving a case out of a `match` over a closed union is a
+          compile-time error, not a silent no-op
     * class shapes closed by default
+        * `p.z = 3.0` on a class with no declared `z` field is a
+          compile-time error, not a new attribute
     * private names enforced rather than merely requested
+        * `cache._entries` from outside `Cache` is a compile-time error —
+          Python's leading underscore is only a convention nothing checks
 
 * **Capable.** None of the above is bought by cutting scope. Generics,
   multiple dispatch, and a real error-handling story are all still here, so
