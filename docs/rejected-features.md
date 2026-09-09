@@ -197,7 +197,7 @@ lowering `and` to a separate `Intersection[...]` generic import
 with no native runtime equivalent.
 
 Lucid has neither the alternate spelling nor the separate named type.
-[Intersection types](types.md) are `&`, the direct dual of the
+[Intersection types](type-operations.md) are `&`, the direct dual of the
 `|` already used everywhere for unions; `and`/`or` stay exactly
 what they already are, value-level boolean operators, never meaningful
 in a type position. Two spellings for the same combinator is exactly

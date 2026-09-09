@@ -87,6 +87,8 @@ document builds mostly on documents already covered above it:
 
   * [Type vocabulary](types.md) — what a type is, and type-level
     expressions.
+  * [Operations](type-operations.md) — union, intersection, and
+    negation.
   * [Match types](match-types.md) — computing a type from a type's
     own structure.
   * [Casting](casting.md) — `trust`, in place of a general-purpose
@@ -123,9 +125,14 @@ document builds mostly on documents already covered above it:
   * [Context managers](context-managers.md) — the
     `contextmanager` modifier.
 
-* [Strings and collections](collections.md) — literals, records,
-  and TypedDict shapes.
-* [Indexing](indexing.md) — indexing and unpacking.
+* Containers
+
+  * [Collections](collections.md) — literals, records, and
+    TypedDict shapes.
+  * [Indexing](indexing.md) — indexing and unpacking.
+  * [Strings](strings.md) — string literals, and why `str` is
+    not a sequence.
+
 * [Calls](calls.md) — call syntax, partial application, and
   anonymous functions.
 * Parameters and decorators

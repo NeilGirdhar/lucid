@@ -8,6 +8,19 @@ Python overloads onto one word. A Lucid `class` is that narrow sense
 given its own name: the direct analogue of a Python class — nominal,
 data-owning, producing instances through construction.
 
+The annotation follows the same renaming: where Python writes `type[X]`
+for the type of `X`'s own class object, Lucid writes `class[X]` — the
+keyword that already names the narrow sense, used the same way any other
+generic name is:
+
+```python
+def register(handler: class[Handler]) -> none:
+    ...
+
+register(JSONHandler)     # ok: a class object
+register(JSONHandler())   # error: an instance, not a class object
+```
+
 ## What `type` means in Lucid
 
 The third sense Python overloads onto the same word is looser still:
@@ -89,62 +102,8 @@ callable literal. Lucid also has no gradual, any-arity form — Python's
 hatch this document already closes off for everyday code; a genuinely
 unknown foreign signature stays `object`, claimed with `trust` like
 any other untyped value crossing the interop boundary.
-
-## Union types
-
-`A | B` is the type of values that are an `A` or a `B`, the same
-spelling Python's own `X | Y` union syntax already settled on —
-already used throughout this document, `int | none` among the first
-examples above.
-
-## Intersection types
-
-`A & B` is the type of values satisfying both `A` and `B` — the
-dual of the union `A | B` just covered.
-Lucid's traits are nominal ([Main ideas](principles.md)): a
-promise is made only where a class header names it, so a value
-assembled from two independently declared traits has nowhere to go
-without either a purpose-declared class combining both up front, or a
-type that can say "both, whichever value actually provides them":
-
-```python
-def render(shape: Drawable & Serializable) -> bytes:
-    ...
-
-handlers: list[HasName & HasId]
-```
-`&` means only this — the read-only mutability view prefix used
-everywhere else in this document (`~Self`, `~dict[K, +V]`) was
-moved to `~` for exactly this reason, so `&` never has to carry two
-meanings at once.
-
-Neither `&` nor `|` has a keyword alternate. `and` and `or`
-stay exactly what they already are — value-level boolean operators —
-and are never meaningful in a type position; there is one spelling for
-each combinator, not two.
-
-## Negation types
-
-`not T` in a type position is the type that excludes `T` — every
-value that is not one:
-
-```python
-def f(x: not int) -> none:
-    ...
-
-f("a")   # ok
-f(1)     # error
-```
-`not` already exists, as ordinary boolean negation; a type position
-reads it as type negation instead, the same way this document's own
-type-expression grammar already gives several other tokens a second
-meaning by position rather than by a second word — `type`, disambiguated
-the same way ([What type means in Lucid](#what-type-means-in-lucid)). `not int | str` and
-`not (int | str)` differ exactly the way they read: the first excludes
-only `int`, leaving `str` untouched by the negation, the second
-excludes the whole union. Nesting follows the same rule as every other
-type combinator here: parenthesize to bind negation across `|` or
-`&`; unparenthesized, it binds to the type immediately next to it.
+[Operations](type-operations.md) covers the ways types combine —
+union, intersection, and negation.
 
 ## Type expressions
 
@@ -155,7 +114,7 @@ thing in both grammars (`dict[str, int]`, `~T`, `!T`, and
 `Producer[+K]` all evaluate identically either way), but a type expression
 can use forms that mean something else, or nothing at all, as an ordinary
 expression — for example the TypedDict shape literal in
-[Strings and collections](collections.md).
+[Collections](collections.md).
 
 ## Type aliases
 

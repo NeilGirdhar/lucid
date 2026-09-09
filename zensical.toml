@@ -17,6 +17,7 @@ nav = [
   ] },
   { "Types" = [
     { "Type vocabulary" = "types.md" },
+    { "Operations" = "type-operations.md" },
     { "Match types" = "match-types.md" },
     { "Casting" = "casting.md" },
     { "Mutability" = "mutability.md" },
@@ -37,8 +38,11 @@ nav = [
     { "Control flow and statements" = "control-flow.md" },
     { "Context managers" = "context-managers.md" },
   ] },
-  { "Strings and collections" = "collections.md" },
-  { "Indexing" = "indexing.md" },
+  { "Containers" = [
+    { "Collections" = "collections.md" },
+    { "Indexing" = "indexing.md" },
+    { "Strings" = "strings.md" },
+  ] },
   { "Calls" = "calls.md" },
   { "Parameters and decorators" = [
     { "Parameters and arguments" = "parameters.md" },
