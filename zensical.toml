@@ -85,6 +85,7 @@ nav = [
   { "Implementation" = [
     { "Architecture" = "architecture.md" },
     { "Getting started" = "getting-started.md" },
+    { "Language tour" = "language-tour.md" },
     { "Benchmarks" = "benchmarks.md" },
   ] },
 ]
