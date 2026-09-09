@@ -109,7 +109,7 @@ given an instance or the class itself:
 def dispatch fields[T](obj: T) -> Iterable[(name: str, value: object, doc: str | none, metadata: dict[str, object])]:
     ...
 
-def dispatch fields[T](cls: type[T]) -> Iterable[(name: str, doc: str | none, metadata: dict[str, object])]:
+def dispatch fields[T](cls: class[T]) -> Iterable[(name: str, doc: str | none, metadata: dict[str, object])]:
     ...
 ```
 Both yield fields in declaration order. The instance form pairs each
