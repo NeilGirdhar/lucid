@@ -17,6 +17,8 @@ nav = [
   ] },
   { "Types, mutability, and annotations" = [
     { "Type vocabulary" = "types.md" },
+    { "Match types" = "match-types.md" },
+    { "Casting" = "casting.md" },
     { "Mutability" = "mutability.md" },
     { "Generics" = "generics.md" },
     { "Numeric types" = "numeric-types.md" },

@@ -191,7 +191,8 @@ leaves: PyTree[int] = [1, {"a": 2, "b": [3, 4]}, 5]
 ```
 Recursion is what makes a type like `PyTree` expressible at all: at every
 level, the shape is either a leaf, or one of the listed containers holding
-that very same shape one level down.
+that very same shape one level down. [Match types](match-types.md) picks
+a shape like this apart instead of building one up.
 
 ## Reifying a type expression
 
@@ -206,56 +207,6 @@ example when passing a type to a metaprogramming function:
 form = type list[str]                                # an ordinary value: a reified type
 handlers = {"json": JSONHandler, "xml": XMLHandler}   # an ordinary dict, not a type
 ```
-
-## Match types
-
-A recursive alias like `PyTree` picks its shape by union — every
-alternative is listed once, up front. Sometimes the type to produce
-depends on the *structure* of another type instead: whether a list is
-nested another level deeper, or already down to its leaf. A match type
-is a `type` alias whose right side is `match`, reusing the same
-`match`/`case` grammar [Exhaustive pattern matching](control-flow.md)
-already has, computing a type from a type instead of a value from a
-value:
-
-```python
-type Elem[T] = match T:
-    case list[Inner]: Elem[Inner]
-    case Leaf: Leaf
-```
-`Elem[list[list[int]]]` is `int`: each case peels off one layer of
-nesting and recurses, until what is left is not a `list` at all.
-
-Value-level `match` is a statement, deliberately without a case-body-
-as-implicit-expression form, because that would make an ordinary
-statement block secretly double as a value some of the time. A match
-type has no such ambiguity to guard against: it lives entirely in the
-type-expression grammar [Type expressions](#type-expressions)
-already describes, and every case's only job, ever, is to produce one
-type — so each case is a bare type expression, no block form needed.
-Pattern capture follows the same convention Python's own structural
-pattern matching already uses: a name that already names something is an
-exact match (`case list[Inner]:` matches the shape `list` exactly),
-and a name that doesn't is a fresh capture, bound to whatever the
-subject actually was for use on the right (`Inner`, or `Leaf` for
-whatever falls through to the second case).
-
-A captured name can itself be a union — a subject typed `A | B` makes
-any fresh capture over it a capture of `A | B` as a whole — and a
-fresh-capture case runs once per member of a union subject, unioning the
-results, the same distribution TypeScript's own conditional types
-already do. This is what lets a recursive match type work through a
-branching structure instead of getting stuck treating the whole union as
-one opaque type: [Promotion](dispatch.md), later in the reading
-order, puts exactly this to use for a type that branches in more than
-one direction. Combined with `Never` already
-being union's identity element — a type with no values contributes
-nothing to a union, so `Never | X` is just `X`, true of any bottom
-type in any type system that has one — distribution gives an
-existential test for free:
-if a fresh-capture case produces `Never` down every branch, the
-distributed result is `Never`; if it produces something else down even
-one branch, that survives, since every `Never` alongside it disappears.
 
 ## Literal types
 
@@ -370,47 +321,7 @@ The one place something `Any`-shaped is actually needed is not inside
 Lucid at all: a foreign, untyped value crossing the Python interop boundary
 has to be accepted somehow, without static proof. That is a property of
 whatever crosses that specific boundary, not a gap in the type system that
-needs a general escape hatch to fill.
-
-## Python interop and `trust`
-
-A Python value crossing into Lucid with no further information is typed as
-`object` — nothing is assumed about it, the same as any other value whose
-shape is genuinely unknown. That is not a new rule; it is the no-`Any`
-principle above applied to values that happen to come from outside Lucid,
-instead of values that happen to be under-specified inside it.
-
-Getting anything more specific out of an `object` that actually came from
-Python requires an explicit, unverified claim: `trust`.
-
-```python
-raw: object = some_python_function()
-items: !list[int] = trust[!list[int]](raw)
-```
-`trust` asserts a type with no proof behind it — there is nothing on the
-Python side for the checker to verify against — but the claim is visible,
-written once, at the exact place it is made. That is the difference from
-`Any`: `Any` lets a value be used as anything, anywhere, with no marker
-recording that a leap was taken; `trust` requires writing down exactly
-what is being trusted, and where, every time.
-
-`trust` only accepts an `object`-typed operand. Python's `typing.cast`
-has no such restriction — it can assert any type in place of any other,
-anywhere, purely between values that are already fully typed on the Python
-side, with nothing foreign involved at all. Lucid has no equivalent
-general-purpose `cast`, on purpose: traits are nominal specifically so
-that satisfying one is an explicit, checked act rather than an accidental
-shape match, and an unrestricted cast would let any code route around that
-check between two ordinary, already-sound Lucid values — `trust[Dog](some_cat)`
-between two well-typed Lucid values is not filling a real gap, it is
-punching a hole where the checker already had real information. Restricting
-`trust` to `object` operands makes that impossible by construction: it
-only ever gets to speak where the checker had nothing to say in the first
-place, which is exactly and only the Python interop boundary.
-
-Calling `trust` at every use site does not scale to a whole library.
-Attaching a claim once, at the import, the way a `.pyi` stub does for
-Python's own type checkers, is the natural next step — where such a stub
-would live, and how it interacts with lazy imports, is not yet decided.
+needs a general escape hatch to fill. [Casting](casting.md) covers the one
+place Lucid does let a claim like that be made explicit.
 
 

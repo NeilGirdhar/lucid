@@ -87,6 +87,10 @@ document builds mostly on documents already covered above it:
 
   * [Type vocabulary](types.md) — what a type is, and type-level
     expressions.
+  * [Match types](match-types.md) — computing a type from a type's
+    own structure.
+  * [Casting](casting.md) — `trust`, in place of a general-purpose
+    `cast`.
   * [Mutability](mutability.md) — mutable, read-only, and
     immutable views.
   * [Generics](generics.md) — variance, higher-kinded parameters,
