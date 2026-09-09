@@ -143,6 +143,18 @@ exist or how they use `K`, so `!T`'s callable member set is exactly
 `~T`'s. One keyword pair on the mutable declaration settles all
 three views.
 
+A private field or method never enters this computation at all,
+regardless of how it uses `K`. Variance is a promise about the
+*public* interface — whether `Foo[Dog]` can stand in for `Foo[Animal]`
+from the outside — and no outside caller can ever reach a private
+member to exploit an unsound substitution through it, since
+[private members are enforced](class-inheritance.md#private-members),
+not merely named by convention. [The worked example](index.md#example)'s `InferenceModel`
+relies on exactly this: `score` mutates a private `_scores` cache, but
+that write only has to be reconciled with whatever `score` and
+`labels` themselves expose publicly, not treated as a use in its own
+right.
+
 ## Leaving a type parameter unspecified
 
 Python's bare `list`, with no type argument, is usually treated as
