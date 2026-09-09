@@ -5,12 +5,7 @@ easy for an LLM to read and write correctly as for a human — which turns out
 to mean holding to the same properties good human-readable code already
 wants, just refusing to let any of them slide.
 
-Core principle:
-
-    Keep Python's directness, make structure explicit, and choose the cleaner
-    rule when compatibility no longer has to win.
-
-Four properties follow from that:
+Core properties:
 
 * **Succinct.** A simple idea is written simply, with nothing carried along
   out of habit:
@@ -61,9 +56,18 @@ Four properties follow from that:
         * `cache._entries` from outside `Cache` is a compile-time error —
           Python's leading underscore is only a convention nothing checks
 
-* **Capable.** None of the above is bought by cutting scope. Generics,
-  multiple dispatch, and a real error-handling story are all still here, so
-  "easy to get right" never has to mean "too small to use."
+* **Capable.** None of the above is bought by cutting scope, so
+  "easy to get right" never has to mean "too small to use":
+
+    * generics carry real variance, not just erased type parameters
+        * `trait Cache[=K, =V]` — definition-site `+`/`-`/`=` variance,
+          not a call-site-only or fully erased scheme
+    * binary operators dispatch on both operand types
+        * `a + b` picks an implementation from both operands' types at
+          once — no `__radd__`, no `NotImplemented` negotiation
+    * errors stay structured, not reduced to a bare boolean or `None`
+        * a recoverable failure is an ordinary return type, checked
+          exhaustively; `raise` stays for what should never happen
 
 Lucid borrows Python's readable surface syntax, Java-style single class
 inheritance plus multiple traits, Scala-style definition-site type
