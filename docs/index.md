@@ -77,8 +77,8 @@ document builds mostly on documents already covered above it:
 * [Main ideas](principles.md) — the nine ideas behind the language.
 * Names
 
-  * [Binding](names.md) — ordinary binding, final locals, and the
-    black-hole target `_`.
+  * [Binding](names.md) — ordinary binding, final locals, `del`,
+    and the black-hole target `_`.
   * [Destructuring](destructuring.md) — destructuring with `let` and
     with `match`.
   * [Scope](scope.md) — scope-rebinding rules.
