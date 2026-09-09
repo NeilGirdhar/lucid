@@ -69,21 +69,6 @@ Core properties:
         * a recoverable failure is an ordinary return type, checked
           exhaustively; `raise` stays for what should never happen
 
-Lucid borrows Python's readable surface syntax, Java-style single class
-inheritance plus multiple traits, Scala-style definition-site type
-information, Julia-style multiple dispatch, Kotlin-style function types,
-and Rust's split between recoverable and unrecoverable errors — made
-possible by a zero-deprecation release cadence that lets Lucid choose the
-cleaner rule instead of the Python-compatible one throughout the language.
-
-Object state is declared in the class body. Construction returns fully built
-objects. A definition is visible everywhere in the project by default; a
-leading `_` makes it private instead. Traits declare obligations,
-provide reusable behavior, or both at once, and binary operators dispatch
-on both operands. Generic parameters carry definition-site variance with
-`+K`, `-K`, and `=K`. Mutable, read-only, and immutable views are
-visible in the type spelling with `T`, `~T`, and `!T`.
-
 ## Example
 
 ```python

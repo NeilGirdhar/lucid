@@ -35,11 +35,21 @@ lets Lucid pick one and enforce it by construction:
 Python lets behavior happen somewhere other than where you're looking —
 `__getattr__`, descriptors, and metaclasses intercept normal-looking
 code, and `typing.Protocol` grants conformance to code that never asked
-for it. Lucid closes these off: traits are nominal
-([No structural traits](traits.md)); `final` and `override` must be
-written, never inferred ([Explicit overrides](traits.md)); attribute
-access has no interception hooks
-([No descriptors](classes.md#no-descriptors)).
+for it. Lucid closes these off:
+
+* traits are nominal ([No structural traits](traits.md))
+* `final` and `override` must be written, never inferred
+  ([Explicit overrides](traits.md))
+* attribute access has no interception hooks
+  ([No descriptors](classes.md#no-descriptors))
+* object state is declared directly in the class body, not hidden
+  behind `__dict__`
+  ([Classes have visible state](classes.md#classes-have-visible-state))
+* a factory returns a fully built object, never a partially
+  initialized one
+  ([Factory construction](construction.md#factory-construction))
+* a name's visibility is checked, not merely requested by a leading
+  `_` Python never enforces ([Module-private names](modules.md))
 
 ## Java-style single inheritance
 
@@ -48,7 +58,9 @@ state, interfaces, reusable behavior, and MRO — jobs that interfere,
 since MRO order can silently change which method a call reaches. Lucid
 keeps Java's split instead, naming the non-state-owning kind `trait`:
 one class parent, since only a class owns stored state, but any number
-of traits. See [Traits](traits.md) and
+of traits, each free to mix required methods with reusable default
+ones — a bodyless member is an obligation, a bodied one is a default,
+no marker keyword for either. See [Traits](traits.md) and
 [One class parent](class-inheritance.md).
 
 ## Scala-style type information
