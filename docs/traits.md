@@ -169,7 +169,7 @@ A `final` field obligation does not compose the way plain field,
 getter, and setter obligations did above — it asks for something
 stronger. `final` only promises that the binding is never rebound to
 a different object; it says nothing about that object's own contents
-(see [Final fields](classes.md)). A `getter` does not satisfy it,
+(see [Final fields](class-members.md)). A `getter` does not satisfy it,
 even alone with no setter:
 
 ```python
@@ -395,7 +395,7 @@ to construct your subclass, which is the case this problem actually shows
 up in. It does not compose, either: two independent subclasses of
 `ThirdPartyBuffer`, each adding a different capability, cannot later be
 combined into one class, because that class would need two class parents,
-which class inheritance does not allow ([One class parent](classes.md)). `implement`
+which class inheritance does not allow ([One class parent](class-inheritance.md)). `implement`
 has neither limit — it changes what the original type itself satisfies, for
 every instance, and any number of unrelated `implement` blocks for the
 same type coexist without ever needing to be reconciled into one class.

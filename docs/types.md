@@ -92,7 +92,7 @@ parameters still needs the parens, `() -> R`; one needs no trailing
 comma, since a type position has no bare parenthesized expression for
 `(int) -> bool` to be confused with. A named, positional-only, or
 keyword-only parameter list uses the same grammar a real signature does
-— see [Anonymous class](classes.md#anonymous-class) for the full shape.
+— see [Anonymous class](anonymous-class.md) for the full shape.
 
 This form is recognized only in type positions, the same restriction
 already placed on other type-only syntax: `(int) -> int` written where

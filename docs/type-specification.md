@@ -13,7 +13,7 @@ Definitions are visible everywhere in the project by default; a leading
 
 Each kind gets its own document: [Traits](traits.md) specify
 obligations, reusable method bodies, or both, without owning state.
-[Classes](classes.md) own concrete state, construction, and identity.
+[Classes](object-shape.md) own concrete state, construction, and identity.
 The rest of this page shows why Python mixes the two together, and how
 they work together once they're kept apart.
 

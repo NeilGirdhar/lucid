@@ -3,7 +3,7 @@
 Building an instance and introspecting a class's own fields are two
 related jobs, both centered on the factory as where they meet — neither
 about what kinds of members a class body can declare, which
-[Classes](classes.md) covers on its own. A factory field can also be
+[Class members](class-members.md) covers on its own. A factory field can also be
 filled with a value captured from its own call site, a mechanism that
 applies to any function, not just factories, covered in
 [Call-site captured values](call-site-captured-values.md).
@@ -115,7 +115,7 @@ def dispatch fields[T](cls: type[T]) -> Iterable[(name: str, doc: str | none, me
 Both yield fields in declaration order. The instance form pairs each
 field's name with its current value; the class form has no instance to
 read a value from, so it yields only names. Both carry `doc` and
-`metadata` from [Field docstrings and metadata](classes.md), `none`
+`metadata` from [Field docstrings and metadata](class-members.md), `none`
 and `{:}` respectively when a field declares neither.
 
 ```python

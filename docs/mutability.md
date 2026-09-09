@@ -190,7 +190,7 @@ all.
 
 Lucid generates three things for every class by default, the same way it
 generates a default constructor when `__init__` is left unspecified
-(see [Classes](classes.md)): structural `Eq`, structural `Ord`,
+(see [Factory construction](construction.md#factory-construction)): structural `Eq`, structural `Ord`,
 and hashability. All three are traits that provide a real body rather
 than just an obligation, because each just iterates over the class's
 own fields and does the obvious thing: `Eq` compares them all,

@@ -92,7 +92,7 @@ For a callback that genuinely fires later, from further outside than
 any scope in this function reaches — the fully deferred case `await`
 already covers — there is still no boundary to check "never called"
 against, and no finalizer to fall back on, for the same non-determinism
-reasons already given ([No __del__](classes.md)).
+reasons already given ([No __del__](object-shape.md)).
 
 ## `local` borrow parameters (basedpython)
 
@@ -120,7 +120,7 @@ so it cannot protect the case that actually matters for an unmanaged
 resource: what happens once code outside Lucid touches the value.
 
 And the raw resource is never Lucid-visible to begin with.
-[Private members](classes.md) already keeps a field like a raw file
+[Private members](class-inheritance.md) already keeps a field like a raw file
 descriptor out of reach — the only thing visible outside the class is
 the wrapping object itself, which can guard its own liveness with an
 ordinary stored flag:

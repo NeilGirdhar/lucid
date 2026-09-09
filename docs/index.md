@@ -106,8 +106,14 @@ document builds mostly on documents already covered above it:
     are separate.
   * [Traits](traits.md) — obligations and reusable behavior, in
     place of multiple inheritance.
-  * [Classes](classes.md) — object shape, the anonymous class,
-    members, and inheritance.
+  * [Object shape](object-shape.md) — declared fields, attribute
+    access, and the dynamic hooks Lucid removes.
+  * [Anonymous class](anonymous-class.md) — an unnamed class shape
+    for parameter lists.
+  * [Class members](class-members.md) — fields, methods, getters,
+    setters, and value semantics options.
+  * [Class inheritance](class-inheritance.md) — one class parent,
+    final and sealed classes, and private members.
   * [Construction](construction.md) — factories, and field
     reflection.
 

@@ -16,7 +16,7 @@ def parse_file(path: Path) -> list[Row]:  # every file in the project
 ```
 A member named with a leading `_` follows the same rule one level
 down, private to its class instead of its file; see
-[Private members](classes.md).
+[Private members](class-inheritance.md).
 
 This is Python's own convention, finally enforced. Python's single
 leading underscore is a request nothing checks — `from module import
