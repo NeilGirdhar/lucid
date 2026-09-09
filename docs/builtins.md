@@ -7,8 +7,9 @@
   [`complex`](numeric-types.md#exact-complex), [`str`](strings.md)
   (see also its
   [`bin`/`oct`/`hex` factories](strings.md#base-formatted-string-factories)),
-  `Bytes`, and `ByteArray` — the last two capitalized, unlike the
-  others here, since `bytes`/`bytearray` stay the ordinary lowercase
+  and [`Bytes`, `ByteArray`, and `MemoryView`](binary-types.md) — the
+  last three capitalized, unlike the others here, since
+  `bytes`/`bytearray`/`memoryview` stay the ordinary lowercase
   conversion calls, not the type names
 * Capability traits, the main ABC-equivalent nominal traits (see
   [No structural traits](traits.md#no-structural-traits)), listed in
@@ -58,7 +59,9 @@
   elsewhere: by position. `any(xs)` is a call; `any Trait` is bare, no
   parentheses, and never appears where a call would.
 * `iter`, `locals`, `format`, `hash`, `help`, `sum`, `reversed`,
-  `repr`, `print` — kept, unchanged.
+  `repr`, `print`, `list`, `set`, `dict`, `enumerate`, `map`, `max`,
+  `min`, `sorted`, `slice`, `getattr`, `setattr`, `hasattr` — kept,
+  unchanged.
 * [`pow`](numeric-types.md#pow-dispatches-per-type) — kept, but
   multiple-dispatch, one case per base type, so the zero-base,
   negative-exponent case returns each type's own `inf` instead of
