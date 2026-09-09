@@ -64,8 +64,10 @@ nav = [
     { "Spread" = "spread.md" },
     { "Decorators" = "decorators.md" },
   ] },
-  { "Project configuration" = "project-configuration.md" },
-  { "Modules, projects, and public APIs" = "modules.md" },
+  { "Projects" = [
+    { "Project configuration" = "project-configuration.md" },
+    { "Modules, projects, and public APIs" = "modules.md" },
+  ] },
   { "Keyword reference" = "keywords.md" },
   { "Rejected features" = "rejected-features.md" },
 ]
