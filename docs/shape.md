@@ -99,90 +99,81 @@ slice's other boundary is implicit in "everything else," so pulling
 out an unbounded batch prefix needs no name or index of its own — only
 the fixed end needs a number.
 
-## Broadcasting and other runtime checks
-
-Getting a position, dropping one, concatenating, reversing — every
-operation above is purely structural: the checker can answer it from
-the shapes' literal lengths and positions alone, the same way it
-resolves any other type expression. Broadcasting, matrix
-multiplication's shape rule, reshape validity, and concatenation along
-an existing axis are a different kind of question: whether two
-*already-known* shapes are compatible, which is exactly the sort of
-fact [Results](results.md) already treats as an ordinary, recoverable
-return value rather than something the type system has to prove ahead
-of time.
+## Broadcasting
 
 Two dimensions are broadcast-compatible if they're equal, or either
-one is exactly `1`:
+one is exactly `1`. [`promote[A, B]`](type-operations.md#promotion)
+already established the pattern for a type-level conditional — an
+ordinary `if`/`else`, reused in type position the same way `+`/`-`/`*`
+already are:
 
 ```python
-def broadcast_dim(a: int, b: int) -> int | none:
-    if a == b:
-        return a
-    if a == 1:
-        return b
-    if b == 1:
-        return a
-    return none
+type BroadcastDim[A: int, B: int] =
+    A if A == B else
+    B if A == 1 else
+    A if B == 1 else
+    error   # A and B are not broadcast-compatible
 ```
-Broadcasting aligns from the *right*, so `broadcast` reverses both
-shapes, aligns from the front, and reverses the result back:
+Broadcasting aligns from the *right*: peel the last position off each
+shape, combine those two with `BroadcastDim`, and recurse on what's
+left. Once either shape runs out, the other's remaining prefix passes
+through unchanged — a shorter shape's missing leading dimensions
+behave as if they were `1`, contributing no constraint:
 
 ```python
-def broadcast(a: !list[int], b: !list[int]) -> !list[int] | none:
-    ra, rb = a[::-1], b[::-1]
-    dims: !list[int] = ![]
-    for i in range(max(len(ra), len(rb))):
-        da = ra[i] if i < len(ra) else 1
-        db = rb[i] if i < len(rb) else 1
-        match broadcast_dim(da, db):
-            case none:
-                return none
-            case d:
-                dims = ![d, *dims]
-    return dims
+type BroadcastAligned[A: Shape, B: Shape] =
+    B if A == shape[] else
+    A if B == shape[] else
+    BroadcastAligned[A[:-1], B[:-1]] + shape[BroadcastDim[A[-1], B[-1]]]
 ```
+This resolves the same way `Reverse` and `Concat` do: a self-reference
+resolved lazily, the same as any other
+[recursive type alias](types.md#recursive-type-aliases) — just walking
+from the right instead of the left, since that's the end broadcasting
+actually aligns on.
+
+## Matrix multiplication's shape rule
+
 Matmul needs the inner dimensions to match exactly and the batch
 dimensions — everything before the last two axes — to broadcast:
 
 ```python
-def matmul_shape(a: !list[int], b: !list[int]) -> !list[int] | none:
-    if len(a) < 2 or len(b) < 2:
-        return none
-    if a[-1] != b[-2]:
-        return none
-    match broadcast(a[:-2], b[:-2]):
-        case none:
-            return none
-        case batch:
-            return batch + ![a[-2], b[-1]]
+type MatmulShape[A: Shape, B: Shape] =
+    shape[*BroadcastAligned[A[:-2], B[:-2]], A[-2], B[-1]]
+    if A[-1] == B[-2] else
+    error   # inner dimensions don't match
 ```
-Reshaping is valid only when the total element count is unchanged:
+A shape with fewer than two dimensions needs no separate case: `A[-2]`
+on a shape that short is already out of range, the same compile-time
+bounds error indexing anywhere else out of range already is — this
+gets rejected for free, not as a case this alias has to spell out.
+
+## Reshape validity
+
+Reshaping is valid only when the total element count is unchanged —
+the one property in this whole library that's a genuine computation,
+not a structural comparison. `Product` folds
+[literal multiplication](type-operations.md#arithmetic-on-literal-types)
+over a shape the same recursive way `BroadcastAligned` folds
+`BroadcastDim`:
 
 ```python
-def product(s: !list[int]) -> int:
-    total = 1
-    for dim in s:
-        total *= dim
-    return total
+type Product[S: Shape] = 1 if S == shape[] else S[0] * Product[S[1:]]
 
-def reshape_is_valid(s: !list[int], new_shape: !list[int]) -> bool:
-    return product(s) == product(new_shape)
+type Reshape[S: Shape, NewShape: Shape] =
+    NewShape if Product[S] == Product[NewShape] else
+    error   # element count doesn't match
 ```
-Concatenation along an existing axis needs the same kind of check —
-the sizes of the concatenated axis add, and every other axis has to
-match exactly:
+Concatenation along an existing axis needs the same kind of computed
+value — the sizes of the concatenated axis add, and every other axis
+has to match exactly, which is now an ordinary slice comparison:
 
 ```python
-def concat_axis0(a: !list[int], b: !list[int]) -> !list[int] | none:
-    if a[1:] != b[1:]:
-        return none
-    return ![a[0] + b[0], *a[1:]]
+type ConcatAxis0[A: Shape, B: Shape] =
+    shape[A[0] + B[0], *A[1:]]
+    if A[1:] == B[1:] else
+    error   # every axis but the concatenated one must match
 ```
-Each of these returns `none` for an incompatible pair rather than
-raising, the same trade [Results](results.md) makes for every other
-expected, recoverable failure — a caller checks the result with an
-ordinary `match`, the same way any other fallible call is checked.
 
 ## Still open
 
