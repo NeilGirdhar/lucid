@@ -1,49 +1,10 @@
 # Parameters and arguments
 
-A callable's parameter shape can be written as a type in its own right, and
-the leftover arguments a signature doesn't name explicitly still need
-somewhere typed to go. This covers both: the anonymous class shape that
-fills a `Callable`'s parameter position, and `Arguments`/`Parameters`,
-the two classes that gather and spread whatever a signature leaves open.
-
-## Anonymous class
-
-[Anonymous record shapes](collections.md) already give a value shape
-without declaring a name for it: `(x: int, y: int)`. A callable's own
-parameter list uses the same grammar, on the left of a
-[function type's](types.md) `->`, whenever a function has no
-variadic zoning of its own:
-
-```python
-(str, bool) -> R
-```
-— the type of a function like `greet(name: str, loud: bool)`.
-
-A `/` marks the end of a positional-only zone; a bare `*` marks the
-start of a keyword-only one — the same two markers an ordinary parameter
-list already uses, and both stay within this same, plain shape:
-
-```python
-(c: int, /, a: int, *, b: int)
-```
-- `c: int, /` — positional-only.
-- `a: int` — ordinary: callable by position or by keyword.
-- `*` — the keyword-only zone begins.
-- `b: int` — keyword-only.
-
-Every field here has a name, because every field here is one fixed,
-individually addressable slot — whether or not a caller can ever use
-that name. An ordinary or keyword-only field needs one because the
-checker has to know it to verify a keyword call. A positional-only field
-needs one for a different reason: callers can never use it, but the name
-is what marks it as *one* slot. The order — positional-only, then
-ordinary, then keyword-only — isn't a style rule: nothing can be
-keyword-only until the positional zone is finished.
-
-A signature with an unbounded, unnamed tail — the case a decorator's
-generic forwarding needs, or a genuine overflow catch-all — extends this
-grammar further; see
-[Gathering arguments with Arguments and Parameters](#gathering-arguments-with-arguments-and-parameters).
+A callable's parameter shape can be written as a type in its own right —
+see [Anonymous class](classes.md#anonymous-class) — and the leftover
+arguments a signature doesn't name explicitly still need somewhere typed
+to go. This covers that: `Arguments`/`Parameters`, the two classes that
+gather and spread whatever a signature leaves open.
 
 ## Gathering arguments with `Arguments` and `Parameters`
 
@@ -84,7 +45,7 @@ individually named — rather than a bare per-value type. Writing
 `kwargs: str` would say each value is a `str`, not that `kwargs`
 itself is a mapping; the field has to be annotated with what it actually
 holds. `pargs` holds whatever fixed, possibly zoned prefix a signature
-has, typed as an [Anonymous class](#anonymous-class) itself when it needs its own
+has, typed as an [Anonymous class](classes.md#anonymous-class) itself when it needs its own
 positional-only or ordinary zoning.
 
 `Arguments` on its own is for genuinely unnamed overflow: arguments
@@ -98,7 +59,7 @@ bound the same way `dict` or `Functor` are, and a plain nominal
 class's unzoned field shape satisfies it as the simplest case.
 
 A signature's full shape, open-ended content included, can be written
-inline by extending [Anonymous class](#anonymous-class)'s grammar with its two remaining
+inline by extending [Anonymous class](classes.md#anonymous-class)'s grammar with its two remaining
 zones: a bare, unnamed type followed by `...` for the variadic
 positional tail, and `_: type, ...` for the variadic keyword one, after
 the fixed prefix and its keyword-only zone respectively — the same
@@ -108,14 +69,14 @@ positional-before-keyword order every zone already follows:
 (c: int, /, a: int, int, ..., *, b: int, _: int, ...)
 ```
 - `c: int, /, a: int` — the fixed, possibly zoned prefix:
-  [Anonymous class](#anonymous-class), exactly as written there.
+  [Anonymous class](classes.md#anonymous-class), exactly as written there.
 - `int, ...` — variadic positional: zero or more further `int`\ s,
   after every fixed position — nothing fixed can follow it, since it
   consumes every remaining positional slot. The trailing `...` is the
   same marker that opens a TypedDict shape
   ([TypedDict shapes in type position](types.md#typeddict-shapes-in-type-position)), here meaning
   "and more of the type just written," not "anything."
-- `*, b: int` — the keyword-only zone, [Anonymous class](#anonymous-class) again.
+- `*, b: int` — the keyword-only zone, [Anonymous class](classes.md#anonymous-class) again.
 - `_: int, ...` — variadic keyword: zero or more further keyword
   arguments, each `int`. `_` marks the slot as nameless the same way
   it already does for black-hole assignment
@@ -129,7 +90,7 @@ Parameters[(c: int, /, a: int), int, {"b": int, _: int, ...}]
 ```
 Only the two variadic markers — a bare, unnamed run and `_: type,
 ...` — trigger this desugaring. `/` and a named keyword-only zone
-don't: they stay inside the fixed prefix, an ordinary [Anonymous class](#anonymous-class)
+don't: they stay inside the fixed prefix, an ordinary [Anonymous class](classes.md#anonymous-class)
 shape in its own right, which is why `pargs`'s own type can have a
 `/` in it without becoming another `Parameters` — a fixed, zoned but
 non-variadic prefix needs no aggregation, only genuinely open-ended
@@ -160,7 +121,7 @@ through the bundle just to give it one. `query` needs only `Arguments`
 here, since `path` is already an ordinary, separately named parameter —
 there is no fixed prefix left for a `pargs` field to hold.
 
-For an ordinary class (see [Anonymous class](#anonymous-class) and [Decorators](decorators.md)),
+For an ordinary class (see [Anonymous class](classes.md#anonymous-class) and [Decorators](decorators.md)),
 `***name: SomeClass` gathers one-to-one: each of `SomeClass`'s fields
 corresponds to exactly one of the function's own remaining parameters, in
 whichever positional or keyword zone that class itself declares.

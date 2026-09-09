@@ -106,8 +106,8 @@ document builds mostly on documents already covered above it:
     are separate.
   * [Traits](traits.md) — obligations and reusable behavior, in
     place of multiple inheritance.
-  * [Classes](classes.md) — object shape, members, and
-    inheritance.
+  * [Classes](classes.md) — object shape, the anonymous class,
+    members, and inheritance.
   * [Construction](construction.md) — factories, and field
     reflection.
 
@@ -137,8 +137,8 @@ document builds mostly on documents already covered above it:
   anonymous functions.
 * Parameters and decorators
 
-  * [Parameters and arguments](parameters.md) — the anonymous
-    class, and argument gathering.
+  * [Parameters and arguments](parameters.md) — gathering and
+    spreading leftover arguments with `Arguments`/`Parameters`.
   * [Decorators](decorators.md) — identity-preserving `@`, and
     decorator factories.
 
