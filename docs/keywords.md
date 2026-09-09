@@ -1,6 +1,6 @@
 # Keywords
 
-Apart from [Builtins](builtins.md#lowercase-constants) and behaviors
+Apart from [Builtins](builtins.md) and behaviors
 explicitly replaced in this specification, Lucid preserves Python's
 ordinary keyword vocabulary.
 
