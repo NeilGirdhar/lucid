@@ -53,6 +53,7 @@ features = [
   "navigation.tracking",
   "search.highlight",
   "toc.follow",
+  "toc.integrate",
 ]
 
 [[project.theme.palette]]
