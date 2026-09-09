@@ -163,6 +163,28 @@ for row in rows:
     if_broken:
         break
 ```
+## Destructuring with `match`
+
+`case Type(a, b):` destructures the same way [`let`](destructuring.md)
+does — the same positional, field-order correspondence — but as one
+arm of a `match` instead of a standalone statement, narrowing the
+subject to `Type` and pulling its fields out in the same step:
+
+```python
+match shape:
+    case Point(x, y):
+        ...
+```
+The difference from `let` is exactly the difference between the two
+forms' jobs: `let` requires the pattern to already be proven, with
+nothing to fall back to; `match` exists for a subject that could be
+any of several variants, and checks that every one is covered.
+`match`'s own grammar — the narrowing-only form `case Type:` with
+nothing pulled out, exhaustiveness checking, and the rest — is covered
+next ([Exhaustive pattern matching](#exhaustive-pattern-matching));
+this is only the destructuring half, which needs nothing from that
+section to make sense on its own.
+
 ## Exhaustive pattern matching
 
 Python's `match`/`case` cannot check that every case is covered: Python
@@ -212,8 +234,8 @@ gets from being a closed union.
 A bare `case Type:` pattern just narrows — the subject keeps its own
 name, narrowed to `Type` for that case, with nothing pulled out of it.
 `case Type(a, b):` does both at once — the positional destructuring
-covered in [Destructuring with match](destructuring.md), the same rule `let`
-uses outside a `match`.
+covered in [Destructuring with match](#destructuring-with-match), the
+same rule `let` uses outside a `match`.
 Narrowing by name only works when the subject already is a name, the way
 `tree` is above. When it is some other expression — a call, an
 attribute access, anything without a name of its own to reuse — `match`

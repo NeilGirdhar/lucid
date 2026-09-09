@@ -12,7 +12,7 @@ nav = [
   { "Main ideas" = "principles.md" },
   { "Names" = [
     { "Binding" = "names.md" },
-    { "Destructuring" = "destructuring.md" },
+    { "Destructuring with let" = "destructuring.md" },
     { "Scope" = "scope.md" },
   ] },
   { "Types" = [

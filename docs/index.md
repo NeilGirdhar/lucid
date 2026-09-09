@@ -79,8 +79,8 @@ document builds mostly on documents already covered above it:
 
   * [Binding](names.md) — ordinary binding, final locals, `del`,
     and the black-hole target `_`.
-  * [Destructuring](destructuring.md) — destructuring with `let` and
-    with `match`.
+  * [Destructuring with `let`](destructuring.md) — pulling several
+    bindings out of one already-proven value at once.
   * [Scope](scope.md) — scope-rebinding rules.
 
 * Types
