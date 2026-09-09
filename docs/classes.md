@@ -1,4 +1,4 @@
-# Object shape
+# Classes
 
 Classes define concrete state, construction, and identity. A class can
 use any number of traits and use *class inheritance* to extend at

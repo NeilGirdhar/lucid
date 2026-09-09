@@ -106,7 +106,7 @@ document builds mostly on documents already covered above it:
     are separate.
   * [Traits](traits.md) — obligations and reusable behavior, in
     place of multiple inheritance.
-  * [Object shape](object-shape.md) — declared fields, attribute
+  * [Classes](classes.md) — declared fields, attribute
     access, and the dynamic hooks Lucid removes.
   * [Anonymous class](anonymous-class.md) — an unnamed class shape
     for parameter lists.

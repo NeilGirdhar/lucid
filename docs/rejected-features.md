@@ -92,7 +92,7 @@ For a callback that genuinely fires later, from further outside than
 any scope in this function reaches — the fully deferred case `await`
 already covers — there is still no boundary to check "never called"
 against, and no finalizer to fall back on, for the same non-determinism
-reasons already given ([No __del__](object-shape.md)).
+reasons already given ([No __del__](classes.md)).
 
 ## `local` borrow parameters (basedpython)
 

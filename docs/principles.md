@@ -70,7 +70,7 @@ needs both a base class that inherits from `ABC` and an
 
 Lucid closes each by construction: `@` always preserves identity
 ([Preserving identity](decorators.md)); class shape is closed by
-default, with nothing to opt into ([No undeclared fields](object-shape.md));
+default, with nothing to opt into ([No undeclared fields](classes.md));
 a bodyless trait member is already an obligation ([Traits](traits.md)).
 
 ## Explicit over implicit
@@ -84,7 +84,7 @@ the class currently does.
 Lucid closes each off: traits are nominal, so a promise is made only
 where a class header names it ([No structural traits](traits.md)); `final` and `override` must be written, never
 inferred ([Explicit overrides](traits.md)); attribute access has no
-interception hooks ([No descriptors](object-shape.md#no-descriptors)). Nothing about a piece of
+interception hooks ([No descriptors](classes.md#no-descriptors)). Nothing about a piece of
 code's behavior should depend on something declared elsewhere the reader
 never saw.
 

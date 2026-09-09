@@ -361,7 +361,7 @@ meant to routinely handle in the first place.
 
 This sketch has not yet specified Lucid's full behavior for `assert`,
 `break`, or `continue`. `del` and `pass` are both fully settled. `del`
-is a compile-time error on a declared field (see [No del on fields](object-shape.md)), removed entirely in favor of explicit methods on a
+is a compile-time error on a declared field (see [No del on fields](classes.md)), removed entirely in favor of explicit methods on a
 mapping or sequence index (see [No __delitem__](indexing.md)), and
 retained for exactly one purpose beyond those: [ending a local
 name's lifetime early](names.md#del-ends-a-names-lifetime-early).
