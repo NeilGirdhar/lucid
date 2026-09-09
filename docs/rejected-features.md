@@ -249,46 +249,6 @@ captures the same signature as two separate parameters, `P: Parameters`
 and `R`, from the start, so there is nothing later to project back
 apart.
 
-## Use-site variance projections (basedpython)
-
-basedpython lets an ordinary, invariant generic type be locally
-projected to a narrower view at one specific annotation, without
-touching the type's own declared variance:
-
-```python
-def read(data: list[out int]):
-    data[0]        # int
-    data[0] = 1    # error — write rejected
-
-def write(data: list[in int]):
-    data[0] = 1    # ok — int accepted
-    data[0]        # error — read rejected
-```
-The `out` half adds nothing Lucid doesn't already have: `list[int]`
-is already invariant, and [Mutability](mutability.md)'s `~list[int]`
-already gives exactly this read-only projection — accepted from the
-same callers, with the same restriction on the callee — as an
-ordinary type, not a special-cased subscript argument. `list[out
-int]` would be a second spelling for `~list[int]`.
-
-The `in` half — write-only — has no existing Lucid equivalent, but
-the motivating case doesn't need one either. The scenario is a sink
-parameter: a function that only fills a container in, and should
-never read back what the caller put there first. If the caller
-already has to hand over a container the callee is going to
-overwrite, handing over an *empty* one instead makes the guarantee
-true by construction — there is nothing pre-existing to read, no
-matter what the callee's code does — without needing the checker to
-verify anything. A write-only projection only earns its keep once a
-caller needs to hand over a container that already holds data it
-wants protected from inspection while still letting the callee
-overwrite it, or once review needs a type-level guarantee that a
-function provably never reads its input at all — an audit or
-sandboxing concern, not an ordinary API design one. Both are real,
-but narrow enough that Lucid leaves them unaddressed rather than add
-a projection syntax whose common case an empty container already
-covers for free.
-
 ## `Overlapping[T]` (basedpython)
 
 basedpython lets a covariant class keep an otherwise-unsound input

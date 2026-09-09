@@ -155,6 +155,69 @@ that write only has to be reconciled with whatever `score` and
 `labels` themselves expose publicly, not treated as a use in its own
 right.
 
+## Use-site projection
+
+`~T` and `!T` narrow *every* parameter's role at once: they drop any
+method that needs mutable `self`, for any reason, regardless of what
+it touches. Sometimes only one parameter's role needs narrowing,
+leaving the rest exactly as declared. `list` is invariant in its
+element type — it has both `__getitem__` and `__setitem__` — but a
+caller who only ever wants to *fill* a `list` in, never read it back,
+can say so directly at the annotation, without asking for `~list` or
+`!list` and without `list` needing a second, purpose-built type:
+
+```python
+def recv_into(sock: Socket, buf: list[in int]) -> int:
+    ...   # can write ints into buf; cannot read buf's existing contents
+```
+`list[in int]` drops every method that *reads* `int` back out —
+`__getitem__` — while `__setitem__`, `append`, and `__len__` stay
+exactly as `list` already declares them, mutable and all. `out` runs
+the same rule the other way, dropping methods that *consume* the
+named parameter instead of producing it — the projection this
+recovers is the read-only one `~list[int]` already gives, for a
+single-parameter container whose only mutable state is the parameter
+itself.
+
+For a class with more than one parameter, the projection restricts
+just the one named, positionally, the same way the parameter itself
+is written — leaving every other parameter at whatever `Node` itself
+declares for it:
+
+```python
+class Node[Data, Children]:
+    data: Data
+    children: list[Children]
+
+    def set_data(self, d: Data) -> none:
+        self.data = d
+
+    def add_child(self, c: Children) -> none:
+        self.children.append(c)
+
+def update_payloads(nodes: list[Node[int, out str]]) -> none:
+    for node in nodes:
+        node.set_data(5)      # fine: Data is unrestricted
+        node.add_child("x")   # error: add_child consumes Children, and Children is out here
+```
+`Node[int, out str]` leaves `Data` exactly as declared — fully
+mutable — while dropping every method that writes `Children`. `~T`
+and `!T` cannot express this at all: they are whole-object operators,
+with no way to restrict one parameter while leaving another
+untouched. Use-site projection is the narrower, complementary tool
+for exactly that case, not a replacement for `~T`/`!T`, which stay
+the right choice whenever the restriction really is "no mutation, for
+any reason."
+
+For a single-parameter type whose only mutable state is the
+parameter itself — true of `list`, `dict`, `set`, and any ordinary
+container — `T[out X]` and `~T[X]` land on the same callable set,
+since "mutating" and "produces/consumes `X`" happen to be the same
+fact there, and `~T[X]` is the one to reach for. The projection earns
+its keep once a class has mutable state unrelated to the parameter
+being restricted, or more than one parameter to restrict
+independently, as `Node` does above.
+
 ## Leaving a type parameter unspecified
 
 Python's bare `list`, with no type argument, is usually treated as
