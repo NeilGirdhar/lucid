@@ -159,19 +159,6 @@ and a factory's ends at "return a fully constructed object" — neither
 has anywhere for a "resume after the block" to attach to the way `def`
 and `classmethod` do.
 
-## `with` itself is unchanged
-
-None of this touches the calling side: `with expr:` and
-`with expr as name:` work exactly as they already do, on anything
-`contextmanager` produces or any class declaring
-`contextmanager def __cm__(self):`.
-
-This bracketing is also why Lucid has no exactly-once callback-parameter
-marker, the way some languages do for transaction commits and one-shot
-completion handlers — see [Rejected features](rejected-features.md).
-
-So every real "make sure this runs exactly once" reduces to a scope
-Lucid already has: synchronous, `contextmanager`; asynchronous,
-`await`. A callback parameter marked exactly-once would only restate
-one of the two, with a weaker guarantee at the far end.
+None of this touches the calling side — [With](with.md) covers
+`with expr:` and `with expr as name:`, unchanged from Python.
 

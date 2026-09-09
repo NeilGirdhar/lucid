@@ -123,6 +123,8 @@ document builds mostly on documents already covered above it:
     and beyond operators.
   * [Call-site captured values](call-site-captured-values.md) —
     reading a call's own location or assignment target.
+  * [Context managers](context-managers.md) — the
+    `contextmanager` modifier.
 
 * Statements
 
@@ -134,8 +136,8 @@ document builds mostly on documents already covered above it:
     types, and the `?` operator.
   * [Exceptions](exceptions.md) — `raise`, narrowed to broken
     invariants.
-  * [Context managers](context-managers.md) — the
-    `contextmanager` modifier.
+  * [With](with.md) — the `with` statement, unchanged from
+    Python.
 
 * Containers
 
