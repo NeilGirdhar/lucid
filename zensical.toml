@@ -19,10 +19,10 @@ nav = [
   { "Types" = [
     { "Type vocabulary" = "types.md" },
     { "Operations" = "type-operations.md" },
-    { "Shapes" = "shape.md" },
     { "Casting" = "casting.md" },
     { "Mutability" = "mutability.md" },
     { "Generics" = "generics.md" },
+    { "Shapes" = "shape.md" },
   ] },
   { "Basic types" = [
     { "Numeric types" = "numeric-types.md" },
