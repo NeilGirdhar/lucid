@@ -62,7 +62,7 @@ that decision:
 * `open` — not a bare builtin; `Path.open(...)` already exists
   alongside it in Python, so keeping both is one spelling too many
 * [`bin`, `oct`, `hex`](strings.md#base-formatted-string-factories) —
-  not bare builtins; they move to `Str.bin`, `Str.oct`, and `Str.hex`,
+  not bare builtins; they move to `str.bin`, `str.oct`, and `str.hex`,
   named factories instead of three unrelated top-level names for the
   same job
 * `chr`, `ord` — not bare builtins; they move to `string.chr(...)`

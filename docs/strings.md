@@ -58,15 +58,23 @@ def render_lines(lines: Iterable[str]) -> str:
 
 render_lines("hello")  # error: str is not Iterable[str]
 ```
-Code that wants a character sequence asks for the `chars` property
-explicitly. `chars` returns a read-only sequence view, `~Sequence[str]`,
-that keeps `Sequence`'s actual contract: containment, `index`, and
-`count` test for an equal one-character element, not a substring, and
-`reversed(chars)` works because `chars` genuinely implements
-`__reversed__`, not because of a fallback:
+None of this stops `str` from indexing directly — `text[0]` still
+works, since [indexing and iteration are separate capabilities](indexing.md#no-__getitem__-iteration-fallback)
+in Lucid, unlike Python's own legacy fallback where the two were
+never really independent. A single character back from a single
+index needs no sequence contract at all; it's the *sequence*
+operations — iterating, containment as element-equality, `index`,
+`count`, `reversed` — that `str` doesn't get for free. Code that wants
+those asks for the `chars` property explicitly. `chars` returns a
+read-only sequence view, `~Sequence[str]`, that keeps `Sequence`'s
+actual contract: containment, `index`, and `count` test for an equal
+one-character element, not a substring, and `reversed(chars)` works
+because `chars` genuinely implements `__reversed__`, not because of a
+fallback:
 
 ```python
 text: str = "hello"
+text[0]    # "h" -- ordinary indexing, no Sequence needed
 
 for ch in text:          # error
     ...
@@ -105,16 +113,16 @@ f"{name} is {age}"
 ## Base-formatted string factories
 
 Python's `bin`, `oct`, and `hex` each convert a number to a
-prefixed string in one base. Lucid moves them onto `Str` itself, as
+prefixed string in one base. Lucid moves them onto `str` itself, as
 named factories — the same pattern [Factory
 construction](construction.md#factory-construction) already uses for
 `Point.origin()` — rather than three unrelated top-level names for
-one job, "build a `Str` a particular way":
+one job, "build a `str` a particular way":
 
 ```python
-Str.bin(255)  # "0b11111111"
-Str.oct(255)  # "0o377"
-Str.hex(255)  # "0xff"
+str.bin(255)  # "0b11111111"
+str.oct(255)  # "0o377"
+str.hex(255)  # "0xff"
 ```
 The same result is also reachable through an f-string's own
 format-spec mini-language (`f"{255:#b}"`), for when the string being
