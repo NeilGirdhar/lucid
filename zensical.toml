@@ -37,11 +37,18 @@ nav = [
     { "With" = "with.md" },
     { "Import" = "import.md" },
   ] },
+  { "Argument bundles" = [
+    { "Arguments" = "arguments.md" },
+    { "Parameters" = "parameters.md" },
+    { "Gather" = "gather.md" },
+    { "Spread" = "spread.md" },
+  ] },
   { "Functions" = [
     { "Multiple dispatch" = "dispatch.md" },
     { "Call-site captured values" = "call-site-captured-values.md" },
     { "Context managers" = "context-managers.md" },
     { "Results" = "results.md" },
+    { "Decorators" = "decorators.md" },
   ] },
   { "Containers" = [
     { "Collections" = "collections.md" },
@@ -56,13 +63,6 @@ nav = [
     { "Class members" = "class-members.md" },
     { "Class inheritance" = "class-inheritance.md" },
     { "Construction" = "construction.md" },
-  ] },
-  { "Parameters and decorators" = [
-    { "Arguments" = "arguments.md" },
-    { "Parameters" = "parameters.md" },
-    { "Gather" = "gather.md" },
-    { "Spread" = "spread.md" },
-    { "Decorators" = "decorators.md" },
   ] },
   { "Projects" = [
     { "Project configuration" = "project-configuration.md" },
