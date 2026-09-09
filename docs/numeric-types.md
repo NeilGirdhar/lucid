@@ -254,7 +254,7 @@ trait SupportsAbs[+K]:
 trait SupportsRound[+K]:
     def __round__(self, ndigits: int | none = none) -> K
 
-class int(SupportsInt, SupportsFloat, SupportsIndex):
+class int(SupportsInt, SupportsFloat, SupportsComplex, SupportsIndex):
     ...
 ```
 An API names the specific capability it needs rather than reaching for
