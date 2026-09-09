@@ -176,8 +176,8 @@ document builds mostly on documents already covered above it:
 
   * [Project configuration](project-configuration.md) —
     `project.yaml`, `development.yaml`, and `lucid.lock`.
-  * [Modules, projects, and public APIs](modules.md) —
-    module-private names, and projects.
+  * [Module-private names](modules.md) — visible by default, with
+    a leading `_` to opt out.
 
 * [Keyword reference](keywords.md) — every keyword, in one place.
 * [Rejected features](rejected-features.md) — other languages'

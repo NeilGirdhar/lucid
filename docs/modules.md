@@ -1,6 +1,4 @@
-# Modules, projects, and public APIs
-
-## Module-private names
+# Module-private names
 
 A name starting with `_` is private to where it is declared: a leading
 underscore on a definition at the top level of a file keeps it out of
@@ -28,7 +26,7 @@ Which of a project's names are visible *outside* it, to another project
 depending on this one, is a different question with one answer, in one
 place: [Public API](project-configuration.md).
 
-### No `__all__`
+## No `__all__`
 
 `__all__` only narrows what `from module import *` sees; a direct
 import of anything else in the module reaches it regardless, so a
@@ -38,19 +36,3 @@ narrow in the first place (see [Import](import.md)), and the one list
 that does exist — private names decided by a leading `_`, checked
 everywhere — cannot fall out of sync with itself the way a
 separately-maintained `__all__` can with the module it describes.
-
-## Projects
-
-Every project has a `project.yaml` file, written in StrictYAML, that
-declares the project's identity and dependencies, its public API, its local
-import shortcuts, its library initialization, and its runnable commands. A
-sibling `development.yaml` holds tool configuration and development-only
-dependencies. Together they take over the roles Python splits across
-`pyproject.toml` and `__init__.py`.
-
-[Import](import.md)'s laziness means none of this runs implicit setup
-code on `import`: a project's library initialization runs only when an
-entry point explicitly opens `library.initialize` for the libraries it
-depends on. The full structure of both files is covered separately in
-[Project configuration](project-configuration.md).
-
