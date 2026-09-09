@@ -256,43 +256,32 @@ project-specific opt-in to get it back. Lucid's `Literal` has no such
 restriction — a float or complex literal promotes exactly like any
 other, with nothing to opt into.
 
-## Constructor calls infer as `final`
+## Final types
 
-A call naming the class it constructs can only ever produce an
-instance of exactly that class — building a subclass instead needs its
-own constructor call, `B()`, not `A()`. Lucid infers this
-precisely: `A()`'s type is `final A`, not plain `A`:
+`final A` is the type of values whose class is exactly `A`, never a
+subclass — the same "nothing wider exists" idea `final`'s
+class-declaration sense already has, applied to one value's type
+instead of a whole class's openness. A value most often gets this type
+by inference, from a constructor call
+([Constructor calls infer as final](construction.md)), but it is an
+ordinary type in its own right, writable wherever any other type is:
 
 ```python
 class A: ...
-
-a = A()   # final A
-```
-This is the constructor counterpart of literal inference: `1` infers
-as `Literal[1]` and widens to `int` wherever a declaration governs
-it, and `final A` widens to `A` in exactly the same places:
-
-```python
 class B(A): ...
 
-class C:
-    x: A = A()
-
-def g(c: C):
-    c.x = B()   # ok — C.x's declared type is A, not final A
-
-items: list[A] = [A()]   # list[A], not list[final A]
+def f(a: final A, b: B):
+    if a is B: ...   # error: an exactly-A value is never a B
 ```
-The extra precision buys disjointness. A value whose class is exactly
-`A` cannot also be a `str`, and cannot be some subclass of `A`
-either, so both possibilities narrow away — which is what lets the
-non-overlapping check in [Identity and instance checks](control-flow.md) catch a test that can never hold, not just
-against an unrelated type but against `A`'s own subclasses:
+The extra precision buys disjointness. A value of type `final A`
+cannot also be a `str`, and cannot be some subclass of `A` either, so
+both possibilities narrow away — which is what lets the non-overlapping
+check in [Identity and instance checks](control-flow.md) catch a test
+that can never hold, not just against an unrelated type but against
+`A`'s own subclasses. `final A` widens to plain `A` wherever a
+declaration governs it — a field, a parameter, a collection element —
+the same as any other narrower type widening to a broader declared one.
 
-```python
-a = A()
-if a is B: ...   # error: an exactly-A value is never a B
-```
 ## No `Any` escape hatch
 
 Python's `Any` turns off type checking for a value entirely: nothing about

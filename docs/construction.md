@@ -69,6 +69,35 @@ class Point:
 p = Point(1.0, 2.0)
 q = Point.replace(p, y=3.0)
 ```
+
+## Constructor calls infer as `final`
+
+A call naming the class it constructs can only ever produce an
+instance of exactly that class — building a subclass instead needs its
+own constructor call, `B()`, not `A()`. Lucid infers this precisely:
+`A()`'s type is [`final A`](types.md#final-types), not plain `A`:
+
+```python
+class A: ...
+
+a = A()   # final A
+```
+This is the constructor counterpart of literal inference: `1` infers
+as `Literal[1]` and widens to `int` wherever a declaration governs
+it, and `final A` widens to `A` in exactly the same places:
+
+```python
+class B(A): ...
+
+class C:
+    x: A = A()
+
+def g(c: C):
+    c.x = B()   # ok — C.x's declared type is A, not final A
+
+items: list[A] = [A()]   # list[A], not list[final A]
+```
+
 ## Field reflection with `fields`
 
 `replace` and the default constructor both already have to walk a
