@@ -75,8 +75,14 @@ under one theme; within a theme, and across the list top to bottom, each
 document builds mostly on documents already covered above it:
 
 * [Main ideas](principles.md) — the nine ideas behind the language.
-* [Binding, destructuring, and scope](names.md) — destructuring with
-  `let` and with `match`, and scope-rebinding rules.
+* Binding, destructuring, and scope
+
+  * [Binding](names.md) — ordinary binding, final locals, and the
+    black-hole target `_`.
+  * [Destructuring](destructuring.md) — destructuring with `let` and
+    with `match`.
+  * [Scope](scope.md) — scope-rebinding rules.
+
 * Types, mutability, and annotations
 
   * [Type vocabulary](types.md) — what a type is, and type-level

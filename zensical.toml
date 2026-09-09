@@ -10,7 +10,11 @@ docs_dir = "docs"
 nav = [
   { "Home" = "index.md" },
   { "Main ideas" = "principles.md" },
-  { "Binding, destructuring, and scope" = "names.md" },
+  { "Binding, destructuring, and scope" = [
+    { "Binding" = "names.md" },
+    { "Destructuring" = "destructuring.md" },
+    { "Scope" = "scope.md" },
+  ] },
   { "Types, mutability, and annotations" = [
     { "Type vocabulary" = "types.md" },
     { "Mutability" = "mutability.md" },
@@ -53,7 +57,6 @@ features = [
   "navigation.tracking",
   "search.highlight",
   "toc.follow",
-  "toc.integrate",
 ]
 
 [[project.theme.palette]]

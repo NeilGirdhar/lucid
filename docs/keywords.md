@@ -79,7 +79,7 @@ two cross-referencing declarations for what is really one idea (see
 
 Lucid discards Python's scope-rebinding declarations — see the `No global`
 and `No nonlocal` rules in
-[Binding, destructuring, and scope](names.md):
+[Scope](scope.md):
 
 ```text
 global nonlocal
