@@ -56,19 +56,28 @@ object.
 
 Factories are not inherited.
 
-Every class has a generated `replace` factory. It works like Python's
-`__replace__` protocol: given an existing instance and any changed field
-values, it constructs a new instance of the same exact class with unchanged
-fields copied from the original object.
+Every class has a generated `replace` method. It works like Python's
+`__replace__` protocol: given any changed field values as keyword
+arguments, it builds a new instance of the same exact class with
+unchanged fields copied from `self`, and hands back an ordinary,
+mutable value — regardless of which view called it:
 
 ```python
 class Point:
     x: float
     y: float
 
-p = Point(1.0, 2.0)
-q = Point.replace(p, y=3.0)
+p: !Point = freeze(Point(1.0, 2.0))
+q: Point = p.replace(y=3.0)   # a fresh, ordinary Point, not !Point
 ```
+`replace` only ever reads `self` to build the new object; it never
+writes to it, so it takes `self: ~Self`, callable through a mutable,
+read-only, or frozen view alike. This does not strain
+[freezing being deep](mutability.md#freezing-is-deep): that rule
+governs what a view exposes about the *original* object's own
+storage, and `replace` never exposes that storage — it constructs a
+brand new instance, as free to be ordinarily mutable as any other
+freshly constructed value.
 
 ## Constructor calls infer as `final`
 

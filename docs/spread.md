@@ -4,7 +4,7 @@ The same sigil spreads a value back out at a call site by calling a
 method every class has — `__spread__` — and using the `Parameters`
 instance it returns. Every class gets one generated for free, the same
 way every class already gets a generated `__init__` and `replace`
-factory ([Factory construction](construction.md)). By default,
+method ([Factory construction](construction.md)). By default,
 `__spread__` wraps the instance as its own fixed prefix, with nothing
 variadic:
 

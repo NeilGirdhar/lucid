@@ -3,18 +3,20 @@
 A quick walkthrough of the core mechanics, each one runnable through the
 reference implementation (see [Getting started](getting-started.md)).
 
-## Three user-defined types
+## Two user-defined types
 
-Lucid separates obligations, stateless reuse, and owned state into three
-distinct constructs:
+Lucid separates obligations and reusable behavior from owned state into two
+constructs, not three — a `trait` mixes required methods with reusable
+default ones freely, so no separate interface keyword is needed for the
+obligation-only case:
 
-1. **`interface`**: Abstract obligations with no state and no method bodies.
-2. **`trait`**: Reusable behavior with method bodies, but no owned fields.
-3. **`class`**: Concrete types with owned fields and constructors. Classes
+1. **`trait`**: A member with no body is a required obligation; a member
+   with a body is reusable default behavior. Traits own no fields.
+2. **`class`**: Concrete types with owned fields and constructors. Classes
    permit at most one class parent (single inheritance).
 
 ```python
-interface Greeter:
+trait Greeter:
     def greet(self) -> str
 
 trait Friendly:

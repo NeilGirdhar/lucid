@@ -48,7 +48,7 @@ COMMANDS:
     check <file>         Parse and typecheck a Lucid source file
     emit-c <file>        Emit generated C99 code for a Lucid source file
     eval <code>          Evaluate a Lucid code snippet string
-    test-spec [dir]      Extract and validate code snippets from RST specification docs
+    test-spec [dir]      Extract and validate code snippets from Markdown specification docs
     help                 Display this help message
     version              Show version information
 ```
