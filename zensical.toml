@@ -76,6 +76,7 @@ nav = [
   { "Reference" = [
     { "Keywords" = "keywords.md" },
     { "Builtins" = "builtins.md" },
+    { "Removed builtins" = "removed-builtins.md" },
   ] },
   { "Rejected features" = "rejected-features.md" },
 ]

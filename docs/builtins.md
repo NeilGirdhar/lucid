@@ -56,42 +56,14 @@
   the `string` module — a specific-audience string-formatting
   operation, the same reasoning that keeps `iteration.done` in the
   `iteration` module instead of built in.
+* `iter`, `locals` — kept, unchanged.
+* [`super`](traits.md#explicit-overrides) — kept, but takes no
+  parentheses: `super.save()`, not `super().save()`. A class has at
+  most one class parent, so calling through to the overridden
+  implementation is never ambiguous the way it can be in Python's own
+  cooperative multiple inheritance — there's nothing to call, only the
+  one parent to name.
 
-## Python builtins not in Lucid
-
-Python's `builtins` module has far more names than this specification
-has had reason to address — most of it, unaddressed, simply carries
-over unchanged. This lists only the ones a specific design decision
-elsewhere in this spec actually removes or replaces, each linked to
-that decision:
-
-* [`tuple`](collections.md#no-tuple-or-namedtuple-type) — no tuple
-  type; use a class or `!list`
-* [`property`](classes.md#no-property) — `getter`/`setter` member
-  syntax instead
-* [`staticmethod`](class-members.md#no-static-methods-for-namespaced-functions)
-  — a function that needs no `self` or `cls` stays a function
-* [`classmethod`](keywords.md#new-lucid-keywords) — a modifier
-  keyword, not a decorator; a class method is declared, not wrapped
-* [`NotImplemented`](dispatch.md#no-notimplemented-operator-negotiation)
-  — multiple dispatch replaces the reflected-method negotiation
-  protocol it signals
-* [`isinstance`](identity-checks.md), [`issubclass`](identity-checks.md)
-  — `is`/`is not` become instance checks; identity moves to `===`/`!==`
-* [`frozenset`](collections.md#immutable-collection-literals) — as a
-  call, replaced by the `!` marker on a set literal (`!{a, b}`); the
-  type itself still exists, just not this constructor
-* [`type`](types.md#what-class-means-in-lucid) — as a call returning a
-  value's own class, since `type` is a keyword now; `class[X]` covers
-  the annotation `type[X]` used to
-* [`next`](for-and-while.md#explicit-iteration) — an iterator's
-  `__next__` returns `IterResult[T]` directly instead of raising
-  `StopIteration`, so `next()`'s whole contract (catch the exception,
-  or don't) has nothing left to do; call `__next__()` and match the
-  result
-* [`eval`](types.md#no-any-escape-hatch), [`exec`](types.md#no-any-escape-hatch)
-  — running code the checker never saw is exactly the escape hatch
-  the type system has none of
-* [`vars`](construction.md#field-reflection-with-fields) — no
-  `__dict__` to return; `fields` replaces it
-* `ascii` — not a bare builtin; see [Builtin functions](#builtin-functions)
+[Removed builtins](removed-builtins.md) covers the rest of Python's
+`builtins` module: the names a specific design decision elsewhere in
+this spec actually removes or replaces.

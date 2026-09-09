@@ -40,3 +40,19 @@ def g():
 ```
 `==` is unchanged: it still resolves through [Multiple dispatch](dispatch.md), exactly as before. Only `is`/`is not` and
 `===`/`!==` change meaning.
+
+## `is trait` and `is class`
+
+`trait` and `class` are valid right-hand sides of `is` too, testing
+which kind of declaration produced `x`'s own type rather than one
+specific named type:
+
+```python
+x is trait
+x is class
+```
+Both are ordinary instance checks, the same as any other `x is T`.
+Since a class is the only kind that ever produces an instance — a
+trait declares obligations and reusable behavior, but nothing is ever
+*just* a trait at runtime — `x is class` is always true for any
+ordinary value, the same guarantee `x is object` already gives.

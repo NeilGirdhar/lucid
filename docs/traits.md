@@ -281,7 +281,7 @@ class Timestamped:
 
 class Document(Timestamped):
     override def save(self):
-        super().save()
+        super.save()
         write_to_disk(self)
 ```
 The same rule governs `override` as governs variance markers: the checker
@@ -294,8 +294,9 @@ matches anything, silently becoming an unrelated new method while the
 original goes on being called elsewhere.
 
 Because a class has at most one class parent, calling through to the
-overridden implementation is unambiguous — `super()` always means that one
-parent, never a position in an MRO. A linter checks that an `override`
+overridden implementation is unambiguous — `super` always means that one
+parent, never a position in an MRO, so it takes no parentheses: there is
+nothing to call, only the one parent to name. A linter checks that an `override`
 method calls it, but this check is a suggestion, not a rule: some overrides
 exist specifically to replace an inherited implementation entirely, such as
 a class resolving a conflict between two traits, and the warning can be
