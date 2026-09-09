@@ -127,6 +127,17 @@ Scalar values are already immutable in practice, so `~float` is mainly useful
 for uniform view syntax in generic APIs; it is not the way to spell
 float-like input.
 
+## Exact `complex`
+
+`complex` means complex. Complex values support arithmetic but not ordering.
+Code that accepts complex values should not accidentally promise ordering just
+because other numeric types are orderable.
+
+```python
+z: complex = 1 + 2j
+z < 3 + 4j  # error: complex is not orderable
+```
+
 ## Infinity and NaN
 
 Python spells these two special `float` values inconsistently:
@@ -213,16 +224,6 @@ checkable value — the same trade [Errors: results and exceptions](control-flow
 involved, later in this reading order, extended to the one place
 integer arithmetic still had an unchecked exception instead of one.
 
-## Exact `complex`
-
-`complex` means complex. Complex values support arithmetic but not ordering.
-Code that accepts complex values should not accidentally promise ordering just
-because other numeric types are orderable.
-
-```python
-z: complex = 1 + 2j
-z < 3 + 4j  # error: complex is not orderable
-```
 ## Operation-specific numeric methods
 
 Lucid does not assume that numeric-looking methods travel together. A type can
@@ -278,7 +279,7 @@ class int(SupportsInt, SupportsFloat, SupportsIndex):
 
 Numeric equality and ordering are type-directed. Cross-type numeric equality,
 cross-type hashing, and cross-type ordering exist only where explicitly defined.
-`bool` and `complex` are not orderable. Bitwise operators are integer-like
-operations, not general numeric operations, and are not provided by `bool`,
-`float`, or `complex`.
+`complex` is not orderable; `bool` is, the ordinary way — `false < true`.
+Bitwise operators are integer-like operations, not general numeric
+operations, and are not provided by `bool`, `float`, or `complex`.
 
