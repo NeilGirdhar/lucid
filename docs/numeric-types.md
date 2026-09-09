@@ -225,6 +225,23 @@ else a recoverable outcome is involved, later in this reading order,
 extended to the one place integer arithmetic still had an unchecked
 exception instead of one.
 
+## NaN for `complex`
+
+```python
+class complex:
+    classvar nan: complex
+```
+`complex.nan` is a single, canonical invalid value the same way
+`float.nan` is — every NaN already compares unequal to itself and to
+every other NaN, so one classvar covers every "not a valid complex
+number" case there is. Infinity does not have that same single,
+canonical answer: a complex value can diverge along any direction in
+the plane, not just toward one distinguished point, so there is no
+one `complex.inf` to name. A specific infinite complex value is built
+the same way any other one is, from its real and imaginary parts —
+`complex(float.inf)` for the real axis, `complex(0, float.inf)` for
+the imaginary one — rather than reached for as a classvar.
+
 ## `pow` dispatches per type
 
 `pow`'s zero-base, negative-exponent case is the same undefined-answer
@@ -243,14 +260,32 @@ def dispatch pow(base: float, exponent: float) -> float:
     if base == 0.0 and exponent < 0.0:
         return float.inf
     ...
+
+def dispatch pow(base: complex, exponent: complex) -> complex:
+    if base == 0 and exponent.real < 0:
+        return complex(float.inf)
+    ...
 ```
-`0 ** 0` stays `1`, the ordinary convention, in both cases — only a
-negative exponent on a zero base has no defined answer to give. The
-`complex` case has the same shape, without a `complex.inf`/`complex.nan`
-of its own to reach for yet; its real and imaginary components can
-already individually hold `float.inf`/`float.nan`; a dedicated pair of
-classvars is future work, not needed for `pow` specifically to avoid
-raising.
+`0 ** 0` stays `1`, the ordinary convention, in every case — only a
+negative exponent on a zero base has no defined answer to give.
+
+A third parameter changes the job, not just the answer: Python's own
+three-argument `pow(base, exponent, modulus)` computes `(base **
+exponent) % modulus` by modular exponentiation, without ever
+materializing the full power — a different algorithm, not
+`pow(base, exponent) % modulus` with a shortcut taken, and one that
+only makes sense for `int`. Rather than an optional third parameter
+defaulting to `none`, this gets its own dispatch case: [Dispatch
+beyond operators](dispatch.md#dispatch-beyond-operators) already
+established that a call's argument count is part of what dispatch
+resolves on, so a two-argument and a three-argument `pow` are simply
+two distinct, unambiguous cases, the same way `pop(self)`,
+`pop(self, i)`, and `pop(self, i, j)` already are:
+
+```python
+def dispatch pow(base: int, exponent: int, modulus: int) -> int:
+    ...
+```
 
 ## Capability traits
 
