@@ -36,9 +36,13 @@ that decision:
   `iteration` module instead of built in.
 * `filter` — a comprehension with an `if` clause already does this:
   `[x for x in y if condition]`, one spelling instead of two
-* `globals` — there is no such concept. A module has no single mutable
-  namespace object to hand back; [Module-private names](modules.md)
-  already decides what's visible by the name alone
+* `globals` is supplanted by `locals` — nothing else. There is no
+  separate global scope to reach past locals for: at any point in the
+  source, everything visible already is the locals, the same reason
+  assignment is always local once [`global` is
+  gone](scope.md#no-global) — nothing privileges module scope as a
+  separately reachable, dict-shaped thing `globals()` could hand back
+  that `locals()` doesn't already cover
 * `compile` — not a bare builtin; tucked into a library alongside
   other code-object and reflection tools, not exposed at the top level
 * [`delattr`](classes.md#no-del-on-fields) — the same rule `del
