@@ -271,7 +271,7 @@ A key or set member has to survive being hashed once and looked up again
 later, so both bound their element parameter to `!Hashable`:
 
 ```text
-dict[K: !Hashable, +V]
+dict[K: !Hashable, out V]
 set[K: !Hashable]
 ```
 `!Hashable` reads the same way `!InferenceModel` does — the immutable
