@@ -17,18 +17,18 @@ Four properties follow from that:
 * **Clear.** Nothing about a piece of code's behavior depends on something
   declared elsewhere the reader never saw:
 
-  * no action at a distance
-  * no operator that quietly means two different things
-  * no well-known footgun a reader has to already know to dodge
-  * no second way to spell something already spelled one way
+    * no action at a distance
+    * no operator that quietly means two different things
+    * no well-known footgun a reader has to already know to dodge
+    * no second way to spell something already spelled one way
 
 * **Checked.** A mistake is caught where it is made, not learned three calls
   later at runtime:
 
-  * exhaustive matches
-  * no silent escape hatch out of the type system
-  * class shapes closed by default
-  * private names enforced rather than merely requested
+    * exhaustive matches
+    * no silent escape hatch out of the type system
+    * class shapes closed by default
+    * private names enforced rather than merely requested
 
 * **Capable.** None of the above is bought by cutting scope. Generics,
   multiple dispatch, and a real error-handling story are all still here, so
