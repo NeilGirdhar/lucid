@@ -58,12 +58,11 @@ first defined: [`final`](names.md#final-local-variables),
 
 ## Discarded Python keywords
 
-Lucid discards `global`, `nonlocal`, and `lambda`. `global` and
-`nonlocal` are Python's scope-rebinding declarations — see the `No
-global` and `No nonlocal` rules in [Scope](scope.md). `else` is not
-discarded as a keyword. Lucid removes loop `else` clauses,
-but `else` remains available for the Python-like constructs that still use
-it. `lambda` is discarded because it is redundant, not because anonymous
+Lucid discards `global` and `nonlocal`, Python's scope-rebinding
+declarations — see the `No global` and `No nonlocal` rules in
+[Scope](scope.md).
+
+Lucid discards `lambda`. It is redundant, not a sign that anonymous
 functions are gone: an unnamed `def` is one (see
 [Anonymous functions](calls.md)), needing no keyword of its own.
 
