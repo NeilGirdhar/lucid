@@ -24,21 +24,6 @@ nav = [
     { "Generics" = "generics.md" },
     { "Numeric types" = "numeric-types.md" },
   ] },
-  { "Traits and classes" = [
-    { "Overview" = "type-specification.md" },
-    { "Traits" = "traits.md" },
-    { "Classes" = "classes.md" },
-    { "Anonymous class" = "anonymous-class.md" },
-    { "Class members" = "class-members.md" },
-    { "Class inheritance" = "class-inheritance.md" },
-    { "Construction" = "construction.md" },
-  ] },
-  { "Functions" = [
-    { "Multiple dispatch" = "dispatch.md" },
-    { "Call-site captured values" = "call-site-captured-values.md" },
-    { "Context managers" = "context-managers.md" },
-    { "Results" = "results.md" },
-  ] },
   { "Operators" = [
     { "Identity and instance checks" = "identity-checks.md" },
     { "The ? operator" = "question-mark-operator.md" },
@@ -51,10 +36,25 @@ nav = [
     { "With" = "with.md" },
     { "Import" = "import.md" },
   ] },
+  { "Functions" = [
+    { "Multiple dispatch" = "dispatch.md" },
+    { "Call-site captured values" = "call-site-captured-values.md" },
+    { "Context managers" = "context-managers.md" },
+    { "Results" = "results.md" },
+  ] },
   { "Containers" = [
     { "Collections" = "collections.md" },
     { "Indexing" = "indexing.md" },
     { "Strings" = "strings.md" },
+  ] },
+  { "Traits and classes" = [
+    { "Overview" = "type-specification.md" },
+    { "Traits" = "traits.md" },
+    { "Classes" = "classes.md" },
+    { "Anonymous class" = "anonymous-class.md" },
+    { "Class members" = "class-members.md" },
+    { "Class inheritance" = "class-inheritance.md" },
+    { "Construction" = "construction.md" },
   ] },
   { "Calls" = "calls.md" },
   { "Parameters and decorators" = [

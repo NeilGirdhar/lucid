@@ -12,18 +12,18 @@ inside it.
 
 - `README.md`—a short pointer for GitHub's own repo view: the core
   principle and a link into the real hub.
-- `docs/index.md`—the real hub: the core principle, a worked example, and
-  a nested tree of links to every document under `docs/`, grouped by
-  theme. This is also the site's homepage.
+- `docs/index.md`—the real hub: the core principle and a worked example.
+  This is also the site's homepage. It does not list the other documents —
+  Zensical's sidebar, generated from `zensical.toml`'s `nav`, is already
+  that list, and a second, hand-maintained copy would just be one more
+  thing to keep in sync.
 - `docs/*.md`—one specification document per topic.
   `zensical.toml`'s `nav` orders them to minimize forward references: a
   document should mostly build on documents already covered above it, not
   ones introduced later. A handful of forward pointers are intentional,
   where two topics genuinely reference each other for comparison (e.g.
   generics/traits, dispatch/control-flow); the reverse direction of
-  each such pair is already satisfied. Keep `docs/index.md`'s
-  documentation list and `zensical.toml`'s `nav` in sync — they describe
-  the same tree.
+  each such pair is already satisfied.
 - `zensical.toml`—site config and navigation tree.
 - `.github/workflows/docs.yml`—builds and deploys the site to GitHub
   Pages on every push to `main`.
