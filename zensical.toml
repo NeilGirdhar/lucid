@@ -23,7 +23,7 @@ nav = [
     { "Generics" = "generics.md" },
     { "Numeric types" = "numeric-types.md" },
   ] },
-  { "Modern type specification" = [
+  { "Traits and classes" = [
     { "Overview" = "type-specification.md" },
     { "Traits" = "traits.md" },
     { "Classes" = "classes.md" },

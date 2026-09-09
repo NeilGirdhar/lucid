@@ -98,7 +98,7 @@ document builds mostly on documents already covered above it:
   * [Numeric types](numeric-types.md) — exact numeric types and
     capability traits.
 
-* Modern type specification
+* Traits and classes
 
   * [Overview](type-specification.md) — why traits and classes
     are separate.
