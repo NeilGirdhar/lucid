@@ -57,3 +57,20 @@ negation, the second excludes the whole union. Nesting follows the
 same rule as every other type combinator here: parenthesize to bind
 negation across `|` or `&`; unparenthesized, it binds to the type
 immediately next to it.
+
+## Arithmetic on literal types
+
+`+`, `-`, and `*` between two `Literal[int]` types compute a new
+`Literal[int]` type, the same rule that already lets `&`, `|`, and
+`not` mean something different in a type position than they do as
+ordinary value-level operators:
+
+```python
+type Product[A: int, B: int] = A * B
+```
+`Product[3, 4]` is `Literal[12]` — computed once, at the type level,
+the same way [`promote[A, B]`](dispatch.md#promotion) computes a type
+instead of substituting one. Comparing two computed literals is
+ordinary type equality, the same check that already decides whether
+any other two types match.
+

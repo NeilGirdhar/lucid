@@ -132,6 +132,13 @@ into a `list`, not a tuple:
 first, *rest = [1, 2, 3, 4]
 rest: list[int] = [2, 3, 4]
 ```
+The star can also sit in the middle, with fixed targets both before and
+after it — Python's own extended-unpacking form, unchanged:
+
+```python
+first, *middle, last = [1, 2, 3, 4, 5]
+middle: list[int] = [2, 3, 4]
+```
 Lucid uses Python's operators and Python's order of operations unless this
 document says otherwise. In an expression, as opposed to an assignment
 target, unpacking binds tighter than binary operators:
