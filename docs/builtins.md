@@ -52,11 +52,11 @@
   are distinguished the same way `type`/`match`/`not` already are
   elsewhere: by position. `any(xs)` is a call; `any Trait` is bare, no
   parentheses, and never appears where a call would.
-* `ascii` is not a bare builtin. It moves to `string.ascii(...)`, in
-  the `string` module — a specific-audience string-formatting
-  operation, the same reasoning that keeps `iteration.done` in the
-  `iteration` module instead of built in.
 * `iter`, `locals` — kept, unchanged.
+* [`next`](for-and-while.md#explicit-iteration) — kept, but returns
+  `IterResult[T]` instead of raising `StopIteration`, wrapping
+  `__next__` the same way `len` already wraps `__len__` — nothing
+  consuming an iterator by hand has to touch the dunder directly.
 * [`super`](traits.md#explicit-overrides) — kept, but takes no
   parentheses: `super.save()`, not `super().save()`. A class has at
   most one class parent, so calling through to the overridden

@@ -25,17 +25,15 @@ that decision:
 * [`type`](types.md#what-class-means-in-lucid) — as a call returning a
   value's own class, since `type` is a keyword now; `class[X]` covers
   the annotation `type[X]` used to
-* [`next`](for-and-while.md#explicit-iteration) — an iterator's
-  `__next__` returns `IterResult[T]` directly instead of raising
-  `StopIteration`, so `next()`'s whole contract (catch the exception,
-  or don't) has nothing left to do; call `__next__()` and match the
-  result
 * [`eval`](types.md#no-any-escape-hatch), [`exec`](types.md#no-any-escape-hatch)
   — running code the checker never saw is exactly the escape hatch
   the type system has none of
 * [`vars`](construction.md#field-reflection-with-fields) — no
   `__dict__` to return; `fields` replaces it
-* `ascii` — not a bare builtin; see [Builtin functions](builtins.md#builtin-functions)
+* `ascii` is not a bare builtin. It moves to `string.ascii(...)`, in
+  the `string` module — a specific-audience string-formatting
+  operation, the same reasoning that keeps `iteration.done` in the
+  `iteration` module instead of built in.
 * `filter` — a comprehension with an `if` clause already does this:
   `[x for x in y if condition]`, one spelling instead of two
 * `globals` — there is no such concept. A module has no single mutable

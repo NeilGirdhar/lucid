@@ -19,15 +19,21 @@ type IterResult[T] = T | Literal[iteration.done]
 
 trait Iterator[+T]:
     def __next__(self) -> IterResult[T]
+
+def next[T](it: ~Iterator[T]) -> IterResult[T]:
+    return it.__next__()
 ```
-`iteration.done` is a singleton value, not a class — the same shape as
-`none`, just not common enough to earn `none`'s bare-word exemption in
-type position, so it is written through `Literal` (see
-[Literal types](types.md)) instead of getting a type invented to
-represent it. It matches like any other case:
+`next` is the ordinary way to advance an iterator by hand, outside a
+`for` loop — a thin wrapper, the same relationship `len` already has
+to `__len__`, so nothing consuming an iterator has to touch the dunder
+directly. `iteration.done` is a singleton value, not a class — the
+same shape as `none`, just not common enough to earn `none`'s
+bare-word exemption in type position, so it is written through
+`Literal` (see [Literal types](types.md)) instead of getting a type
+invented to represent it. It matches like any other case:
 
 ```python
-match cursor.__next__():
+match next(cursor):
     case Literal[iteration.done]:
         ...
     case _:
