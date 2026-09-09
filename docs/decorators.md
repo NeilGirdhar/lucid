@@ -25,7 +25,7 @@ every decorator, or the replacement silently carries the wrong identity.
 
 Lucid makes `@` itself responsible for identity instead of the decorator.
 Applying `@` always carries the pre-decoration function's name,
-`__path__` (see [No __module__ or __qualname__](project-configuration.md)), doc, and signature onto whatever the
+`__path__` (see [No __module__ or __qualname__](project-yaml.md#no-__module__-or-__qualname__)), doc, and signature onto whatever the
 decorator returns, along with a link back to the original:
 
 ```python

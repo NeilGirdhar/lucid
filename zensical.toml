@@ -66,6 +66,9 @@ nav = [
   ] },
   { "Projects" = [
     { "Project configuration" = "project-configuration.md" },
+    { "project.yaml" = "project-yaml.md" },
+    { "development.yaml" = "development-yaml.md" },
+    { "lucid.lock" = "lucid-lock.md" },
     { "Module-private names" = "modules.md" },
   ] },
   { "Keyword reference" = "keywords.md" },

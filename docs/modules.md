@@ -24,7 +24,7 @@ happen.
 
 Which of a project's names are visible *outside* it, to another project
 depending on this one, is a different question with one answer, in one
-place: [Public API](project-configuration.md).
+place: [Public API](project-yaml.md#public-api).
 
 ## No `__all__`
 

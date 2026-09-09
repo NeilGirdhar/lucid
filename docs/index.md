@@ -174,8 +174,15 @@ document builds mostly on documents already covered above it:
 
 * Projects
 
-  * [Project configuration](project-configuration.md) —
-    `project.yaml`, `development.yaml`, and `lucid.lock`.
+  * [Project configuration](project-configuration.md) — the split
+    across `project.yaml`, `development.yaml`, and `lucid.lock`,
+    and the correspondence with `pyproject.toml`.
+  * [project.yaml](project-yaml.md) — identity, dependencies,
+    public API, and library initialization.
+  * [development.yaml](development-yaml.md) — tool configuration
+    and development-only dependencies.
+  * [lucid.lock](lucid-lock.md) — pinned, resolved dependency
+    versions.
   * [Module-private names](modules.md) — visible by default, with
     a leading `_` to opt out.
 

@@ -51,7 +51,7 @@ plus a project-wide manifest repeating the same paths a second time.
 Visibility is now decided by the name alone — see
 [Module-private names](modules.md) — and the manifest is the only
 place the externally visible surface is declared, in
-[Public API](project-configuration.md) — so no keyword is needed at
+[Public API](project-yaml.md#public-api) — so no keyword is needed at
 the definition site at all.
 
 An earlier draft also added `caller` and `from_var_name` here, two
