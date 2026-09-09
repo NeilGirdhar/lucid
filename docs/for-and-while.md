@@ -117,8 +117,9 @@ for row in rows:
 ```
 ## Unspecified simple statements
 
-This sketch has not yet specified Lucid's full behavior for `assert`,
-`break`, or `continue`. `del` and `pass` are both fully settled. `del`
+This sketch has not yet specified Lucid's full behavior for `break` or
+`continue`. `assert`, `del`, and `pass` are all fully settled. `assert`
+is covered on its own — see [Assert](assert.md). `del`
 is a compile-time error on a declared field (see [No del on fields](classes.md)), removed entirely in favor of explicit methods on a
 mapping or sequence index (see [No __delitem__](indexing.md)), and
 retained for exactly one purpose beyond those: [ending a local

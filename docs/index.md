@@ -36,9 +36,9 @@ Core properties:
         * `&` means only intersection; `~` marks a read-only view,
           never `&`
     * no well-known footgun to dodge
-        * `assert (x == y, "message")` is always true in Python — a
-          non-empty tuple is truthy, and Lucid has no tuple type left to
-          build one with
+        * `assert (x == y, "message")` is always true in Python — Lucid's
+          `assert` requires those parens, so there is no bare form left
+          to mis-parenthesize
 
 * **Checked.** A mistake is caught where it is made, not learned three calls
   later at runtime:
