@@ -24,7 +24,11 @@ nav = [
     { "Casting" = "casting.md" },
     { "Mutability" = "mutability.md" },
     { "Generics" = "generics.md" },
+  ] },
+  { "Basic types" = [
     { "Numeric types" = "numeric-types.md" },
+    { "Strings" = "strings.md" },
+    { "Binary types" = "binary-types.md" },
   ] },
   { "Expressions" = [
     { "Calls" = "calls.md" },
@@ -56,8 +60,6 @@ nav = [
   { "Containers" = [
     { "Collections" = "collections.md" },
     { "Indexing" = "indexing.md" },
-    { "Strings" = "strings.md" },
-    { "Binary types" = "binary-types.md" },
   ] },
   { "Traits and classes" = [
     { "Overview" = "type-specification.md" },
