@@ -56,11 +56,14 @@ object.
 
 Factories are not inherited.
 
-Every class has a generated `replace` method. It works like Python's
-`__replace__` protocol: given any changed field values as keyword
-arguments, it builds a new instance of the same exact class with
-unchanged fields copied from `self`, and hands back an ordinary,
-mutable value — regardless of which view called it:
+Every class has a generated `replace` method, and it is not inherited
+either — a subclass gets its own `replace`, scoped to exactly its own
+declared fields, the same way it gets its own `__init__` rather than
+its parent's. `replace` works like Python's `__replace__` protocol:
+given any changed field values as keyword arguments, it builds a new
+instance of the same exact class with unchanged fields copied from
+`self`, and hands back an ordinary, mutable value — regardless of
+which view called it:
 
 ```python
 class Point:
@@ -70,6 +73,14 @@ class Point:
 p: !Point = freeze(Point(1.0, 2.0))
 q: Point = p.replace(y=3.0)   # a fresh, ordinary Point, not !Point
 ```
+Not being inherited also means `replace` has no Liskov substitution
+obligation to satisfy. An *inherited* method has to behave compatibly
+across every subclass that relies on the inherited version, since
+callers see one shared contract; a generated, per-class `replace`
+never is that shared version — every class, subclasses included,
+already has its own, so there is nothing for a subclass's `replace`
+to stay substitutable for.
+
 `replace` only ever reads `self` to build the new object; it never
 writes to it, so it takes `self: ~Self`, callable through a mutable,
 read-only, or frozen view alike. This does not strain
