@@ -55,9 +55,57 @@
   // happens to contain one of these words as text.
   const SKIP_CLASS = /^(s|s1|s2|sa|sb|sc|sd|se|sh|si|sr|ss|sx|c|c1|cm|cs|cp)$/;
 
+  // Pygments already promotes the name right after `class` to Name.Class
+  // (`nc`) as part of its Python grammar; it has no idea `trait` or
+  // `implement ... for ...` mean the same thing, so those names would
+  // otherwise fall through as plain, uncolored identifiers. This walks
+  // token-by-token (each token is already its own element, since Pygments
+  // wraps every token individually) and promotes the identifier following
+  // `trait` or `implement`/`for` the same way, independent of whether that
+  // name happens to be in TYPES above — a name declared today by `trait X`
+  // gets this without ever adding it to a list by hand.
+  const IDENTIFIER = /^[A-Za-z_]\w*$/;
+
+  function promoteTraitNames(block) {
+    const tokens = [...block.querySelectorAll("span")].filter(
+      (el) => el.children.length === 0,
+    );
+
+    const promoteNext = (fromIndex) => {
+      const next = tokens
+        .slice(fromIndex + 1)
+        .find((el) => el.textContent.trim().length > 0);
+      if (next && next.className === "n" && IDENTIFIER.test(next.textContent)) {
+        next.className = "nc";
+      }
+    };
+
+    for (let i = 0; i < tokens.length; i++) {
+      const text = tokens[i].textContent.trim();
+      if (text === "trait") {
+        promoteNext(i);
+      } else if (text === "implement") {
+        // `implement Trait for Type:` — promote both names, but bound the
+        // search for `for` to this one statement so an unrelated `for`
+        // loop further down the block is never touched.
+        promoteNext(i);
+        for (let j = i + 1; j < tokens.length; j++) {
+          const t = tokens[j].textContent.trim();
+          if (t === ":") break;
+          if (t === "for") {
+            promoteNext(j);
+            break;
+          }
+        }
+      }
+    }
+  }
+
   function highlightBlock(block) {
     if (block.dataset.lucidHighlighted) return;
     block.dataset.lucidHighlighted = "true";
+
+    promoteTraitNames(block);
 
     const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
     const textNodes = [];
