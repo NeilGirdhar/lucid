@@ -72,7 +72,10 @@ nav = [
     { "lucid.lock" = "lucid-lock.md" },
     { "Module-private names" = "modules.md" },
   ] },
-  { "Keyword reference" = "keywords.md" },
+  { "Reference" = [
+    { "Keywords" = "keywords.md" },
+    { "Builtins" = "builtins.md" },
+  ] },
   { "Rejected features" = "rejected-features.md" },
 ]
 
