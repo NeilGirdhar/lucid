@@ -125,6 +125,8 @@ document builds mostly on documents already covered above it:
     reading a call's own location or assignment target.
   * [Context managers](context-managers.md) — the
     `contextmanager` modifier.
+  * [Results](results.md) — recoverable errors as ordinary return
+    types.
 
 * Operators
 
@@ -140,8 +142,6 @@ document builds mostly on documents already covered above it:
     bindings, and `if_broken`.
   * [Match](match.md) — destructuring and exhaustive pattern
     matching.
-  * [Results](results.md) — recoverable errors as ordinary return
-    types.
   * [Exceptions](exceptions.md) — `raise`, narrowed to broken
     invariants.
   * [With](with.md) — the `with` statement, unchanged from
