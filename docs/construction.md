@@ -54,7 +54,34 @@ exact class whose factory is running, assigns the supplied values to that
 class's declared fields in field order, and returns the fully initialized
 object.
 
-Factories are not inherited.
+Factories are not inherited, but a subclass factory can still build on
+a parent factory's own result directly: call it by name, spread the
+object it returns into `construct`, and add whatever the subclass
+adds.
+
+```python
+class Point:
+    x: int
+    y: int
+
+    factory on_diagonal(cls, z: int):
+        return construct(z, z)
+
+class Point3D(Point):
+    z: int
+
+    factory on_diagonal(cls, z: int):
+        point = Point.on_diagonal(z)
+        return construct(***point, z)
+```
+`***point` spreads `Point`'s own fields positionally — [Spread](spread.md)
+already gives every class this for free — filling `x` and `y`, in
+that order; `Point3D`'s own trailing field, `z`, is the one
+positional slot `***point` never supplied, the same
+inherited-fields-first order [`Parameters`'s own construction](spread.md)
+already follows. No override rule is needed to combine them: `z`
+isn't replacing anything `***point` provided, it's filling the one
+field `Point` never had.
 
 Every class has a generated `replace` method, and it is not inherited
 either — a subclass gets its own `replace`, scoped to exactly its own
