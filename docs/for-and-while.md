@@ -20,9 +20,10 @@ type IterResult[T] = T | Literal[iteration.done]
 trait Iterator[+T]:
     def next(self) -> IterResult[T]
 ```
-`next` is an ordinary method, not a dunder — advancing an iterator by
-hand, outside a `for` loop, is rare enough that it needs no builtin
-wrapping it, the way `len`/`abs` wrap theirs. It stays plain `self`,
+Python's own protocol method is `__next__`; Lucid drops the dunder in
+favor of the ordinary name `next` — advancing an iterator by hand,
+outside a `for` loop, is rare enough that it needs no builtin wrapping
+it, the way `len`/`abs` wrap theirs. It stays plain `self`,
 not the read-only `self: ~Self`
 [Read-only methods with `~Self`](class-members.md#read-only-methods-with-self)
 usually prefers: advancing an iterator moves it forward, an ordinary
