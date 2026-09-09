@@ -130,6 +130,8 @@ document builds mostly on documents already covered above it:
 
   * [Identity and instance checks](identity-checks.md) — `is`/`is not`
     for type checks, `===`/`!==` for identity.
+  * [The `?` operator](question-mark-operator.md) — propagating a
+    recoverable error without matching by hand.
 
 * Statements
 
@@ -139,7 +141,7 @@ document builds mostly on documents already covered above it:
   * [Match](match.md) — destructuring and exhaustive pattern
     matching.
   * [Results](results.md) — recoverable errors as ordinary return
-    types, and the `?` operator.
+    types.
   * [Exceptions](exceptions.md) — `raise`, narrowed to broken
     invariants.
   * [With](with.md) — the `with` statement, unchanged from

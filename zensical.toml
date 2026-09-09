@@ -40,6 +40,7 @@ nav = [
   ] },
   { "Operators" = [
     { "Identity and instance checks" = "identity-checks.md" },
+    { "The ? operator" = "question-mark-operator.md" },
   ] },
   { "Statements" = [
     { "If" = "if.md" },
