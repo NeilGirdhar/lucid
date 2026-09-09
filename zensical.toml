@@ -24,7 +24,8 @@ nav = [
     { "Generics" = "generics.md" },
     { "Numeric types" = "numeric-types.md" },
   ] },
-  { "Operators" = [
+  { "Expressions" = [
+    { "Calls" = "calls.md" },
     { "Identity and instance checks" = "identity-checks.md" },
     { "The ? operator" = "question-mark-operator.md" },
   ] },
@@ -56,7 +57,6 @@ nav = [
     { "Class inheritance" = "class-inheritance.md" },
     { "Construction" = "construction.md" },
   ] },
-  { "Calls" = "calls.md" },
   { "Parameters and decorators" = [
     { "Arguments" = "arguments.md" },
     { "Parameters" = "parameters.md" },
