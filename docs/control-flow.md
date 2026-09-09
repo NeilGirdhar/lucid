@@ -90,7 +90,7 @@ every program pays for.
 
 It needs no bespoke definition either — it is an ordinary
 `Sentinel`, the same well-identified singleton any other module can
-reach for (see [Name-captured identifiers](construction.md)):
+reach for (see [Name-captured identifiers](call-site-captured-values.md)):
 
 ```python
 done = Sentinel()

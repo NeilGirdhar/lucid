@@ -58,7 +58,7 @@ An earlier draft also added `caller` and `from_var_name` here, two
 bare reserved words for two rare, unrelated call-site captures. Both
 are now ordinary-looking intrinsic classmethod calls instead,
 `SourceLocation.caller()` and `VarName.from_assignment()` (see
-[Call-site captured values](construction.md)) — recognized by name
+[Call-site captured values](call-site-captured-values.md)) — recognized by name
 on their two built-in types the way Rust's `Location::caller()` is
 recognized without needing a keyword either, so two reserved words
 became zero.

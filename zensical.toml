@@ -29,7 +29,10 @@ nav = [
     { "Classes" = "classes.md" },
     { "Construction" = "construction.md" },
   ] },
-  { "Multiple dispatch" = "dispatch.md" },
+  { "Functions" = [
+    { "Multiple dispatch" = "dispatch.md" },
+    { "Call-site captured values" = "call-site-captured-values.md" },
+  ] },
   { "Control flow" = [
     { "Control flow and statements" = "control-flow.md" },
     { "Context managers" = "context-managers.md" },

@@ -106,11 +106,16 @@ document builds mostly on documents already covered above it:
     place of multiple inheritance.
   * [Classes](classes.md) — object shape, members, and
     inheritance.
-  * [Construction](construction.md) — factories, field
-    reflection, and call-site captured values.
+  * [Construction](construction.md) — factories, and field
+    reflection.
 
-* [Multiple dispatch](dispatch.md) — dispatch on both operands,
-  and beyond operators.
+* Functions
+
+  * [Multiple dispatch](dispatch.md) — dispatch on both operands,
+    and beyond operators.
+  * [Call-site captured values](call-site-captured-values.md) —
+    reading a call's own location or assignment target.
+
 * Control flow
 
   * [Control flow and statements](control-flow.md) — conditionals,
