@@ -333,6 +333,69 @@ way basedpython's own version does, since the two markers sit on
 opposite sides of the name: `class Container[in out T in (int, str)]:`
 declares `T` both invariant and restricted to exactly `int` or `str`.
 
+## Member types
+
+A type parameter's own members can be named in a type position: `T.a`
+is the type of member `a` on whatever `T` turns out to be, not
+flattened to whatever `a` happens to be on `T`'s own bound. `T` isn't
+known yet where the annotation is written, so the lookup stays
+symbolic — much like [literal arithmetic](type-operations.md#arithmetic-on-literal-types)
+on a type parameter — and re-resolves at each specialization, so a
+subclass that narrows a member is honored rather than flattened to
+the bound's own declaration:
+
+```python
+class Animal:
+    getter offspring(self: ~Self) -> Animal:
+        ...
+
+class Dog(Animal):
+    getter offspring(self: ~Self) -> Dog:
+        ...
+
+class Nursery[T: Animal]:
+    resident: T
+    latest: T.offspring
+
+def check(n1: Nursery[Animal], n2: Nursery[Dog]) -> none:
+    n1.latest   # Animal
+    n2.latest   # Dog
+```
+`offspring` narrows covariantly in `Dog` — a `getter` is read-only, so
+this is the same safe narrowing [Getting variance wrong](#getting-variance-wrong)
+already establishes for any output-only position; a plain, mutable
+field couldn't narrow this way; a caller holding `resident` through
+its `Animal`-typed slot could otherwise write an `Animal` into what is
+actually a `Dog`'s storage.
+
+The receiver doesn't have to be a bare parameter. Any type expression
+works, including one already specialized, so a member's type can be
+asked for directly, and receivers chain:
+
+```python
+Nursery[Dog].latest         # Dog
+Nursery[Dog].latest.offspring  # Dog, chained through Dog's own offspring
+```
+A member the bound doesn't have is an error, checked where `T.a` is
+written, not only once `T` is specialized:
+
+```python
+class B[T: Animal]:
+    x: T.nope   # error: Animal has no attribute `nope`
+```
+[Ranging over a fixed set of types](#ranging-over-a-fixed-set-of-types)
+changes what a member type means before specialization: for an
+ordinary bound, `T.a` reads as the bound's own `a` until `T` narrows
+further. For `T in (X, Y)`, there is no single bound to fall back on
+— each specialization picks exactly one member, so `T.a` in a value
+position unions over what every member's `a` could be:
+
+```python
+class Kennel[T in (Animal, Dog)]:
+    resident: T
+    latest: T.offspring   # Animal | Dog, until T is specialized
+```
+
 ## Higher-kinded parameters
 
 An ordinary generic parameter like `K` above stands for a type. Some
