@@ -155,6 +155,51 @@ sound alternative to a bare name's own unsound default. Lucid has no
 unsound default to be distinct from, so there is nothing separate to
 opt into: leaving a parameter unspecified already means it.
 
+## Bounds across type parameters
+
+A bound can name another type parameter already in scope — one that
+precedes it in the same list, or one belonging to an enclosing list:
+
+```python
+def pick[T, R: T](t: T, r: R) -> T:
+    return t
+
+class Owner[T]:
+    def narrow[U: T](self, u: U) -> T:
+        return u
+```
+The bound takes part in solving a call rather than being checked
+against one argument at a time, so `R: T` is a floor under `T`, not a
+constraint on `R` in isolation:
+
+```python
+class Animal: ...
+class Dog(Animal): ...
+
+pick(Dog(), Animal())   # T is Animal, not Dog
+```
+`t: Dog` alone would infer `T` as `Dog`, but `r: Animal` has to satisfy
+`R: T` too, and `Dog` isn't a floor under `Animal` — so the solver
+widens `T` to `Animal`, the narrowest type both arguments actually fit.
+Nothing else has to mention `T` for the checker to find it, either —
+`R`'s own bound is enough on its own:
+
+```python
+def only_bound[T, R: T](r: R) -> T:
+    return r
+
+only_bound(1)   # T is Literal[1]
+```
+A name that isn't yet in scope is rejected: a later parameter in the
+same list, and a parameter's own name inside its own bound, are both
+out of reach, the same way an ordinary variable can't appear in its
+own initializer:
+
+```python
+def f[S: T, T](s: S, t: T): ...    # error: T comes later
+def g[T: list[T]](x: T) -> T: ...  # error: T is not in scope inside its own bound
+```
+
 ## Higher-kinded parameters
 
 An ordinary generic parameter like `K` above stands for a type. Some
