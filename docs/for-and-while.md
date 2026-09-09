@@ -56,6 +56,24 @@ reach for (see [Name-captured identifiers](call-site-captured-values.md)):
 ```python
 done = Sentinel()
 ```
+## `Reversible` and `reversed`
+
+`reversed(xs)` needs `xs` to provide its own reverse-order iterator,
+walked backward directly — not `Iterable`'s forward `__iter__` run in
+reverse afterward, since not every iterable can be walked backward at
+all (a value read once from a stream, say). `Reversible` names that
+narrower promise:
+
+```python
+trait Reversible[+T](Iterable[T]):
+    def __reversed__(self: ~Self) -> Iterator[T]
+```
+
+`list` and `range` satisfy `Reversible`; a plain generator does
+not — the same distinction `reversed(x for x in xs)` already runs
+into today as a runtime `TypeError`, just caught ahead of the call
+instead of during it.
+
 ## Fresh loop bindings
 
 Python's `for` loop reuses one binding across every iteration: the loop

@@ -30,6 +30,31 @@ immutable_scores = !{"Ada": 10, "Grace": 9}
 
 groups: dict[frozenset[str], int] = {immutable_names: 2}
 ```
+## The `Set` trait
+
+Python's `Set`/`MutableSet` split the set-algebra operators
+(`__and__`, `__or__`, `__sub__`, `__xor__`, `isdisjoint`) from the
+mutating ones (`add`, `discard`, `clear`, `pop`, `remove`) across two
+separate ABCs. Lucid needs only the first: the mutating half is
+already the ordinary job of the mutable view `!set`, the same split
+`~T`/`!T` already draws for every other container, so there is no
+separate `MutableSet` to add:
+
+```python
+trait Set[+T](Collection[T]):
+    def dispatch __and__(lhs: Self, rhs: Self) -> Self
+    def dispatch __or__(lhs: Self, rhs: Self) -> Self
+    def dispatch __sub__(lhs: Self, rhs: Self) -> Self
+    def dispatch __xor__(lhs: Self, rhs: Self) -> Self
+    def isdisjoint(self: ~Self, other: Self) -> bool
+```
+
+`set` and the frozenset `!{...}` produces both satisfy `Set` — the
+algebra operators work the same way regardless of which view holds
+the value, since they are ordinary multiple-dispatch operators
+([Multiple dispatch](dispatch.md)), ordinary values returned rather
+than one side mutated in place.
+
 ## No tuple or namedtuple type
 
 Lucid has no `tuple` type and no `namedtuple`. Python uses a tuple for

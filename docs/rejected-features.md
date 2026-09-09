@@ -188,6 +188,10 @@ crossing an interop boundary — recorded here because an `any
 Parameters -> R` composition was briefly added to [parameters.md](parameters.md) as a supposedly-free way to spell this, without
 checking this decision first, and had to be reverted.
 
+Checking merely *whether* a value is callable at all, with no
+signature claim attached, is a different question, and it already has
+an answer: the [`Callable` trait](types.md#the-callable-trait).
+
 ## `and`/`or` as type operators (basedpython)
 
 basedpython accepts the keywords `or`/`and` in annotation

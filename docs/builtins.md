@@ -14,15 +14,19 @@
 * Capability traits, the main ABC-equivalent nominal traits (see
   [No structural traits](traits.md#no-structural-traits)), listed in
   the order each is first defined:
+  [`Callable`](types.md#the-callable-trait),
   [`Eq`](mutability.md#equality-ordering-and-hashing),
   [`Ord`](mutability.md#equality-ordering-and-hashing),
   [`Hashable`](mutability.md#equality-ordering-and-hashing),
   [`Sized`](numeric-types.md#exact-bool),
   [`Iterable`](for-and-while.md#explicit-iteration),
   [`Iterator`](for-and-while.md#explicit-iteration),
+  [`Reversible`](for-and-while.md#reversible-and-reversed),
+  [`Set`](collections.md#the-set-trait),
   [`Container`](strings.md#strings-are-not-sequences),
-  [`Collection`](strings.md#strings-are-not-sequences), and
-  [`Sequence`](strings.md#strings-are-not-sequences)
+  [`Collection`](strings.md#strings-are-not-sequences),
+  [`Sequence`](strings.md#strings-are-not-sequences), and
+  [`Buffer`](binary-types.md)
 * Special types, built outside the ordinary class system, listed in
   the order each is first defined: [`object`](types.md#no-any-escape-hatch),
   [`Arguments`](arguments.md), [`Parameters`](parameters.md),

@@ -30,3 +30,18 @@ the same underlying storage, not a copy:
 view: MemoryView = memoryview(buffer)
 window: MemoryView = view[2:5]  # still backed by buffer, no copy
 ```
+"Anything else that exposes the buffer protocol" is `Buffer`, the
+capability trait that names the protocol itself, rather than a fixed
+list of three built-in types:
+
+```python
+trait Buffer:
+    def __buffer__(self: ~Self) -> MemoryView
+```
+
+`Bytes`, `ByteArray`, and `MemoryView` all satisfy `Buffer`. A
+third-party class wrapping something else buffer-shaped — a
+memory-mapped file, say — can satisfy it too, the same way
+[Implementing a trait after the fact](traits.md#implementing-a-trait-after-the-fact)
+lets any existing type pick up a capability it did not originally
+declare.

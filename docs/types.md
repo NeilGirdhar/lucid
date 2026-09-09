@@ -105,6 +105,30 @@ any other untyped value crossing the interop boundary.
 [Operations](type-operations.md) covers the ways types combine —
 union, intersection, and negation.
 
+## The `Callable` trait
+
+Every function value satisfies `Callable` automatically — the
+compiler marks it, not a class header a function could forget to
+declare, the same way every value already satisfies `object` without
+declaring it. `x is Callable` replaces Python's bare `callable(x)`,
+the same swap [Identity and instance checks](identity-checks.md)
+already makes for `isinstance`/`issubclass`:
+
+```python
+def apply(x: object) -> none:
+    if x is Callable:
+        x()
+```
+
+`Callable` carries no parameter or return information — that is
+exactly what `(A, B) -> R` already spells out precisely, and what the
+rejected, gradual `Callable[..., R]` form would have thrown away
+([Gradual, any-arity callable type](rejected-features.md#gradual-any-arity-callable-type-python-basedpython)).
+`Callable` only answers whether a value is callable at all, the same
+narrow job `is class` answers for classes
+([`is trait` and `is class`](identity-checks.md#is-trait-and-is-class)) —
+a bare capability check, never a substitute for a real signature.
+
 ## Type expressions
 
 Wherever a type is expected — variable, parameter, and return annotations,
