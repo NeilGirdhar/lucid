@@ -15,7 +15,7 @@ nav = [
     { "Destructuring" = "destructuring.md" },
     { "Scope" = "scope.md" },
   ] },
-  { "Types, mutability, and annotations" = [
+  { "Types" = [
     { "Type vocabulary" = "types.md" },
     { "Match types" = "match-types.md" },
     { "Casting" = "casting.md" },

@@ -83,7 +83,7 @@ document builds mostly on documents already covered above it:
     with `match`.
   * [Scope](scope.md) — scope-rebinding rules.
 
-* Types, mutability, and annotations
+* Types
 
   * [Type vocabulary](types.md) — what a type is, and type-level
     expressions.
