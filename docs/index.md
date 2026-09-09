@@ -75,7 +75,7 @@ under one theme; within a theme, and across the list top to bottom, each
 document builds mostly on documents already covered above it:
 
 * [Main ideas](principles.md) — the nine ideas behind the language.
-* Binding, destructuring, and scope
+* Names
 
   * [Binding](names.md) — ordinary binding, final locals, and the
     black-hole target `_`.
