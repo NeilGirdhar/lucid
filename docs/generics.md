@@ -290,6 +290,49 @@ def f[S: T, T](s: S, t: T): ...    # error: T comes later
 def g[T: list[T]](x: T) -> T: ...  # error: T is not in scope inside its own bound
 ```
 
+## Ranging over a fixed set of types
+
+A bound, `T: X`, lets `T` be `X` or any subtype of it. Sometimes the
+intent is narrower still: `T` should be exactly one member of a fixed,
+small set, chosen fresh each call, never a subtype of one member and
+never their union. `in`, written *after* the parameter's name — the
+same position-based split [variance's own `in`/`out`](#definition-site-variance)
+already relies on, just on the other side of the name — declares that:
+
+```python
+def concat[T in (str, bytes)](a: T, b: T) -> T:
+    return a + b
+
+concat("x", "y")     # T is str
+concat(b"x", b"y")   # T is bytes
+concat("x", b"y")    # error: "x" and b"y" share no single member of the set
+```
+An ordinary bound wouldn't catch the mismatched call at all: `T: str |
+bytes` lets `T` widen to the union when arguments disagree, and
+whether that ever surfaces as an error depends entirely on whether the
+function body happens to do something that demands a concrete type.
+One that doesn't type-checks fine with mismatched arguments regardless:
+
+```python
+def first[T: str | bytes](a: T, b: T) -> T:
+    return a
+
+first("x", b"y")   # type-checks: T widens to str | bytes, and first
+                    # never needs a concrete type to return a unchanged
+```
+`in (str, bytes)` rejects the mismatch directly, at the call site,
+regardless of what the function does with its arguments — a real
+difference, not just a clearer spelling of the same check.
+
+A set needs at least two members — one leaves nothing to choose
+between — and it is an alternative to an ordinary bound, not an
+addition to one: a parameter takes either `T: X` or `T in (X, Y, ...)`,
+never both, since a set of alternatives has no single upper bound to
+layer a subtype constraint onto. It composes with variance the same
+way basedpython's own version does, since the two markers sit on
+opposite sides of the name: `class Container[in out T in (int, str)]:`
+declares `T` both invariant and restricted to exactly `int` or `str`.
+
 ## Higher-kinded parameters
 
 An ordinary generic parameter like `K` above stands for a type. Some
