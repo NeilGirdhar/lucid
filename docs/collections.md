@@ -41,7 +41,7 @@ already the ordinary job of the mutable view `!set`, the same split
 separate `MutableSet` to add:
 
 ```python
-trait Set[+T](Collection[T]):
+trait Set[out T](Collection[T]):
     def dispatch __and__(lhs: Self, rhs: Self) -> Self
     def dispatch __or__(lhs: Self, rhs: Self) -> Self
     def dispatch __sub__(lhs: Self, rhs: Self) -> Self

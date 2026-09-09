@@ -135,7 +135,7 @@ Wherever a type is expected — variable, parameter, and return annotations,
 generic parameter lists, trait member signatures — Lucid parses a *type
 expression* rather than an ordinary expression. Most syntax means the same
 thing in both grammars (`dict[str, int]`, `~T`, `!T`, and
-`Producer[+K]` all evaluate identically either way), but a type expression
+`Producer[out K]` all evaluate identically either way), but a type expression
 can use forms that mean something else, or nothing at all, as an ordinary
 expression — for example the TypedDict shape literal covered next.
 

@@ -82,12 +82,12 @@ views; see [Variance under ~T and !T](generics.md) for the full rule
 and why it never needs more than one:
 
 ```text
-InferenceModel[+=K]
+InferenceModel[~in out K]
 ```
-which reads as: invariant while mutable — `score` writes to
-`self._scores`, consuming `K` — but covariant once read-only or
-immutable, since the write that forced invariance is gone and only
-`labels: list[K]`'s read remains.
+which reads as: both `in` and `out` apply while mutable — `score`
+writes to `self._scores`, consuming `K`, that's the `in` use — but
+only `out` survives once read-only or immutable, since the write that
+forced invariance is gone and only `labels: list[K]`'s read remains.
 
 ### Read-only dictionaries
 
@@ -114,14 +114,14 @@ Lucid keeps these as views of the same collection abstraction instead,
 with one declaration governing all three:
 
 ```text
-dict[=K, +=V]
+dict[in out K, ~in out V]
 ```
 `K` stays invariant everywhere: both of its uses — `get`'s lookup and
 `keys()`'s enumeration — are non-mutating, so both survive onto the
 read-only view unchanged, and invariance survives with them. `V` is
-only ever produced by a non-mutating member (`get`) and only ever
-consumed by a mutating one (`__setitem__`), so the read-only view
-drops the one member forcing invariance and loosens to `+V`. A
+only ever produced by a non-mutating member (`get`) — the `out` use —
+and only ever consumed by a mutating one (`__setitem__`) — the `in`
+use — so the read-only view drops `in` and loosens to `out` alone. A
 narrower view that exposes only keys or only values can land on
 different variance again, for the same reason. Code does not need a
 separate `Mapping` type just to ask for a read-only dictionary-shaped

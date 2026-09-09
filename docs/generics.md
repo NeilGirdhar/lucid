@@ -7,24 +7,35 @@ implementer instead of a named one.
 
 ## Definition-site variance
 
-Lucid writes variance on the generic parameter where it is declared: `+K`
-for covariant, `-K` for contravariant, and `=K` for invariant. If a
-parameter is written without a variance marker, the checker warns, infers
-the narrowest valid variance, and offers an autofix — keeping most of the
-convenience of inferred variance during drafting, while still requiring the
-marker to be written into the source, and preserved or intentionally
-changed on future edits, before the API is accepted.
+Lucid writes variance on the generic parameter where it is declared:
+`out K` for covariant, `in K` for contravariant — the same keywords
+Kotlin and C# already use for the same jobs — and both together, `in
+out K`, for invariant. If a parameter is written with no marker at
+all, the checker warns and the linter fills in whichever of the three
+is correct — keeping most of the convenience of inferred variance
+during drafting, while still requiring the marker to be written into
+the source, and preserved or intentionally changed on future edits,
+before the API is accepted.
 
 ```python
-trait Producer[+K]:
+trait Producer[out K]:
     def get(self: ~Self) -> K
 
-trait Consumer[-K]:
+trait Consumer[in K]:
     def put(self, value: K) -> none
 
-class Cell[=K]:
+class Cell[in out K]:
     value: K
 ```
+`in out K` means invariant: no subtyping relationship between
+`Cell[A]` and `Cell[B]` at all, unless `A` and `B` already have one of
+their own — not bivariance, which would claim the opposite, that
+`Cell[A] <: Cell[B]` and `Cell[B] <: Cell[A]` both hold regardless of
+how `A` and `B` relate. That second claim is unsound — it would let a
+`Cell[Cat]` and a `Cell[Dog]` each stand in for the other — and
+Lucid's grammar has no way to write it: `in` and `out` together only
+ever mean "no promise either way," never "a promise both ways."
+
 Python's generic variance is often hidden in library declarations or stubs,
 inferred from the current member set rather than written down. Lucid puts
 variance on the definition instead because variance is part of the public
@@ -37,12 +48,12 @@ than letting it shift underneath callers as the trait evolves.
 
 ## Getting variance wrong
 
-Marking a parameter with the wrong variance does not fail to compile —
+Marking a parameter with the wrong keyword does not fail to compile —
 it type-checks right up until something depends on the mistake. Suppose
 `Consumer` above were declared covariant instead of contravariant:
 
 ```python
-trait Consumer[+K]:      # wrong: put(value: K) only consumes K
+trait Consumer[out K]:      # wrong: put(value: K) only consumes K
     def put(self, value: K) -> none
 
 class Dog(Animal): ...
@@ -52,43 +63,43 @@ def feed(c: Consumer[Animal]) -> none:
     c.put(Cat())
 
 dog_feeder: Consumer[Dog] = ...
-feed(dog_feeder)  # accepted under +K: Consumer[Dog] <: Consumer[Animal]
+feed(dog_feeder)  # accepted under out K: Consumer[Dog] <: Consumer[Animal]
 ```
-`dog_feeder` only knows how to `put` a `Dog`, but `+K` makes
+`dog_feeder` only knows how to `put` a `Dog`, but `out K` makes
 `Consumer[Dog]` a subtype of `Consumer[Animal]`, so `feed` can pass
 it a `Cat`. Covariance is sound only for a parameter that appears in
 *output* positions; `put`'s `value: K` is a pure input, so the
-soundness direction runs the other way. `-K` gives the checker the
+soundness direction runs the other way. `in K` gives the checker the
 subtyping relation that actually matches the capability on offer:
 `Consumer[Animal] <: Consumer[Dog]`, since something that can consume
 any `Animal` can stand in wherever something that consumes only `Dog`
 is needed — the same shape as a function parameter itself.
 
 A parameter used both ways — read back out somewhere, fed in somewhere
-else — cannot be sound at either variance and needs `=K`, invariant,
-the same reasoning `Cell[=K]` above already applies to a field that is
-both read and written.
+else — cannot be sound at either keyword alone and needs both,
+`in out K`, the same reasoning `Cell[in out K]` above already applies
+to a field that is both read and written.
 
 ## Variance under `~T` and `!T`
 
-A variance marker is written once, on the mutable type, but a type with
-[mutable, read-only, and immutable views](mutability.md) has three
-variances to account for, not one. `~T`'s members are always a subset
-of `T`'s — every mutating method drops out, nothing is ever added — so
-removing members can only remove a use of the parameter, never introduce
-one. That gives a directional result: if `T[K]` is `+K` or `-K`,
-`~T[K]` and `!T[K]` are forced to match it exactly, since a subset of
-"no member consumes `K`" is still "no member consumes `K`," and the
-same holds for "no member produces it." There is nothing left to compute
-or declare in either case.
+A variance keyword is written once, on the mutable type, but a type
+with [mutable, read-only, and immutable views](mutability.md) has
+three variances to account for, not one. `~T`'s members are always a
+subset of `T`'s — every mutating method drops out, nothing is ever
+added — so removing members can only remove a use of the parameter,
+never introduce one. That gives a directional result: if `T[K]` is
+`out K` or `in K`, `~T[K]` and `!T[K]` are forced to match it exactly,
+since a subset of "no member consumes `K`" is still "no member
+consumes `K`," and the same holds for "no member produces it." There
+is nothing left to compute or declare in either case.
 
-Only `=K`, invariant, leaves the views open. Invariance means some
-member produces `K` and some member consumes it — possibly the same
-member, possibly two different ones — and whether those survive onto
-`~T` depends on whether they happen to be mutating:
+Only `in out K`, invariant, leaves the views open. Invariance means
+some member produces `K` and some member consumes it — possibly the
+same member, possibly two different ones — and whether those survive
+onto `~T` depends on whether they happen to be mutating:
 
 ```python
-class Bag[=K]:
+class Bag[in out K]:
     def contains(self: ~Self, item: K) -> bool:   # non-mutating, consumes K
         ...
 
@@ -98,35 +109,39 @@ class Bag[=K]:
 `Bag` is invariant: `pop` produces `K`, `contains` consumes it.
 `~Bag` drops `pop` — mutating — and keeps `contains` — it doesn't
 mutate anything — so the only surviving use of `K` is as an input.
-`~Bag[-K]` is sound: something that can check membership against any
-`Animal` can stand in wherever checking membership against only
-`Dog` is needed. [Read-only dictionaries](mutability.md) shows the
-opposite outcome for the same reason in reverse — a mutating consumer
-drops out, leaving only a producer behind, and the view loosens to
-covariant instead.
+That leftover `in` use is sound: something that can check membership
+against any `Animal` can stand in wherever checking membership
+against only `Dog` is needed. [Read-only dictionaries](mutability.md)
+shows the opposite outcome for the same reason in reverse — a
+mutating consumer drops out, leaving only a producer behind, and the
+view loosens to covariant instead.
 
-Since an invariant mutable type can loosen to `+K`, to `-K`, or stay
-`=K`, and which of the three isn't knowable from the mutable type's
-own marker alone, two more markers name the outcome directly: `+=K`
-for invariant-that-loosens-to-covariant, `-=K` for
-invariant-that-loosens-to-contravariant. Together with `+`, `-`, and
-plain `=`, this covers every reachable combination — the other four of
-the nine naively possible (mutable, view) pairings, such as a covariant
-mutable type with an invariant view, can never happen, so there is no
-marker for them:
+Since an invariant mutable type can loosen to covariant, to
+contravariant, or stay invariant under its views, and which of the
+three isn't knowable from `in out` alone, a `~` on one of the two
+keywords names the outcome directly — it marks the half that does
+*not* survive to the read-only and immutable views. `Bag` above is
+really `class Bag[in ~out K]`: `out` drops, `in` survives. [Safe
+covariance](mutability.md#safe-covariance)'s `InferenceModel` is the
+opposite case, `~in out K`: `in` drops, `out` survives. Together with
+plain `out K` and `in K`, this covers every reachable combination —
+the other four of the nine naively possible (mutable, view) pairings,
+such as a covariant mutable type with an invariant view, can never
+happen, so there is no marker for them:
 
 | Marker | Mutable | `~T` / `!T` |
 | --- | --- | --- |
-| `+K` | covariant | covariant (forced) |
-| `-K` | contravariant | contravariant (forced) |
-| `=K` | invariant | invariant |
-| `+=K` | invariant | covariant |
-| `-=K` | invariant | contravariant |
+| `out K` | covariant | covariant (forced) |
+| `in K` | contravariant | contravariant (forced) |
+| `in out K` | invariant | invariant |
+| `~in out K` | invariant | covariant |
+| `in ~out K` | invariant | contravariant |
 
 `~T` and `!T` always land on the same variance as each other:
 freezing constrains what a value's fields *store*, not which methods
 exist or how they use `K`, so `!T`'s callable member set is exactly
-`~T`'s. One marker on the mutable declaration settles all three views.
+`~T`'s. One keyword pair on the mutable declaration settles all
+three views.
 
 ## Leaving a type parameter unspecified
 

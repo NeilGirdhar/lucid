@@ -17,7 +17,7 @@ freely — nothing marks the difference except whether a body follows:
 trait Sized:
     def __len__(self: ~Self) -> int
 
-trait Cache[=K, =V]:
+trait Cache[in out K, in out V]:
     def get(self: ~Self, key: K) -> V | none
     def put(self, key: K, value: V) -> none
     def is_fresh(self: ~Self, key: K) -> bool

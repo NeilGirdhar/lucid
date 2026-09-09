@@ -91,8 +91,8 @@ runtime.**
 never has to mean "too small to use."**
 
 * generics carry real variance, not just erased type parameters
-    * `trait Cache[=K, =V]` — definition-site `+`/`-`/`=` variance,
-      not a call-site-only or fully erased scheme
+    * `trait Cache[in out K, in out V]` — definition-site `in`/`out`
+      variance, not a call-site-only or fully erased scheme
 * binary operators dispatch on both operand types
     * `a + b` picks an implementation from both operands' types at
       once — no `__radd__`, no `NotImplemented` negotiation
@@ -103,13 +103,13 @@ never has to mean "too small to use."**
 ## Example
 
 ```python
-trait Scorable[+K]:
+trait Scorable[out K]:
     def score(self, item: K) -> float
 
     def is_confident(self, item: K) -> bool:
         return self.score(item) >= 0.8
 
-class InferenceModel[+=K](Scorable[K]):
+class InferenceModel[~in out K](Scorable[K]):
     weights: Tensor
     labels: list[K]
     _scores: dict[K, float]

@@ -19,7 +19,8 @@ one new or narrowed meaning:
 [`elif`](match.md#exhaustive-pattern-matching),
 [`else`](for-and-while.md#no-loop-else), [`except`](exceptions.md),
 [`finally`](exceptions.md), [`for`](for-and-while.md),
-[`from`](import.md), [`if`](if.md), [`import`](import.md), `in`,
+[`from`](import.md), [`if`](if.md), [`import`](import.md),
+[`in`](generics.md#definition-site-variance),
 [`is`](identity-checks.md), [`not`](type-operations.md#negation-types),
 [`or`](type-operations.md#intersection-types),
 [`pass`](for-and-while.md#unspecified-simple-statements),
@@ -35,12 +36,13 @@ Lucid adds keywords for construction, destructuring, class member
 kinds, closing off rebinding or further class inheritance or
 overriding, explicit overrides, declining generated behavior,
 guaranteed-cleanup context managers, abstraction, dispatch, external
-trait implementation, type expressions, existential quantification,
-exhaustive pattern matching, and elision. Listed in the order each is
-first defined: [`final`](names.md#final-local-variables),
+trait implementation, type expressions, definition-site variance,
+existential quantification, exhaustive pattern matching, and elision.
+Listed in the order each is first defined: [`final`](names.md#final-local-variables),
 [`_`](names.md#black-hole-assignment-with-_), [`let`](destructuring.md),
 [`type`](types.md#type-aliases), [`trust`](casting.md),
 [`without`](mutability.md#equality-ordering-and-hashing),
+[`out`](generics.md#definition-site-variance),
 [`any`](generics.md#existential-types),
 [`skip`](calls.md#skip-in-calls),
 [`if_broken`](for-and-while.md#if_broken-loop-clauses),

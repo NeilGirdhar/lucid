@@ -48,7 +48,7 @@
   [`round`](numeric-types.md#capability-traits),
   [`len`](strings.md#strings-are-not-sequences) — kept, each
   dispatched through the capability trait that already covers it
-  (`SupportsAbs[+K]`, `SupportsRound[+K]`, `Sized`) rather than a
+  (`SupportsAbs[out K]`, `SupportsRound[out K]`, `Sized`) rather than a
   single hardcoded signature — `abs` returns `int` for an `int` and
   `float` for a `complex`, the type-level consequence of dispatching
   on the argument's own type instead of calling one fixed method.

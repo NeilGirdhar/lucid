@@ -308,10 +308,10 @@ trait SupportsIndex:
     # Exact indexability, not just explicit int(x) conversion.
     def __index__(self: ~Self) -> int
 
-trait SupportsAbs[+K]:
+trait SupportsAbs[out K]:
     def __abs__(self: ~Self) -> K
 
-trait SupportsRound[+K]:
+trait SupportsRound[out K]:
     def __round__(self: ~Self, ndigits: int | none = none) -> K
 
 class int(SupportsInt, SupportsFloat, SupportsComplex, SupportsIndex):
