@@ -6,6 +6,7 @@ repo_url = "https://github.com/NeilGirdhar/lucid"
 repo_name = "NeilGirdhar/lucid"
 edit_uri = "edit/main/docs/"
 docs_dir = "docs"
+extra_javascript = ["javascripts/lucid-highlight.js"]
 
 nav = [
   { "Introduction" = "index.md" },
