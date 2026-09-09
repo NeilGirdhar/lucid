@@ -34,6 +34,9 @@ that decision:
   to call directly
 * [`vars`](construction.md#field-reflection-with-fields) — no
   `__dict__` to return; `fields` replaces it
+* [`dir`](construction.md#field-reflection-with-fields) — `fields`
+  replaces it too, on a module: an ordered, documented walk instead
+  of an unordered list of bare names
 * [`next`](for-and-while.md#explicit-iteration) — advancing an
   iterator by hand is rare enough that it needs no builtin: `Iterator`
   declares `next` as an ordinary method, `cursor.next()`, not a
@@ -56,3 +59,11 @@ that decision:
 * [`delattr`](classes.md#no-del-on-fields) — the same rule `del
   obj.field` already breaks on; a declared field is part of a class's
   fixed shape, not an optional slot a call can remove
+* `bin`, `oct`, `hex` — the f-string format-spec mini-language already
+  does this: `f"{x:#b}"`, `f"{x:#o}"`, `f"{x:#x}"` (`f"{x:b}"` etc.
+  without the `#` for the prefix-less form each function's own
+  argument-free spelling can't reach anyway), one mini-language
+  instead of a function per base
+* `chr`, `ord` — not bare builtins; they move to `string.chr(...)`
+  and `string.ord(...)`, the same specific-audience move `ascii`
+  already makes

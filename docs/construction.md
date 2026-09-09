@@ -102,8 +102,8 @@ items: list[A] = [A()]   # list[A], not list[final A]
 
 `replace` and the default constructor both already have to walk a
 class's fields generically. `fields` exposes that same walk directly,
-the way Python's `dataclasses.fields` does, dispatched on whether it is
-given an instance or the class itself:
+the way Python's `dataclasses.fields` does, dispatched on what it's
+given — an instance, a class, a trait, or a module:
 
 ```python
 def dispatch fields[T](obj: T) -> Iterable[(name: str, value: object, doc: str | none, metadata: dict[str, object])]:
@@ -111,10 +111,17 @@ def dispatch fields[T](obj: T) -> Iterable[(name: str, value: object, doc: str |
 
 def dispatch fields[T](cls: class[T]) -> Iterable[(name: str, doc: str | none, metadata: dict[str, object])]:
     ...
+
+def dispatch fields(trait: type Trait) -> Iterable[(name: str, obligation: bool, doc: str | none, metadata: dict[str, object])]:
+    ...
+
+def dispatch fields(mod: Module) -> Iterable[(name: str, doc: str | none)]:
+    ...
 ```
-Both yield fields in declaration order. The instance form pairs each
-field's name with its current value; the class form has no instance to
-read a value from, so it yields only names. Both carry `doc` and
+The instance and class forms yield fields in declaration order — the
+instance form pairs each field's name with its current value; the
+class form has no instance to read a value from, so it yields only
+names. Both carry `doc` and
 `metadata` from [Field docstrings and metadata](class-members.md), `none`
 and `{:}` respectively when a field declares neither.
 
@@ -126,3 +133,23 @@ class Config:
 c = Config("Ada")
 list(fields(c))[0]      # (name="name", value="Ada", doc="the user's display name", metadata={:})
 list(fields(Config))[0]  # (name="name", doc="the user's display name", metadata={:})
+```
+The trait form walks a trait's own declared members — fields,
+getters, setters, methods, classmethods, and factories alike —
+reporting whether each one is a bodyless obligation or a default with
+a body ([Body or no body](traits.md#body-or-no-body)), the same
+distinction the checker already uses to decide whether a class using
+the trait still has something left to implement. `type Trait` reifies
+the trait the same way [Reifying a type
+expression](types.md#reifying-a-type-expression) already reifies any
+other type expression, since a trait is not itself a callable value
+the way a class is:
+
+```python
+list(fields(type Sized))[0]  # (name="__len__", obligation=True, doc=none, metadata={:})
+```
+The module form walks a module's own top-level, visible definitions —
+functions, classes, traits, and module-level bindings — the structured
+replacement for Python's `dir()`: names in declaration order, each with
+its own docstring, rather than an unordered list of strings with
+nothing else attached.

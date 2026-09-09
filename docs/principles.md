@@ -28,7 +28,9 @@ Where Python lets more than one way survive — three generations of
 string formatting, or a named-fields bag as a class, `dataclass`,
 `NamedTuple`, or `TypedDict` — [Zero-deprecation](#zero-deprecation)
 lets Lucid pick one and enforce it by construction:
-[No tuple or namedtuple type](collections.md) picked named records once.
+[No tuple or namedtuple type](collections.md) picked named records
+once, and [No `%` string formatting](strings.md#no-string-formatting)
+picked f-strings once.
 
 ## Explicit over implicit
 

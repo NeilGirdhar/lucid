@@ -4,7 +4,10 @@
 * Basic types, listed in the order each is first defined:
   [`bool`](numeric-types.md#exact-bool), [`int`](numeric-types.md#exact-int),
   [`float`](numeric-types.md#exact-float-and-float-like-input),
-  [`complex`](numeric-types.md#exact-complex), and [`str`](strings.md)
+  [`complex`](numeric-types.md#exact-complex), [`str`](strings.md),
+  `Bytes`, and `ByteArray` — the last two capitalized, unlike the
+  others here, since `bytes`/`bytearray` stay the ordinary lowercase
+  conversion calls, not the type names
 * Capability traits, the main ABC-equivalent nominal traits (see
   [No structural traits](traits.md#no-structural-traits)), listed in
   the order each is first defined:
@@ -23,8 +26,9 @@
   [`SourceLocation`](call-site-captured-values.md#caller-captured-source-locations),
   [`VarName`](call-site-captured-values.md#name-captured-identifiers),
   [`Sentinel`](call-site-captured-values.md#name-captured-identifiers),
-  [`Self`](class-members.md#read-only-methods-with-self), and
-  [`DottedPath`](project-yaml.md#no-__module__-or-__qualname__)
+  [`Self`](class-members.md#read-only-methods-with-self),
+  [`DottedPath`](project-yaml.md#no-__module__-or-__qualname__), and
+  [`Module`](construction.md#field-reflection-with-fields)
 
 ## Builtin functions
 
@@ -37,11 +41,10 @@
   `float` for a `complex`, the type-level consequence of dispatching
   on the argument's own type instead of calling one fixed method.
 * [`fields`](construction.md#field-reflection-with-fields) — walks a
-  class's own fields, dispatched on whether it's given an instance or
-  the class itself, replacing Python's `vars()`: Lucid has no
-  `__dict__` for `vars()` to return, and `fields` gives back something
-  `vars()` never could — declared order, each field's docstring, and
-  its metadata, not just a name/value pair.
+  class's, trait's, or module's own members, dispatched on which it's
+  given (an instance or the class itself included), replacing both
+  Python's `vars()` (no `__dict__` to return) and `dir()` (an ordered,
+  documented walk instead of an unordered list of bare names).
 * `zip` — always strict. Mismatched-length iterables are a runtime
   error, never silent truncation to the shortest — the same class of
   mistake `assert`'s required parentheses closes elsewhere, just for
