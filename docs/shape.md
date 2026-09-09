@@ -4,10 +4,9 @@ A numeric array's shape — how many dimensions it has, and how large
 each one is — is exactly the kind of fact [Type vocabulary](types.md)
 already wants visible at the definition site, the same way mutability
 and variance are. `typing.Shape` and `typing.shape[...]` give it a
-type, and this covers the library of [match types](match-types.md)
-built on top of it for taking one apart, combining two, and checking
-the constraints an operation like reshape or matrix multiplication
-actually needs.
+type, and this covers the operations built on top of it: taking one
+apart, combining two, and checking the constraints an operation like
+reshape or matrix multiplication actually needs.
 
 ## `typing.Shape` and `typing.shape[...]`
 
@@ -42,158 +41,148 @@ class Array[D: DataType, S: typing.Shape | none]:
 checked: Array[Float32, typing.shape[2, 3, 4]]
 unchecked: Array[Float32, none]
 ```
+At runtime, a shape value is an ordinary `!list[int]` — hashable,
+immutable, exactly the sequence [Hashable sequences](collections.md#hashable-sequences)
+already recommends for this job. `typing.shape[...]` is the type such
+a value can be checked against, the same relationship any other type
+has to its values; a concrete `![2, 3, 4]` satisfies
+`typing.shape[2, 3, 4]` the same way `(x=1, y=2)` satisfies
+`(x: int, y: int)`.
+
 Everything from here on lives in the `typing.shape` module; the
 `typing.shape.` prefix is dropped from the definitions below the way
 `iteration.done`'s own definition, inside the `iteration` module,
 never writes `iteration.` either — only a caller from outside needs
 the qualified name.
 
-## Taking a shape apart
+## Shape is a sequence
 
-[Match types](match-types.md) already showed `Rank`, peeling one
-position at a time. `Get` and `DropAt` peel down to a specific index
-instead of peeling everything:
-
-```python
-type Get[S: Shape, I: int] = match S:
-    case shape[Head, *Rest]: match I:
-        case 0: Head
-        case N: Get[Rest, N - 1]
-
-type DropAt[S: Shape, I: int] = match S:
-    case shape[Head, *Rest]: match I:
-        case 0: Rest
-        case N: shape[Head, *DropAt[Rest, N - 1]]
-```
-`InsertAt` runs the same walk, splicing a new dimension in instead of
-removing one:
+Because `shape[...]` fixes both its length and its order, indexing,
+slicing, concatenation, and equality already mean exactly what they
+mean for any other sequence, extended into type position the same way
+[Arithmetic on literal types](type-operations.md#arithmetic-on-literal-types)
+already extends `+`/`-`/`*` to a pair of `Literal[int]`:
 
 ```python
-type InsertAt[S: Shape, I: int, D: int] = match I:
-    case 0: shape[D, *S]
-    case N: match S:
-        case shape[Head, *Rest]: shape[Head, *InsertAt[Rest, N - 1, D]]
+type Get[S: Shape, I: int] = S[I]
+type DropAt[S: Shape, I: int] = S[:I] + S[I + 1:]
+type InsertAt[S: Shape, I: int, D: int] = S[:I] + shape[D] + S[I:]
+type Concat[A: Shape, B: Shape] = A + B
+type Reverse[S: Shape] = S[::-1]
 ```
+None of these need to walk the shape position by position: a fixed
+index or a fixed slice boundary already says exactly which positions
+are wanted, whether the other end is a concrete length or a generic
+parameter standing in for one.
 
-## Recombining shapes
-
-`Concat` glues two shapes end to end — prepending a batch shape onto a
-fixed trailing shape is the common case — and `Reverse` is built
-directly from it:
-
-```python
-type Concat[A: Shape, B: Shape] = match A:
-    case shape[]: B
-    case shape[Head, *Rest]: shape[Head, *Concat[Rest, B]]
-
-type Reverse[S: Shape] = match S:
-    case shape[]: shape[]
-    case shape[Head, *Rest]: Concat[Reverse[Rest], shape[Head]]
-```
 Transpose — swapping the last two axes, the case that actually comes
-up, as opposed to swapping two arbitrary indices, which composes from
-`Get`/`DropAt`/`InsertAt` but needs care once the first removal shifts
-the second index — needs no index arithmetic at all, since the
-positions it cares about are already at the front once the shape is
-reversed:
+up, as opposed to swapping two arbitrary indices — is the same
+slicing, just naming both ends directly instead of walking to them:
 
 ```python
-type SwapLast2[S: Shape] = match Reverse[S]:
-    case shape[Last, SecondLast, *Rest]: Reverse[shape[SecondLast, Last, *Rest]]
+type SwapLast2[S: Shape] = S[:-2] + shape[S[-1], S[-2]]
 ```
 
 ## Batch dimensions
 
-The single most common shape pattern in real numeric code is "any
-number of leading batch dimensions, then a fixed trailing shape" —
-`[*Batch, 3, 224, 224]`. That's [the same star that already captures a
-run of unpacked values](collections.md#unpacking), just with a fixed
-suffix following it instead of nothing:
+The single most common shape pattern in real numeric code is "some
+number of leading batch dimensions, then a fixed trailing shape," and
+a fixed-length slice from the *right* already answers it:
 
 ```python
-type BatchDims[S: Shape] = match S:
-    case shape[*Batch, 3, 224, 224]: Batch
-
-type TrailingShape[S: Shape] = match S:
-    case shape[*_, 3, 224, 224]: shape[3, 224, 224]
+type BatchDims[S: Shape] = S[:-3]
+type TrailingShape[S: Shape] = S[-3:]
 ```
+`S[:-3]` is every position except the fixed trailing three, however
+many leading positions there are; `S[-3:]` is exactly those three. A
+slice's other boundary is implicit in "everything else," so pulling
+out an unbounded batch prefix needs no name or index of its own — only
+the fixed end needs a number.
 
-## Broadcasting
+## Broadcasting and other runtime checks
+
+Getting a position, dropping one, concatenating, reversing — every
+operation above is purely structural: the checker can answer it from
+the shapes' literal lengths and positions alone, the same way it
+resolves any other type expression. Broadcasting, matrix
+multiplication's shape rule, reshape validity, and concatenation along
+an existing axis are a different kind of question: whether two
+*already-known* shapes are compatible, which is exactly the sort of
+fact [Results](results.md) already treats as an ordinary, recoverable
+return value rather than something the type system has to prove ahead
+of time.
 
 Two dimensions are broadcast-compatible if they're equal, or either
-one is exactly `1` — a per-position check with no arithmetic in it,
-using the same trick `BatchDims` and `promote`'s own `ReachableFrom`
-both already rely on: a name already bound (`B` below) becomes an
-exact-match pattern the next time it's written:
+one is exactly `1`:
 
 ```python
-type BroadcastDim[A: int, B: int] = match A:
-    case B: A
-    case 1: B
-    case _: match B:
-        case 1: A
-        case _: error   # A and B are not broadcast-compatible
+def broadcast_dim(a: int, b: int) -> int | none:
+    if a == b:
+        return a
+    if a == 1:
+        return b
+    if b == 1:
+        return a
+    return none
 ```
-Broadcasting aligns from the *right*, the opposite end from where
-peeling naturally recurses, so `BroadcastAligned` runs on reversed
-shapes, and `Broadcast` reverses the result back:
+Broadcasting aligns from the *right*, so `broadcast` reverses both
+shapes, aligns from the front, and reverses the result back:
 
 ```python
-type BroadcastAligned[A: Shape, B: Shape] = match A:
-    case shape[]: B
-    case shape[AHead, *ARest]: match B:
-        case shape[]: A
-        case shape[BHead, *BRest]:
-            shape[BroadcastDim[AHead, BHead], *BroadcastAligned[ARest, BRest]]
-
-type Broadcast[A: Shape, B: Shape] = Reverse[BroadcastAligned[Reverse[A], Reverse[B]]]
+def broadcast(a: !list[int], b: !list[int]) -> !list[int] | none:
+    ra, rb = a[::-1], b[::-1]
+    dims: !list[int] = ![]
+    for i in range(max(len(ra), len(rb))):
+        da = ra[i] if i < len(ra) else 1
+        db = rb[i] if i < len(rb) else 1
+        match broadcast_dim(da, db):
+            case none:
+                return none
+            case d:
+                dims = ![d, *dims]
+    return dims
 ```
-
-## Matrix multiplication's shape rule
-
 Matmul needs the inner dimensions to match exactly and the batch
-dimensions to broadcast — `BatchDims`'s rest-with-suffix pattern picks
-out the last two positions, and `Broadcast` handles the rest:
+dimensions — everything before the last two axes — to broadcast:
 
 ```python
-type MatmulShape[A: Shape, B: Shape] = match A:
-    case shape[*ABatch, M, K]: match B:
-        case shape[*BBatch, K, N]: shape[*Broadcast[ABatch, BBatch], M, N]
-        case _: error   # inner dimensions don't match, or B has fewer than 2 dimensions
-    case _: error   # A has fewer than 2 dimensions
+def matmul_shape(a: !list[int], b: !list[int]) -> !list[int] | none:
+    if len(a) < 2 or len(b) < 2:
+        return none
+    if a[-1] != b[-2]:
+        return none
+    match broadcast(a[:-2], b[:-2]):
+        case none:
+            return none
+        case batch:
+            return batch + ![a[-2], b[-1]]
 ```
-Reusing `K` as the pattern in `B`'s case, rather than capturing a
-fresh name and comparing it afterward, is the exact-match rule doing
-the dimension check and the destructuring in the same step.
-
-## Reshape validity
-
-Reshaping is valid only when the total element count is unchanged —
-the one property in this whole library that's a genuine computation,
-not a structural comparison. `Product` folds
-[literal multiplication](type-operations.md#arithmetic-on-literal-types)
-over a shape; `Reshape` computes it once for each side and compares:
+Reshaping is valid only when the total element count is unchanged:
 
 ```python
-type Product[S: Shape] = match S:
-    case shape[]: 1
-    case shape[Head, *Rest]: Head * Product[Rest]
+def product(s: !list[int]) -> int:
+    total = 1
+    for dim in s:
+        total *= dim
+    return total
 
-type Reshape[S: Shape, NewShape: Shape] = match Product[S]:
-    case Total: match Product[NewShape]:
-        case Total: NewShape
-        case _: error   # element count doesn't match
+def reshape_is_valid(s: !list[int], new_shape: !list[int]) -> bool:
+    return product(s) == product(new_shape)
 ```
-Concatenation along an axis needs the same kind of computed value —
+Concatenation along an existing axis needs the same kind of check —
 the sizes of the concatenated axis add, and every other axis has to
-match exactly, which the exact-match rule gets for free by reusing the
-already-bound `Rest`:
+match exactly:
 
 ```python
-type ConcatAxis0[A: Shape, B: Shape] = match A:
-    case shape[AHead, *Rest]: match B:
-        case shape[BHead, *Rest]: shape[AHead + BHead, *Rest]
+def concat_axis0(a: !list[int], b: !list[int]) -> !list[int] | none:
+    if a[1:] != b[1:]:
+        return none
+    return ![a[0] + b[0], *a[1:]]
 ```
+Each of these returns `none` for an incompatible pair rather than
+raising, the same trade [Results](results.md) makes for every other
+expected, recoverable failure — a caller checks the result with an
+ordinary `match`, the same way any other fallible call is checked.
 
 ## Still open
 

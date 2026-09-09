@@ -259,41 +259,40 @@ exact same rule ("convert both to the wider type, then add"), duplicated
 once per pair instead of stated once.
 
 The fix is to stop enumerating pairs and instead give each type exactly
-one fact about itself: what it promotes to when combined with something
-wider. `Promotes` demands nothing but that fact, declared as an
-associated type rather than a method — a type relationship belongs at
-the definition site, the same principle already behind definition-site
-variance and mutability views, not something computed by running code:
+one fact about itself: every other type it promotes to. `Promotes`
+demands nothing but that fact, declared as a classvar rather than a
+method — a type relationship belongs at the definition site, the same
+principle already behind definition-site variance and mutability
+views, not something computed by running code:
 
 ```python
 trait Promotes:
-    type Wider
-
-class float32(Promotes):
-    type Wider = float64 | complex64
+    classvar promotes_to: !set[type]
 
 class int32(Promotes):
-    type Wider = int64 | float32
+    classvar promotes_to = {int64, float32, float64, complex64, complex128}
+
+class float32(Promotes):
+    classvar promotes_to = {float64, complex64, complex128}
 
 class float64(Promotes):
-    type Wider = complex128
+    classvar promotes_to = {complex128}
 
 class complex128(Promotes):
-    type Wider = Never
+    classvar promotes_to = {}
 ```
-A type can widen in more than one direction — `float32` gains precision
-toward `float64` or gains an imaginary part toward `complex64` —
-because real promotion is a lattice, not a chain: `Wider` names a union
-of immediate neighbors, not a single next step. `Never`, already used
-elsewhere for "provably no value," marks the top of the lattice.
+`promotes_to` is each type's full promotion set, not just its nearest
+neighbor — `int32` lists `complex128` directly, rather than leaving a
+reader (or the checker) to chase `int32 → float32 → complex64 →
+complex128` by hand. Writing out the closure once, at the widest
+type's declaration, costs less than a search does every time two
+types combine, and it makes the relationship exactly as visible as
+`Wider` was ever trying to be — just stated instead of computed.
 
-`promote[A, B]` is a parameterized type like any other — `Array[A]`,
-`list[A]`, `PyTree[L]` — living in the same type-expression grammar
-every generic type already does. Nothing about *where* it lives is new;
-what is new is *how* it resolves: given two `Promotes` types, to their
-least upper bound, the unique type reachable by following `Wider` from
-both, closest to both of them, rather than by plain substitution. A
-generic arithmetic operator can then be written once, for the whole
+[`promote[A, B]`](type-operations.md#promotion) finds the two types'
+common target directly from these sets — no walk required, since each
+set already contains everything reachable, not just one step of it.
+A generic arithmetic operator can then be written once, for the whole
 family, instead of once per pair:
 
 ```python
@@ -308,35 +307,4 @@ already lets any type expression become one, here to get the concrete
 class `common(lhs)` needs to call. This case only ever fires when `A`
 and `B` differ — `int64.__add__(int64, int64)` is strictly more
 specific, the same rule that already lets `list[A]` beat a bare `A`.
-
-`promote[A, B]` itself is a [match type](types.md): walk upward from
-`B`, testing at each step whether the current candidate is reachable
-by walking upward from `A`, and stop at the first one that is —
-`B`'s own chain is visited narrowest first, so the first hit is the
-least upper bound, not just some common ancestor:
-
-```python
-type ReachableFrom[X: Promotes, From: Promotes] = match From:
-    case X: X
-    case _: match From.Wider:
-        case Never: Never
-        case W: ReachableFrom[X, W]
-
-type promote[A: Promotes, B: Promotes] = match ReachableFrom[B, A]:
-    case Never: match B.Wider:
-        case Never: error   # A and B share no common promotion target
-        case NextB: promote[A, NextB]
-    case found: found
-```
-`ReachableFrom` is exactly what makes `Wider`'s branching safe:
-`float32`'s `Wider` is a union, so testing reachability through it
-distributes over both branches, and a `Never` from a branch that misses
-disappears against a hit from the branch that doesn't, the same way
-`Never | X` always collapses to `X`. `int32 + complex64` resolves
-to `complex64` directly this way — `int32 → float32 → complex64` is
-already a path, so no promotion has to reach all the way to
-`complex128` for it. This assumes the graph a `Promotes` hierarchy
-declares is acyclic with a genuine top, the same well-formedness Julia's
-own `promote_type` quietly requires of its authors — a cycle in
-`Wider` would make `promote` search forever instead of erroring.
 

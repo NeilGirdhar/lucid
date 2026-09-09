@@ -204,8 +204,9 @@ leaves: PyTree[int] = [1, {"a": 2, "b": [3, 4]}, 5]
 ```
 Recursion is what makes a type like `PyTree` expressible at all: at every
 level, the shape is either a leaf, or one of the listed containers holding
-that very same shape one level down. [Match types](match-types.md) picks
-a shape like this apart instead of building one up.
+that very same shape one level down. [Operations](type-operations.md) covers
+the other direction — combining and transforming types that already exist,
+rather than assembling a new one from scratch.
 
 ## Reifying a type expression
 

@@ -69,8 +69,35 @@ ordinary value-level operators:
 type Product[A: int, B: int] = A * B
 ```
 `Product[3, 4]` is `Literal[12]` — computed once, at the type level,
-the same way [`promote[A, B]`](dispatch.md#promotion) computes a type
-instead of substituting one. Comparing two computed literals is
-ordinary type equality, the same check that already decides whether
-any other two types match.
+the same way `promote[A, B]` (below) computes a type instead of
+substituting one. Comparing two computed literals is ordinary type
+equality, the same check that already decides whether any other two
+types match.
+
+## Promotion
+
+`promote[A, B]` is a parameterized type like any other — `Array[A]`,
+`list[A]`, `PyTree[L]` — living in the same type-expression grammar
+every generic type already does. Nothing about *where* it lives is
+new; what is new is *how* it resolves: given two
+[`Promotes`](dispatch.md#promotion) types, to whichever one is already
+listed in the other's `promotes_to`. Since each type's `promotes_to`
+is already its full promotion set rather than one step of it, that
+membership test is the entire computation — no walk, no recursion,
+just the ordinary `in` operator reused in type position, the same way
+`+`/`-`/`*` were reused for literal arithmetic above:
+
+```python
+type promote[A: Promotes, B: Promotes] =
+    B if B in A.promotes_to else
+    A if A in B.promotes_to else
+    error   # A and B share no common promotion target
+```
+`int32 + complex64` resolves to `complex64` directly, because
+`int32.promotes_to` already contains `complex64` — not because
+anything walked there through `float32` first. The two `if`/`else`
+branches are symmetric on purpose: `A in B.promotes_to` covers the
+case where `B` is actually the narrower type, so `promote[int32,
+complex64]` and `promote[complex64, int32]` resolve the same way
+regardless of which argument came first.
 
