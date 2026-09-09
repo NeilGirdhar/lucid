@@ -62,7 +62,7 @@ Lucid discards `global` and `nonlocal`, Python's scope-rebinding
 declarations — see the `No global` and `No nonlocal` rules in
 [Scope](scope.md).
 
-Lucid discards `lambda`. It is redundant, not a sign that anonymous
-functions are gone: an unnamed `def` is one (see
-[Anonymous functions](calls.md)), needing no keyword of its own.
+Lucid discards `lambda`. It's spelled `def:` now, generalized: an
+anonymous function is just a `def` with no name (see
+[Anonymous functions](calls.md)).
 
