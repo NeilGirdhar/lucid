@@ -303,7 +303,7 @@ def dispatch __add__[A: Promotes, B: Promotes](lhs: A, rhs: B) -> promote[A, B]:
 ```
 `-> promote[A, B]` is the checker resolving that type; `type
 promote[A, B]` inside the body is the same computation, reified into an
-ordinary value the way [Type expressions and the type keyword](types.md)
+ordinary value the way [The `type` keyword](types.md#the-type-keyword)
 already lets any type expression become one, here to get the concrete
 class `common(lhs)` needs to call. This case only ever fires when `A`
 and `B` differ — `int64.__add__(int64, int64)` is strictly more

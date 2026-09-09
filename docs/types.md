@@ -31,7 +31,7 @@ The word itself appears in exactly these roles in Lucid, and no others:
   vocabulary, not syntax.
 - **Type expression**, as a grammar — the parsing mode that applies in
   annotation positions, generic parameter lists, and trait member
-  signatures (see [Type expressions and the type keyword](#type-expressions-and-the-type-keyword)), as opposed to
+  signatures (see [Type expressions](#type-expressions)), as opposed to
   the ordinary expression grammar used everywhere else. Also not syntax by
   itself — it names which grammar is in effect at a given position.
 - `type Name = <type expression>` — the alias statement, giving a type
@@ -147,7 +147,7 @@ excludes the whole union. Nesting follows the same rule as every other
 type combinator here: parenthesize to bind negation across `|` or
 `&`; unparenthesized, it binds to the type immediately next to it.
 
-## Type expressions and the `type` keyword
+## Type expressions
 
 Wherever a type is expected — variable, parameter, and return annotations,
 generic parameter lists, trait member signatures — Lucid parses a *type
@@ -157,6 +157,8 @@ thing in both grammars (`dict[str, int]`, `~T`, `!T`, and
 can use forms that mean something else, or nothing at all, as an ordinary
 expression — for example the TypedDict shape literal in
 [Strings and collections](collections.md).
+
+## The `type` keyword
 
 The `type` keyword crosses between the two grammars, in the two directions
 that matter:
@@ -226,7 +228,7 @@ Value-level `match` is a statement, deliberately without a case-body-
 as-implicit-expression form, because that would make an ordinary
 statement block secretly double as a value some of the time. A match
 type has no such ambiguity to guard against: it lives entirely in the
-type-expression grammar [Type expressions and the type keyword](#type-expressions-and-the-type-keyword)
+type-expression grammar [Type expressions](#type-expressions)
 already describes, and every case's only job, ever, is to produce one
 type — so each case is a bare type expression, no block form needed.
 Pattern capture follows the same convention Python's own structural
@@ -283,7 +285,7 @@ flag: Literal[True]
 ```
 None of this is ambiguous with what `1 | 2 | 3` means as a value,
 because an annotation is already parsed as a type expression
-([Type expressions and the type keyword](#type-expressions-and-the-type-keyword)), not an ordinary one — the
+([Type expressions](#type-expressions)), not an ordinary one — the
 same separation that already lets `&`, `|`, and `not` mean
 something different there than they do in a value. The shorthand is
 for a literal written fresh, not for every singleton value a name
