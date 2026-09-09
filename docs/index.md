@@ -29,11 +29,10 @@ Four properties follow from that:
 
 Lucid borrows Python's readable surface syntax, Java-style single class
 inheritance plus multiple traits, Scala-style definition-site type
-information, Julia-style multiple dispatch, basedpython's fresh
-per-iteration loop bindings, Kotlin-style function types, and Rust's
-split between recoverable and unrecoverable errors — made possible by a
-zero-deprecation release cadence that lets Lucid choose the cleaner rule
-instead of the Python-compatible one throughout the language.
+information, Julia-style multiple dispatch, Kotlin-style function types,
+and Rust's split between recoverable and unrecoverable errors — made
+possible by a zero-deprecation release cadence that lets Lucid choose the
+cleaner rule instead of the Python-compatible one throughout the language.
 
 Object state is declared in the class body. Construction returns fully built
 objects. A definition is visible everywhere in the project by default; a

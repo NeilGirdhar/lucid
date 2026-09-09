@@ -81,15 +81,6 @@ exhaustively like any other union, with `?` as sugar to propagate it;
 `raise` stays, narrowed to broken invariants, unchecked. See
 [Results](results.md) and [Exceptions](exceptions.md).
 
-## Basedpython-style loop bindings
-
-Python's `for` loop reuses one binding across every iteration, so a
-closure created in the loop body captures that shared variable, not the
-value it appeared to capture — `fns = []; for i in [1, 2, 3]:
-fns.append(def(): print(i))` prints `3 3 3`. Lucid gives each iteration
-a fresh binding instead: the closures above print `1 2 3`. See
-[Fresh loop bindings](for-and-while.md#fresh-loop-bindings).
-
 ## Kotlin-style function types
 
 Python spells a callable's type `Callable[[A, B], R]`, inherited from
