@@ -126,10 +126,15 @@ document builds mostly on documents already covered above it:
   * [Context managers](context-managers.md) — the
     `contextmanager` modifier.
 
+* Operators
+
+  * [Identity and instance checks](identity-checks.md) — `is`/`is not`
+    for type checks, `===`/`!==` for identity.
+
 * Statements
 
-  * [Control flow and statements](control-flow.md) — conditionals,
-    loops, and identity checks.
+  * [Control flow and statements](control-flow.md) — conditionals
+    and loops.
   * [Match](match.md) — destructuring and exhaustive pattern
     matching.
   * [Results](results.md) — recoverable errors as ordinary return

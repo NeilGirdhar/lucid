@@ -38,6 +38,9 @@ nav = [
     { "Call-site captured values" = "call-site-captured-values.md" },
     { "Context managers" = "context-managers.md" },
   ] },
+  { "Operators" = [
+    { "Identity and instance checks" = "identity-checks.md" },
+  ] },
   { "Statements" = [
     { "Control flow and statements" = "control-flow.md" },
     { "Match" = "match.md" },

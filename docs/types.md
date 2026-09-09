@@ -265,7 +265,7 @@ def f(a: final A, b: B):
 The extra precision buys disjointness. A value of type `final A`
 cannot also be a `str`, and cannot be some subclass of `A` either, so
 both possibilities narrow away — which is what lets the non-overlapping
-check in [Identity and instance checks](control-flow.md) catch a test
+check in [Identity and instance checks](identity-checks.md) catch a test
 that can never hold, not just against an unrelated type but against
 `A`'s own subclasses. `final A` widens to plain `A` wherever a
 declaration governs it — a field, a parameter, a collection element —
