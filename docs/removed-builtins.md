@@ -30,6 +30,10 @@ that decision:
   the type system has none of
 * [`vars`](construction.md#field-reflection-with-fields) — no
   `__dict__` to return; `fields` replaces it
+* [`next`](for-and-while.md#explicit-iteration) — advancing an
+  iterator by hand is rare enough that it needs no builtin: `Iterator`
+  declares `next` as an ordinary method, `cursor.next()`, not a
+  dunder with a wrapper function in front of it
 * `ascii` is not a bare builtin. It moves to `string.ascii(...)`, in
   the `string` module — a specific-audience string-formatting
   operation, the same reasoning that keeps `iteration.done` in the

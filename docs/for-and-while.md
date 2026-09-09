@@ -18,34 +18,24 @@ import iteration
 type IterResult[T] = T | Literal[iteration.done]
 
 trait Iterator[+T]:
-    def __next__(self) -> IterResult[T]
-
-def next[T](it: Iterator[T]) -> IterResult[T]:
-    return it.__next__()
+    def next(self) -> IterResult[T]
 ```
-`next` is the ordinary way to advance an iterator by hand, outside a
-`for` loop — a thin wrapper, the same relationship `len` already has
-to `__len__`, so nothing consuming an iterator has to touch the dunder
-directly. `it` takes `Iterator[T]`, not the read-only `~Iterator[T]`
+`next` is an ordinary method, not a dunder — advancing an iterator by
+hand, outside a `for` loop, is rare enough that it needs no builtin
+wrapping it, the way `len`/`abs` wrap theirs. It stays plain `self`,
+not the read-only `self: ~Self`
 [Read-only methods with `~Self`](class-members.md#read-only-methods-with-self)
 usually prefers: advancing an iterator moves it forward, an ordinary
-mutation of the iterator's own position, even though `__next__` returns
-a value the same way a read-only method would. `__next__` is
-dunder-spelled for both reasons a protocol
-member ever is here: the reason `__eq__` is, since a class could
-otherwise separately want an ordinary `.next` meaning something else
-entirely (a linked-list node's own next node, say); and the reason
-`__len__` is, since the ordinary word is already spoken for by the
-wrapper function, and a class defining an ordinary `next` method
-alongside a free `next()` function would just be two spellings for the
-same job. `iteration.done` is a singleton value, not a class — the
-same shape as `none`, just not common enough to earn `none`'s
-bare-word exemption in type position, so it is written through
-`Literal` (see [Literal types](types.md)) instead of getting a type
-invented to represent it. It matches like any other case:
+mutation of the iterator's own position, even though it returns a
+value the same way a read-only method would. `iteration.done` is a
+singleton value, not a class — the same shape as `none`, just not
+common enough to earn `none`'s bare-word exemption in type position,
+so it is written through `Literal` (see [Literal types](types.md))
+instead of getting a type invented to represent it. It matches like
+any other case:
 
 ```python
-match next(cursor):
+match cursor.next():
     case Literal[iteration.done]:
         ...
     case _:
