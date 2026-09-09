@@ -26,7 +26,14 @@ def next[T](it: ~Iterator[T]) -> IterResult[T]:
 `next` is the ordinary way to advance an iterator by hand, outside a
 `for` loop — a thin wrapper, the same relationship `len` already has
 to `__len__`, so nothing consuming an iterator has to touch the dunder
-directly. `iteration.done` is a singleton value, not a class — the
+directly. `__next__` is dunder-spelled for both reasons a protocol
+member ever is here: the reason `__eq__` is, since a class could
+otherwise separately want an ordinary `.next` meaning something else
+entirely (a linked-list node's own next node, say); and the reason
+`__len__` is, since the ordinary word is already spoken for by the
+wrapper function, and a class defining an ordinary `next` method
+alongside a free `next()` function would just be two spellings for the
+same job. `iteration.done` is a singleton value, not a class — the
 same shape as `none`, just not common enough to earn `none`'s
 bare-word exemption in type position, so it is written through
 `Literal` (see [Literal types](types.md)) instead of getting a type
