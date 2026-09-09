@@ -73,7 +73,7 @@ lucid run --native examples/hello.lucid
 ```
 
 For technical details on how the compiler and runtime function, see
-[Compiler and Runtime Architecture](docs/architecture.rst) and [Benchmark Performance](BENCHMARKS.md).
+[Compiler and Runtime Architecture](architecture.md) and [Benchmark Performance](benchmarks.md).
 
 ### Interactive REPL
 

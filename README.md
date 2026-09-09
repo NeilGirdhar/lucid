@@ -70,5 +70,5 @@ python3 benchmarks/run_benchmarks.py
 
 Lucid Native achieves a 13.7x geometric mean speedup over CPython 3.14 across
 all benchmarks with exact numerical output equivalence. Detailed measurements
-and architectural notes are in [BENCHMARKS.md](BENCHMARKS.md).
+and architectural notes are in [docs/benchmarks.md](docs/benchmarks.md).
 

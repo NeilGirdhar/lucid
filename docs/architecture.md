@@ -34,6 +34,24 @@ execution backend:
 4. The execution driver dispatches the verified tree either to the native code
    generator or to the reference interpreter.
 
+```mermaid
+flowchart TD
+    subgraph Frontend ["Front-End Pipeline"]
+        src["Lucid Source (.lucid / .lc)"] --> lexer["Lexer (lucid-syntax)"]
+        lexer -->|"Indentation & Tokens"| parser["Parser (lucid-syntax)"]
+        parser -->|"Typed AST"| checker["Type & Invariant Checker (lucid-checker)"]
+    end
+
+    subgraph Backends ["Execution Backends"]
+        checker -->|"lucid build / --native"| codegen["AOT Code Generator (lucid-codegen)"]
+        codegen -->|"Optimized C99"| c_compiler["GCC / Clang (-O3)"]
+        c_compiler --> elf["Standalone Native Binary"]
+
+        checker -->|"lucid run"| runtime["Reference Interpreter (lucid-runtime)"]
+        runtime --> out["Standard Output"]
+    end
+```
+
 ## Front-end: syntax and parser
 
 The `lucid-syntax` crate converts source text into an abstract syntax tree.
@@ -238,15 +256,18 @@ against CPython 3.14 across ten standard compute benchmarks.
 Across all ten benchmarks, the native AOT compiler achieves a 13.7x geometric
 mean speedup over CPython 3.14:
 
-* Spectral norm: 40.3x faster than CPython 3.14 due to flat array layout and
-  inner loop vectorization.
-* Fibonacci recursion: 36.5x faster than CPython 3.14 due to native hardware
-  stack frames.
-* Mandelbrot: 18.2x faster than CPython 3.14 through unboxed 64-bit
-  floating-point operations.
+| Benchmark | CPython 3.14 (s) | Lucid Native (s) | Speedup | Architectural rationale |
+| :--- | :--- | :--- | :--- | :--- |
+| Spectral norm | 2.502s | 0.062s | **40.3x** | Flat contiguous memory buffers and SIMD loop vectorization |
+| Fibonacci (recursive) | 0.840s | 0.023s | **36.5x** | Hardware CPU stack frames with zero interpreter frame overhead |
+| Mandelbrot | 2.531s | 0.139s | **18.2x** | Unboxed 64-bit IEEE floating-point registers |
+| Fannkuch-Redux | 0.655s | 0.038s | **17.2x** | In-place unboxed integer array permutations |
+| N-Body | 0.940s | 0.076s | **12.4x** | Unboxed vector mathematics and coordinate transforms |
+| Sieve of Eratosthenes | 0.812s | 0.077s | **10.5x** | Continuous boolean memory scans with cache locality |
+| Binary trees | 1.834s | 0.231s | **7.9x** | Compact struct allocations and fast pointer traversals |
 
 Detailed measurements, benchmark implementations, and replication scripts
-reside in the benchmark suite documentation in `BENCHMARKS.md`.
+reside in the benchmark suite documentation in [Benchmarks](benchmarks.md).
 
 For language design rationale and type system semantics, consult
 [Main ideas](principles.md) and

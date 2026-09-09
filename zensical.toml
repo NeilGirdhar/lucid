@@ -81,8 +81,12 @@ nav = [
     { "Builtins" = "builtins.md" },
     { "Removed builtins" = "removed-builtins.md" },
   ] },
-  { "Architecture" = "architecture.md" },
   { "Rejected features" = "rejected-features.md" },
+  { "Implementation" = [
+    { "Architecture" = "architecture.md" },
+    { "Getting started" = "getting-started.md" },
+    { "Benchmarks" = "benchmarks.md" },
+  ] },
 ]
 
 [project.theme]
@@ -131,4 +135,4 @@ pymdownx.highlight.line_spans = "__span"
 pymdownx.highlight.pygments_lang_class = true
 pymdownx.inlinehilite = {}
 pymdownx.magiclink = {}
-pymdownx.superfences = {}
+pymdownx.superfences = { custom_fences = [ { name = "mermaid", class = "mermaid" } ] }
