@@ -89,7 +89,7 @@ already means.
 
 Wrapping `yield` in an explicit `try` opts back into full control,
 using nothing beyond ordinary `try`/`except`/`raise` (see
-[Control flow and statements](control-flow.md)) — no separate
+[Exceptions](exceptions.md)) — no separate
 suppression mechanism, and no return value doing double duty the way
 `__exit__`'s does:
 

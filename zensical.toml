@@ -42,7 +42,8 @@ nav = [
     { "Identity and instance checks" = "identity-checks.md" },
   ] },
   { "Statements" = [
-    { "Control flow and statements" = "control-flow.md" },
+    { "If" = "if.md" },
+    { "For and While" = "for-and-while.md" },
     { "Match" = "match.md" },
     { "Results" = "results.md" },
     { "Exceptions" = "exceptions.md" },

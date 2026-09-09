@@ -40,8 +40,8 @@ For a full list of preserved, discarded, and new keywords, see
 Lucid code should stay as easy to read and write as ordinary Python:
 indentation matters, definitions are direct, common control flow is
 familiar, and simple programs need no ceremony. See
-[Binding](names.md) and
-[Control flow and statements](control-flow.md).
+[Binding](names.md),
+[If](if.md), and [For and While](for-and-while.md).
 
 ### Succinct code
 
@@ -173,7 +173,7 @@ closure shares the one binding the loop kept reassigning.
 Lucid gives each iteration a fresh binding instead, following
 `basedpython`: the closures above print `1 2 3`, each one keeping the
 value from the iteration that created it. See
-[Fresh loop bindings](control-flow.md).
+[Fresh loop bindings](for-and-while.md#fresh-loop-bindings).
 
 ## Kotlin-style function types
 

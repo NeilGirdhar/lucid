@@ -133,8 +133,9 @@ document builds mostly on documents already covered above it:
 
 * Statements
 
-  * [Control flow and statements](control-flow.md) — conditionals
-    and loops.
+  * [If](if.md) — explicit boolean tests.
+  * [For and While](for-and-while.md) — iteration, fresh loop
+    bindings, and `if_broken`.
   * [Match](match.md) — destructuring and exhaustive pattern
     matching.
   * [Results](results.md) — recoverable errors as ordinary return

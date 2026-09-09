@@ -1,9 +1,4 @@
-# Control flow and statements
-
-## Explicit boolean tests
-
-Boolean tests require `bool` or explicit truth behavior. This applies to
-`if`, `while`, and other conditional control-flow positions.
+# For and While
 
 ## Explicit iteration
 
@@ -134,4 +129,3 @@ author has none to write. That makes it the statement-level counterpart
 to `skip`, [an expression-level elision marker](calls.md) — the two
 fill the same kind of gap one level apart, and neither replaces the
 other.
-
