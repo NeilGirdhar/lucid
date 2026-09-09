@@ -1,12 +1,31 @@
 # The Lucid language
 
-Lucid is a Python-like language sketch that keeps Python easy to read and write
-while making room for cleaner type, dispatch, object, and compatibility rules.
+Lucid is a language for LLMs: a Python-like language sketch designed to be as
+easy for an LLM to read and write correctly as for a human — which turns out
+to mean holding to the same properties good human-readable code already
+wants, just refusing to let any of them slide.
 
 Core principle:
 
     Keep Python's directness, make structure explicit, and choose the cleaner
     rule when compatibility no longer has to win.
+
+Four properties follow from that:
+
+* **Succinct.** A simple idea is written simply — no boilerplate carried
+  along out of habit, and no second way to spell something already spelled
+  one way.
+* **Clear.** Nothing about a piece of code's behavior depends on something
+  declared elsewhere the reader never saw: no action at a distance, no
+  operator that quietly means two different things, no well-known footgun a
+  reader has to already know to dodge.
+* **Checked.** A mistake is caught where it is made, not learned three calls
+  later at runtime — exhaustive matches, no silent escape hatch out of the
+  type system, class shapes closed by default, private names enforced
+  rather than merely requested.
+* **Capable.** None of the above is bought by cutting scope. Generics,
+  multiple dispatch, and a real error-handling story are all still here, so
+  "easy to get right" never has to mean "too small to use."
 
 Lucid borrows Python's readable surface syntax, Java-style single class
 inheritance plus multiple traits, Scala-style definition-site type

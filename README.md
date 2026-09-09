@@ -1,7 +1,7 @@
 # The Lucid language
 
-Lucid is a Python-like language sketch that keeps Python easy to read and write
-while making room for cleaner type, dispatch, object, and compatibility rules.
+Lucid is a language for LLMs: a Python-like language sketch designed to be as
+easy for an LLM to read and write correctly as for a human.
 
 Core principle:
 
@@ -10,5 +10,5 @@ Core principle:
 
 The full specification lives in [`docs/`](docs/index.md), or rendered at
 **<https://neilgirdhar.github.io/lucid/>** — start at
-[`docs/index.md`](docs/index.md) for the worked example and the complete
-documentation tree.
+[`docs/index.md`](docs/index.md) for the worked example; its sidebar links
+to the rest of the specification.
