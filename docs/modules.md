@@ -34,31 +34,10 @@ place: [Public API](project-configuration.md).
 import of anything else in the module reaches it regardless, so a
 module's real public surface and its `__all__` list can say two
 different things. Lucid has no wildcard import for a second list to
-narrow in the first place (see [Lazy imports](#lazy-imports) below), and the one list
+narrow in the first place (see [Import](import.md)), and the one list
 that does exist — private names decided by a leading `_`, checked
 everywhere — cannot fall out of sync with itself the way a
 separately-maintained `__all__` can with the module it describes.
-
-## Lazy imports
-
-Python already has lazy-import building blocks, such as import hooks and lazy
-loaders. Lucid makes laziness the only import behavior instead of an opt-in
-building block: every import binds the requested name immediately but does not
-load the target module until the name is first used.
-
-```python
-import pandas as pd
-from .reports import build_report
-```
-After the first use, the binding behaves like an ordinary import. No separate
-keyword or opt-in form is needed.
-
-Lucid has no wildcard import. `from module import *` cannot be lazy even
-in principle: binding every name a module exports means already knowing
-what those names are, which means the module has to load immediately, the
-one shape of import laziness could never cover. Every import names its
-targets explicitly instead, so "every import is lazy" holds without a
-caveat to remember.
 
 ## Projects
 
@@ -69,9 +48,9 @@ sibling `development.yaml` holds tool configuration and development-only
 dependencies. Together they take over the roles Python splits across
 `pyproject.toml` and `__init__.py`.
 
-Lazy imports mean none of this runs implicit setup code on `import`: a
-project's library initialization runs only when an entry point explicitly
-opens `library.initialize` for the libraries it depends on. The full
-structure of both files is covered separately in
+[Import](import.md)'s laziness means none of this runs implicit setup
+code on `import`: a project's library initialization runs only when an
+entry point explicitly opens `library.initialize` for the libraries it
+depends on. The full structure of both files is covered separately in
 [Project configuration](project-configuration.md).
 

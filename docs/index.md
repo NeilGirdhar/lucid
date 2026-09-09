@@ -146,6 +146,8 @@ document builds mostly on documents already covered above it:
     invariants.
   * [With](with.md) — the `with` statement, unchanged from
     Python.
+  * [Import](import.md) — every import is lazy, and there is no
+    wildcard import.
 
 * Containers
 
@@ -173,7 +175,7 @@ document builds mostly on documents already covered above it:
 * [Project configuration](project-configuration.md) —
   `project.yaml`, `development.yaml`, and `lucid.lock`.
 * [Modules, projects, and public APIs](modules.md) —
-  module-private names, and lazy imports.
+  module-private names, and projects.
 * [Keyword reference](keywords.md) — every keyword, in one place.
 * [Rejected features](rejected-features.md) — other languages'
   features that turned out to already be covered.
