@@ -31,15 +31,15 @@ Four properties follow from that:
 
     * no second way to spell the same thing
         * `tuple`, `namedtuple`, `dataclass`, and a plain class all do the
-          same job in Python; Lucid keeps one — an ordinary `class`,
-          already a dataclass
+          same job in Python; Lucid keeps one — a dataclass, spelled with
+          just `class`
     * no action at a distance
         * no `__getattr__`, no descriptors, no metaclasses — attribute
           access can't be intercepted by code declared somewhere else
           entirely
     * no operator that means two different things
-        * `&` means only intersection; the read-only view marker that
-          might have used it moved to `~` instead
+        * `&` means only intersection; `~` marks a read-only view,
+          never `&`
     * no well-known footgun to dodge
         * `assert (x == y, "message")` is always true in Python — a
           non-empty tuple is truthy, and Lucid has no tuple type left to
