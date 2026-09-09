@@ -91,10 +91,17 @@ hatch this document already closes off for everyday code; a genuinely
 unknown foreign signature stays `object`, claimed with `trust` like
 any other untyped value crossing the interop boundary.
 
+## Union types
+
+`A | B` is the type of values that are an `A` or a `B`, the same
+spelling Python's own `X | Y` union syntax already settled on —
+already used throughout this document, `int | none` among the first
+examples above.
+
 ## Intersection types
 
 `A & B` is the type of values satisfying both `A` and `B` — the
-dual of the union `A | B` already used throughout this document.
+dual of the union `A | B` just covered.
 Lucid's traits are nominal ([Main ideas](principles.md)): a
 promise is made only where a class header names it, so a value
 assembled from two independently declared traits has nowhere to go
