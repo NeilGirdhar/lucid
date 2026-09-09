@@ -59,11 +59,12 @@ that decision:
 * [`delattr`](classes.md#no-del-on-fields) — the same rule `del
   obj.field` already breaks on; a declared field is part of a class's
   fixed shape, not an optional slot a call can remove
-* `bin`, `oct`, `hex` — the f-string format-spec mini-language already
-  does this: `f"{x:#b}"`, `f"{x:#o}"`, `f"{x:#x}"` (`f"{x:b}"` etc.
-  without the `#` for the prefix-less form each function's own
-  argument-free spelling can't reach anyway), one mini-language
-  instead of a function per base
+* `open` — not a bare builtin; `Path.open(...)` already exists
+  alongside it in Python, so keeping both is one spelling too many
+* [`bin`, `oct`, `hex`](strings.md#base-formatted-string-factories) —
+  not bare builtins; they move to `Str.bin`, `Str.oct`, and `Str.hex`,
+  named factories instead of three unrelated top-level names for the
+  same job
 * `chr`, `ord` — not bare builtins; they move to `string.chr(...)`
   and `string.ord(...)`, the same specific-audience move `ascii`
   already makes

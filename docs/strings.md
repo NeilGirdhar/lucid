@@ -71,5 +71,23 @@ learn:
 f"{name} is {age}"
 ```
 
+## Base-formatted string factories
+
+Python's `bin`, `oct`, and `hex` each convert a number to a
+prefixed string in one base. Lucid moves them onto `Str` itself, as
+named factories — the same pattern [Factory
+construction](construction.md#factory-construction) already uses for
+`Point.origin()` — rather than three unrelated top-level names for
+one job, "build a `Str` a particular way":
+
+```python
+Str.bin(255)  # "0b11111111"
+Str.oct(255)  # "0o377"
+Str.hex(255)  # "0xff"
+```
+The same result is also reachable through an f-string's own
+format-spec mini-language (`f"{255:#b}"`), for when the string being
+built is more than just the number itself.
+
 [Collections](collections.md) covers the container types built from
 values like these — sets, dicts, and records.

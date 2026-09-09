@@ -225,6 +225,33 @@ else a recoverable outcome is involved, later in this reading order,
 extended to the one place integer arithmetic still had an unchecked
 exception instead of one.
 
+## `pow` dispatches per type
+
+`pow`'s zero-base, negative-exponent case is the same undefined-answer
+problem floor division and modulo already had — `pow(0, -1)` is
+`1 / 0` written differently, not a new kind of question. `pow` is
+multiple-dispatch, one case per base type, and each returns the
+`inf`/`nan` its own type already has instead of raising:
+
+```python
+def dispatch pow(base: int, exponent: int) -> int:
+    if base == 0 and exponent < 0:
+        return int.inf
+    ...
+
+def dispatch pow(base: float, exponent: float) -> float:
+    if base == 0.0 and exponent < 0.0:
+        return float.inf
+    ...
+```
+`0 ** 0` stays `1`, the ordinary convention, in both cases — only a
+negative exponent on a zero base has no defined answer to give. The
+`complex` case has the same shape, without a `complex.inf`/`complex.nan`
+of its own to reach for yet; its real and imaginary components can
+already individually hold `float.inf`/`float.nan`; a dedicated pair of
+classvars is future work, not needed for `pow` specifically to avoid
+raising.
+
 ## Capability traits
 
 The numeric capability traits are builtins and are always available

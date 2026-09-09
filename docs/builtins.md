@@ -4,7 +4,9 @@
 * Basic types, listed in the order each is first defined:
   [`bool`](numeric-types.md#exact-bool), [`int`](numeric-types.md#exact-int),
   [`float`](numeric-types.md#exact-float-and-float-like-input),
-  [`complex`](numeric-types.md#exact-complex), [`str`](strings.md),
+  [`complex`](numeric-types.md#exact-complex), [`str`](strings.md)
+  (see also its
+  [`bin`/`oct`/`hex` factories](strings.md#base-formatted-string-factories)),
   `Bytes`, and `ByteArray` — the last two capitalized, unlike the
   others here, since `bytes`/`bytearray` stay the ordinary lowercase
   conversion calls, not the type names
@@ -55,7 +57,12 @@
   are distinguished the same way `type`/`match`/`not` already are
   elsewhere: by position. `any(xs)` is a call; `any Trait` is bare, no
   parentheses, and never appears where a call would.
-* `iter`, `locals` — kept, unchanged.
+* `iter`, `locals`, `format`, `hash`, `help`, `sum`, `reversed`,
+  `repr`, `print` — kept, unchanged.
+* [`pow`](numeric-types.md#pow-dispatches-per-type) — kept, but
+  multiple-dispatch, one case per base type, so the zero-base,
+  negative-exponent case returns each type's own `inf` instead of
+  raising, the same trade floor division and modulo already make.
 * [`super`](traits.md#explicit-overrides) — kept, but takes no
   parentheses: `super.save()`, not `super().save()`. A class has at
   most one class parent, so calling through to the overridden
