@@ -224,24 +224,6 @@ checkable value — the same trade [Errors: results and exceptions](control-flow
 involved, later in this reading order, extended to the one place
 integer arithmetic still had an unchecked exception instead of one.
 
-## Operation-specific numeric methods
-
-Lucid does not assume that numeric-looking methods travel together. A type can
-support conversion without supporting indexing, arithmetic without ordering, or
-absolute value without rounding. APIs name the operation they need instead of
-reaching for a broad tower class.
-
-```python
-def repeat(count: SupportsIndex, action: () -> none) -> none:
-    for _ in range(count.__index__()):
-        action()
-
-def magnitude(x: SupportsAbs[float]) -> float:
-    return abs(x)
-
-def rounded(x: SupportsRound[int]) -> int:
-    return round(x)
-```
 ## Capability traits
 
 The numeric capability traits are builtins and are always available
@@ -274,6 +256,21 @@ trait SupportsRound[+K]:
 
 class int(SupportsInt, SupportsFloat, SupportsIndex):
     ...
+```
+An API names the specific capability it needs rather than reaching for
+a broad tower class — conversion without indexing, absolute value
+without rounding:
+
+```python
+def repeat(count: SupportsIndex, action: () -> none) -> none:
+    for _ in range(count.__index__()):
+        action()
+
+def magnitude(x: SupportsAbs[float]) -> float:
+    return abs(x)
+
+def rounded(x: SupportsRound[int]) -> int:
+    return round(x)
 ```
 ## No implicit cross-type numeric behavior
 
