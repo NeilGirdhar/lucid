@@ -28,6 +28,10 @@ that decision:
 * [`eval`](types.md#no-any-escape-hatch), [`exec`](types.md#no-any-escape-hatch)
   — running code the checker never saw is exactly the escape hatch
   the type system has none of
+* [`__import__`](import.md) — loading a module by a name computed at
+  runtime is the same escape hatch one level up: `import` already
+  names its target statically, and there is no dynamic form behind it
+  to call directly
 * [`vars`](construction.md#field-reflection-with-fields) — no
   `__dict__` to return; `fields` replaces it
 * [`next`](for-and-while.md#explicit-iteration) — advancing an
