@@ -39,9 +39,6 @@ retries: int = is_retry          # error: bool is not int
 total = completed + failed       # error if both names are bool flags
 page = pages[is_admin]           # error: bool is not an index
 mask = can_read | can_write      # error: use boolean operators for flags
-ratio: float = is_ready          # error: bool is not a numeric value
-true + true                      # error: bool is not numeric
-true & flag                      # error: use boolean operators for logic
 ```
 Write the conversion when the numeric interpretation is intentional:
 
