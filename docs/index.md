@@ -2,10 +2,28 @@
 
 ## Motivation
 
-Lucid is a language for LLMs: a Python-like language sketch designed to be as
-easy for an LLM to read and write correctly as for a human — which turns out
-to mean holding to the same properties good human-readable code already
-wants, just refusing to let any of them slide.
+Lucid is a language for LLMs: a Python-like language sketch designed to be
+as easy for an LLM to read and write correctly as for a human. The two
+goals overlap far more than they conflict — an LLM benefits from the same
+explicitness, predictability, and freedom from hidden state that make code
+readable to a person, so most of what follows serves both audiences at
+once. But the two audiences are not identical, and where they pull apart,
+this spec picks a side deliberately rather than papering over the conflict.
+
+Typing cost is one place they diverge. A human pays, in effort felt at the
+keyboard, for every extra character a call site needs; an LLM, or a linter
+inserting the same text mechanically, does not. [Anonymous
+functions](calls.md#anonymous-functions)'s explicit `def: expr` for a lazy
+argument is one consequence: a dedicated auto-thunking parameter would save
+a human a few keystrokes, but since the one writing `def:` out is usually
+an LLM or a linter, there is no keystroke cost left to design sugar around.
+
+Naming consistency is another. An LLM has no entrenched habit to offend by
+capitalizing `str` and `int` the same way [`Bytes` and
+`ByteArray`](builtins.md) already are; a human reader does, from decades of
+exactly this spelling elsewhere. Lucid keeps `bool`/`int`/`float`/`complex`/`str`
+lowercase for that reason alone — a concession to the human reader this
+spec would have no cause to make if it optimized for an LLM audience only.
 
 ## Guiding principles
 

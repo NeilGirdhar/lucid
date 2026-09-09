@@ -10,7 +10,12 @@
   and [`Bytes`, `ByteArray`, and `MemoryView`](binary-types.md) — the
   last three capitalized, unlike the others here, since
   `bytes`/`bytearray`/`memoryview` stay the ordinary lowercase
-  conversion calls, not the type names
+  conversion calls, not the type names. `bool`/`int`/`float`/`complex`/`str`
+  have no such split to force a second name, so they keep the one
+  spelling doing both jobs — the deeper consistency an all-caps
+  `Int`/`Str` would buy costs a human reader decades of `int`/`str`
+  habit to unlearn, for a distinction an LLM reader has no such habit
+  to notice in the first place
 * Capability traits, the main ABC-equivalent nominal traits (see
   [No structural traits](traits.md#no-structural-traits)), listed in
   the order each is first defined:
