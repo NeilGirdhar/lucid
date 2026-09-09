@@ -89,7 +89,7 @@ fn print_help() {
     println!("    check <file>          Parse and typecheck a Lucid source file");
     println!("    emit-c <file>         Emit generated C99 code for a Lucid source file");
     println!("    eval <code>           Evaluate a Lucid code snippet string");
-    println!("    test-spec [dir]       Extract and validate code snippets from RST specification docs");
+    println!("    test-spec [dir]       Extract and validate code snippets from Markdown specification docs");
     println!("    help                  Display this help message");
     println!("    version               Show version information");
 }
@@ -512,33 +512,33 @@ fn print_repl_help() {
 
 fn test_spec_docs(docs_dir: &Path, verbose: bool) {
     println!("Testing Lucid specification code snippets from: {}", docs_dir.display());
-    let mut rst_files = Vec::new();
-    if Path::new("README.rst").exists() {
-        rst_files.push(PathBuf::from("README.rst"));
+    let mut spec_files = Vec::new();
+    if Path::new("README.md").exists() {
+        spec_files.push(PathBuf::from("README.md"));
     }
     if docs_dir.exists() {
         if let Ok(entries) = fs::read_dir(docs_dir) {
             for entry in entries.flatten() {
                 let p = entry.path();
-                if p.extension().map_or(false, |ext| ext == "rst") {
-                    rst_files.push(p);
+                if p.extension().map_or(false, |ext| ext == "md") {
+                    spec_files.push(p);
                 }
             }
         }
     }
-    rst_files.sort();
+    spec_files.sort();
 
     let mut total_blocks = 0;
     let mut parsed_blocks = 0;
     let mut typechecked_blocks = 0;
 
-    for rst_file in &rst_files {
-        let content = match fs::read_to_string(rst_file) {
+    for spec_file in &spec_files {
+        let content = match fs::read_to_string(spec_file) {
             Ok(c) => c,
             Err(_) => continue,
         };
 
-        let blocks = extract_rst_code_blocks(&content);
+        let blocks = extract_markdown_code_blocks(&content);
         for (idx, block) in blocks.into_iter().enumerate() {
             total_blocks += 1;
             match lucid_syntax::parse(&block) {
@@ -549,12 +549,12 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
                         typechecked_blocks += 1;
                     } else if verbose {
                         let err = checker.check_module(&module).unwrap_err();
-                        println!("! Typecheck failed in {} block #{}: {}", rst_file.display(), idx + 1, err.message);
+                        println!("! Typecheck failed in {} block #{}: {}", spec_file.display(), idx + 1, err.message);
                     }
                 }
                 Err(err) => {
                     if verbose {
-                        println!("✗ Parse failed in {} block #{}: {}", rst_file.display(), idx + 1, err);
+                        println!("✗ Parse failed in {} block #{}: {}", spec_file.display(), idx + 1, err);
                         let first_line = block.lines().next().unwrap_or("").trim();
                         println!("    Snippet: {first_line}");
                     }
@@ -564,59 +564,31 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
     }
 
     println!("Specification validation complete:");
-    println!("  RST files scanned: {}", rst_files.len());
+    println!("  Markdown files scanned: {}", spec_files.len());
     println!("  Code blocks found: {total_blocks}");
     println!("  Valid Lucid modules parsed: {parsed_blocks} / {total_blocks} ({:.1}%)", (parsed_blocks as f64 / total_blocks as f64) * 100.0);
     println!("  Type checked without errors: {typechecked_blocks} / {parsed_blocks}");
 }
 
-fn extract_rst_code_blocks(rst: &str) -> Vec<String> {
+/// Extracts the contents of every fenced ```python or ```lucid code block
+/// from a Markdown document, in source order.
+fn extract_markdown_code_blocks(markdown: &str) -> Vec<String> {
     let mut blocks = Vec::new();
-    let lines: Vec<&str> = rst.lines().collect();
+    let lines: Vec<&str> = markdown.lines().collect();
     let mut i = 0;
 
     while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim();
+        let trimmed = lines[i].trim();
+        let is_fence_open = trimmed == "```python" || trimmed == "```lucid";
 
-        let is_code = trimmed.starts_with(".. code-block:: python")
-            || trimmed.starts_with(".. code-block:: lucid")
-            || trimmed == "::"
-            || (trimmed.ends_with("::") && !trimmed.starts_with(".. "));
-
-        if is_code {
+        if is_fence_open {
             let mut block_lines = Vec::new();
             i += 1;
-            // Skip empty lines
-            while i < lines.len() && lines[i].trim().is_empty() {
+            while i < lines.len() && lines[i].trim() != "```" {
+                block_lines.push(lines[i]);
                 i += 1;
             }
-            if i >= lines.len() {
-                break;
-            }
-            // Determine indentation of the block
-            let base_indent = lines[i].chars().take_while(|c| *c == ' ').count();
-            if base_indent > 0 {
-                while i < lines.len() {
-                    let cur = lines[i];
-                    if cur.trim().is_empty() {
-                        block_lines.push("");
-                        i += 1;
-                        continue;
-                    }
-                    let indent = cur.chars().take_while(|c| *c == ' ').count();
-                    if indent < base_indent {
-                        break;
-                    }
-                    let unindented = if cur.len() >= base_indent {
-                        &cur[base_indent..]
-                    } else {
-                        cur.trim_start()
-                    };
-                    block_lines.push(unindented);
-                    i += 1;
-                }
-            }
+            i += 1; // Skip the closing fence.
             let block = block_lines.join("\n");
             if !block.trim().is_empty() {
                 blocks.push(block);
