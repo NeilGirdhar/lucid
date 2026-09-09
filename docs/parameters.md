@@ -113,7 +113,7 @@ positional-before-keyword order every zone already follows:
   after every fixed position — nothing fixed can follow it, since it
   consumes every remaining positional slot. The trailing `...` is the
   same marker that opens a TypedDict shape
-  ([TypedDict shapes in type position](collections.md)), here meaning
+  ([TypedDict shapes in type position](types.md#typeddict-shapes-in-type-position)), here meaning
   "and more of the type just written," not "anything."
 - `*, b: int` — the keyword-only zone, [Anonymous class](#anonymous-class) again.
 - `_: int, ...` — variadic keyword: zero or more further keyword

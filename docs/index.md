@@ -85,8 +85,8 @@ document builds mostly on documents already covered above it:
 
 * Types
 
-  * [Type vocabulary](types.md) — what a type is, and type-level
-    expressions.
+  * [Type vocabulary](types.md) — what a type is, type-level
+    expressions, and TypedDict shapes.
   * [Operations](type-operations.md) — union, intersection, and
     negation.
   * [Match types](match-types.md) — computing a type from a type's
@@ -128,7 +128,7 @@ document builds mostly on documents already covered above it:
 * Containers
 
   * [Collections](collections.md) — literals, records, and
-    TypedDict shapes.
+    hashable sequences.
   * [Indexing](indexing.md) — indexing and unpacking.
   * [Strings](strings.md) — string literals, and why `str` is
     not a sequence.

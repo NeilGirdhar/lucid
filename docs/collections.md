@@ -186,7 +186,7 @@ def midpoint(a: Point2D, b: Point2D) -> Point2D:
 `(x: int, y: int)` is structural: any class with at least those fields at
 those types satisfies it, the same way `Point` above would, with no
 declared relationship required — the same way a plain dict satisfies a
-TypedDict shape. The immutable marker applies here too: `!(x: int, y: int)`
+[TypedDict shape](types.md#typeddict-shapes-in-type-position). The immutable marker applies here too: `!(x: int, y: int)`
 is the frozen version of the same shape.
 
 Outside a type expression, the same `(...)` syntax constructs an anonymous
@@ -201,39 +201,6 @@ Constructing with `=` instead of `:` is not just a style choice: it
 means the construction site already reads like a call, so replacing the
 anonymous shape with a named class later is a small edit, not a rewrite —
 `(x=0, y=0)` becomes `Point2D(x=0, y=0)`.
-
-## TypedDict shapes in type position
-
-In a type expression (see the `type` keyword in
-[Type vocabulary](types.md)), a brace literal maps
-literal keys to per-key types instead of constructing a dict value. This is
-Lucid's TypedDict: an exact dict shape, not a class. Values are ordinary
-dicts, indexed and iterated like any other dict, but each key's value is
-checked against that key's own type instead of every value being unified
-into one value type.
-
-```python
-type Movie = {"name": str, "year": int}
-
-movie: Movie = {"name": "Paths of Glory", "year": 1957}
-movie["year"] += 1
-movie["name"] = 1957          # error: str expected
-```
-Keys are not restricted to strings. Any literal hashable key is allowed:
-
-```python
-type Row = {0: str, 1: int, "label": str}
-```
-A trailing `...` marks the shape open, allowing keys beyond the ones listed:
-
-```python
-type Movie = {"name": str, "year": int, ...}
-
-movie: Movie = {"name": "Paths of Glory", "year": 1957, "director": "Kubrick"}
-```
-Outside a type expression, the same brace syntax is an ordinary dict literal:
-written as a plain expression, `{"name": str, "year": int}` is a dict value
-mapping to the `str` and `int` type objects, not a `Movie` shape.
 
 ## `skip` in collection literals
 

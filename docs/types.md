@@ -113,8 +113,38 @@ expression* rather than an ordinary expression. Most syntax means the same
 thing in both grammars (`dict[str, int]`, `~T`, `!T`, and
 `Producer[+K]` all evaluate identically either way), but a type expression
 can use forms that mean something else, or nothing at all, as an ordinary
-expression — for example the TypedDict shape literal in
-[Collections](collections.md).
+expression — for example the TypedDict shape literal covered next.
+
+## TypedDict shapes in type position
+
+In a type expression, a brace literal maps literal keys to per-key types
+instead of constructing a dict value. This is Lucid's TypedDict: an exact
+dict shape, not a class. Values are ordinary dicts, indexed and iterated
+like any other dict, but each key's value is checked against that key's
+own type instead of every value being unified into one value type.
+
+```python
+type Movie = {"name": str, "year": int}
+
+movie: Movie = {"name": "Paths of Glory", "year": 1957}
+movie["year"] += 1
+movie["name"] = 1957          # error: str expected
+```
+Keys are not restricted to strings. Any literal hashable key is allowed:
+
+```python
+type Row = {0: str, 1: int, "label": str}
+```
+A trailing `...` marks the shape open, allowing keys beyond the ones listed:
+
+```python
+type Movie = {"name": str, "year": int, ...}
+
+movie: Movie = {"name": "Paths of Glory", "year": 1957, "director": "Kubrick"}
+```
+Outside a type expression, the same brace syntax is an ordinary dict literal:
+written as a plain expression, `{"name": str, "year": int}` is a dict value
+mapping to the `str` and `int` type objects, not a `Movie` shape.
 
 ## Type aliases
 
