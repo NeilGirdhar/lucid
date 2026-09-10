@@ -119,11 +119,13 @@ view loosens to covariant instead.
 Since an invariant mutable type can loosen to covariant, to
 contravariant, or stay invariant under its views, and which of the
 three isn't knowable from `in out` alone, a `~` on one of the two
-keywords names the outcome directly — it marks the half that does
-*not* survive to the read-only and immutable views. `Bag` above is
-really `class Bag[in ~out K]`: `out` drops, `in` survives. [Safe
-covariance](mutability.md#safe-covariance)'s `InferenceModel` is the
-opposite case, `~in out K`: `in` drops, `out` survives. Together with
+keywords names the outcome directly — it marks the half that
+survives to the read-only and immutable views, the same way `~T`
+itself names a view that still exists, never one that's been
+negated away. `Bag` above is really `class Bag[~in out K]`: `in`
+survives, `out` drops. [Safe covariance](mutability.md#safe-covariance)'s
+`InferenceModel` is the opposite case, `in ~out K`: `out` survives,
+`in` drops. Together with
 plain `out K` and `in K`, this covers every reachable combination —
 the other four of the nine naively possible (mutable, view) pairings,
 such as a covariant mutable type with an invariant view, can never
@@ -134,8 +136,8 @@ happen, so there is no marker for them:
 | `out K` | covariant | covariant (forced) |
 | `in K` | contravariant | contravariant (forced) |
 | `in out K` | invariant | invariant |
-| `~in out K` | invariant | covariant |
-| `in ~out K` | invariant | contravariant |
+| `in ~out K` | invariant | covariant |
+| `~in out K` | invariant | contravariant |
 
 `~T` and `!T` always land on the same variance as each other:
 freezing constrains what a value's fields *store*, not which methods

@@ -109,7 +109,7 @@ trait Scorable[in K]:
     def is_confident(self, item: K) -> bool:
         return self.score(item) >= 0.8
 
-class InferenceModel[~in out K](Scorable[K]):
+class InferenceModel[in ~out K](Scorable[K]):
     weights: Tensor
     labels: list[K]
     _scores: dict[K, float]

@@ -82,7 +82,7 @@ views; see [Variance under ~T and !T](generics.md) for the full rule
 and why it never needs more than one:
 
 ```text
-InferenceModel[~in out K]
+InferenceModel[in ~out K]
 ```
 which reads as: both `in` and `out` apply while mutable — `score`
 writes to `self._scores`, consuming `K`, that's the `in` use — but
@@ -114,7 +114,7 @@ Lucid keeps these as views of the same collection abstraction instead,
 with one declaration governing all three:
 
 ```text
-dict[in out K, ~in out V]
+dict[in out K, in ~out V]
 ```
 `K` stays invariant everywhere: both of its uses — `get`'s lookup and
 `keys()`'s enumeration — are non-mutating, so both survive onto the
