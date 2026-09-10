@@ -139,11 +139,16 @@ happen, so there is no marker for them:
 | `in ~out K` | invariant | covariant |
 | `~in out K` | invariant | contravariant |
 
-`~T` and `!T` always land on the same variance as each other:
-freezing constrains what a value's fields *store*, not which methods
-exist or how they use `K`, so `!T`'s callable member set is exactly
-`~T`'s. One keyword pair on the mutable declaration settles all
-three views.
+`~T` and `!T` land on the same variance as each other whenever every
+method reachable only through `!Self` leaves `K` alone — true of
+every example above, and of the built-in [`Hashable`](mutability.md#equality-ordering-and-hashing):
+`__hash__(self: !Self) -> int` needs the deep-freeze guarantee for an
+unrelated reason, a stable hash, and never mentions `K` in its own
+signature. A `self: !Self`-only method that did use `K` would be
+callable on `!T` but not on `~T`, so the two could in principle
+disagree; nothing here rules that out, but no example needs it, so
+it stays unaddressed until one does. One keyword pair on the mutable
+declaration settles all three views for every case in this document.
 
 A private field or method never enters this computation at all,
 regardless of how it uses `K`. Variance is a promise about the
