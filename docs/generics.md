@@ -290,6 +290,59 @@ def f[S: T, T](s: S, t: T): ...    # error: T comes later
 def g[T: list[T]](x: T) -> T: ...  # error: T is not in scope inside its own bound
 ```
 
+## Type parameter defaults
+
+A type parameter can default to a type instead of requiring one at
+every use site: `class Foo[T = int]:` means a bare `Foo`, with no
+subscript at all, is `Foo[int]`. `Self` is a valid default too, and
+it is the one that earns its keep — a class generic over "whatever
+type one particular method actually produces," defaulting to the
+receiver's own type for the common case, without forcing every
+subclass to name itself explicitly just to get that:
+
+```python
+trait AbstractContextManager[T = Self]:
+    contextmanager def __cm__(self) -> T
+```
+Most context managers do yield themselves, so the default covers the
+common case for free:
+
+```python
+class FileHandle(AbstractContextManager):
+    contextmanager def __cm__(self) -> Self:
+        yield self
+        self.close()
+```
+But not every context manager yields itself — a stream redirector
+yields the stream it's redirecting *to*, not the redirector; a
+connection's own `transaction()` often yields a cursor, not the
+connection. `T`'s default isn't a bound, so nothing requires `__cm__`
+to agree with `Self` at all; an explicit type argument simply
+replaces the default instead of having to satisfy it:
+
+```python
+class Redirect(AbstractContextManager[TextIO]):
+    target: TextIO
+
+    contextmanager def __cm__(self) -> TextIO:
+        old = sys.stdout
+        sys.stdout = self.target
+        yield self.target
+        sys.stdout = old
+```
+`Self` can be a default but not a bound. A bound is checked at
+specialization — does `X` satisfy `T: SomeBound` when a caller writes
+`Foo[X]`? — and that check has no receiver to resolve `Self` against;
+specializing a class is not itself a call on an instance. A default
+has no such moment to answer for: it stays symbolic until a member is
+actually looked up on a receiver, the same way `Self` already works
+everywhere else, so there is always a concrete class to resolve it
+against by the time it matters:
+
+```python
+trait Bad[T: Self]: ...   # error: Self cannot bound a type parameter of the class it belongs to
+```
+
 ## Ranging over a fixed set of types
 
 A bound, `T: X`, lets `T` be `X` or any subtype of it. Sometimes the
