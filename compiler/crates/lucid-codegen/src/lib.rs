@@ -6248,6 +6248,10 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                     }
                     if let Some(Expr::Ident { name: source, .. }) = value {
+                        if let Some(binding) = self.anonymous_bindings.get(source).cloned() {
+                            self.anonymous_bindings.insert(name.clone(), binding);
+                            return Ok(());
+                        }
                         let resolved = self
                             .function_aliases
                             .get(source)
@@ -6337,6 +6341,10 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                         }
                         if let Expr::Ident { name: source, .. } = value {
+                            if let Some(binding) = self.anonymous_bindings.get(source).cloned() {
+                                self.anonymous_bindings.insert(name.clone(), binding);
+                                return Ok(());
+                            }
                             let resolved = self
                                 .function_aliases
                                 .get(source)
@@ -17208,6 +17216,19 @@ print(result[1])
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "12");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_named_nested_closure_alias_preserves_capture() {
+        let source = "def run(threshold: int) -> bool:\n    def check(x: int) -> bool:\n        return x > threshold\n    g = check\n    return g(4)\nprint(run(3))\n";
+        let module = parse(source).unwrap();
+        let output = std::env::temp_dir().join(format!("lucid_debug_nested_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).unwrap();
+        let run = Command::new(&output).output().unwrap();
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "nested closure alias failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 
     #[test]

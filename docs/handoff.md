@@ -119,6 +119,8 @@ own cleanup during native lowering.
 Named nested functions with a single expression return can now be called from
 their defining scope through the existing captured-local closure machinery;
 escaping named closures still require the planned first-class closure ABI.
+Aliases assigned from those nested functions preserve the same captured-call
+binding instead of being lowered as an undeclared native variable.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
@@ -189,12 +191,12 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-349 native-codegen tests
+350 native-codegen tests
 153 runtime tests
 22 syntax tests
 50 compiler-database tests
 17 configuration tests
-795 tests passed
+796 tests passed
 ```
 
 The same 792 tests also pass with:
