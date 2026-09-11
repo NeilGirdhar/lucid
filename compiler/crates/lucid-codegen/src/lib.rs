@@ -6763,9 +6763,7 @@ static inline void lucid_print_val(LucidVal v) {
                 Ok(())
             }
             Stmt::With { items, body, .. } => {
-                let contexts: Vec<String> = (0..items.len())
-                    .map(|index| format!("_lucid_context_{index}"))
-                    .collect();
+                let contexts: Vec<String> = items.iter().map(|_| self.new_temp()).collect();
                 for context_name in &contexts {
                     self.emit_line(&format!("LucidVal {context_name} = lucid_none();"));
                 }
@@ -14477,6 +14475,22 @@ with managed() as value:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "setup\n3\nteardown\n");
+    }
+
+    #[test]
+    fn native_sequential_contextmanagers_use_distinct_temporaries() {
+        let source = "contextmanager def managed(label: str) -> int:\n    print(label)\n    yield 1\n    print(\"exit\")\nwith managed(\"a\") as first:\n    print(first)\nwith managed(\"b\") as second:\n    print(second)\n";
+        let module = parse(source).expect("sequential context source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_context_sequential_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("sequential contexts should compile");
+        let run = Command::new(&output).output().expect("run sequential contexts");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "sequential contexts failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "a\n1\nexit\nb\n1\nexit\n");
     }
 
     #[test]
