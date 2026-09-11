@@ -3421,7 +3421,8 @@ static inline void lucid_print_val(LucidVal v) {
                         "int" => args
                             .first()
                             .map(|arg| {
-                                if self.infer_expr_type(&arg.value, vars) == "LucidVal" {
+                                let arg_type = self.infer_expr_type(&arg.value, vars);
+                                if matches!(arg_type.as_str(), "LucidVal" | "const char*") {
                                     "LucidVal".to_string()
                                 } else {
                                     "int64_t".to_string()
@@ -8443,7 +8444,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     ));
                                 }
                                 let arg_type = self.infer_expr_type(&a.value, &HashMap::new());
-                                if arg_type == "LucidVal" {
+                                if matches!(arg_type.as_str(), "LucidVal" | "const char*") {
                                     return Ok(format!("lucid_int_dynamic(lucid_wrap({arg_str}))"));
                                 }
                                 return Ok(format!("lucid_int_builtin(lucid_wrap({arg_str}))"));
@@ -13611,6 +13612,28 @@ print(all({1, 2}))
         assert!(
             run.status.success(),
             "dynamic big integer conversion failed: {run:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
+    }
+
+    #[test]
+    fn native_int_preserves_big_integer_from_string() {
+        let source = "print(int(\"100000000000000000001\"))\n";
+        let module = parse(source).expect("string big integer conversion source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_int_string_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("string big integer conversion should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run string big integer conversion");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "string big integer conversion failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
     }
