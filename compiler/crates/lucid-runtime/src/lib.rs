@@ -2535,7 +2535,7 @@ impl Interpreter {
                             span: Span::default(),
                         });
                     }
-                    let mut names = match &args[0] {
+                    let names = match &args[0] {
                         Value::Object {
                             class_name, fields, ..
                         } => {
@@ -2580,7 +2580,6 @@ impl Interpreter {
                             .unwrap_or_default(),
                         _ => Vec::new(),
                     };
-                    names.sort();
                     Ok(Value::List(Rc::new(RefCell::new(
                         names.into_iter().map(Value::Str).collect(),
                     ))))
@@ -10342,6 +10341,19 @@ s = sum(r)
             interp.env.borrow().get("values"),
             Some(Value::List(_))
         ));
+        let ordered = parse(
+            "class Ordered:\n    zeta: int\n    alpha: int\no = Ordered(1, 2)\nnames = fields(o)\n",
+        )
+        .unwrap();
+        let mut ordered_interp = Interpreter::new();
+        ordered_interp.eval_module(&ordered).unwrap();
+        assert_eq!(
+            ordered_interp.env.borrow().get("names"),
+            Some(Value::List(Rc::new(RefCell::new(vec![
+                Value::Str("zeta".into()),
+                Value::Str("alpha".into()),
+            ]))))
+        );
     }
 
     #[test]
