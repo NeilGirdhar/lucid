@@ -2110,8 +2110,9 @@ static inline LucidVal lucid_hash(LucidVal value) {
     else if (value.type == LUCID_TYPE_BIGINT) {
         const char* digits = value.bigint ? value.bigint : "0";
         char* end = NULL;
+        errno = 0;
         long long parsed = strtoll(digits, &end, 10);
-        if (end && *end == '\0') {
+        if (end && *end == '\0' && errno != ERANGE) {
             hash = (int64_t)parsed;
         } else {
             hash = 17;
@@ -13816,6 +13817,25 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "bigint sorted failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "9007199254740992\n");
+    }
+
+    #[test]
+    fn native_hash_wide_bigints_uses_decimal_fold() {
+        let source = "print(hash(100000000000000000000))\n";
+        let module = parse(source).expect("bigint hash source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_hash_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("bigint hash should compile");
+        let run = Command::new(&output).output().expect("run bigint hash");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "bigint hash failed: {run:?}");
+        let expected = "100000000000000000000"
+            .bytes()
+            .fold(17i64, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte as i64));
+        assert_eq!(String::from_utf8_lossy(&run.stdout), format!("{expected}\n"));
     }
 
     #[test]
