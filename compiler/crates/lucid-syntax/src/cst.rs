@@ -52,9 +52,9 @@ pub fn parse_lossless(source: &str) -> Cst {
     builder.start_node(LucidLanguage::kind_to_raw(SyntaxKind::Root));
     let mut cursor = 0;
     let mut lexer = Lexer::new(source);
-    match lexer.tokenize() {
-        Ok(tokens) => {
-            for token in tokens {
+    loop {
+        match lexer.next_token() {
+            Ok(Some(token)) => {
                 let start = token.span.start.min(source.len());
                 let end = token.span.end.min(source.len()).max(start);
                 if start > cursor {
@@ -68,21 +68,29 @@ pub fn parse_lossless(source: &str) -> Cst {
                     &source[start..end],
                 );
                 cursor = end;
+                if token.kind == crate::TokenKind::Eof {
+                    break;
+                }
             }
-        }
-        Err(error) => {
-            let start = error.span.start.min(source.len());
-            if start > cursor {
+            Ok(None) => break,
+            Err(error) => {
+                let start = error.span.start.min(source.len());
+                let end = error.span.end.min(source.len()).max(start);
+                if start > cursor {
+                    builder.token(
+                        LucidLanguage::kind_to_raw(SyntaxKind::Trivia),
+                        &source[cursor..start],
+                    );
+                }
                 builder.token(
-                    LucidLanguage::kind_to_raw(SyntaxKind::Trivia),
-                    &source[cursor..start],
+                    LucidLanguage::kind_to_raw(SyntaxKind::Error),
+                    &source[start..end],
                 );
+                cursor = end;
+                if !lexer.recover_from_error(&error) {
+                    break;
+                }
             }
-            builder.token(
-                LucidLanguage::kind_to_raw(SyntaxKind::Error),
-                &source[start..],
-            );
-            cursor = source.len();
         }
     }
     if cursor < source.len() {
@@ -149,6 +157,21 @@ mod tests {
                 .filter_map(|element| element.into_token())
                 .any(|token| token.kind() == SyntaxKind::Error)
         );
-        assert_eq!(error_ranges(&cst).len(), 1);
+        assert_eq!(error_ranges(&cst).len(), 2);
+    }
+
+    #[test]
+    fn cst_recovers_independent_lexical_errors() {
+        let source = "x = `bad`\ny = 1\nz = `again`\n";
+        let cst = parse_lossless(source);
+        assert_eq!(text(&cst), source);
+        // Both malformed literals contribute their two offending delimiters,
+        // while the valid middle statement remains present.
+        assert_eq!(error_ranges(&cst).len(), 4);
+        assert!(cst.descendants_with_tokens().any(|element| {
+            element
+                .into_token()
+                .is_some_and(|token| token.text() == "1")
+        }));
     }
 }
