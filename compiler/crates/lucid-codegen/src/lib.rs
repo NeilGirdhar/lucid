@@ -1183,6 +1183,7 @@ impl CCodeGenerator {
 #include <stdint.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <errno.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
@@ -1863,6 +1864,21 @@ static inline int64_t lucid_int_builtin(LucidVal v) {
         return result;
     }
     return lucid_as_int(v);
+}
+static inline LucidVal lucid_int_dynamic(LucidVal v) {
+    if (v.type == LUCID_TYPE_BIGINT && v.bigint) return v;
+    if (v.type == LUCID_TYPE_STR && v.s) {
+        char* end = NULL;
+        errno = 0;
+        long long result = strtoll(v.s, &end, 10);
+        while (end && isspace((unsigned char)*end)) ++end;
+        if (!end || end == v.s || *end != '\0') {
+            fprintf(stderr, "invalid literal for int()\n"); exit(1);
+        }
+        if (errno == ERANGE) return lucid_bigint(v.s);
+        return lucid_int((int64_t)result);
+    }
+    return lucid_wrap(lucid_int_builtin(v));
 }
 static inline double lucid_as_float(LucidVal v) {
     if (v.type == LUCID_TYPE_FLOAT) return v.f;
@@ -3401,7 +3417,17 @@ static inline void lucid_print_val(LucidVal v) {
                         return ret.clone();
                     }
                     match name.as_str() {
-                        "len" | "sum" | "int" => "int64_t".to_string(),
+                        "len" | "sum" => "int64_t".to_string(),
+                        "int" => args
+                            .first()
+                            .map(|arg| {
+                                if self.infer_expr_type(&arg.value, vars) == "LucidVal" {
+                                    "LucidVal".to_string()
+                                } else {
+                                    "int64_t".to_string()
+                                }
+                            })
+                            .unwrap_or_else(|| "int64_t".to_string()),
                         "any" | "all" => "bool".to_string(),
                         "iter" => args
                             .first()
@@ -8415,6 +8441,10 @@ static inline void lucid_print_val(LucidVal v) {
                                         "lucid_bigint(\"{}\")",
                                         bigint_literal_decimal(value)
                                     ));
+                                }
+                                let arg_type = self.infer_expr_type(&a.value, &HashMap::new());
+                                if arg_type == "LucidVal" {
+                                    return Ok(format!("lucid_int_dynamic(lucid_wrap({arg_str}))"));
                                 }
                                 return Ok(format!("lucid_int_builtin(lucid_wrap({arg_str}))"));
                             }
@@ -13560,6 +13590,28 @@ print(all({1, 2}))
         let run = Command::new(&output).output().expect("run big integer conversion");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "big integer conversion failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
+    }
+
+    #[test]
+    fn native_int_preserves_big_integer_through_any() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(int(identity(100000000000000000001)))\n";
+        let module = parse(source).expect("dynamic big integer conversion source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_int_dynamic_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("dynamic big integer conversion should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic big integer conversion");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "dynamic big integer conversion failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
     }
 

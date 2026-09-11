@@ -59,6 +59,8 @@ Native `float` now applies the same strict whole-string parsing to string
 inputs.
 Native `int` preserves arbitrary-size integer literals instead of narrowing
 them through a signed 64-bit conversion.
+Native `int` also preserves arbitrary-size integers that cross an erased
+`Any` value, while retaining strict parsing for dynamic string inputs.
 
 ## Verified baseline
 
@@ -73,15 +75,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-298 native-codegen tests
+299 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-739 tests passed
+740 tests passed
 ```
 
-The same 739 tests also pass with:
+The same 740 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
