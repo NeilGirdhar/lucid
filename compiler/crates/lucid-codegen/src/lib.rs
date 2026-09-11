@@ -11434,7 +11434,7 @@ print(c.x, c.y)
 
     #[test]
     fn native_and_or_preserve_selected_operand() {
-        let source = "print(0 and 5)\nprint(2 and 5)\nprint(0 or 5)\nprint(2 or 5)\n";
+        let source = "print(0 and 5)\nprint(2 and 5)\nprint(0 or 5)\nprint(2 or 5)\ndef identity(value: Any) -> Any:\n    return value\nzero = identity(0)\nfive = identity(5)\nprint(zero and five)\nprint(zero or five)\n";
         let module = parse(source).expect("logical source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_logical_values_{}",
@@ -11445,7 +11445,7 @@ print(c.x, c.y)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n5\n5\n2\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n5\n5\n2\n0\n5\n");
     }
 
     #[test]
