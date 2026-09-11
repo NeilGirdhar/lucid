@@ -13500,7 +13500,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_membership_preserves_container_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(\"ell\" in identity(\"hello\"))\nprint(\"answer\" in identity({\"answer\": 42}))\nprint(2 in identity([1, 2, 3]))\nprint(9 not in identity([1, 2, 3]))\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\ntext = identity(\"hello\")\nitems = identity({\"answer\": 42})\nnumbers = identity([1, 2, 3])\nprint(\"ell\" in text)\nprint(\"answer\" in items)\nprint(2 in numbers)\nprint(9 not in numbers)\n";
         let module = parse(source).expect("dynamic membership should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_membership_{}",
