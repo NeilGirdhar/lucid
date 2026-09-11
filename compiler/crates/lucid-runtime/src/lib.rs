@@ -6161,7 +6161,11 @@ impl Interpreter {
                 let val = self.eval_expr(expr)?;
                 match op {
                     UnaryOp::Neg => match val {
-                        Value::Int(n) => Ok(Value::Int(-n)),
+                        Value::Int(n) => Ok(Value::Int(match n {
+                            INT_POS_INF => INT_NEG_INF,
+                            INT_NEG_INF => INT_POS_INF,
+                            value => -value,
+                        })),
                         Value::BigInt(n) => Ok(Value::BigInt(-n)),
                         Value::Float(f) => Ok(Value::Float(-f)),
                         Value::Complex(real, imag) => Ok(Value::Complex(-real, -imag)),
@@ -10299,6 +10303,14 @@ s = sum(r)
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("result"), Some(Value::BigInt(BigInt::from(1))));
+    }
+
+    #[test]
+    fn test_integer_special_negation_preserves_sentinels() {
+        let module = parse("a = -int.inf\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("a"), Some(Value::Int(INT_NEG_INF)));
     }
 
     #[test]

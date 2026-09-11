@@ -1434,6 +1434,8 @@ static inline int64_t lucid_checked_mul(int64_t a, int64_t b) {
     return a * b;
 }
 static inline int64_t lucid_checked_neg(int64_t value) {
+    if (value == INT64_MAX) return INT64_MIN + 1;
+    if (value == INT64_MIN + 1) return INT64_MAX;
     if (value == INT64_MIN) {
         fprintf(stderr, "integer overflow in unary -\n"); exit(1);
     }
@@ -13937,6 +13939,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "special int conversion failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "int.inf\nint.nan\n0\n");
+    }
+
+    #[test]
+    fn native_integer_special_negation_preserves_sentinels() {
+        let source = "print(-int.inf)\n";
+        let module = parse(source).expect("special negation source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_int_neg_special_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("special negation should compile");
+        let run = Command::new(&output).output().expect("run special negation");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "special negation failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "-int.inf\n");
     }
 
     #[test]

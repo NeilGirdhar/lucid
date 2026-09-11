@@ -89,6 +89,8 @@ Native BigInt exponentiation now divides the decimal exponent directly, so it
 does not truncate exponents wider than `u64`.
 Native modular `pow` now accepts BigInt exponents and performs the same exact
 repeated-squaring reduction as the interpreter.
+Unary negation now preserves the `int.inf` and `-int.inf` sentinels in both
+execution paths while retaining the checked overflow behavior for `int.nan`.
 
 ## Verified baseline
 
@@ -103,15 +105,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-312 native-codegen tests
-152 runtime tests
+313 native-codegen tests
+153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-754 tests passed
+756 tests passed
 ```
 
-The same 754 tests also pass with:
+The same 756 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
