@@ -2315,6 +2315,16 @@ static inline LucidList* lucid_list_repeat(LucidVal v, int64_t n) {
     }
     return l;
 }
+static inline LucidList* lucid_list_repeat_value(LucidList* source, int64_t count) {
+    if (!source || count <= 0) return lucid_list_new(0);
+    if ((uint64_t)count > (SIZE_MAX - 1) / (size_t)(source->len ? source->len : 1)) exit(1);
+    int64_t length = source->len * count;
+    LucidList* result = lucid_list_new(length);
+    for (int64_t repeat = 0; repeat < count; ++repeat)
+        for (int64_t index = 0; index < source->len; ++index)
+            lucid_list_append(result, source->items[index]);
+    return result;
+}
 static inline const char* lucid_str_repeat(const char* value, int64_t count) {
     if (!value || count <= 0) return "";
     size_t length = strlen(value);
@@ -2557,7 +2567,7 @@ static inline int64_t _len_str(const char* s) {
 }
 static inline int64_t _len_val(LucidVal v) {
     if (v.type == LUCID_TYPE_LIST) return v.list ? v.list->len : 0;
-    if (v.type == LUCID_TYPE_STR) return v.s ? (int64_t)strlen(v.s) : 0;
+    if (v.type == LUCID_TYPE_STR) return _len_str(v.s);
     if (v.type == LUCID_TYPE_DICT) return v.dict ? v.dict->len : 0;
     if (v.type == LUCID_TYPE_SET) return v.set ? v.set->len : 0;
     return 0;
@@ -2910,15 +2920,15 @@ static inline void lucid_print_val(LucidVal v) {
                 if has_bigint || self.expr_is_complex(left) || self.expr_is_complex(right) {
                     return "LucidVal".to_string();
                 }
+                if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
+                    return "LucidList*".to_string();
+                }
                 if let Some(operator) = Self::binary_op_name(op) {
                     if self.dispatch_fns.contains_key(operator) {
                         if let Some(ret) = self.known_fns.get(operator) {
                             return ret.clone();
                         }
                     }
-                }
-                if *op == BinaryOp::Mul && matches!(**left, Expr::List { .. }) {
-                    return "LucidList*".to_string();
                 }
                 match op {
                     BinaryOp::Eq
@@ -5609,16 +5619,23 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                     }
                 }
-                // Check for list repeat: [x] * n
+                // Check for list repeat: list * n and n * list.
                 if *op == BinaryOp::Mul {
-                    if let Expr::List { elements, .. } = &**left {
-                        if elements.len() == 1 {
-                            let elem_code = self.emit_expr(&elements[0])?;
-                            let count_code = self.emit_expr(right)?;
-                            return Ok(format!(
-                                "lucid_list_repeat(lucid_wrap({elem_code}), lucid_int_val({count_code}))"
-                            ));
-                        }
+                    let left_type = self.infer_expr_type(left, &HashMap::new());
+                    let right_type = self.infer_expr_type(right, &HashMap::new());
+                    if left_type == "LucidList*" && right_type == "int64_t" {
+                        let list_code = self.emit_expr(left)?;
+                        let count_code = self.emit_expr(right)?;
+                        return Ok(format!(
+                            "lucid_list_repeat_value({list_code}, lucid_int_val(lucid_wrap({count_code})))"
+                        ));
+                    }
+                    if left_type == "int64_t" && right_type == "LucidList*" {
+                        let list_code = self.emit_expr(right)?;
+                        let count_code = self.emit_expr(left)?;
+                        return Ok(format!(
+                            "lucid_list_repeat_value({list_code}, lucid_int_val(lucid_wrap({count_code})))"
+                        ));
                     }
                 }
 
@@ -12624,6 +12641,24 @@ print(all({1, 2}))
     }
 
     #[test]
+    fn native_wrapped_string_length_is_unicode_aware() {
+        let source = "values = {\"text\": \"café\"}\nprint(len(values[\"text\"]))\n";
+        let module = parse(source).expect("wrapped string length source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_wrapped_string_len_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("wrapped string length should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled wrapped string length should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n");
+    }
+
+    #[test]
     fn native_string_membership_uses_substring_semantics() {
         let source = "print(\"ell\" in \"hello\")\nprint(\"x\" not in \"hello\")\n";
         let module = parse(source).expect("string membership source should parse");
@@ -12657,6 +12692,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "hahaha\n\n");
+    }
+
+    #[test]
+    fn native_list_repeat_supports_arbitrary_lists_and_reflected_order() {
+        let source = "a = [1, 2] * 2\nb = 2 * [1, 2]\nprint(len(a))\nprint(a[3])\nprint(len(b))\nprint(b[3])\n";
+        let module = parse(source).expect("list repeat source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_list_repeat_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("list repeat should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled list repeat program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n2\n4\n2\n");
     }
 
     #[test]
