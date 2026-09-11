@@ -89,6 +89,9 @@ diverged:
   other side effects. Tagged object values retain their class-specific
   `__bool__`/`__len__` callback when they cross an `Any` boundary, with
   coverage for both protocol forms.
+  Callback registration is limited to methods with the documented return
+  types, preventing malformed protocol declarations from creating an ABI
+  mismatch in generated C.
   Native object metadata grows on demand instead of silently dropping
   truthiness and freezing information after a fixed object-count limit, with
   checked capacity growth at the allocation boundary.

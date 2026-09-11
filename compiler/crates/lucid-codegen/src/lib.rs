@@ -175,6 +175,7 @@ pub struct CCodeGenerator {
     known_field_defaults: HashMap<(String, String), Option<Expr>>,
     known_methods: HashMap<String, String>,
     known_method_param_names: HashMap<(String, String), Vec<String>>,
+    known_method_return_types: HashMap<(String, String), String>,
     known_method_defaults: HashMap<(String, String), Vec<Option<Expr>>>,
     known_method_gather: HashMap<(String, String), (usize, String)>,
     known_getters: HashMap<(String, String), String>,
@@ -280,6 +281,7 @@ impl CCodeGenerator {
             known_field_defaults: HashMap::new(),
             known_methods: HashMap::new(),
             known_method_param_names: HashMap::new(),
+            known_method_return_types: HashMap::new(),
             known_method_defaults: HashMap::new(),
             known_method_gather: HashMap::new(),
             known_getters: HashMap::new(),
@@ -598,6 +600,10 @@ impl CCodeGenerator {
                                 (name.clone(), m.name.clone()),
                                 m.params.iter().skip(1).map(|p| p.name.clone()).collect(),
                             );
+                            self.known_method_return_types.insert(
+                                (name.clone(), m.name.clone()),
+                                self.map_type_expr(m.return_type.as_ref()),
+                            );
                             self.known_method_defaults.insert(
                                 (name.clone(), m.name.clone()),
                                 m.params.iter().skip(1).map(|p| p.default.clone()).collect(),
@@ -634,6 +640,10 @@ impl CCodeGenerator {
                             self.known_method_param_names.insert(
                                 (name.clone(), m.name.clone()),
                                 m.params.iter().skip(1).map(|p| p.name.clone()).collect(),
+                            );
+                            self.known_method_return_types.insert(
+                                (name.clone(), m.name.clone()),
+                                self.map_type_expr(m.return_type.as_ref()),
                             );
                             self.known_method_defaults.insert(
                                 (name.clone(), m.name.clone()),
@@ -3980,9 +3990,19 @@ static inline void lucid_print_val(LucidVal v) {
         // callback; the implementation itself is emitted with the methods.
         let truthy_owner = self
             .method_owner(name, "__bool__")
+            .filter(|owner| {
+                self.known_method_return_types
+                    .get(&(owner.clone(), "__bool__".to_string()))
+                    .is_some_and(|ty| ty == "bool")
+            })
             .map(|owner| (owner, true))
             .or_else(|| {
                 self.method_owner(name, "__len__")
+                    .filter(|owner| {
+                        self.known_method_return_types
+                            .get(&(owner.clone(), "__len__".to_string()))
+                            .is_some_and(|ty| ty == "int64_t")
+                    })
                     .map(|owner| (owner, false))
             });
         if let Some((owner, is_bool)) = &truthy_owner {
