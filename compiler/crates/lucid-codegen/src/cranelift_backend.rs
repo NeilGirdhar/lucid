@@ -1764,7 +1764,11 @@ fn compile_integer_function_impl(
                     } else {
                         let exponent = match exponent {
                             Some(value) => value,
-                            None => unreachable!("constant exponent checked above"),
+                            None => {
+                                return Err(CraneliftError::UnsupportedInstruction(
+                                    "constant exponent is missing".into(),
+                                ));
+                            }
                         };
                         if exponent < 0 {
                             if !result_abi {

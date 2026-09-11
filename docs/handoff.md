@@ -111,6 +111,9 @@ diverged:
 * Parameterized native result adapters reject signatures above the fixed
   sixteen-argument ABI limit with `InvalidOperation` before entering unsafe
   legacy calls, including pointer-output FFI adapters.
+* Cranelift power lowering now reports a missing constant exponent as an
+  explicit unsupported-instruction error instead of relying on an internal
+  assertion.
 * Checker subtype and numeric-special-value paths now return ordinary
   negatives for malformed intermediate types instead of relying on internal
   `unreachable!()` assumptions.
