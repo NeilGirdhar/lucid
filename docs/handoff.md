@@ -90,7 +90,8 @@ diverged:
   `__bool__`/`__len__` callback when they cross an `Any` boundary, with
   coverage for both protocol forms.
   Native object metadata grows on demand instead of silently dropping
-  truthiness and freezing information after a fixed object-count limit.
+  truthiness and freezing information after a fixed object-count limit, with
+  checked capacity growth at the allocation boundary.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.
