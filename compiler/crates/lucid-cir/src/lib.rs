@@ -698,6 +698,62 @@ impl Function {
                         local_bindings,
                     );
                 }
+                if node.kind == "match-chain" && node.children.len() >= 3 {
+                    let Some(detail) = node.detail.as_deref() else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    let Some(patterns) = detail.strip_prefix("literal-chain:") else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    let patterns = patterns
+                        .split(',')
+                        .map(|value| {
+                            if let Some(value) = value.strip_prefix('i') {
+                                value.parse::<i64>().ok().map(TypedLiteral::Int)
+                            } else {
+                                value
+                                    .strip_prefix('b')
+                                    .and_then(|value| value.parse::<bool>().ok())
+                                    .map(TypedLiteral::Bool)
+                            }
+                        })
+                        .collect::<Option<Vec<_>>>();
+                    let Some(patterns) = patterns else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    if patterns.len() + 2 != node.children.len() {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    let outputs = node.children[1..]
+                        .iter()
+                        .map(|id| nodes.get(*id as usize).and_then(|node| node.literal))
+                        .collect::<Option<Vec<_>>>();
+                    let Some(outputs) = outputs else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    let subject = nodes
+                        .get(node.children[0] as usize)
+                        .and_then(|node| node.detail.as_deref())
+                        .and_then(|name| {
+                            parameter_names
+                                .iter()
+                                .position(|parameter| parameter == name)
+                        });
+                    let Some(subject) = subject else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    let wildcard = outputs[patterns.len()];
+                    let arms = patterns
+                        .into_iter()
+                        .zip(outputs.into_iter().take(node.children.len() - 2))
+                        .collect::<Vec<_>>();
+                    return Self::from_parameterized_literal_match(
+                        parameter_names.len(),
+                        subject,
+                        &arms,
+                        wildcard,
+                    );
+                }
                 if node.id == roots[0]
                     && node.kind == "if"
                     && node.children.len() == 3
@@ -2249,10 +2305,15 @@ impl Function {
         // shape, not indexed optimistically and panicked on. A trailing
         // `continue` is semantically equivalent to reaching the loop back
         // edge after the induction update, so the canonical lowering can
-        // safely accept that form too.
+        // safely accept those forms too. `pass` is likewise a no-op and does
+        // not alter the loop's observable behavior.
         if body.is_empty()
             || body.len() > 2
-            || (body.len() == 2 && !matches!(&body[1], lucid_syntax::Stmt::Continue(_)))
+            || (body.len() == 2
+                && !matches!(
+                    &body[1],
+                    lucid_syntax::Stmt::Continue(_) | lucid_syntax::Stmt::Pass(_)
+                ))
         {
             return None;
         }
@@ -2515,7 +2576,11 @@ impl Function {
         if return_name != acc_name
             || body.is_empty()
             || body.len() > 2
-            || (body.len() == 2 && !matches!(&body[1], lucid_syntax::Stmt::Continue(_)))
+            || (body.len() == 2
+                && !matches!(
+                    &body[1],
+                    lucid_syntax::Stmt::Continue(_) | lucid_syntax::Stmt::Pass(_)
+                ))
             || !(1..=3).contains(&args.len())
             || !matches!(func.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == "range")
         {
@@ -6430,6 +6495,12 @@ return n
             .expect("trailing continue should lower with the induction loop");
         assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
 
+        let module = lucid_syntax::parse("while n > 0:\n    n -= 1\n    pass\nreturn n\n")
+            .expect("pass loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("trailing pass should lower with the induction loop");
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
+
         let module = lucid_syntax::parse(
             r#"while n > 0:
     n = n - 1
@@ -6486,6 +6557,14 @@ return total
         .expect("range continue fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("trailing continue in range loop should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            "total = 0\nfor i in range(n):\n    total += i\n    pass\nreturn total\n",
+        )
+        .expect("range pass fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("trailing pass in range loop should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(

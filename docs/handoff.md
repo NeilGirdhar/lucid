@@ -190,6 +190,9 @@ diverged:
   The supported two-arm shape now carries its subject, arm results, and
   literal discriminator as one typed-HIR node before CIR lowering, including
   the simple branch-local assignment-and-return form.
+* Canonical counted `while` and `for range` CIR loops now accept a trailing
+  `pass` after the induction update, preserving the specified no-op statement
+  without widening the loop lowering shape.
 * Pure discarded expressions before a return now pass through typed-CIR
   lowering; effectful expressions remain rejected instead of being dropped.
   Their rejection now carries a dedicated diagnostic explaining that an

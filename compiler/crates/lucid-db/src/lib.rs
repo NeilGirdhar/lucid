@@ -1047,6 +1047,78 @@ fn collect_typed_body<'db>(
                         _ => None,
                     }
                 }
+                if arms.len() >= 3
+                    && matches!(
+                        arms.last().map(|arm| &arm.pattern),
+                        Some(lucid_syntax::Pattern::Wildcard(_))
+                    )
+                    && arms[..arms.len() - 1]
+                        .iter()
+                        .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                    && arms.iter().all(|arm| {
+                        match_arm_result(arm).is_some_and(|value| {
+                            matches!(
+                                value,
+                                lucid_syntax::Expr::Literal {
+                                    value: lucid_syntax::LiteralValue::Int(_)
+                                        | lucid_syntax::LiteralValue::Bool(_),
+                                    ..
+                                }
+                            )
+                        })
+                    })
+                {
+                    let detail = arms[..arms.len() - 1]
+                        .iter()
+                        .map(|arm| match &arm.pattern {
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Int(value),
+                                _,
+                            ) => format!("i{value}"),
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Bool(value),
+                                _,
+                            ) => format!("b{value}"),
+                            _ => unreachable!(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let mut children = vec![subject_id];
+                    let mut result_ids = Vec::with_capacity(arms.len());
+                    for arm in arms {
+                        let value = match_arm_result(arm).expect("validated match result");
+                        let Some(id) = nodes
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == value.span())
+                            .map(|node| node.id)
+                        else {
+                            result_ids.clear();
+                            break;
+                        };
+                        result_ids.push(id);
+                    }
+                    if result_ids.len() == arms.len() {
+                        children.extend(result_ids);
+                        let id = u32::try_from(nodes.len())
+                            .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                        let result = match_arm_result(&arms[0]).expect("validated match result");
+                        let ty = checker
+                            .type_of_expr(result)
+                            .map_err(|error| Arc::<str>::from(error.message))?
+                            .canonical();
+                        nodes.push(TypedExpr {
+                            id,
+                            type_id: TypeId::new(db, ty.canonical_string()),
+                            type_name: ty.canonical_string(),
+                            kind: "match-chain".into(),
+                            detail: Some(format!("literal-chain:{detail}")),
+                            children: Arc::from(children),
+                            literal: None,
+                            span: subject.span(),
+                        });
+                    }
+                }
             }
             Stmt::Try {
                 body,
@@ -1453,12 +1525,9 @@ pub fn lower_function_body(
         && let [lucid_syntax::Stmt::Match { subject, arms, .. }] = source_function.body.as_slice()
         && matches!(subject, lucid_syntax::Expr::Ident { .. })
     {
-        if let Some(root) = function
-            .body_expressions
-            .iter()
-            .rev()
-            .find(|node| node.kind == "match" && node.span == subject.span())
-        {
+        if let Some(root) = function.body_expressions.iter().rev().find(|node| {
+            matches!(node.kind.as_str(), "match" | "match-chain") && node.span == subject.span()
+        }) {
             let nodes = function
                 .body_expressions
                 .iter()
@@ -3821,6 +3890,15 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("multi-arm literal match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
