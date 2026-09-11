@@ -2071,7 +2071,11 @@ static inline LucidVal lucid_hash(LucidVal value) {
     return lucid_int(hash);
 }
 static inline LucidVal lucid_abs_value(LucidVal value) {
-    if (value.type == LUCID_TYPE_INT) return lucid_int(llabs(value.i));
+    if (value.type == LUCID_TYPE_INT) {
+        if (value.i == INT64_MIN) return lucid_int(INT64_MIN);
+        if (value.i == INT64_MIN + 1) return lucid_int(INT64_MAX);
+        return lucid_int(llabs(value.i));
+    }
     if (value.type == LUCID_TYPE_FLOAT) return lucid_float(fabs(value.f));
     if (value.type == LUCID_TYPE_COMPLEX) return lucid_float(hypot(value.real, value.imag));
     if (value.type == LUCID_TYPE_BIGINT) {
@@ -13573,6 +13577,22 @@ print(all({1, 2}))
                 .to_string()
                 .contains("abs() takes exactly one argument")
         );
+    }
+
+    #[test]
+    fn native_abs_preserves_integer_special_values() {
+        let source = "print(abs(int.nan))\nprint(abs(-int.inf))\n";
+        let module = parse(source).expect("special abs source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_abs_int_special_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("special abs should compile");
+        let run = Command::new(&output).output().expect("run special abs");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "special abs failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "int.nan\nint.inf\n");
     }
 
     #[test]

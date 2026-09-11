@@ -67,6 +67,8 @@ Float-to-int conversion now matches Rust's saturating cast semantics for
 infinities and maps NaN to zero instead of relying on undefined C casts.
 The one-argument native `round` path uses the same guarded conversion for
 float infinities and NaN.
+Native and interpreter `abs` preserve the `int.nan` and `-int.inf` sentinel
+values instead of overflowing on their reserved machine representations.
 
 ## Verified baseline
 
@@ -81,15 +83,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-302 native-codegen tests
+303 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-743 tests passed
+744 tests passed
 ```
 
-The same 743 tests also pass with:
+The same 744 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

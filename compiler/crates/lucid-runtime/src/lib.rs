@@ -3937,7 +3937,11 @@ impl Interpreter {
                 });
             }
             match &args[0] {
-                Value::Int(n) => Ok(Value::Int(n.abs())),
+                Value::Int(n) => Ok(Value::Int(match *n {
+                    INT_NAN => INT_NAN,
+                    INT_NEG_INF => INT_POS_INF,
+                    value => value.abs(),
+                })),
                 Value::BigInt(n) => Ok(Value::BigInt(n.abs())),
                 Value::Float(f) => Ok(Value::Float(f.abs())),
                 Value::Complex(real, imag) => Ok(Value::Float(real.hypot(*imag))),
@@ -4394,7 +4398,11 @@ impl Interpreter {
                             });
                         }
                         match &args[0] {
-                            Value::Int(n) => Ok(Value::Int(n.abs())),
+                            Value::Int(n) => Ok(Value::Int(match *n {
+                                INT_NAN => INT_NAN,
+                                INT_NEG_INF => INT_POS_INF,
+                                value => value.abs(),
+                            })),
                             Value::BigInt(n) => Ok(Value::BigInt(n.abs())),
                             Value::Float(f) => Ok(Value::Float(f.abs())),
                             Value::Complex(real, imag) => Ok(Value::Float(real.hypot(*imag))),
