@@ -3135,6 +3135,9 @@ static inline void lucid_print_val(LucidVal v) {
                 {
                     return "LucidVal".to_string();
                 }
+                if *op == BinaryOp::Pow && l_ty == "LucidVal" && r_ty == "LucidVal" {
+                    return "LucidVal".to_string();
+                }
                 if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
                     return "LucidList*".to_string();
                 }
@@ -6012,6 +6015,14 @@ static inline void lucid_print_val(LucidVal v) {
                     };
                     return Ok(format!(
                         "{helper}(lucid_wrap({l_str}), lucid_wrap({r_str}))"
+                    ));
+                }
+                if *op == BinaryOp::Pow
+                    && self.expr_is_dynamic_value(left)
+                    && self.expr_is_dynamic_value(right)
+                {
+                    return Ok(format!(
+                        "lucid_pow(lucid_wrap({l_str}), lucid_wrap({r_str}))"
                     ));
                 }
 
@@ -13237,6 +13248,24 @@ print(all({1, 2}))
             "dynamic floor operations failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n1\n");
+    }
+
+    #[test]
+    fn native_dynamic_power_preserves_numeric_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nbase = identity(2)\nexponent = identity(10)\nprint(base ** exponent)\nprint(identity(4.0) ** identity(0.5))\n";
+        let module = parse(source).expect("dynamic power should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_power_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic power should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic power should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic power failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1024\n2\n");
     }
 
     #[test]
