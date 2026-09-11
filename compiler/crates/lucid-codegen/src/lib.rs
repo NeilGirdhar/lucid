@@ -345,12 +345,10 @@ impl CCodeGenerator {
             format!("({owner}___len__(({owner}*)({code})) != 0)")
         } else {
             match ty.as_str() {
-                "const char*" | "char*" => {
-                    format!("(({code}) != NULL && ({code})[0] != '\\0')")
-                }
-                "LucidList*" => format!("(({code}) != NULL && ({code})->len > 0)"),
-                "LucidDict*" => format!("(({code}) != NULL && ({code})->len > 0)"),
-                "LucidSet*" => format!("(({code}) != NULL && ({code})->len > 0)"),
+                "const char*" | "char*" => format!("lucid_str_truthy({code})"),
+                "LucidList*" => format!("lucid_list_truthy({code})"),
+                "LucidDict*" => format!("lucid_dict_truthy({code})"),
+                "LucidSet*" => format!("lucid_set_truthy({code})"),
                 _ => format!("lucid_bool_val({code})"),
             }
         }
@@ -1929,6 +1927,18 @@ static inline bool _b_int(int64_t i) { return i != 0; }
 static inline bool _b_float(double f) { return f != 0.0; }
 static inline bool _b_val(LucidVal v) { return lucid_as_bool(v); }
 static inline bool _b_ptr(void* p) { return p != NULL; }
+static inline bool lucid_str_truthy(const char* value) {
+    return value != NULL && value[0] != '\0';
+}
+static inline bool lucid_list_truthy(LucidList* value) {
+    return value != NULL && value->len > 0;
+}
+static inline bool lucid_dict_truthy(LucidDict* value) {
+    return value != NULL && value->len > 0;
+}
+static inline bool lucid_set_truthy(LucidSet* value) {
+    return value != NULL && value->len > 0;
+}
 
 #define lucid_bool_val(x) _Generic((x), \
     bool: _b_bool, \
