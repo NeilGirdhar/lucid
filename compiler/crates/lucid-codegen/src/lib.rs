@@ -9739,6 +9739,36 @@ static inline void lucid_print_val(LucidVal v) {
                         };
                         return Ok(format!("{helper}(lucid_as_str(lucid_wrap({obj_code})))"));
                     }
+                    if receiver_ty == "LucidVal" {
+                        if !args.is_empty() {
+                            return Err(CodegenError {
+                                message: format!(
+                                    "dynamic method '{attr}' with arguments is not supported by the native backend"
+                                ),
+                            });
+                        }
+                        let object = self.new_temp();
+                        let class_name = self.new_temp();
+                        let result = self.new_temp();
+                        let matched = self.new_temp();
+                        let mut classes: Vec<String> = self.known_classes.keys().cloned().collect();
+                        classes.sort();
+                        let mut lines = vec![format!(
+                            "LucidVal {object} = lucid_wrap({}); const char* {class_name} = lucid_object_class_name({object}.ptr); LucidVal {result} = lucid_none(); bool {matched} = false;",
+                            self.emit_expr(obj_expr)?
+                        )];
+                        for candidate in classes {
+                            if let Some(owner) = self.method_owner(&candidate, attr) {
+                                lines.push(format!(
+                                    "if (!{matched} && {class_name} && strcmp({class_name}, \"{candidate}\") == 0) {{ {result} = lucid_wrap({owner}_{attr}(({owner}*){object}.ptr)); {matched} = true; }}"
+                                ));
+                            }
+                        }
+                        lines.push(format!(
+                            "if (!{matched}) {{ fprintf(stderr, \"unsupported dynamic method '{attr}'\\n\"); exit(1); }} {result}"
+                        ));
+                        return Ok(format!("({{ {}; }})", lines.join(" ")));
+                    }
                     let receiver_class = receiver_ty
                         .strip_suffix('*')
                         .filter(|class| self.known_classes.contains_key(*class))
@@ -12254,7 +12284,7 @@ print(z is complex)
 
     #[test]
     fn native_propagated_union_values_support_dynamic_attributes() {
-        let source = "class NotFoundError:\n    message: str\n    getter upper(self) -> str:\n        return self.message\ndef lookup(key: str) -> int | NotFoundError:\n    if key == \"missing\":\n        return NotFoundError(\"item missing\")\n    return 100\ndef get_value(key: str) -> int | NotFoundError:\n    value = lookup(key)?\n    return value + 1\nprint(get_value(\"present\"))\nprint(get_value(\"missing\").message)\nprint(get_value(\"missing\").upper)\n";
+        let source = "class NotFoundError:\n    message: str\n    getter upper(self) -> str:\n        return self.message\n    def render(self) -> str:\n        return self.message\ndef lookup(key: str) -> int | NotFoundError:\n    if key == \"missing\":\n        return NotFoundError(\"item missing\")\n    return 100\ndef get_value(key: str) -> int | NotFoundError:\n    value = lookup(key)?\n    return value + 1\nprint(get_value(\"present\"))\nprint(get_value(\"missing\").message)\nprint(get_value(\"missing\").upper)\nprint(get_value(\"missing\").render())\n";
         let module = parse(source).expect("propagated union source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_propagated_union_attr_{}",
@@ -12268,7 +12298,7 @@ print(z is complex)
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
-            "101\nitem missing\nitem missing\n"
+            "101\nitem missing\nitem missing\nitem missing\n"
         );
     }
 
