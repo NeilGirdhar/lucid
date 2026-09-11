@@ -2193,8 +2193,16 @@ static inline LucidSet* lucid_set_union_value(LucidSet* a, LucidVal other) {
 static inline LucidSet* lucid_set_difference(LucidSet* a, LucidSet* b) {
     LucidSet* out = lucid_set_new(0); if (!a) return out; for (int64_t i = 0; i < a->len; ++i) if (!b || !lucid_set_contains(b, a->items[i])) lucid_set_add(out, a->items[i]); return out;
 }
+static inline LucidSet* lucid_set_difference_value(LucidSet* a, LucidVal other) {
+    if (other.type != LUCID_TYPE_SET) { fprintf(stderr, "unsupported operands for -\n"); exit(1); }
+    return lucid_set_difference(a, other.set);
+}
 static inline LucidSet* lucid_set_xor(LucidSet* a, LucidSet* b) {
     LucidSet* out = lucid_set_difference(a, b); if (b) for (int64_t i = 0; i < b->len; ++i) if (!a || !lucid_set_contains(a, b->items[i])) lucid_set_add(out, b->items[i]); return out;
+}
+static inline LucidSet* lucid_set_xor_value(LucidSet* a, LucidVal other) {
+    if (other.type != LUCID_TYPE_SET) { fprintf(stderr, "unsupported operands for ^\n"); exit(1); }
+    return lucid_set_xor(a, other.set);
 }
 static inline bool lucid_set_disjoint(LucidSet* a, LucidSet* b) { if (!a || !b) return true; for (int64_t i = 0; i < a->len; ++i) if (lucid_set_contains(b, a->items[i])) return false; return true; }
 static inline bool lucid_set_disjoint_value(LucidSet* a, LucidVal other) {
@@ -5783,7 +5791,9 @@ static inline void lucid_print_val(LucidVal v) {
                 if matches!(op, BinaryOp::Sub)
                     && self.infer_expr_type(left, &HashMap::new()) == "LucidSet*"
                 {
-                    return Ok(format!("lucid_set_difference({l_str}, {r_str})"));
+                    return Ok(format!(
+                        "lucid_set_difference_value({l_str}, lucid_wrap({r_str}))"
+                    ));
                 }
 
                 match op {
@@ -5962,7 +5972,7 @@ static inline void lucid_print_val(LucidVal v) {
                     BinaryOp::BitXor
                         if self.infer_expr_type(left, &HashMap::new()) == "LucidSet*" =>
                     {
-                        Ok(format!("lucid_set_xor({l_str}, {r_str})"))
+                        Ok(format!("lucid_set_xor_value({l_str}, lucid_wrap({r_str}))"))
                     }
                     BinaryOp::BitAnd => Ok(format!("((int64_t){l_str} & (int64_t){r_str})")),
                     BinaryOp::BitOr => Ok(format!("((int64_t){l_str} | (int64_t){r_str})")),
@@ -13716,6 +13726,30 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "set/list union should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("unsupported operands for |"));
+    }
+
+    #[test]
+    fn native_set_difference_and_xor_reject_non_set_operands() {
+        for (index, operation) in ["-", "^"].iter().enumerate() {
+            let source = format!("print({{1, 2}} {operation} [2, 3])\n");
+            let module = parse(&source).expect("invalid set operation source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_codegen_set_invalid_{}_{}",
+                std::process::id(),
+                index
+            ));
+            let _ = fs::remove_file(&output);
+            compile_to_native(&module, &output, 0).expect("invalid set operation should compile");
+            let run = Command::new(&output).output().expect("run native binary");
+            let _ = fs::remove_file(&output);
+            assert!(!run.status.success(), "set/list {operation} should fail");
+            assert!(
+                String::from_utf8_lossy(&run.stderr)
+                    .contains(&format!("unsupported operands for {operation}")),
+                "unexpected stderr: {}",
+                String::from_utf8_lossy(&run.stderr)
+            );
+        }
     }
 
     #[test]
