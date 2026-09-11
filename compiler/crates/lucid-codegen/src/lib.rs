@@ -2488,6 +2488,35 @@ static inline LucidVal lucid_div_value(LucidVal left, LucidVal right) {
     fprintf(stderr, "unsupported operands for /\n");
     exit(1);
 }
+static inline LucidVal lucid_floor_div_value(LucidVal left, LucidVal right) {
+    bool left_int = left.type == LUCID_TYPE_INT;
+    bool right_int = right.type == LUCID_TYPE_INT;
+    bool left_numeric = left_int || left.type == LUCID_TYPE_FLOAT;
+    bool right_numeric = right_int || right.type == LUCID_TYPE_FLOAT;
+    if (left_numeric && right_numeric) {
+        if (left_int && right_int)
+            return lucid_int(lucid_int_floor_div(left.i, right.i));
+        double lhs = left_int ? (double)left.i : left.f;
+        double rhs = right_int ? (double)right.i : right.f;
+        return lucid_float(lucid_float_floor_div(lhs, rhs));
+    }
+    fprintf(stderr, "unsupported operands for //\n");
+    exit(1);
+}
+static inline LucidVal lucid_mod_value(LucidVal left, LucidVal right) {
+    bool left_int = left.type == LUCID_TYPE_INT;
+    bool right_int = right.type == LUCID_TYPE_INT;
+    bool left_numeric = left_int || left.type == LUCID_TYPE_FLOAT;
+    bool right_numeric = right_int || right.type == LUCID_TYPE_FLOAT;
+    if (left_numeric && right_numeric) {
+        if (left_int && right_int) return lucid_int(lucid_int_mod(left.i, right.i));
+        double lhs = left_int ? (double)left.i : left.f;
+        double rhs = right_int ? (double)right.i : right.f;
+        return lucid_float(lucid_float_mod(lhs, rhs));
+    }
+    fprintf(stderr, "unsupported operands for %\n");
+    exit(1);
+}
 
 static inline bool lucid_checked_range_advance(int64_t current, int64_t step, int64_t* next) {
     if (step > 0 && current > INT64_MAX - step) return false;
@@ -3098,6 +3127,12 @@ static inline void lucid_print_val(LucidVal v) {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Div && l_ty == "LucidVal" && r_ty == "LucidVal" {
+                    return "LucidVal".to_string();
+                }
+                if matches!(op, BinaryOp::FloorDiv | BinaryOp::Mod)
+                    && l_ty == "LucidVal"
+                    && r_ty == "LucidVal"
+                {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
@@ -5964,6 +5999,19 @@ static inline void lucid_print_val(LucidVal v) {
                 {
                     return Ok(format!(
                         "lucid_div_value(lucid_wrap({l_str}), lucid_wrap({r_str}))"
+                    ));
+                }
+                if matches!(op, BinaryOp::FloorDiv | BinaryOp::Mod)
+                    && self.expr_is_dynamic_value(left)
+                    && self.expr_is_dynamic_value(right)
+                {
+                    let helper = if *op == BinaryOp::FloorDiv {
+                        "lucid_floor_div_value"
+                    } else {
+                        "lucid_mod_value"
+                    };
+                    return Ok(format!(
+                        "{helper}(lucid_wrap({l_str}), lucid_wrap({r_str}))"
                     ));
                 }
 
@@ -13168,6 +13216,27 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic division failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3.5\n");
+    }
+
+    #[test]
+    fn native_dynamic_floor_division_and_remainder_preserve_numeric_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(7)\nright = identity(2)\nprint(left // right)\nprint(left % right)\n";
+        let module = parse(source).expect("dynamic floor operations should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_floor_ops_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic floor operations should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic floor operations should run");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "dynamic floor operations failed: {run:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n1\n");
     }
 
     #[test]
