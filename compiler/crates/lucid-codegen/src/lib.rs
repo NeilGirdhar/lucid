@@ -2179,6 +2179,10 @@ static inline LucidSet* lucid_set_intersection(LucidSet* a, LucidSet* b) {
     for (int64_t i = 0; i < a->len; ++i) if (lucid_set_contains(b, a->items[i])) lucid_set_add(out, a->items[i]);
     return out;
 }
+static inline LucidSet* lucid_set_intersection_value(LucidSet* a, LucidVal other) {
+    if (other.type != LUCID_TYPE_SET) { fprintf(stderr, "unsupported operands for &\n"); exit(1); }
+    return lucid_set_intersection(a, other.set);
+}
 static inline LucidSet* lucid_set_union(LucidSet* a, LucidSet* b) {
     LucidSet* out = lucid_set_new(0); if (a) for (int64_t i = 0; i < a->len; ++i) lucid_set_add(out, a->items[i]); if (b) for (int64_t i = 0; i < b->len; ++i) lucid_set_add(out, b->items[i]); return out;
 }
@@ -5940,7 +5944,9 @@ static inline void lucid_print_val(LucidVal v) {
                     BinaryOp::BitAnd
                         if self.infer_expr_type(left, &HashMap::new()) == "LucidSet*" =>
                     {
-                        Ok(format!("lucid_set_intersection({l_str}, {r_str})"))
+                        Ok(format!(
+                            "lucid_set_intersection_value({l_str}, lucid_wrap({r_str}))"
+                        ))
                     }
                     BinaryOp::BitOr
                         if self.infer_expr_type(left, &HashMap::new()) == "LucidSet*" =>
@@ -13672,6 +13678,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native isdisjoint failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
+    }
+
+    #[test]
+    fn native_set_intersection_rejects_non_set_operand() {
+        let source = "print({1, 2} & [2, 3])\n";
+        let module = parse(source).expect("invalid set intersection source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_set_intersection_invalid_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("invalid set intersection should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "set/list intersection should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("unsupported operands for &"));
     }
 
     #[test]
