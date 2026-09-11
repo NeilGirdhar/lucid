@@ -13732,6 +13732,22 @@ print(all({1, 2}))
     }
 
     #[test]
+    fn native_bigint_exponent_keeps_exact_integer_result() {
+        let source = "print(1 ** 9223372036854775808)\n";
+        let module = parse(source).expect("bigint exponent source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_bigint_exponent_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("bigint exponent should compile");
+        let run = Command::new(&output).output().expect("run bigint exponent");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "bigint exponent failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+    }
+
+    #[test]
     fn native_numeric_conversions_reject_unsupported_erased_values() {
         let source = "def identity(value: Any) -> Any:\n    return value\nprint(int(identity(none)))\n";
         let module = parse(source).expect("dynamic int source should parse");

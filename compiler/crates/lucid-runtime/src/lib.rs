@@ -1533,6 +1533,22 @@ impl Interpreter {
                     }
                     Ok(Value::BigInt(result))
                 }
+                (Value::BigInt(base), Value::BigInt(exp))
+                    if exp.sign() != num_bigint::Sign::Minus => {
+                        let mut power = base.clone();
+                        let mut exponent = exp.clone();
+                        let mut result = BigInt::one();
+                        while !exponent.is_zero() {
+                            if (&exponent & BigInt::one()) == BigInt::one() {
+                                result *= &power;
+                            }
+                            exponent >>= 1;
+                            if !exponent.is_zero() {
+                                power = &power * &power;
+                            }
+                        }
+                        Ok(Value::BigInt(result))
+                    }
                 (Value::BigInt(base), Value::BigInt(exp)) => Ok(Value::Float(
                     bigint_to_float(base).powf(bigint_to_float(exp)),
                 )),
@@ -10275,6 +10291,14 @@ s = sum(r)
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("result"), Some(Value::BigInt(BigInt::from(0))));
+    }
+
+    #[test]
+    fn test_bigint_exponent_keeps_exact_integer_result() {
+        let module = parse("result = 1 ** 9223372036854775808\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("result"), Some(Value::BigInt(BigInt::from(1))));
     }
 
     #[test]

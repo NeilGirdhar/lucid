@@ -83,6 +83,8 @@ Native three-argument `pow` now performs modular exponentiation for BigInt
 operands instead of returning the integer NaN sentinel.
 The interpreter's three-argument `pow` path now accepts the same arbitrary-size
 integer operands and preserves the BigInt result.
+Positive BigInt exponents now retain exact integer results in the interpreter,
+including exponents wider than the machine integer range.
 
 ## Verified baseline
 
@@ -97,15 +99,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-309 native-codegen tests
-151 runtime tests
+310 native-codegen tests
+152 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-751 tests passed
+752 tests passed
 ```
 
-The same 751 tests also pass with:
+The same 752 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
