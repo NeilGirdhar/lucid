@@ -2530,11 +2530,11 @@ static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
     exit(1);
 }
 static inline LucidVal lucid_div_value(LucidVal left, LucidVal right) {
-    bool left_numeric = left.type == LUCID_TYPE_INT || left.type == LUCID_TYPE_FLOAT;
-    bool right_numeric = right.type == LUCID_TYPE_INT || right.type == LUCID_TYPE_FLOAT;
+    bool left_numeric = left.type == LUCID_TYPE_INT || left.type == LUCID_TYPE_FLOAT || left.type == LUCID_TYPE_BIGINT;
+    bool right_numeric = right.type == LUCID_TYPE_INT || right.type == LUCID_TYPE_FLOAT || right.type == LUCID_TYPE_BIGINT;
     if (left_numeric && right_numeric) {
-        double lhs = left.type == LUCID_TYPE_FLOAT ? left.f : (double)left.i;
-        double rhs = right.type == LUCID_TYPE_FLOAT ? right.f : (double)right.i;
+        double lhs = left.type == LUCID_TYPE_INT ? (double)left.i : lucid_as_float(left);
+        double rhs = right.type == LUCID_TYPE_INT ? (double)right.i : lucid_as_float(right);
         return lucid_float(lhs / rhs);
     }
     fprintf(stderr, "unsupported operands for /\n");
@@ -13323,7 +13323,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_division_preserves_numeric_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(7)\nright = identity(2)\nprint(left / right)\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(7)\nright = identity(2)\nprint(left / right)\nprint(identity(100000000000000000001) / identity(2))\n";
         let module = parse(source).expect("dynamic division should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_division_{}",
@@ -13336,7 +13336,7 @@ print(all({1, 2}))
             .expect("compiled dynamic division should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic division failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "3.5\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3.5\n5e+19\n");
     }
 
     #[test]
