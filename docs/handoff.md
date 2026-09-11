@@ -39,15 +39,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-289 native-codegen tests
+290 native-codegen tests
 149 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-729 tests passed
+730 tests passed
 ```
 
-The same 729 tests also pass with:
+The same 730 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
@@ -123,6 +123,10 @@ diverged:
   Native object-tag growth now checks both counter and allocation-size
   overflow before calling `realloc`, preserving a recoverable process failure
   instead of allowing wrapped allocation sizes.
+  Native union-returning calls now support dynamic field and getter reads
+  through a checked object-attribute dispatcher, so `value = fallible()?` can
+  be inspected after propagation without treating the `LucidVal` wrapper as a
+  C struct.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.

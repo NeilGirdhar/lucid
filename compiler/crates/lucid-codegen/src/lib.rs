@@ -878,6 +878,8 @@ impl CCodeGenerator {
             }
         }
         self.emit_line("");
+        self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr);");
+        self.emit_line("");
 
         // 2. Emit class struct definitions & constructors
         for stmt in &module.statements {
@@ -885,6 +887,49 @@ impl CCodeGenerator {
                 self.emit_class_def(name, body)?;
             }
         }
+
+        // Union-returning calls are represented as LucidVal in native code.
+        // Provide one checked attribute path for those erased objects instead
+        // of emitting a C `->field` access against the wrapper value.
+        let mut dynamic_classes: Vec<String> = self.known_classes.keys().cloned().collect();
+        dynamic_classes.sort();
+        self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr) {");
+        self.indent += 1;
+        self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) { fprintf(stderr, \"attribute access requires an object\\n\"); exit(1); }");
+        self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
+        self.emit_line("if (!class_name) { fprintf(stderr, \"unknown object in attribute access\\n\"); exit(1); }");
+        for class in dynamic_classes {
+            self.emit_line(&format!("if (strcmp(class_name, \"{class}\") == 0) {{"));
+            self.indent += 1;
+            self.emit_line(&format!("{class}* self = ({class}*)value.ptr;"));
+            let mut getter_owner = Some(class.clone());
+            while let Some(owner) = getter_owner.clone() {
+                let getter_names: Vec<String> = self
+                    .known_getters
+                    .keys()
+                    .filter(|(candidate, _)| candidate == &owner)
+                    .map(|(_, getter)| getter.clone())
+                    .collect();
+                for getter in getter_names {
+                    self.emit_line(&format!(
+                        "if (strcmp(attr, \"{getter}\") == 0) return lucid_wrap({owner}_{getter}_get(({owner}*)value.ptr));"
+                    ));
+                }
+                getter_owner = self.known_parents.get(&owner).cloned();
+            }
+            let fields = self.known_classes.get(&class).cloned().unwrap_or_default();
+            for field in fields {
+                self.emit_line(&format!(
+                    "if (strcmp(attr, \"{field}\") == 0) return lucid_wrap(self->{field});"
+                ));
+            }
+            self.indent -= 1;
+            self.emit_line("}");
+        }
+        self.emit_line("fprintf(stderr, \"object has no requested attribute\\n\"); exit(1); return lucid_none();");
+        self.indent -= 1;
+        self.emit_line("}");
+        self.emit_line("");
 
         // Collect top-level statements and global variables
         let top_level_stmts: Vec<&Stmt> = module
@@ -1048,6 +1093,11 @@ static inline bool lucid_object_is(void* ptr, const char* class_name) {
         if (lucid_object_tags[i].ptr == ptr && strcmp(lucid_object_tags[i].class_name, class_name) == 0)
             return true;
     return false;
+}
+static inline const char* lucid_object_class_name(void* ptr) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr) return lucid_object_tags[i].class_name;
+    return NULL;
 }
 static inline bool lucid_object_frozen(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i) if (lucid_object_tags[i].ptr == ptr) return lucid_object_tags[i].frozen;
@@ -10091,6 +10141,12 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                 }
                 let receiver_type = self.infer_expr_type(value, &HashMap::new());
+                if receiver_type == "LucidVal" {
+                    return Ok(format!(
+                        "lucid_dynamic_attr(lucid_wrap({v_code}), \"{}\")",
+                        c_escape_string(attr)
+                    ));
+                }
                 let class_name = receiver_type.trim_end_matches('*').to_string();
                 if !self.known_classes.contains_key(&class_name) {
                     if let Expr::Index { value: indexed, .. } = &**value {
@@ -12194,6 +12250,26 @@ print(z is complex)
             "true\ntrue\nfalse\n"
         );
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_propagated_union_values_support_dynamic_attributes() {
+        let source = "class NotFoundError:\n    message: str\n    getter upper(self) -> str:\n        return self.message\ndef lookup(key: str) -> int | NotFoundError:\n    if key == \"missing\":\n        return NotFoundError(\"item missing\")\n    return 100\ndef get_value(key: str) -> int | NotFoundError:\n    value = lookup(key)?\n    return value + 1\nprint(get_value(\"present\"))\nprint(get_value(\"missing\").message)\nprint(get_value(\"missing\").upper)\n";
+        let module = parse(source).expect("propagated union source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_propagated_union_attr_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("propagated union should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        let _ = std::fs::remove_file(output);
+        assert!(result.status.success(), "native program failed: {result:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            "101\nitem missing\nitem missing\n"
+        );
     }
 
     #[test]
