@@ -88,6 +88,8 @@ diverged:
   single-evaluation helpers, so checking a value cannot duplicate calls or
   other side effects. Tagged object values retain their class-specific
   `__bool__`/`__len__` callback when they cross an `Any` boundary.
+  Native object metadata grows on demand instead of silently dropping
+  truthiness and freezing information after a fixed object-count limit.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`

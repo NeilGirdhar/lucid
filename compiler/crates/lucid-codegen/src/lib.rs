@@ -988,10 +988,19 @@ typedef struct LucidExceptionFrame LucidExceptionFrame;
 typedef void (*LucidObjectFreezer)(void*);
 typedef bool (*LucidObjectTruthy)(void*);
 typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; } LucidObjectTag;
-static LucidObjectTag lucid_object_tags[4096];
+static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
+static size_t lucid_object_tag_capacity = 0;
 static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy) {
-    if (ptr && lucid_object_tag_count < 4096) lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy};
+    if (!ptr) return;
+    if (lucid_object_tag_count == lucid_object_tag_capacity) {
+        size_t next = lucid_object_tag_capacity ? lucid_object_tag_capacity * 2 : 64;
+        LucidObjectTag* grown = (LucidObjectTag*)realloc(lucid_object_tags, sizeof(LucidObjectTag) * next);
+        if (!grown) { fprintf(stderr, "out of memory registering object\n"); exit(1); }
+        lucid_object_tags = grown;
+        lucid_object_tag_capacity = next;
+    }
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i) if (lucid_object_tags[i].ptr == ptr) return strcmp(lucid_object_tags[i].class_name, class_name) == 0;
