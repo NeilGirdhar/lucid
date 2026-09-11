@@ -897,6 +897,7 @@ impl CCodeGenerator {
         }
         self.emit_line("");
         self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr);");
+        self.emit_line("static bool lucid_dynamic_has_attr(LucidVal value, const char* attr);");
         self.emit_line("");
 
         // 2. Emit class struct definitions & constructors
@@ -945,6 +946,37 @@ impl CCodeGenerator {
             self.emit_line("}");
         }
         self.emit_line("fprintf(stderr, \"object has no requested attribute\\n\"); exit(1); return lucid_none();");
+        self.indent -= 1;
+        self.emit_line("}");
+        self.emit_line("static bool lucid_dynamic_has_attr(LucidVal value, const char* attr) {");
+        self.indent += 1;
+        self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) return false;");
+        self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
+        self.emit_line("if (!class_name) return false;");
+        for class in self.known_classes.keys().cloned().collect::<Vec<_>>() {
+            self.emit_line(&format!("if (strcmp(class_name, \"{class}\") == 0) {{"));
+            self.indent += 1;
+            let fields = self.known_classes.get(&class).cloned().unwrap_or_default();
+            for field in fields {
+                self.emit_line(&format!("if (strcmp(attr, \"{field}\") == 0) return true;"));
+            }
+            let mut owner = Some(class.clone());
+            while let Some(candidate) = owner {
+                let getters: Vec<String> = self
+                    .known_getters
+                    .keys()
+                    .filter(|(class_name, _)| class_name == &candidate)
+                    .map(|(_, getter)| getter.clone())
+                    .collect();
+                for getter in getters {
+                    self.emit_line(&format!("if (strcmp(attr, \"{getter}\") == 0) return true;"));
+                }
+                owner = self.known_parents.get(&candidate).cloned();
+            }
+            self.indent -= 1;
+            self.emit_line("}");
+        }
+        self.emit_line("return false;");
         self.indent -= 1;
         self.emit_line("}");
         self.emit_line("");
@@ -7399,6 +7431,12 @@ static inline void lucid_print_val(LucidVal v) {
                                     c_escape_string(attr_name)
                                 ));
                             }
+                            if name == "hasattr" && class_name == "LucidVal" {
+                                return Ok(format!(
+                                    "lucid_dynamic_has_attr(lucid_wrap({object}), \"{}\")",
+                                    c_escape_string(attr_name)
+                                ));
+                            }
                             let present =
                                 self.known_classes.get(&class_name).is_some_and(|fields| {
                                     fields.iter().any(|field| field == attr_name)
@@ -12378,6 +12416,8 @@ class NotFoundError:
 def get_value() -> int | NotFoundError:
     return NotFoundError("item missing")
 print(getattr(get_value(), "message"))
+print(hasattr(get_value(), "message"))
+print(hasattr(get_value(), "missing"))
 "#;
         let module = parse(source).expect("union getattr source should parse");
         let output = std::env::temp_dir().join(format!(
@@ -12390,7 +12430,10 @@ print(getattr(get_value(), "message"))
             .expect("run native binary");
         let _ = std::fs::remove_file(output);
         assert!(result.status.success(), "native program failed: {result:?}");
-        assert_eq!(String::from_utf8_lossy(&result.stdout), "item missing\n");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            "item missing\ntrue\nfalse\n"
+        );
     }
 
     #[test]

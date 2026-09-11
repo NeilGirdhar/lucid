@@ -132,6 +132,8 @@ diverged:
   each selected method's declared native type before the call.
   Reflective `getattr` reads on those union values use the same dispatcher,
   rather than assuming a statically known struct layout.
+  `hasattr` now performs a non-throwing runtime field/getter presence check
+  for the same erased objects.
   The checker now rejects `?` at module scope, where no enclosing function
   return type can accept the propagated error; this prevents native `return`
   generation from producing invalid top-level C control flow.
