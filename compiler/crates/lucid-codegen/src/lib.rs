@@ -1337,6 +1337,44 @@ static inline LucidVal lucid_env_var(LucidVal name, bool has_default, LucidVal f
     if (value) return lucid_str(value);
     return has_default ? fallback : lucid_none();
 }
+static inline LucidVal lucid_read_file(LucidVal path) {
+    if (path.type != LUCID_TYPE_STR || !path.s) {
+        fprintf(stderr, "read_file() path must be a string\n");
+        exit(1);
+    }
+    FILE* file = fopen(path.s, "rb");
+    if (!file) {
+        fprintf(stderr, "read_file('%s') failed\n", path.s);
+        exit(1);
+    }
+    if (fseek(file, 0, SEEK_END) != 0) { fclose(file); exit(1); }
+    long size = ftell(file);
+    if (size < 0 || fseek(file, 0, SEEK_SET) != 0) { fclose(file); exit(1); }
+    char* contents = (char*)malloc((size_t)size + 1);
+    if (!contents) { fclose(file); exit(1); }
+    size_t read = fread(contents, 1, (size_t)size, file);
+    fclose(file);
+    if (read != (size_t)size) { free(contents); exit(1); }
+    contents[size] = '\0';
+    return lucid_str(contents);
+}
+static inline LucidVal lucid_write_file(LucidVal path, LucidVal contents) {
+    if (path.type != LUCID_TYPE_STR || !path.s) {
+        fprintf(stderr, "write_file() path must be a string\n");
+        exit(1);
+    }
+    if (contents.type != LUCID_TYPE_STR || !contents.s) {
+        fprintf(stderr, "write_file() content must be a string\n");
+        exit(1);
+    }
+    FILE* file = fopen(path.s, "wb");
+    if (!file) { fprintf(stderr, "write_file('%s') failed\n", path.s); exit(1); }
+    size_t length = strlen(contents.s);
+    bool wrote = fwrite(contents.s, 1, length, file) == length;
+    bool closed = fclose(file) == 0;
+    if (!wrote || !closed) exit(1);
+    return lucid_none();
+}
 
 static inline const char* lucid_str_concat(const char* a, const char* b) {
     if (!a) a = "";
@@ -6903,6 +6941,27 @@ static inline void lucid_print_val(LucidVal v) {
                                 args.len() == 2
                             ));
                         }
+                        "read_file" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    message: "read_file() takes exactly one argument".into(),
+                                });
+                            }
+                            let path = self.emit_expr(&args[0].value)?;
+                            return Ok(format!("lucid_read_file(lucid_wrap({path}))"));
+                        }
+                        "write_file" => {
+                            if args.len() != 2 {
+                                return Err(CodegenError {
+                                    message: "write_file() takes exactly two arguments".into(),
+                                });
+                            }
+                            let path = self.emit_expr(&args[0].value)?;
+                            let contents = self.emit_expr(&args[1].value)?;
+                            return Ok(format!(
+                                "lucid_write_file(lucid_wrap({path}), lucid_wrap({contents}))"
+                            ));
+                        }
                         "slice" => {
                             if !(1..=3).contains(&args.len()) {
                                 return Err(CodegenError {
@@ -12251,6 +12310,34 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "fallback\n");
+    }
+
+    #[test]
+    fn native_file_builtins_round_trip_text() {
+        let path = std::env::temp_dir().join(format!(
+            "lucid_codegen_file_builtin_{}.txt",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let source = format!(
+            "write_file(\"{}\", \"hello\")\nprint(read_file(\"{}\"))\n",
+            path.display(),
+            path.display()
+        );
+        let module = parse(&source).expect("file builtin source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_file_builtin_bin_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("file builtin source should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled file builtin program should run");
+        let _ = fs::remove_file(&output);
+        let _ = fs::remove_file(&path);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "hello\n");
     }
 
     #[test]
