@@ -90,7 +90,8 @@ object dispatch overloads before applying built-in numeric and collection rules.
 The same erased bridge now handles dispatch-defined equality and ordering
 comparisons.
 Named multiple-dispatch calls now use generated erased bridges as well, with
-class-hierarchy matching before reporting an unsupported overload.
+class-hierarchy and tagged primitive matching before reporting an unsupported
+overload.
 Native dispatch collection also recognizes the specification's dunder operator
 spellings, such as `__add__`, when lowering binary expressions.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold

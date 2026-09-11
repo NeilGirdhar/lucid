@@ -1216,22 +1216,29 @@ impl CCodeGenerator {
             self.indent += 1;
             self.emit_line("if (!args) { fprintf(stderr, \"dispatch requires arguments\\n\"); exit(1); }");
             for (types, emitted) in signatures {
-                if types.is_empty()
-                    || types.iter().any(|ty| {
-                        let class = ty.trim_end_matches('*');
-                        !ty.ends_with('*') || !self.known_classes.contains_key(class)
-                    })
-                {
+                if types.is_empty() {
                     continue;
                 }
                 let checks = types
                     .iter()
                     .enumerate()
                     .map(|(index, ty)| {
-                        let class = ty.trim_end_matches('*');
-                        format!(
-                            "lucid_object_is(lucid_as_ptr(args->items[{index}]), \"{class}\")"
-                        )
+                        if ty.ends_with('*') && self.known_classes.contains_key(ty.trim_end_matches('*')) {
+                            let class = ty.trim_end_matches('*');
+                            format!("lucid_object_is(lucid_as_ptr(args->items[{index}]), \"{class}\")")
+                        } else {
+                            match ty.as_str() {
+                                "int64_t" => format!("args->items[{index}].type == LUCID_TYPE_INT || args->items[{index}].type == LUCID_TYPE_BIGINT"),
+                                "double" => format!("args->items[{index}].type == LUCID_TYPE_INT || args->items[{index}].type == LUCID_TYPE_FLOAT || args->items[{index}].type == LUCID_TYPE_BIGINT"),
+                                "bool" => format!("args->items[{index}].type == LUCID_TYPE_BOOL"),
+                                "const char*" | "char*" => format!("args->items[{index}].type == LUCID_TYPE_STR"),
+                                "LucidList*" => format!("args->items[{index}].type == LUCID_TYPE_LIST"),
+                                "LucidDict*" => format!("args->items[{index}].type == LUCID_TYPE_DICT"),
+                                "LucidSet*" => format!("args->items[{index}].type == LUCID_TYPE_SET"),
+                                "LucidVal" => "true".to_string(),
+                                _ => "false".to_string(),
+                            }
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join(" && ");
@@ -1239,9 +1246,21 @@ impl CCodeGenerator {
                     .iter()
                     .enumerate()
                     .map(|(index, ty)| {
-                        format!(
-                            "({ty})lucid_as_ptr(args->items[{index}])"
-                        )
+                        if ty.ends_with('*') && self.known_classes.contains_key(ty.trim_end_matches('*')) {
+                            format!("({ty})lucid_as_ptr(args->items[{index}])")
+                        } else {
+                            match ty.as_str() {
+                                "int64_t" => format!("lucid_as_int(args->items[{index}])"),
+                                "double" => format!("lucid_as_float(args->items[{index}])"),
+                                "bool" => format!("lucid_as_bool(args->items[{index}])"),
+                                "const char*" | "char*" => format!("lucid_as_str(args->items[{index}])"),
+                                "LucidList*" => format!("lucid_as_list(args->items[{index}])"),
+                                "LucidDict*" => format!("lucid_as_dict(args->items[{index}])"),
+                                "LucidSet*" => format!("lucid_as_set(args->items[{index}])"),
+                                "LucidVal" => format!("args->items[{index}]"),
+                                _ => format!("args->items[{index}]"),
+                            }
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -13154,7 +13173,7 @@ print(c.x, c.y)
 
     #[test]
     fn native_erased_arguments_dispatch_named_overload() {
-        let source = "class Animal:\n    pass\nclass Dog(Animal):\n    pass\ndispatch def identify(value: Animal) -> str:\n    return \"animal\"\ndef identity(value: Any) -> Any:\n    return value\nprint(identify(identity(Dog())))\n";
+        let source = "class Animal:\n    pass\nclass Dog(Animal):\n    pass\ndispatch def identify(value: Animal) -> str:\n    return \"animal\"\ndispatch def identify(value: int) -> str:\n    return \"int\"\ndef identity(value: Any) -> Any:\n    return value\nprint(identify(identity(Dog())))\nprint(identify(identity(7)))\n";
         let module = parse(source).expect("erased named dispatch source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_erased_named_dispatch_{}",
@@ -13167,7 +13186,7 @@ print(c.x, c.y)
             .expect("run erased named dispatch");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "erased named dispatch failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "animal\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "animal\nint\n");
     }
 
     #[test]
