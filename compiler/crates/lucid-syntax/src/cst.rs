@@ -48,6 +48,9 @@ pub type CstToken = SyntaxToken<LucidLanguage>;
 /// suffix.  This deliberately keeps the API useful for editor tooling while
 /// the ordinary `parse` entry point continues to report a hard error.
 pub fn parse_lossless(source: &str) -> Cst {
+    let syntax_errors = crate::parse_recovering(source)
+        .map(|(_, errors)| errors)
+        .unwrap_or_default();
     let mut builder = GreenNodeBuilder::new();
     builder.start_node(LucidLanguage::kind_to_raw(SyntaxKind::Root));
     let mut cursor = 0;
@@ -63,10 +66,16 @@ pub fn parse_lossless(source: &str) -> Cst {
                         &source[cursor..start],
                     );
                 }
-                builder.token(
-                    LucidLanguage::kind_to_raw(SyntaxKind::Token),
-                    &source[start..end],
-                );
+                let kind = if syntax_errors.iter().any(|error| {
+                    let error_start = error.span.start.min(source.len());
+                    let error_end = error.span.end.min(source.len()).max(error_start);
+                    error_start < end && start < error_end
+                }) {
+                    SyntaxKind::Error
+                } else {
+                    SyntaxKind::Token
+                };
+                builder.token(LucidLanguage::kind_to_raw(kind), &source[start..end]);
                 cursor = end;
                 if token.kind == crate::TokenKind::Eof {
                     break;
@@ -168,6 +177,19 @@ mod tests {
         // Both malformed literals contribute their two offending delimiters,
         // while the valid middle statement remains present.
         assert_eq!(error_ranges(&cst).len(), 4);
+        assert!(cst.descendants_with_tokens().any(|element| {
+            element
+                .into_token()
+                .is_some_and(|token| token.text() == "1")
+        }));
+    }
+
+    #[test]
+    fn cst_marks_recovered_grammar_errors_without_losing_following_tokens() {
+        let source = "x =\ny = 1\n";
+        let cst = parse_lossless(source);
+        assert_eq!(text(&cst), source);
+        assert!(!error_ranges(&cst).is_empty());
         assert!(cst.descendants_with_tokens().any(|element| {
             element
                 .into_token()

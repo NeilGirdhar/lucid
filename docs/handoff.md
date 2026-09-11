@@ -96,6 +96,8 @@ Native dispatch collection also recognizes the specification's dunder operator
 spellings, such as `__add__`, when lowering binary expressions.
 Lossless CST construction now recovers across multiple independent lexical
 errors instead of converting the first error's entire suffix into one token.
+Recovered grammar-error spans are now marked in the CST as well, without
+discarding valid tokens from later statements.
 Native control-flow exits from `try` blocks now run active `finally` cleanup
 before `return`, `break`, or `continue` leaves the protected scope.
 Native capability checks on erased objects now resolve the runtime class and
@@ -178,13 +180,13 @@ cargo test --workspace --all-targets --quiet
 31 CLI/spec tests
 345 native-codegen tests
 153 runtime tests
-21 syntax tests
+22 syntax tests
 50 compiler-database tests
 17 configuration tests
-790 tests passed
+791 tests passed
 ```
 
-The same 790 tests also pass with:
+The same 791 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
