@@ -857,6 +857,7 @@ impl CCodeGenerator {
         for stmt in &module.statements {
             if let Stmt::ClassDef { name, .. } = Self::unwrap_export(stmt) {
                 self.emit_line(&format!("typedef struct {name} {name};"));
+                self.emit_line(&format!("static void {name}_freeze(void* raw);"));
             }
         }
         self.emit_line("");
@@ -1016,7 +1017,13 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
     lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
-    for (size_t i = 0; i < lucid_object_tag_count; ++i) if (lucid_object_tags[i].ptr == ptr) return strcmp(lucid_object_tags[i].class_name, class_name) == 0;
+    // A derived object has one registry entry for its concrete class and one
+    // for each ancestor. Keep scanning entries for the same pointer: the
+    // first entry is the concrete class, so returning false there would make
+    // every erased parent check fail.
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr && strcmp(lucid_object_tags[i].class_name, class_name) == 0)
+            return true;
     return false;
 }
 static inline bool lucid_object_frozen(void* ptr) {
@@ -4039,6 +4046,16 @@ static inline void lucid_print_val(LucidVal v) {
         self.emit_line(&format!(
             "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback});"
         ));
+        // Dynamic `is` checks need the complete class hierarchy, not only the
+        // concrete allocation name. Register each ancestor as an alias so a
+        // value erased to `Any` still satisfies parent-type tests.
+        let mut ancestor = self.known_parents.get(name).cloned();
+        while let Some(parent) = ancestor {
+            self.emit_line(&format!(
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL);"
+            ));
+            ancestor = self.known_parents.get(&parent).cloned();
+        }
         for (fname, _) in &fields {
             self.emit_line(&format!("self->{fname} = {fname};"));
         }
@@ -13614,7 +13631,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_comparisons_preserve_value_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(\"alpha\")\nright = identity(\"beta\")\nbig_left = identity(100000000000000000000)\nbig_right = identity(99999999999999999999)\nprint(left < right)\nprint(big_left > big_right)\n";
+        let source = "class Base:\n    pass\nclass Child(Base):\n    pass\ndef identity(value: Any) -> Any:\n    return value\nleft = identity(\"alpha\")\nright = identity(\"beta\")\nbig_left = identity(100000000000000000000)\nbig_right = identity(99999999999999999999)\nchild = identity(Child())\nprint(left < right)\nprint(big_left > big_right)\nprint(child is Base)\n";
         let module = parse(source).expect("dynamic comparisons should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_comparisons_{}",
@@ -13627,7 +13644,7 @@ print(all({1, 2}))
             .expect("compiled dynamic comparisons should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic comparisons failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\ntrue\n");
     }
 
     #[test]

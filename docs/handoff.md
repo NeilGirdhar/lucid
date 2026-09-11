@@ -95,6 +95,11 @@ diverged:
   Native object metadata grows on demand instead of silently dropping
   truthiness and freezing information after a fixed object-count limit, with
   checked capacity growth at the allocation boundary.
+  Native object metadata also records each class ancestor, so a value erased
+  to `Any` still satisfies `is` checks against its base classes. The registry
+  scans all entries for a pointer rather than stopping at the concrete-class
+  entry; this preserves inheritance semantics without adding a second object
+  representation.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.
