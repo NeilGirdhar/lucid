@@ -12609,8 +12609,9 @@ print(all({1, 2}))
         let source = "print(\"ell\" in \"hello\")\nprint(\"z\" not in \"hello\")\n";
         let module = parse(source).expect("string membership source should parse");
         let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_string_membership_{}",
-            std::process::id()
+            "lucid_codegen_string_membership_{}_{}",
+            std::process::id(),
+            format!("{:?}", std::thread::current().id()).replace(['(', ')'], "")
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("string membership should compile");
