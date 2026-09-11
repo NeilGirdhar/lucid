@@ -344,7 +344,15 @@ impl CCodeGenerator {
         } else if let Some(owner) = self.method_owner(class, "__len__") {
             format!("({owner}___len__(({owner}*)({code})) != 0)")
         } else {
-            format!("lucid_bool_val({code})")
+            match ty.as_str() {
+                "const char*" | "char*" => {
+                    format!("(({code}) != NULL && ({code})[0] != '\\0')")
+                }
+                "LucidList*" => format!("(({code}) != NULL && ({code})->len > 0)"),
+                "LucidDict*" => format!("(({code}) != NULL && ({code})->len > 0)"),
+                "LucidSet*" => format!("(({code}) != NULL && ({code})->len > 0)"),
+                _ => format!("lucid_bool_val({code})"),
+            }
         }
     }
 
@@ -1606,8 +1614,17 @@ static inline bool lucid_as_bool(LucidVal v) {
     if (v.type == LUCID_TYPE_BOOL) return v.b;
     if (v.type == LUCID_TYPE_INT) return v.i != 0;
     if (v.type == LUCID_TYPE_FLOAT) return v.f != 0.0;
+    if (v.type == LUCID_TYPE_BIGINT) {
+        const char* digits = v.bigint ? v.bigint : "0";
+        if (*digits == '-') ++digits;
+        while (*digits == '0') ++digits;
+        return *digits != '\0';
+    }
+    if (v.type == LUCID_TYPE_COMPLEX) return v.real != 0.0 || v.imag != 0.0;
     if (v.type == LUCID_TYPE_STR) return v.s && v.s[0] != '\0';
     if (v.type == LUCID_TYPE_LIST) return v.list && v.list->len > 0;
+    if (v.type == LUCID_TYPE_DICT) return v.dict && v.dict->len > 0;
+    if (v.type == LUCID_TYPE_SET) return v.set && v.set->len > 0;
     return v.type != LUCID_TYPE_NONE;
 }
 static inline const char* lucid_as_str(LucidVal v) {
@@ -11462,6 +11479,24 @@ print(c.x, c.y)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n");
+    }
+
+    #[test]
+    fn native_tagged_truthiness_handles_empty_collections_and_numeric_zero() {
+        let source = "if 0:\n    print(1)\nelse:\n    print(0)\nif complex(0, 0):\n    print(1)\nelse:\n    print(0)\nif {}:\n    print(1)\nelse:\n    print(0)\nif set():\n    print(1)\nelse:\n    print(0)\nif 100000000000000000000 - 100000000000000000000:\n    print(1)\nelse:\n    print(0)\n";
+        let module = parse(source).expect("tagged truthiness source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_tagged_truthiness_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("tagged truthiness should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled tagged truthiness should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n0\n0\n0\n");
     }
 
     #[test]

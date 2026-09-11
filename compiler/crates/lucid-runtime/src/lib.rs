@@ -9064,12 +9064,14 @@ impl Interpreter {
         match val {
             Value::Bool(b) => *b,
             Value::Int(n) => *n != 0,
+            Value::BigInt(n) => !n.is_zero(),
             Value::Float(f) => *f != 0.0,
+            Value::Complex(real, imag) => *real != 0.0 || *imag != 0.0,
             Value::Str(s) => !s.is_empty(),
             Value::None => false,
             Value::List(l) => !l.borrow().is_empty(),
-            Value::Set(s) => !s.borrow().is_empty(),
             Value::Dict(d) => !d.borrow().is_empty(),
+            Value::Set(s) => !s.borrow().is_empty(),
             Value::Skip => false,
             Value::Object { fields, .. } => {
                 if let Some(method) = fields.borrow().get("__bool__").cloned() {
@@ -9437,6 +9439,22 @@ if_broken:
         interp
             .eval_module(&module)
             .expect("custom truthiness should run");
+    }
+
+    #[test]
+    fn test_builtin_truthiness_handles_empty_collections_and_numeric_zero() {
+        let source = "if 0:\n    result = 1\nelse:\n    result = 0\nif complex(0, 0):\n    complex_result = 1\nelse:\n    complex_result = 0\nif {}:\n    dict_result = 1\nelse:\n    dict_result = 0\nif set():\n    set_result = 1\nelse:\n    set_result = 0\nif 100000000000000000000 - 100000000000000000000:\n    bigint_result = 1\nelse:\n    bigint_result = 0\n";
+        let module = parse(source).expect("builtin truthiness source should parse");
+        let mut interp = Interpreter::new();
+        interp
+            .eval_module(&module)
+            .expect("builtin truthiness should run");
+        let env = interp.env.borrow();
+        assert_eq!(env.get("result"), Some(Value::Int(0)));
+        assert_eq!(env.get("complex_result"), Some(Value::Int(0)));
+        assert_eq!(env.get("dict_result"), Some(Value::Int(0)));
+        assert_eq!(env.get("set_result"), Some(Value::Int(0)));
+        assert_eq!(env.get("bigint_result"), Some(Value::Int(0)));
     }
 
     #[test]

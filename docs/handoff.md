@@ -39,15 +39,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-288 native-codegen tests
-148 runtime tests
+289 native-codegen tests
+149 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-726 tests passed
+728 tests passed
 ```
 
-The same 726 tests also pass with:
+The same 728 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
