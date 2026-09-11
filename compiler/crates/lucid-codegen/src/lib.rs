@@ -2324,7 +2324,8 @@ static inline LucidVal lucid_get_index(LucidVal container, int64_t idx) {
     if (container.type == LUCID_TYPE_STR) {
         return lucid_str(lucid_str_index(container.s, idx));
     }
-    return lucid_none();
+    fprintf(stderr, "indexing not supported\n");
+    exit(1);
 }
 static inline LucidVal lucid_get_key(LucidVal container, LucidVal key) {
     if (container.type == LUCID_TYPE_DICT) {
@@ -12828,6 +12829,24 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "out-of-range assignment should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("out of range"));
+    }
+
+    #[test]
+    fn native_dynamic_indexing_rejects_non_container() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(7)[0])\n";
+        let module = parse(source).expect("dynamic indexing source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_invalid_dynamic_index_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic indexing should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic indexing program should run");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "non-container indexing should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("indexing not supported"));
     }
 
     #[test]
