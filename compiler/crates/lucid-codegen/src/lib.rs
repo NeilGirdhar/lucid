@@ -2317,12 +2317,24 @@ static inline LucidList* lucid_list_repeat(LucidVal v, int64_t n) {
 }
 static inline LucidList* lucid_list_repeat_value(LucidList* source, int64_t count) {
     if (!source || count <= 0) return lucid_list_new(0);
+    if (source->len > 0 && count > INT64_MAX / source->len) exit(1);
     if ((uint64_t)count > (SIZE_MAX - 1) / (size_t)(source->len ? source->len : 1)) exit(1);
     int64_t length = source->len * count;
     LucidList* result = lucid_list_new(length);
     for (int64_t repeat = 0; repeat < count; ++repeat)
         for (int64_t index = 0; index < source->len; ++index)
             lucid_list_append(result, source->items[index]);
+    return result;
+}
+static inline LucidList* lucid_list_concat(LucidList* left, LucidList* right) {
+    int64_t left_len = left ? left->len : 0;
+    int64_t right_len = right ? right->len : 0;
+    if (right_len > INT64_MAX - left_len) exit(1);
+    LucidList* result = lucid_list_new(left_len + right_len);
+    for (int64_t index = 0; left && index < left_len; ++index)
+        lucid_list_append(result, left->items[index]);
+    for (int64_t index = 0; right && index < right_len; ++index)
+        lucid_list_append(result, right->items[index]);
     return result;
 }
 static inline const char* lucid_str_repeat(const char* value, int64_t count) {
@@ -2919,6 +2931,9 @@ static inline void lucid_print_val(LucidVal v) {
                 }
                 if has_bigint || self.expr_is_complex(left) || self.expr_is_complex(right) {
                     return "LucidVal".to_string();
+                }
+                if *op == BinaryOp::Add && l_ty == "LucidList*" && r_ty == "LucidList*" {
+                    return "LucidList*".to_string();
                 }
                 if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
                     return "LucidList*".to_string();
@@ -5745,6 +5760,8 @@ static inline void lucid_print_val(LucidVal v) {
                         let r_ty = self.infer_expr_type(right, &HashMap::new());
                         if l_ty == "const char*" && r_ty == "const char*" {
                             Ok(format!("lucid_str_concat({l_str}, {r_str})"))
+                        } else if l_ty == "LucidList*" && r_ty == "LucidList*" {
+                            Ok(format!("lucid_list_concat({l_str}, {r_str})"))
                         } else if l_is_val || r_is_val {
                             Ok(format!("(lucid_num({l_str}) + lucid_num({r_str}))"))
                         } else if l_ty == "int64_t" && r_ty == "int64_t" {
@@ -12708,6 +12725,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n2\n4\n2\n");
+    }
+
+    #[test]
+    fn native_list_add_concatenates_lists() {
+        let source = "joined = [1, 2] + [3, 4]\nprint(len(joined))\nprint(joined[2])\n";
+        let module = parse(source).expect("list concatenation source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_list_concat_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("list concatenation should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled list concatenation program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n3\n");
     }
 
     #[test]
