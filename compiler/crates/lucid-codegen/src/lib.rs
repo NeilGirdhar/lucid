@@ -898,6 +898,7 @@ impl CCodeGenerator {
         self.emit_line("");
         self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr);");
         self.emit_line("static bool lucid_dynamic_has_attr(LucidVal value, const char* attr);");
+        self.emit_line("static void lucid_dynamic_set_attr(LucidVal object, const char* attr, LucidVal value);");
         self.emit_line("");
 
         // 2. Emit class struct definitions & constructors
@@ -977,6 +978,44 @@ impl CCodeGenerator {
             self.emit_line("}");
         }
         self.emit_line("return false;");
+        self.indent -= 1;
+        self.emit_line("}");
+        self.emit_line("static void lucid_dynamic_set_attr(LucidVal object, const char* attr, LucidVal value) {");
+        self.indent += 1;
+        self.emit_line("if (object.type != LUCID_TYPE_PTR || !object.ptr) { fprintf(stderr, \"attribute assignment requires an object\\n\"); exit(1); }");
+        self.emit_line("if (lucid_object_frozen(object.ptr)) { fprintf(stderr, \"cannot mutate frozen object\\n\"); exit(1); }");
+        self.emit_line("const char* class_name = lucid_object_class_name(object.ptr);");
+        let mut setter_classes: Vec<String> = self.known_classes.keys().cloned().collect();
+        setter_classes.sort();
+        for class in setter_classes {
+            self.emit_line(&format!("if (class_name && strcmp(class_name, \"{class}\") == 0) {{"));
+            self.indent += 1;
+            let fields = self.known_classes.get(&class).cloned().unwrap_or_default();
+            for field in fields {
+                let ty = self
+                    .known_field_types
+                    .get(&(class.clone(), field.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| "LucidVal".to_string());
+                let converted = match ty.as_str() {
+                    "LucidVal" => "value".to_string(),
+                    "int64_t" => "lucid_as_int(value)".to_string(),
+                    "double" => "lucid_as_float(value)".to_string(),
+                    "bool" => "lucid_as_bool(value)".to_string(),
+                    "const char*" => "lucid_as_str(value)".to_string(),
+                    "LucidList*" => "lucid_as_list(value)".to_string(),
+                    "LucidDict*" => "lucid_as_dict(value)".to_string(),
+                    "LucidSet*" => "lucid_as_set(value)".to_string(),
+                    other => format!("({other})lucid_as_ptr(value)"),
+                };
+                self.emit_line(&format!(
+                    "if (strcmp(attr, \"{field}\") == 0) {{ (({class}*)object.ptr)->{field} = {converted}; return; }}"
+                ));
+            }
+            self.indent -= 1;
+            self.emit_line("}");
+        }
+        self.emit_line("fprintf(stderr, \"object has no settable attribute\\n\"); exit(1);");
         self.indent -= 1;
         self.emit_line("}");
         self.emit_line("");
@@ -7437,6 +7476,13 @@ static inline void lucid_print_val(LucidVal v) {
                                     c_escape_string(attr_name)
                                 ));
                             }
+                            if name == "setattr" && class_name == "LucidVal" {
+                                let value = self.emit_expr(&args[2].value)?;
+                                return Ok(format!(
+                                    "(lucid_dynamic_set_attr(lucid_wrap({object}), \"{}\", lucid_wrap({value})), lucid_none())",
+                                    c_escape_string(attr_name)
+                                ));
+                            }
                             let present =
                                 self.known_classes.get(&class_name).is_some_and(|fields| {
                                     fields.iter().any(|field| field == attr_name)
@@ -12418,6 +12464,9 @@ def get_value() -> int | NotFoundError:
 print(getattr(get_value(), "message"))
 print(hasattr(get_value(), "message"))
 print(hasattr(get_value(), "missing"))
+value = get_value()
+setattr(value, "message", "updated")
+print(getattr(value, "message"))
 "#;
         let module = parse(source).expect("union getattr source should parse");
         let output = std::env::temp_dir().join(format!(
@@ -12432,7 +12481,7 @@ print(hasattr(get_value(), "missing"))
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
-            "item missing\ntrue\nfalse\n"
+            "item missing\ntrue\nfalse\nupdated\n"
         );
     }
 

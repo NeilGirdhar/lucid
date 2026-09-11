@@ -134,6 +134,9 @@ diverged:
   rather than assuming a statically known struct layout.
   `hasattr` now performs a non-throwing runtime field/getter presence check
   for the same erased objects.
+  Reflective `setattr` writes on erased objects now dispatch through generated
+  field metadata, enforce frozen-object checks, and convert the assigned
+  `LucidVal` to the declared field representation.
   The checker now rejects `?` at module scope, where no enclosing function
   return type can accept the propagated error; this prevents native `return`
   generation from producing invalid top-level C control flow.
