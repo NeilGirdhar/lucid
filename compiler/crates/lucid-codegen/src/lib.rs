@@ -1541,8 +1541,15 @@ static inline LucidVal lucid_dict_val(LucidDict* d) {
 static inline LucidVal lucid_set_val(LucidSet* s) {
     LucidVal v = {0}; v.type = LUCID_TYPE_SET; v.set = s; v.ptr = (void*)s; return v;
 }
+static inline LucidVal lucid_complex_add(LucidVal a, LucidVal b);
+static inline LucidVal lucid_complex_sub(LucidVal a, LucidVal b);
+static inline LucidVal lucid_complex_mul(LucidVal a, LucidVal b);
+static inline LucidVal lucid_complex_div(LucidVal a, LucidVal b);
+static inline LucidVal lucid_complex_pow(LucidVal a, LucidVal b);
 static inline LucidList* lucid_list_concat(LucidList* left, LucidList* right);
 static inline LucidVal lucid_add_value(LucidVal left, LucidVal right) {
+    if (left.type == LUCID_TYPE_COMPLEX || right.type == LUCID_TYPE_COMPLEX)
+        return lucid_complex_add(left, right);
     if ((left.type == LUCID_TYPE_BIGINT || left.type == LUCID_TYPE_INT) &&
         (right.type == LUCID_TYPE_BIGINT || right.type == LUCID_TYPE_INT))
         return lucid_bigint_binop(left, right, '+');
@@ -1625,6 +1632,8 @@ static inline const char* lucid_to_str(LucidVal v) {
     return "none";
 }
 static inline LucidVal lucid_pow(LucidVal base, LucidVal exponent) {
+    if (base.type == LUCID_TYPE_COMPLEX || exponent.type == LUCID_TYPE_COMPLEX)
+        return lucid_complex_pow(base, exponent);
     if (base.type == LUCID_TYPE_INT && exponent.type == LUCID_TYPE_INT && exponent.i >= 0) {
         /* Keep exact integer semantics; never route integer powers through
            floating point. Promote a result that exceeds i64 to BigInt. */
@@ -2260,6 +2269,8 @@ static inline LucidSet* lucid_set_xor_value(LucidSet* a, LucidVal other) {
     return lucid_set_xor(a, other.set);
 }
 static inline LucidVal lucid_setop_value(LucidVal left, LucidVal right, char op) {
+    if ((left.type == LUCID_TYPE_COMPLEX || right.type == LUCID_TYPE_COMPLEX) && op == '-')
+        return lucid_complex_sub(left, right);
     if ((left.type == LUCID_TYPE_BIGINT || left.type == LUCID_TYPE_INT) &&
         (right.type == LUCID_TYPE_BIGINT || right.type == LUCID_TYPE_INT) && op == '-')
         return lucid_bigint_binop(left, right, '-');
@@ -2507,6 +2518,8 @@ static inline const char* lucid_str_repeat(const char* value, int64_t count) {
     return result;
 }
 static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
+    if (left.type == LUCID_TYPE_COMPLEX || right.type == LUCID_TYPE_COMPLEX)
+        return lucid_complex_mul(left, right);
     if ((left.type == LUCID_TYPE_BIGINT || left.type == LUCID_TYPE_INT) &&
         (right.type == LUCID_TYPE_BIGINT || right.type == LUCID_TYPE_INT))
         return lucid_bigint_binop(left, right, '*');
@@ -2530,6 +2543,8 @@ static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
     exit(1);
 }
 static inline LucidVal lucid_div_value(LucidVal left, LucidVal right) {
+    if (left.type == LUCID_TYPE_COMPLEX || right.type == LUCID_TYPE_COMPLEX)
+        return lucid_complex_div(left, right);
     bool left_numeric = left.type == LUCID_TYPE_INT || left.type == LUCID_TYPE_FLOAT || left.type == LUCID_TYPE_BIGINT;
     bool right_numeric = right.type == LUCID_TYPE_INT || right.type == LUCID_TYPE_FLOAT || right.type == LUCID_TYPE_BIGINT;
     if (left_numeric && right_numeric) {
@@ -13337,6 +13352,30 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic division failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3.5\n5e+19\n");
+    }
+
+    #[test]
+    fn native_dynamic_complex_arithmetic_preserves_value_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(1 + 2j) + identity(3 + 4j))\nprint(identity(1 + 2j) * identity(3 + 4j))\nprint(identity(1 + 2j) / identity(3 + 4j))\nprint(identity(1 + 2j) ** identity(2j))\n";
+        let module = parse(source).expect("dynamic complex arithmetic should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_complex_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic complex arithmetic should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic complex arithmetic should run");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "dynamic complex arithmetic failed: {run:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "(4+6j)\n(-5+10j)\n(0.44+0.08j)\n(-0.00421978+0.109149j)\n"
+        );
     }
 
     #[test]
