@@ -1984,7 +1984,8 @@ static inline bool lucid_lt(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_FLOAT || b.type == LUCID_TYPE_FLOAT ||
         a.type == LUCID_TYPE_BIGINT || b.type == LUCID_TYPE_BIGINT)
         return lucid_as_float(a) < lucid_as_float(b);
-    return a.i < b.i;
+    fprintf(stderr, "unsupported operands for <\n");
+    exit(1);
 }
 static inline bool lucid_lte(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_STR && b.type == LUCID_TYPE_STR)
@@ -1995,7 +1996,8 @@ static inline bool lucid_lte(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_FLOAT || b.type == LUCID_TYPE_FLOAT ||
         a.type == LUCID_TYPE_BIGINT || b.type == LUCID_TYPE_BIGINT)
         return lucid_as_float(a) <= lucid_as_float(b);
-    return a.i <= b.i;
+    fprintf(stderr, "unsupported operands for <=\n");
+    exit(1);
 }
 static inline bool lucid_gt(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_STR && b.type == LUCID_TYPE_STR)
@@ -2006,7 +2008,8 @@ static inline bool lucid_gt(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_FLOAT || b.type == LUCID_TYPE_FLOAT ||
         a.type == LUCID_TYPE_BIGINT || b.type == LUCID_TYPE_BIGINT)
         return lucid_as_float(a) > lucid_as_float(b);
-    return a.i > b.i;
+    fprintf(stderr, "unsupported operands for >\n");
+    exit(1);
 }
 static inline bool lucid_gte(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_STR && b.type == LUCID_TYPE_STR)
@@ -2017,7 +2020,8 @@ static inline bool lucid_gte(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_FLOAT || b.type == LUCID_TYPE_FLOAT ||
         a.type == LUCID_TYPE_BIGINT || b.type == LUCID_TYPE_BIGINT)
         return lucid_as_float(a) >= lucid_as_float(b);
-    return a.i >= b.i;
+    fprintf(stderr, "unsupported operands for >=\n");
+    exit(1);
 }
 
 static inline LucidList* lucid_list_new(int64_t cap) {
@@ -13377,6 +13381,24 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic comparisons failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
+    }
+
+    #[test]
+    fn native_dynamic_comparisons_reject_unsupported_containers() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity([1]) < identity([2]))\n";
+        let module = parse(source).expect("unsupported dynamic comparison should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_invalid_dynamic_comparison_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("unsupported comparison should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled unsupported comparison should run");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "container comparison should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("unsupported operands for <"));
     }
 
     #[test]
