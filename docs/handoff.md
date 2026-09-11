@@ -63,6 +63,8 @@ Native `int` also preserves arbitrary-size integers that cross an erased
 `Any` value, while retaining strict parsing for dynamic string inputs.
 String inputs that overflow the machine integer range now promote to a native
 BigInt as they do in the interpreter, including statically known strings.
+Float-to-int conversion now matches Rust's saturating cast semantics for
+infinities and maps NaN to zero instead of relying on undefined C casts.
 
 ## Verified baseline
 
@@ -77,15 +79,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-300 native-codegen tests
+301 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-741 tests passed
+742 tests passed
 ```
 
-The same 741 tests also pass with:
+The same 742 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

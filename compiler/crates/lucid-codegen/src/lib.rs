@@ -1847,7 +1847,14 @@ static inline LucidVal _w_val(LucidVal v) { return v; }
 
 static inline int64_t lucid_as_int(LucidVal v) {
     if (v.type == LUCID_TYPE_INT) return v.i;
-    if (v.type == LUCID_TYPE_FLOAT) return (int64_t)v.f;
+    if (v.type == LUCID_TYPE_FLOAT) {
+        /* Rust's float-to-integer cast saturates (and maps NaN to zero);
+         * a direct C cast is undefined outside the representable range. */
+        if (isnan(v.f)) return 0;
+        if (v.f >= 9223372036854775807.0) return INT64_MAX;
+        if (v.f <= -9223372036854775808.0) return INT64_MIN;
+        return (int64_t)v.f;
+    }
     if (v.type == LUCID_TYPE_BOOL) return v.b ? 1 : 0;
     if (v.type == LUCID_TYPE_STR && v.s) return (int64_t)strtoll(v.s, NULL, 10);
     if (v.type == LUCID_TYPE_BIGINT && v.bigint) return (int64_t)strtoll(v.bigint, NULL, 10);
@@ -13636,6 +13643,25 @@ print(all({1, 2}))
             "string big integer conversion failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
+    }
+
+    #[test]
+    fn native_int_float_special_values_match_interpreter_casts() {
+        let source = "print(int(float.inf))\nprint(int(-float.inf))\nprint(int(float.nan))\n";
+        let module = parse(source).expect("special int conversion source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_int_float_special_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("special int conversion should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run special int conversion");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "special int conversion failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "int.inf\nint.nan\n0\n");
     }
 
     #[test]
