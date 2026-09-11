@@ -915,6 +915,29 @@ impl CCodeGenerator {
             }
         }
 
+        // Keep `len(Any)` on the same declared `__len__` path as statically
+        // typed calls. The erased value carries only its object pointer, so
+        // resolve the concrete class name through the generated dispatch
+        // table instead of silently treating every object as length zero.
+        self.emit_line("static int64_t lucid_dynamic_len(LucidVal value) {");
+        self.indent += 1;
+        self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) return 0;");
+        self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
+        let mut length_classes: Vec<String> = self.known_classes.keys().cloned().collect();
+        length_classes.sort();
+        for class in length_classes {
+            let Some(owner) = self.method_owner(&class, "__len__") else {
+                continue;
+            };
+            self.emit_line(&format!(
+                "if (class_name && strcmp(class_name, \"{class}\") == 0) return {owner}___len__(({owner}*)value.ptr);"
+            ));
+        }
+        self.emit_line("return 0;");
+        self.indent -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
         // Union-returning calls are represented as LucidVal in native code.
         // Provide one checked attribute path for those erased objects instead
         // of emitting a C `->field` access against the wrapper value.
@@ -1348,6 +1371,7 @@ static inline LucidObjectIter lucid_object_reversed(void* ptr) {
             return lucid_object_tags[i].reversed;
     return NULL;
 }
+static int64_t lucid_dynamic_len(LucidVal value);
 static inline bool lucid_object_frozen(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i) if (lucid_object_tags[i].ptr == ptr) return lucid_object_tags[i].frozen;
     return false;
@@ -3474,6 +3498,7 @@ static inline int64_t _len_val(LucidVal v) {
     if (v.type == LUCID_TYPE_STR) return _len_str(v.s);
     if (v.type == LUCID_TYPE_DICT) return v.dict ? v.dict->len : 0;
     if (v.type == LUCID_TYPE_SET) return v.set ? v.set->len : 0;
+    if (v.type == LUCID_TYPE_PTR && v.ptr) return lucid_dynamic_len(v);
     return 0;
 }
 static inline int64_t _len_def(void* p) { (void)p; return 0; }
@@ -12949,6 +12974,22 @@ print(c.x, c.y)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+    }
+
+    #[test]
+    fn native_len_dispatches_erased_custom_len_method() {
+        let source = "class Bag:\n    def __len__(self) -> int:\n        return 7\ndef identity(value: Any) -> Any:\n    return value\nprint(len(identity(Bag())))\n";
+        let module = parse(source).expect("erased custom len source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_erased_custom_len_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("erased custom len should compile");
+        let run = Command::new(&output).output().expect("run erased custom len");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "erased custom len failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
     }
 
     #[test]
