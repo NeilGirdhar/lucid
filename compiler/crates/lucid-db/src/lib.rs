@@ -897,7 +897,7 @@ fn collect_typed_body<'db>(
                 }
             }
             Stmt::Match { subject, arms, .. } => {
-                collect_typed_exprs(db, checker, subject, nodes)?;
+                let subject_id = collect_typed_exprs(db, checker, subject, nodes)?;
                 for arm in arms {
                     let mut arm_checker = checker.clone();
                     fn bind_match_pattern(
@@ -948,6 +948,80 @@ fn collect_typed_body<'db>(
                             std::slice::from_ref(statement),
                             nodes,
                         )?;
+                    }
+                }
+                // Preserve the control-flow relationship for the primitive
+                // literal/wildcard form. Without this synthetic node, the
+                // typed graph would contain unrelated subject and arm values
+                // and the lowering stage would have to recover match order
+                // from syntax again.
+                if arms.len() == 2
+                    && let Some((literal_arm, wildcard_arm)) =
+                        match (&arms[0].pattern, &arms[1].pattern) {
+                            (
+                                lucid_syntax::Pattern::Literal(_, _),
+                                lucid_syntax::Pattern::Wildcard(_),
+                            ) => Some((&arms[0], &arms[1])),
+                            (
+                                lucid_syntax::Pattern::Wildcard(_),
+                                lucid_syntax::Pattern::Literal(_, _),
+                            ) => Some((&arms[1], &arms[0])),
+                            _ => None,
+                        }
+                    && let lucid_syntax::Pattern::Literal(literal, _) = &literal_arm.pattern
+                    && matches!(
+                        literal,
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_)
+                    )
+                    && let [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(literal_value),
+                            ..
+                        },
+                    ] = literal_arm.body.as_slice()
+                    && let [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(wildcard_value),
+                            ..
+                        },
+                    ] = wildcard_arm.body.as_slice()
+                {
+                    let literal_id = nodes
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == literal_value.span())
+                        .map(|node| node.id);
+                    let wildcard_id = nodes
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == wildcard_value.span())
+                        .map(|node| node.id);
+                    if let (Some(literal_id), Some(wildcard_id)) = (literal_id, wildcard_id) {
+                        let id = u32::try_from(nodes.len())
+                            .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                        let detail = match literal {
+                            lucid_syntax::LiteralValue::Int(value) => {
+                                format!("literal-int:{value}")
+                            }
+                            lucid_syntax::LiteralValue::Bool(value) => {
+                                format!("literal-bool:{value}")
+                            }
+                            _ => unreachable!(),
+                        };
+                        let ty = checker
+                            .type_of_expr(literal_value)
+                            .map_err(|error| Arc::<str>::from(error.message))?
+                            .canonical();
+                        nodes.push(TypedExpr {
+                            id,
+                            type_id: TypeId::new(db, ty.canonical_string()),
+                            type_name: ty.canonical_string(),
+                            kind: "match".into(),
+                            detail: Some(detail),
+                            children: Arc::from([subject_id, literal_id, wildcard_id]),
+                            literal: None,
+                            span: subject.span(),
+                        });
                     }
                 }
             }
@@ -1356,6 +1430,31 @@ pub fn lower_function_body(
         && let [lucid_syntax::Stmt::Match { subject, arms, .. }] = source_function.body.as_slice()
         && matches!(subject, lucid_syntax::Expr::Ident { .. })
     {
+        if let Some(root) = function
+            .body_expressions
+            .iter()
+            .rev()
+            .find(|node| node.kind == "match" && node.span == subject.span())
+        {
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            if let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                &nodes,
+                root.id,
+                &function.parameter_names,
+            ) {
+                return Ok(Arc::new(lowered));
+            }
+        }
         let parameter_index = match subject {
             lucid_syntax::Expr::Ident { name, .. } => function
                 .parameter_names
@@ -3514,7 +3613,6 @@ mod tests {
             body.iter()
                 .any(|node| node.detail.as_deref() == Some("fallback"))
         );
-
         let file = db.add_file(
             "match-local-hir.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            selected = 3\n            return selected\n        case _:\n            fallback = 4\n            return fallback\n",
@@ -3531,6 +3629,16 @@ mod tests {
             body.iter()
                 .any(|node| node.detail.as_deref() == Some("fallback"))
         );
+        let file = db.add_file(
+            "match-direct-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 3\n        case _:\n            return 4\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid direct match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
 
         let file = db.add_file(
             "try-local-hir.lucid",

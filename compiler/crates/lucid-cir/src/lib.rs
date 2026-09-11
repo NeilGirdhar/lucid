@@ -647,6 +647,57 @@ impl Function {
                         local_bindings,
                     );
                 }
+                if node.kind == "match" && node.children.len() == 3 {
+                    let literal = node.detail.as_deref().and_then(|detail| {
+                        detail
+                            .strip_prefix("literal-int:")
+                            .and_then(|value| value.parse::<i64>().ok())
+                            .map(TypedLiteral::Int)
+                            .or_else(|| {
+                                detail
+                                    .strip_prefix("literal-bool:")
+                                    .and_then(|value| value.parse::<bool>().ok())
+                                    .map(TypedLiteral::Bool)
+                            })
+                    });
+                    let Some(literal) = literal else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    let mut expanded = nodes.to_vec();
+                    let literal_id = u32::try_from(expanded.len())
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    expanded.push(TypedExprNode {
+                        id: literal_id,
+                        kind: "literal".into(),
+                        detail: None,
+                        children: Vec::new(),
+                        literal: Some(literal),
+                    });
+                    let comparison_id = u32::try_from(expanded.len())
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    expanded.push(TypedExprNode {
+                        id: comparison_id,
+                        kind: "binary".into(),
+                        detail: Some("Eq".into()),
+                        children: vec![node.children[0], literal_id],
+                        literal: None,
+                    });
+                    let if_id = u32::try_from(expanded.len())
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    expanded.push(TypedExprNode {
+                        id: if_id,
+                        kind: "if".into(),
+                        detail: None,
+                        children: vec![comparison_id, node.children[1], node.children[2]],
+                        literal: None,
+                    });
+                    return Self::from_typed_graph(
+                        &expanded,
+                        &[if_id],
+                        parameter_names,
+                        local_bindings,
+                    );
+                }
                 if node.id == roots[0]
                     && node.kind == "if"
                     && node.children.len() == 3

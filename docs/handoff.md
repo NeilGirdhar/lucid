@@ -187,6 +187,8 @@ diverged:
   support literal results followed by a wildcard. More complex patterns remain
   explicit lowering work rather than being silently interpreted by a
   compatibility fallback.
+  The supported two-arm shape now carries its subject, arm results, and
+  literal discriminator as one typed-HIR node before CIR lowering.
 * Pure discarded expressions before a return now pass through typed-CIR
   lowering; effectful expressions remain rejected instead of being dropped.
   Their rejection now carries a dedicated diagnostic explaining that an
