@@ -2337,6 +2337,19 @@ static inline LucidVal lucid_get_key(LucidVal container, LucidVal key) {
     fprintf(stderr, "indexing not supported\n");
     exit(1);
 }
+static inline LucidVal lucid_get_index_value(LucidVal container, LucidVal index) {
+    if (container.type == LUCID_TYPE_DICT)
+        return lucid_get_key(container, index);
+    if (container.type == LUCID_TYPE_LIST || container.type == LUCID_TYPE_STR) {
+        if (index.type != LUCID_TYPE_INT) {
+            fprintf(stderr, "indices must be integers\n");
+            exit(1);
+        }
+        return lucid_get_index(container, index.i);
+    }
+    fprintf(stderr, "indexing not supported\n");
+    exit(1);
+}
 
 static inline LucidList* lucid_list_repeat(LucidVal v, int64_t n) {
     if (n < 0) n = 0;
@@ -9445,6 +9458,11 @@ static inline void lucid_print_val(LucidVal v) {
                         "lucid_get_key(lucid_wrap({v_code}), lucid_wrap({idx_code}))"
                     ));
                 }
+                if receiver_type == "LucidVal" {
+                    return Ok(format!(
+                        "lucid_get_index_value(lucid_wrap({v_code}), lucid_wrap({idx_code}))"
+                    ));
+                }
                 Ok(format!(
                     "lucid_get_index(lucid_wrap({v_code}), lucid_int_val({idx_code}))"
                 ))
@@ -12878,6 +12896,27 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic slicing failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "ell\n2\n2\n");
+    }
+
+    #[test]
+    fn native_dynamic_dict_indexing_preserves_key_type() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity({\"answer\": 42})[\"answer\"])\n";
+        let module = parse(source).expect("dynamic dictionary indexing should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_dict_index_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic dictionary indexing should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic dictionary indexing should run");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "dynamic dictionary indexing failed: {run:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
     }
 
     #[test]
