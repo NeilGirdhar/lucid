@@ -1212,11 +1212,12 @@ typedef bool (*LucidObjectLe)(void*, void*);
 typedef bool (*LucidObjectGt)(void*, void*);
 typedef bool (*LucidObjectGe)(void*, void*);
 typedef bool (*LucidObjectContains)(void*, LucidVal);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; } LucidObjectTag;
+typedef LucidVal (*LucidObjectGetItem)(void*, LucidVal);
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; LucidObjectGetItem getitem; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name, LucidObjectLe le, const char* le_class_name, LucidObjectGt gt, const char* gt_class_name, LucidObjectGe ge, const char* ge_class_name, LucidObjectContains contains) {
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name, LucidObjectLe le, const char* le_class_name, LucidObjectGt gt, const char* gt_class_name, LucidObjectGe ge, const char* ge_class_name, LucidObjectContains contains, LucidObjectGetItem getitem) {
     if (!ptr) return;
     if (lucid_object_tag_count == SIZE_MAX) {
         fprintf(stderr, "too many registered objects\n"); exit(1);
@@ -1234,7 +1235,7 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
         lucid_object_tags = grown;
         lucid_object_tag_capacity = next;
     }
-    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name, le, le_class_name, gt, gt_class_name, ge, ge_class_name, contains};
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name, le, le_class_name, gt, gt_class_name, ge, ge_class_name, contains, getitem};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     // A derived object has one registry entry for its concrete class and one
@@ -1312,6 +1313,12 @@ static inline LucidObjectContains lucid_object_contains(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i)
         if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].contains)
             return lucid_object_tags[i].contains;
+    return NULL;
+}
+static inline LucidObjectGetItem lucid_object_getitem(void* ptr) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].getitem)
+            return lucid_object_tags[i].getitem;
     return NULL;
 }
 static inline bool lucid_object_frozen(void* ptr) {
@@ -2978,6 +2985,10 @@ static inline LucidVal lucid_get_key(LucidVal container, LucidVal key) {
     exit(1);
 }
 static inline LucidVal lucid_get_index_value(LucidVal container, LucidVal index) {
+    if (container.type == LUCID_TYPE_PTR) {
+        LucidObjectGetItem getitem = lucid_object_getitem(container.ptr);
+        if (getitem) return getitem(container.ptr, index);
+    }
     if (container.type == LUCID_TYPE_DICT)
         return lucid_get_key(container, index);
     if (container.type == LUCID_TYPE_LIST || container.type == LUCID_TYPE_STR) {
@@ -4585,6 +4596,23 @@ static inline void lucid_print_val(LucidVal v) {
                     .cloned()?;
                 Some((owner, parameter_type))
             });
+        let getitem_owner = self
+            .method_owner(name, "__getitem__")
+            .and_then(|owner| {
+                let return_type = self
+                    .known_method_return_types
+                    .get(&(owner.clone(), "__getitem__".to_string()))
+                    .cloned()?;
+                if return_type == "void" {
+                    return None;
+                }
+                let parameter_type = self
+                    .known_method_param_types
+                    .get(&(owner.clone(), "__getitem__".to_string()))
+                    .and_then(|types| types.first())
+                    .cloned()?;
+                Some((owner, parameter_type, return_type))
+            });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
             self.emit_line(&format!(
@@ -4664,6 +4692,25 @@ static inline void lucid_print_val(LucidVal v) {
                 "static bool {name}_contains(void* left, LucidVal right) {{ return {owner}___contains__(({owner}*)left, {item}); }}"
             ));
         }
+        if let Some((owner, parameter_type, return_type)) = &getitem_owner {
+            self.emit_line(&format!(
+                "{return_type} {owner}___getitem__({owner}* self, {parameter_type} item);"
+            ));
+            let item = match parameter_type.as_str() {
+                "LucidVal" => "right".to_string(),
+                "int64_t" => "lucid_as_int(right)".to_string(),
+                "double" => "lucid_as_float(right)".to_string(),
+                "bool" => "lucid_as_bool(right)".to_string(),
+                "const char*" | "char*" => "lucid_as_str(right)".to_string(),
+                "LucidList*" => "lucid_as_list(right)".to_string(),
+                "LucidDict*" => "lucid_as_dict(right)".to_string(),
+                "LucidSet*" => "lucid_as_set(right)".to_string(),
+                _ => format!("({parameter_type})lucid_as_ptr(right)"),
+            };
+            self.emit_line(&format!(
+                "static LucidVal {name}_getitem(void* left, LucidVal right) {{ return lucid_wrap({owner}___getitem__(({owner}*)left, {item})); }}"
+            ));
+        }
 
         self.emit_line(&format!("static const char* {name}_repr(void* raw) {{"));
         self.indent += 1;
@@ -4726,8 +4773,12 @@ static inline void lucid_print_val(LucidVal v) {
             .as_ref()
             .map(|_| format!("(LucidObjectContains){name}_contains"))
             .unwrap_or_else(|| "NULL".to_string());
+        let getitem_callback = getitem_owner
+            .as_ref()
+            .map(|_| format!("(LucidObjectGetItem){name}_getitem"))
+            .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {}, {le_callback}, {}, {gt_callback}, {}, {ge_callback}, {}, {contains_callback});",
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {}, {le_callback}, {}, {gt_callback}, {}, {ge_callback}, {}, {contains_callback}, {getitem_callback});",
             eq_owner
                 .as_ref()
                 .and_then(|(_, _, dispatch_class)| dispatch_class.as_deref())
@@ -4764,7 +4815,7 @@ static inline void lucid_print_val(LucidVal v) {
                 break;
             }
             self.emit_line(&format!(
-                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
@@ -11890,6 +11941,22 @@ print(" ".join(capitalized))
             .expect("compiled getitem should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "page 2\n");
+    }
+
+    #[test]
+    fn native_indexing_dispatches_erased_user_getitem() {
+        let source = "class Pages:\n    def __getitem__(self, index: int) -> str:\n        return \"page \" + str(index)\ndef identity(value: Any) -> Any:\n    return value\np = identity(Pages())\nprint(p[2])";
+        let module = parse(source).expect("dynamic getitem source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_getitem_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic getitem should compile");
+        let run = Command::new(&output).output().expect("run dynamic getitem");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic getitem failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "page 2\n");
     }
 

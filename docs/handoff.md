@@ -101,6 +101,8 @@ The same erased metadata path now dispatches declared `__le__`, `__gt__`, and
 `__ge__` methods without reflected-method fallback.
 Erased membership now carries custom `__contains__` callbacks as well,
 including scalar item conversion through the tagged value ABI.
+Erased indexing now dispatches custom `__getitem__` methods and wraps their
+declared return values back into the universal value representation.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -133,15 +135,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-327 native-codegen tests
+328 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-771 tests passed
+772 tests passed
 ```
 
-The same 771 tests also pass with:
+The same 772 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
