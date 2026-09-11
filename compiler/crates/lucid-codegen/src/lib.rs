@@ -1539,6 +1539,15 @@ static inline LucidVal lucid_dict_val(LucidDict* d) {
 static inline LucidVal lucid_set_val(LucidSet* s) {
     LucidVal v = {0}; v.type = LUCID_TYPE_SET; v.set = s; v.ptr = (void*)s; return v;
 }
+static inline LucidList* lucid_list_concat(LucidList* left, LucidList* right);
+static inline LucidVal lucid_add_value(LucidVal left, LucidVal right) {
+    if (left.type == LUCID_TYPE_STR && right.type == LUCID_TYPE_STR)
+        return lucid_str(lucid_str_concat(left.s, right.s));
+    if (left.type == LUCID_TYPE_LIST && right.type == LUCID_TYPE_LIST)
+        return lucid_list_val(lucid_list_concat(left.list, right.list));
+    fprintf(stderr, "unsupported operands for +\n");
+    exit(1);
+}
 static inline LucidVal lucid_ptr_val(void* p) {
     LucidVal v = {0}; v.type = LUCID_TYPE_PTR; v.ptr = p; return v;
 }
@@ -3008,6 +3017,9 @@ static inline void lucid_print_val(LucidVal v) {
                 }
                 if *op == BinaryOp::Add && l_ty == "LucidList*" && r_ty == "LucidList*" {
                     return "LucidList*".to_string();
+                }
+                if *op == BinaryOp::Add && l_ty == "LucidVal" && r_ty == "LucidVal" {
+                    return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
                     return "LucidList*".to_string();
@@ -5845,6 +5857,10 @@ static inline void lucid_print_val(LucidVal v) {
                             Ok(format!("lucid_str_concat({l_str}, {r_str})"))
                         } else if l_ty == "LucidList*" && r_ty == "LucidList*" {
                             Ok(format!("lucid_list_concat({l_str}, {r_str})"))
+                        } else if l_is_val && r_is_val {
+                            Ok(format!(
+                                "lucid_add_value(lucid_wrap({l_str}), lucid_wrap({r_str}))"
+                            ))
                         } else if l_is_val || r_is_val {
                             Ok(format!("(lucid_num({l_str}) + lucid_num({r_str}))"))
                         } else if l_ty == "int64_t" && r_ty == "int64_t" {
@@ -12965,6 +12981,22 @@ print(all({1, 2}))
             "dynamic dictionary assignment failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+    }
+
+    #[test]
+    fn native_dynamic_addition_preserves_container_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"a\") + identity(\"b\"))\nitems = identity([1]) + identity([2])\nprint(len(items))\nprint(items[1])\n";
+        let module = parse(source).expect("dynamic addition should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_dynamic_add_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic addition should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic addition should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic addition failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "ab\n2\n2\n");
     }
 
     #[test]
