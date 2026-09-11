@@ -73,6 +73,8 @@ Native `round` now rejects BigInt values that arrive through erased `Any`,
 matching the interpreter's numeric capability dispatch.
 Native `str` now renders complex values in the same `(real+imagj)` form as
 the interpreter.
+Native `repr` now uses generated per-class callbacks for object values,
+including field names and representations after an `Any` erasure.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -105,15 +107,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-313 native-codegen tests
+314 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-756 tests passed
+757 tests passed
 ```
 
-The same 756 tests also pass with:
+The same 757 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

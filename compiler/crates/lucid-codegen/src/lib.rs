@@ -1203,11 +1203,12 @@ typedef struct LucidContext LucidContext;
 typedef struct LucidExceptionFrame LucidExceptionFrame;
 typedef void (*LucidObjectFreezer)(void*);
 typedef bool (*LucidObjectTruthy)(void*);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; } LucidObjectTag;
+typedef const char* (*LucidObjectRepr)(void*);
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy) {
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr) {
     if (!ptr) return;
     if (lucid_object_tag_count == SIZE_MAX) {
         fprintf(stderr, "too many registered objects\n"); exit(1);
@@ -1225,7 +1226,7 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
         lucid_object_tags = grown;
         lucid_object_tag_capacity = next;
     }
-    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy};
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     // A derived object has one registry entry for its concrete class and one
@@ -1240,6 +1241,12 @@ static inline bool lucid_object_is(void* ptr, const char* class_name) {
 static inline const char* lucid_object_class_name(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i)
         if (lucid_object_tags[i].ptr == ptr) return lucid_object_tags[i].class_name;
+    return NULL;
+}
+static inline LucidObjectRepr lucid_object_repr(void* ptr) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].repr)
+            return lucid_object_tags[i].repr;
     return NULL;
 }
 static inline bool lucid_object_frozen(void* ptr) {
@@ -2211,6 +2218,11 @@ static inline LucidVal lucid_repr_value(LucidVal value) {
     else if (value.type == LUCID_TYPE_BOOL) snprintf(out, 256, "%s", value.b ? "true" : "false");
     else if (value.type == LUCID_TYPE_NONE) snprintf(out, 256, "none");
     else if (value.type == LUCID_TYPE_LIST) snprintf(out, 256, "[list len=%lld]", (long long)(value.list ? value.list->len : 0));
+    else if (value.type == LUCID_TYPE_PTR) {
+        LucidObjectRepr repr = lucid_object_repr(value.ptr);
+        if (repr) { free(out); return lucid_str(repr(value.ptr)); }
+        snprintf(out, 256, "<value>");
+    }
     else snprintf(out, 256, "<value>");
     return lucid_str(out);
 }
@@ -4410,6 +4422,21 @@ static inline void lucid_print_val(LucidVal v) {
             }
         }
 
+        self.emit_line(&format!("static const char* {name}_repr(void* raw) {{"));
+        self.indent += 1;
+        self.emit_line(&format!("{name}* self = ({name}*)raw;"));
+        self.emit_line("char* out = (char*)malloc(1024); if (!out) return \"<out of memory>\"; size_t pos = 0;");
+        self.emit_line(&format!("pos += (size_t)snprintf(out + pos, 1024 - pos, \"{name}({{\");"));
+        for (index, (field, _)) in fields.iter().enumerate() {
+            let value = format!("lucid_as_str(lucid_repr_value(lucid_wrap(self->{field})))");
+            let prefix = if index == 0 { "" } else { ", " };
+            self.emit_line(&format!("pos += (size_t)snprintf(out + pos, pos < 1024 ? 1024 - pos : 0, \"{prefix}\\\"{field}\\\": %s\", {value});"));
+        }
+        self.emit_line("if (pos < 1023) snprintf(out + pos, 1024 - pos, \"})\"); else out[1023] = '\\0';");
+        self.emit_line("return out;");
+        self.indent -= 1;
+        self.emit_line("}");
+
         // Emit constructor
         let param_list: Vec<String> = fields
             .iter()
@@ -4429,7 +4456,7 @@ static inline void lucid_print_val(LucidVal v) {
             })
             .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback});"
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr);"
         ));
         // Dynamic `is` checks need the complete class hierarchy, not only the
         // concrete allocation name. Register each ancestor as an alias so a
@@ -4441,7 +4468,7 @@ static inline void lucid_print_val(LucidVal v) {
                 break;
             }
             self.emit_line(&format!(
-                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL);"
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL);"
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
@@ -13718,6 +13745,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "complex str failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "(3+4j)\n");
+    }
+
+    #[test]
+    fn native_repr_formats_object_fields() {
+        let source = "class Point:\n    x: int\n    y: int\np = Point(1, 2)\nprint(repr(p))\n";
+        let module = parse(source).expect("object repr source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_repr_object_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("object repr should compile");
+        let run = Command::new(&output).output().expect("run object repr");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "object repr failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "Point({\"x\": 1, \"y\": 2})\n");
     }
 
     #[test]
