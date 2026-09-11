@@ -1543,6 +1543,9 @@ static inline LucidVal lucid_set_val(LucidSet* s) {
 }
 static inline LucidList* lucid_list_concat(LucidList* left, LucidList* right);
 static inline LucidVal lucid_add_value(LucidVal left, LucidVal right) {
+    if ((left.type == LUCID_TYPE_BIGINT || left.type == LUCID_TYPE_INT) &&
+        (right.type == LUCID_TYPE_BIGINT || right.type == LUCID_TYPE_INT))
+        return lucid_bigint_binop(left, right, '+');
     if (left.type == LUCID_TYPE_STR && right.type == LUCID_TYPE_STR)
         return lucid_str(lucid_str_concat(left.s, right.s));
     if (left.type == LUCID_TYPE_LIST && right.type == LUCID_TYPE_LIST)
@@ -2222,6 +2225,9 @@ static inline LucidSet* lucid_set_xor_value(LucidSet* a, LucidVal other) {
     return lucid_set_xor(a, other.set);
 }
 static inline LucidVal lucid_setop_value(LucidVal left, LucidVal right, char op) {
+    if ((left.type == LUCID_TYPE_BIGINT || left.type == LUCID_TYPE_INT) &&
+        (right.type == LUCID_TYPE_BIGINT || right.type == LUCID_TYPE_INT) && op == '-')
+        return lucid_bigint_binop(left, right, '-');
     if (left.type == LUCID_TYPE_SET && right.type == LUCID_TYPE_SET) {
         LucidSet* result = NULL;
         if (op == '&') result = lucid_set_intersection(left.set, right.set);
@@ -2458,6 +2464,9 @@ static inline const char* lucid_str_repeat(const char* value, int64_t count) {
     return result;
 }
 static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
+    if ((left.type == LUCID_TYPE_BIGINT || left.type == LUCID_TYPE_INT) &&
+        (right.type == LUCID_TYPE_BIGINT || right.type == LUCID_TYPE_INT))
+        return lucid_bigint_binop(left, right, '*');
     LucidVal sequence = left;
     LucidVal count_value = right;
     if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_LIST) {
@@ -13210,7 +13219,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_addition_preserves_container_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"a\") + identity(\"b\"))\nleft = identity([1])\nright = identity([2])\nitems = left + right\nprint(len(items))\nprint(items[1])\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"a\") + identity(\"b\"))\nleft = identity([1])\nright = identity([2])\nitems = left + right\nprint(len(items))\nprint(items[1])\nprint(identity(100000000000000000000) + identity(1))\n";
         let module = parse(source).expect("dynamic addition should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_dynamic_add_{}", std::process::id()));
@@ -13221,7 +13230,10 @@ print(all({1, 2}))
             .expect("compiled dynamic addition should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic addition failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "ab\n2\n2\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "ab\n2\n2\n100000000000000000001\n"
+        );
     }
 
     #[test]
