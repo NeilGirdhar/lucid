@@ -185,6 +185,7 @@ pub struct CCodeGenerator {
     known_factories: HashMap<(String, String), String>,
     known_list_element_classes: HashMap<String, String>,
     known_setters: HashMap<(String, String), String>,
+    known_setter_types: HashMap<(String, String), String>,
     contextmanager_methods: HashSet<(String, String)>,
     context_error_bodies: HashMap<String, Vec<Stmt>>,
     known_fns: HashMap<String, String>,
@@ -292,6 +293,7 @@ impl CCodeGenerator {
             known_factories: HashMap::new(),
             known_list_element_classes: HashMap::new(),
             known_setters: HashMap::new(),
+            known_setter_types: HashMap::new(),
             contextmanager_methods: HashSet::new(),
             context_error_bodies: HashMap::new(),
             known_fns: HashMap::new(),
@@ -701,6 +703,10 @@ impl CCodeGenerator {
                             members.push(s.name.clone());
                             self.known_setters
                                 .insert((name.clone(), s.name.clone()), s.name.clone());
+                            self.known_setter_types.insert(
+                                (name.clone(), s.name.clone()),
+                                self.map_type_expr(s.param.type_annotation.as_ref()),
+                            );
                         }
                         _ => {}
                     }
@@ -990,6 +996,37 @@ impl CCodeGenerator {
         for class in setter_classes {
             self.emit_line(&format!("if (class_name && strcmp(class_name, \"{class}\") == 0) {{"));
             self.indent += 1;
+            let mut setter_owner = Some(class.clone());
+            while let Some(owner) = setter_owner.clone() {
+                let setters: Vec<String> = self
+                    .known_setters
+                    .keys()
+                    .filter(|(class_name, _)| class_name == &owner)
+                    .map(|(_, setter)| setter.clone())
+                    .collect();
+                for setter in setters {
+                    let ty = self
+                        .known_setter_types
+                        .get(&(owner.clone(), setter.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| "LucidVal".to_string());
+                    let converted = match ty.as_str() {
+                        "LucidVal" => "value".to_string(),
+                        "int64_t" => "lucid_as_int(value)".to_string(),
+                        "double" => "lucid_as_float(value)".to_string(),
+                        "bool" => "lucid_as_bool(value)".to_string(),
+                        "const char*" => "lucid_as_str(value)".to_string(),
+                        "LucidList*" => "lucid_as_list(value)".to_string(),
+                        "LucidDict*" => "lucid_as_dict(value)".to_string(),
+                        "LucidSet*" => "lucid_as_set(value)".to_string(),
+                        other => format!("({other})lucid_as_ptr(value)"),
+                    };
+                    self.emit_line(&format!(
+                        "if (strcmp(attr, \"{setter}\") == 0) {{ {owner}_{setter}_set(({owner}*)object.ptr, {converted}); return; }}"
+                    ));
+                }
+                setter_owner = self.known_parents.get(&owner).cloned();
+            }
             let fields = self.known_classes.get(&class).cloned().unwrap_or_default();
             for field in fields {
                 let ty = self
@@ -7500,6 +7537,42 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 getter_owner = self.known_parents.get(&owner).cloned();
                             }
+                            if name == "setattr" {
+                                let mut setter_owner = Some(class_name.clone());
+                                while let Some(owner) = setter_owner.clone() {
+                                    if self
+                                        .known_setters
+                                        .contains_key(&(owner.clone(), attr_name.clone()))
+                                    {
+                                        let value = self.emit_expr(&args[2].value)?;
+                                        let setter_type = self
+                                            .known_setter_types
+                                            .get(&(owner.clone(), attr_name.clone()))
+                                            .cloned()
+                                            .unwrap_or_else(|| "LucidVal".to_string());
+                                        let converted = match setter_type.as_str() {
+                                            "int64_t" => format!("lucid_as_int(lucid_wrap({value}))"),
+                                            "double" => format!("lucid_as_float(lucid_wrap({value}))"),
+                                            "bool" => format!("lucid_as_bool(lucid_wrap({value}))"),
+                                            "const char*" => format!("lucid_as_str(lucid_wrap({value}))"),
+                                            "LucidList*" => format!("lucid_as_list(lucid_wrap({value}))"),
+                                            "LucidDict*" => format!("lucid_as_dict(lucid_wrap({value}))"),
+                                            "LucidSet*" => format!("lucid_as_set(lucid_wrap({value}))"),
+                                            "LucidVal" => format!("lucid_wrap({value})"),
+                                            other => format!("({other})lucid_as_ptr(lucid_wrap({value}))"),
+                                        };
+                                        let receiver = if owner == class_name {
+                                            object.clone()
+                                        } else {
+                                            format!("({owner}*)({object})")
+                                        };
+                                        return Ok(format!(
+                                            "(lucid_object_frozen((void*)({object})) ? (fprintf(stderr, \"cannot mutate frozen object\\n\"), exit(1), lucid_none()) : ({owner}_{attr_name}_set({receiver}, {converted}), lucid_none()))"
+                                        ));
+                                    }
+                                    setter_owner = self.known_parents.get(&owner).cloned();
+                                }
+                            }
                             let present =
                                 self.known_classes.get(&class_name).is_some_and(|fields| {
                                     fields.iter().any(|field| field == attr_name)
@@ -12126,7 +12199,7 @@ class Box:
         self.value = new_value + 1
 
 b = Box(0)
-b.value = 4
+setattr(b, "value", 4)
 print(b.value)
 "#;
         let module = parse(source).expect("setter program should parse");
@@ -12477,6 +12550,8 @@ print(z is complex)
         let source = r#"
 class NotFoundError:
     message: str
+    setter message(self, next: str):
+        self.message = next + "!"
 def get_value() -> int | NotFoundError:
     return NotFoundError("item missing")
 print(getattr(get_value(), "message"))
@@ -12499,7 +12574,7 @@ print(getattr(value, "message"))
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
-            "item missing\ntrue\nfalse\nupdated\n"
+            "item missing\ntrue\nfalse\nupdated!\n"
         );
     }
 

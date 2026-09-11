@@ -26,6 +26,11 @@ semantic decisions directly from the AST. The target architecture in
 [Implementation architecture](architecture.md) requires one typed control-flow
 IR shared by both execution paths.
 
+Reflective writes now follow the same setter path as ordinary attribute
+assignment. Static receivers, inherited setters, and erased `Any`/union
+receivers convert the supplied value to the setter parameter type and invoke
+the generated setter before falling back to a stored field.
+
 ## Verified baseline
 
 The last full workspace run completed successfully in both debug and release
