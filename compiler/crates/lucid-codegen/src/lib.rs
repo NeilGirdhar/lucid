@@ -17264,6 +17264,22 @@ print(result[1])
     }
 
     #[test]
+    fn native_nested_closure_alias_works_with_map() {
+        let source = "def run(offset: int) -> int:\n    def add(x: int) -> int:\n        return x + offset\n    let f = add\n    return map(f, [1, 2])[1]\nprint(run(5))\n";
+        let module = parse(source).expect("nested closure map source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_nested_map_alias_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("nested closure map should compile");
+        let run = Command::new(&output).output().expect("run nested closure map");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "nested closure map failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+    }
+
+    #[test]
     fn native_map_applies_expression_bodied_anonymous_functions() {
         let source = "print(map(def(x: int) -> int: x * 2, [1, 2])[1])\n";
         let module = parse(source).expect("anonymous map source should parse");

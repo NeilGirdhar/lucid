@@ -123,6 +123,8 @@ Aliases assigned from those nested functions preserve the same captured-call
 binding instead of being lowered as an undeclared native variable.
 `let` aliases receive the same preservation, so immutable local bindings do
 not erase the nested closure call shape.
+Higher-order builtins such as `map` also retain the captured binding after a
+nested-function alias.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
@@ -193,12 +195,12 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-351 native-codegen tests
+352 native-codegen tests
 153 runtime tests
 22 syntax tests
 50 compiler-database tests
 17 configuration tests
-797 tests passed
+798 tests passed
 ```
 
 The same 792 tests also pass with:
