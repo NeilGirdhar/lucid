@@ -86,7 +86,8 @@ diverged:
   lists, dictionaries, sets, strings, and ranges, as well as zero BigInts and
   zero complex values. Native typed collection and string conditions use
   single-evaluation helpers, so checking a value cannot duplicate calls or
-  other side effects.
+  other side effects. Tagged object values retain their class-specific
+  `__bool__`/`__len__` callback when they cross an `Any` boundary.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`

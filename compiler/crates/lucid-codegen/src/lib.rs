@@ -986,11 +986,12 @@ typedef struct LucidFuture LucidFuture;
 typedef struct LucidContext LucidContext;
 typedef struct LucidExceptionFrame LucidExceptionFrame;
 typedef void (*LucidObjectFreezer)(void*);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; } LucidObjectTag;
+typedef bool (*LucidObjectTruthy)(void*);
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; } LucidObjectTag;
 static LucidObjectTag lucid_object_tags[4096];
 static size_t lucid_object_tag_count = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer) {
-    if (ptr && lucid_object_tag_count < 4096) lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer};
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy) {
+    if (ptr && lucid_object_tag_count < 4096) lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i) if (lucid_object_tags[i].ptr == ptr) return strcmp(lucid_object_tags[i].class_name, class_name) == 0;
@@ -1007,6 +1008,12 @@ static inline void lucid_freeze_object(void* ptr) {
         if (lucid_object_tags[i].freezer) lucid_object_tags[i].freezer(ptr);
         return;
     }
+}
+static inline bool lucid_object_truthy(void* ptr) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].truthy)
+            return lucid_object_tags[i].truthy(ptr);
+    return true;
 }
 
 typedef enum {
@@ -1623,6 +1630,7 @@ static inline bool lucid_as_bool(LucidVal v) {
     if (v.type == LUCID_TYPE_LIST) return v.list && v.list->len > 0;
     if (v.type == LUCID_TYPE_DICT) return v.dict && v.dict->len > 0;
     if (v.type == LUCID_TYPE_SET) return v.set && v.set->len > 0;
+    if (v.type == LUCID_TYPE_PTR) return lucid_object_truthy(v.ptr);
     return v.type != LUCID_TYPE_NONE;
 }
 static inline const char* lucid_as_str(LucidVal v) {
@@ -3955,6 +3963,29 @@ static inline void lucid_print_val(LucidVal v) {
         self.indent -= 1;
         self.emit_line("}");
 
+        // Dynamic `Any` values retain class truthiness through the object tag
+        // registry. Emit a prototype before the constructor stores the
+        // callback; the implementation itself is emitted with the methods.
+        let truthy_owner = self
+            .method_owner(name, "__bool__")
+            .map(|owner| (owner, true))
+            .or_else(|| {
+                self.method_owner(name, "__len__")
+                    .map(|owner| (owner, false))
+            });
+        if let Some((owner, is_bool)) = &truthy_owner {
+            let ret_ty = if *is_bool { "bool" } else { "int64_t" };
+            self.emit_line(&format!(
+                "{ret_ty} {owner}___{}({owner}* self);",
+                if *is_bool { "bool__" } else { "len__" }
+            ));
+            if !*is_bool {
+                self.emit_line(&format!(
+                    "static bool {name}_truthy(void* raw) {{ return {owner}___len__(({owner}*)raw) != 0; }}"
+                ));
+            }
+        }
+
         // Emit constructor
         let param_list: Vec<String> = fields
             .iter()
@@ -3963,8 +3994,18 @@ static inline void lucid_print_val(LucidVal v) {
         self.emit_line(&format!("{name}* {name}_new({}) {{", param_list.join(", ")));
         self.indent += 1;
         self.emit_line(&format!("{name}* self = ({name}*)malloc(sizeof({name}));"));
+        let truthy_callback = truthy_owner
+            .as_ref()
+            .map(|(owner, is_bool)| {
+                if *is_bool {
+                    format!("(LucidObjectTruthy){owner}___bool__")
+                } else {
+                    format!("{name}_truthy")
+                }
+            })
+            .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze);"
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback});"
         ));
         for (fname, _) in &fields {
             self.emit_line(&format!("self->{fname} = {fname};"));
@@ -11477,7 +11518,7 @@ print(c.x, c.y)
 
     #[test]
     fn native_logical_conditions_preserve_custom_truthiness() {
-        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nf: Flag = Flag(false)\nif f and true:\n    print(1)\nelse:\n    print(0)\nif f or false:\n    print(1)\nelse:\n    print(0)\n";
+        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nf: Flag = Flag(false)\nif f and true:\n    print(1)\nelse:\n    print(0)\nif f or false:\n    print(1)\nelse:\n    print(0)\ndef identity(value: Any) -> Any:\n    return value\ndynamic = identity(Flag(false))\nif dynamic:\n    print(1)\nelse:\n    print(0)\n";
         let module = parse(source).expect("logical condition source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_logical_truthiness_{}",
@@ -11488,7 +11529,7 @@ print(c.x, c.y)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n0\n");
     }
 
     #[test]
