@@ -13471,7 +13471,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_comparisons_preserve_value_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"alpha\") < identity(\"beta\"))\nprint(identity(100000000000000000000) > identity(99999999999999999999))\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(\"alpha\")\nright = identity(\"beta\")\nbig_left = identity(100000000000000000000)\nbig_right = identity(99999999999999999999)\nprint(left < right)\nprint(big_left > big_right)\n";
         let module = parse(source).expect("dynamic comparisons should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_comparisons_{}",
