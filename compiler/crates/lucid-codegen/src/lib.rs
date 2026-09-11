@@ -1146,6 +1146,40 @@ impl CCodeGenerator {
         }
         self.emit_line("");
 
+        // Erased operands still need to reach user-defined multiple-dispatch
+        // operators. Generate a small object-pair bridge for `+`; it checks
+        // the registered concrete class names, calls the same typed dispatch
+        // function used by static expressions, and falls back to the normal
+        // numeric/string implementation when no object case applies.
+        self.emit_line("static LucidVal lucid_dynamic_add(LucidVal left, LucidVal right) {");
+        self.indent += 1;
+        self.emit_line("if (left.type == LUCID_TYPE_PTR && left.ptr && right.type == LUCID_TYPE_PTR && right.ptr) {");
+        self.indent += 1;
+        self.emit_line("const char* left_class = lucid_object_class_name(left.ptr); const char* right_class = lucid_object_class_name(right.ptr);");
+        if let Some(signatures) = self.dispatch_signatures.get("+").cloned() {
+            for (types, emitted) in signatures {
+                if types.len() < 2 {
+                    continue;
+                }
+                let left_class = types[0].trim_end_matches('*');
+                let right_class = types[1].trim_end_matches('*');
+                if !self.known_classes.contains_key(left_class)
+                    || !self.known_classes.contains_key(right_class)
+                {
+                    continue;
+                }
+                self.emit_line(&format!(
+                    "if (left_class && right_class && strcmp(left_class, \"{left_class}\") == 0 && strcmp(right_class, \"{right_class}\") == 0) return lucid_wrap({emitted}(({left_class}*)left.ptr, ({right_class}*)right.ptr));"
+                ));
+            }
+        }
+        self.indent -= 1;
+        self.emit_line("}");
+        self.emit_line("return lucid_add_value(left, right);");
+        self.indent -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
         // 4. Emit function bodies
         let top_function_aliases = self.function_aliases.clone();
         for stmt in &module.statements {
@@ -7131,6 +7165,16 @@ static inline void lucid_print_val(LucidVal v) {
                 let l_ty = self.infer_expr_type(left, &HashMap::new());
                 let r_ty = self.infer_expr_type(right, &HashMap::new());
 
+                if *op == BinaryOp::Add
+                    && self.expr_is_dynamic_value(left)
+                    && self.expr_is_dynamic_value(right)
+                    && self.dispatch_signatures.contains_key("+")
+                {
+                    return Ok(format!(
+                        "lucid_dynamic_add(lucid_wrap({l_str}), lucid_wrap({r_str}))"
+                    ));
+                }
+
                 if *op == BinaryOp::Mul
                     && matches!(l_ty.as_str(), "const char*" | "char*")
                     && r_ty == "int64_t"
@@ -12857,6 +12901,22 @@ print(c.x, c.y)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n6\n");
+    }
+
+    #[test]
+    fn native_erased_operands_dispatch_custom_binary_operator() {
+        let source = "class Box:\n    value: int\ndispatch def +(left: Box, right: Box) -> int:\n    return left.value + right.value\ndef identity(value: Any) -> Any:\n    return value\nleft = identity(Box(2))\nright = identity(Box(3))\nprint(left + right)\n";
+        let module = parse(source).expect("erased operator source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_erased_operator_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("erased operator should compile");
+        let run = Command::new(&output).output().expect("run erased operator");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "erased operator failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
     #[test]

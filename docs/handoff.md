@@ -85,6 +85,8 @@ Native `sorted` now materializes erased custom iterables and compares object
 values through their registered `__lt__` callbacks.
 Native `len(Any)` now dispatches to a declared custom `__len__` method instead
 of treating erased class instances as zero-length values.
+Native erased binary addition now reaches user-defined object dispatch
+overloads before applying the built-in numeric and collection rules.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
@@ -155,15 +157,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-339 native-codegen tests
+340 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-783 tests passed
+784 tests passed
 ```
 
-The same 783 tests also pass with:
+The same 784 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
