@@ -1494,8 +1494,14 @@ static inline double lucid_float_floor_div(double a, double b) {
     }
     return floor(a / b);
 }
+static inline int64_t lucid_saturating_float_to_int(double value) {
+    if (isnan(value)) return 0;
+    if (value >= 9223372036854775807.0) return INT64_MAX;
+    if (value <= -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)value;
+}
 static inline LucidVal lucid_float(double f) {
-    LucidVal v = {0}; v.type = LUCID_TYPE_FLOAT; v.f = f; v.i = (int64_t)f; v.real = f; v.b = (f != 0.0); return v;
+    LucidVal v = {0}; v.type = LUCID_TYPE_FLOAT; v.f = f; v.i = lucid_saturating_float_to_int(f); v.real = f; v.b = (f != 0.0); return v;
 }
 static inline LucidVal lucid_complex(double real, double imag) {
     LucidVal v = {0}; v.type = LUCID_TYPE_COMPLEX; v.real = real; v.imag = imag; return v;
@@ -1848,12 +1854,7 @@ static inline LucidVal _w_val(LucidVal v) { return v; }
 static inline int64_t lucid_as_int(LucidVal v) {
     if (v.type == LUCID_TYPE_INT) return v.i;
     if (v.type == LUCID_TYPE_FLOAT) {
-        /* Rust's float-to-integer cast saturates (and maps NaN to zero);
-         * a direct C cast is undefined outside the representable range. */
-        if (isnan(v.f)) return 0;
-        if (v.f >= 9223372036854775807.0) return INT64_MAX;
-        if (v.f <= -9223372036854775808.0) return INT64_MIN;
-        return (int64_t)v.f;
+        return lucid_saturating_float_to_int(v.f);
     }
     if (v.type == LUCID_TYPE_BOOL) return v.b ? 1 : 0;
     if (v.type == LUCID_TYPE_STR && v.s) return (int64_t)strtoll(v.s, NULL, 10);
@@ -2210,7 +2211,7 @@ static inline LucidVal lucid_complex_pow(LucidVal a, LucidVal b) {
 static inline LucidVal lucid_complex_neg(LucidVal a) { return lucid_complex(-a.real, -a.imag); }
 
 static inline int64_t _i_int(int64_t i) { return i; }
-static inline int64_t _i_float(double f) { return (int64_t)f; }
+static inline int64_t _i_float(double f) { return lucid_saturating_float_to_int(f); }
 static inline int64_t _i_val(LucidVal v) { return lucid_as_int(v); }
 static inline int64_t _i_def(void* p) { (void)p; return 0; }
 
