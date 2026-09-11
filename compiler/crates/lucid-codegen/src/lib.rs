@@ -902,7 +902,7 @@ impl CCodeGenerator {
             }
         }
         self.emit_line("");
-        self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr);");
+        self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr, LucidVal fallback, bool has_default);");
         self.emit_line("static bool lucid_dynamic_has_attr(LucidVal value, const char* attr);");
         self.emit_line("static void lucid_dynamic_set_attr(LucidVal object, const char* attr, LucidVal value);");
         self.emit_line("");
@@ -919,11 +919,11 @@ impl CCodeGenerator {
         // of emitting a C `->field` access against the wrapper value.
         let mut dynamic_classes: Vec<String> = self.known_classes.keys().cloned().collect();
         dynamic_classes.sort();
-        self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr) {");
+        self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr, LucidVal fallback, bool has_default) {");
         self.indent += 1;
-        self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) { fprintf(stderr, \"attribute access requires an object\\n\"); exit(1); }");
+        self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) { if (has_default) return fallback; fprintf(stderr, \"attribute access requires an object\\n\"); exit(1); }");
         self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
-        self.emit_line("if (!class_name) { fprintf(stderr, \"unknown object in attribute access\\n\"); exit(1); }");
+        self.emit_line("if (!class_name) { if (has_default) return fallback; fprintf(stderr, \"unknown object in attribute access\\n\"); exit(1); }");
         for class in dynamic_classes {
             self.emit_line(&format!("if (strcmp(class_name, \"{class}\") == 0) {{"));
             self.indent += 1;
@@ -952,7 +952,7 @@ impl CCodeGenerator {
             self.indent -= 1;
             self.emit_line("}");
         }
-        self.emit_line("fprintf(stderr, \"object has no requested attribute\\n\"); exit(1); return lucid_none();");
+        self.emit_line("if (has_default) return fallback; fprintf(stderr, \"object has no requested attribute\\n\"); exit(1); return lucid_none();");
         self.indent -= 1;
         self.emit_line("}");
         self.emit_line("static bool lucid_dynamic_has_attr(LucidVal value, const char* attr) {");
@@ -7472,7 +7472,8 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         "getattr" | "hasattr" | "setattr" => {
                             if (name == "setattr" && args.len() != 3)
-                                || (name != "setattr" && args.len() != 2)
+                                || (name == "hasattr" && args.len() != 2)
+                                || (name == "getattr" && !(2..=3).contains(&args.len()))
                             {
                                 return Err(CodegenError {
                                     message: if name == "setattr" {
@@ -7502,8 +7503,13 @@ static inline void lucid_print_val(LucidVal v) {
                                 .trim_end_matches('*')
                                 .to_string();
                             if name == "getattr" && class_name == "LucidVal" {
+                                let (fallback, has_default) = if args.len() == 3 {
+                                    (format!("lucid_wrap({})", self.emit_expr(&args[2].value)?), "true")
+                                } else {
+                                    ("lucid_none()".to_string(), "false")
+                                };
                                 return Ok(format!(
-                                    "lucid_dynamic_attr(lucid_wrap({object}), \"{}\")",
+                                    "lucid_dynamic_attr(lucid_wrap({object}), \"{}\", {fallback}, {has_default})",
                                     c_escape_string(attr_name)
                                 ));
                             }
@@ -7581,6 +7587,12 @@ static inline void lucid_print_val(LucidVal v) {
                                 return Ok(if present { "true" } else { "false" }.to_string());
                             }
                             if !present {
+                                if name == "getattr" && args.len() == 3 {
+                                    return Ok(format!(
+                                        "lucid_wrap({})",
+                                        self.emit_expr(&args[2].value)?
+                                    ));
+                                }
                                 return Err(CodegenError {
                                     message: format!(
                                         "unknown attribute '{attr_name}' on class '{class_name}'"
@@ -10418,7 +10430,7 @@ static inline void lucid_print_val(LucidVal v) {
                 let receiver_type = self.infer_expr_type(value, &HashMap::new());
                 if receiver_type == "LucidVal" {
                     return Ok(format!(
-                        "lucid_dynamic_attr(lucid_wrap({v_code}), \"{}\")",
+                        "lucid_dynamic_attr(lucid_wrap({v_code}), \"{}\", lucid_none(), false)",
                         c_escape_string(attr)
                     ));
                 }
@@ -12560,6 +12572,7 @@ def get_value() -> int | NotFoundError:
 print(getattr(get_value(), "message"))
 print(hasattr(get_value(), "message"))
 print(hasattr(get_value(), "missing"))
+print(getattr(get_value(), "missing", "fallback"))
 value = get_value()
 setattr(value, "message", "updated")
 print(getattr(value, "message"))
@@ -12577,7 +12590,7 @@ print(getattr(value, "message"))
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
-            "item missing\ntrue\nfalse\nupdated!\n"
+            "item missing\ntrue\nfalse\nfallback\nupdated!\n"
         );
     }
 
@@ -14489,6 +14502,7 @@ setattr(p, "x", 6)
 print(p.x)
 print(hasattr(p, "y"))
 print(hasattr(p, "z"))
+print(getattr(p, "z", 42))
 "#;
         let module = parse(source).expect("reflection source should parse");
         let output = std::env::temp_dir().join(format!(
@@ -14502,7 +14516,7 @@ print(hasattr(p, "z"))
             .expect("compiled reflection program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n6\ntrue\nfalse\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n6\ntrue\nfalse\n42\n");
     }
 
     #[test]

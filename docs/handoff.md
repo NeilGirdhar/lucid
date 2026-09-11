@@ -34,6 +34,9 @@ They also enforce the frozen-object mutation rule when no setter is present,
 so `setattr` cannot bypass immutability.
 The interpreter now mirrors native reflection for inherited getters: `getattr`
 evaluates the getter and `hasattr` reports it as present.
+Native `getattr` also honors its optional default for static objects, erased
+values, and missing attributes, matching the interpreter's three-argument
+form.
 
 ## Verified baseline
 
