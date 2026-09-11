@@ -137,6 +137,8 @@ diverged:
   Reflective `setattr` writes on erased objects now dispatch through generated
   field metadata, enforce frozen-object checks, and convert the assigned
   `LucidVal` to the declared field representation.
+  Static `getattr`/`hasattr` calls now recognize getters as well as stored
+  fields, matching ordinary attribute lookup.
   The checker now rejects `?` at module scope, where no enclosing function
   return type can accept the propagated error; this prevents native `return`
   generation from producing invalid top-level C control flow.

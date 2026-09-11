@@ -7483,6 +7483,23 @@ static inline void lucid_print_val(LucidVal v) {
                                     c_escape_string(attr_name)
                                 ));
                             }
+                            let mut getter_owner = Some(class_name.clone());
+                            while let Some(owner) = getter_owner.clone() {
+                                if self
+                                    .known_getters
+                                    .contains_key(&(owner.clone(), attr_name.clone()))
+                                {
+                                    if name == "hasattr" {
+                                        return Ok("true".to_string());
+                                    }
+                                    if name == "getattr" {
+                                        return Ok(format!(
+                                            "lucid_wrap({owner}_{attr_name}_get(({owner}*)({object})))"
+                                        ));
+                                    }
+                                }
+                                getter_owner = self.known_parents.get(&owner).cloned();
+                            }
                             let present =
                                 self.known_classes.get(&class_name).is_some_and(|fields| {
                                     fields.iter().any(|field| field == attr_name)
@@ -12083,6 +12100,7 @@ class Point:
 
 p = Point(2, 3)
 print(p.total, Point.label())
+print(getattr(p, "total"), hasattr(p, "total"), hasattr(p, "missing"))
 "#;
         let module = parse(source).expect("class member program should parse");
         let output = std::env::temp_dir().join(format!(
@@ -12096,7 +12114,7 @@ print(p.total, Point.label())
             .expect("compiled program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "5 Point\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5 Point\n5 true false\n");
     }
 
     #[test]
