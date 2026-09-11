@@ -1992,6 +1992,10 @@ static inline const char* lucid_to_str(LucidVal v) {
     if (v.type == LUCID_TYPE_FLOAT) { snprintf(buf, 64, "%.10g", v.f); return buf; }
     if (v.type == LUCID_TYPE_COMPLEX) { snprintf(buf, 64, "(%g%+gj)", v.real, v.imag); return buf; }
     if (v.type == LUCID_TYPE_BOOL) return v.b ? "true" : "false";
+    if (v.type == LUCID_TYPE_PTR) {
+        LucidObjectRepr repr = lucid_object_repr(v.ptr);
+        if (repr) { free(buf); return repr(v.ptr); }
+    }
     return "none";
 }
 static inline LucidVal lucid_pow(LucidVal base, LucidVal exponent) {
@@ -13760,6 +13764,22 @@ print(all({1, 2}))
         let run = Command::new(&output).output().expect("run object repr");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "object repr failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "Point({\"x\": 1, \"y\": 2})\n");
+    }
+
+    #[test]
+    fn native_str_formats_object_values() {
+        let source = "class Point:\n    x: int\n    y: int\np = Point(1, 2)\nprint(str(p))\n";
+        let module = parse(source).expect("object str source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_str_object_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("object str should compile");
+        let run = Command::new(&output).output().expect("run object str");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "object str failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "Point({\"x\": 1, \"y\": 2})\n");
     }
 

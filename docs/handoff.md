@@ -75,6 +75,8 @@ Native `str` now renders complex values in the same `(real+imagj)` form as
 the interpreter.
 Native `repr` now uses generated per-class callbacks for object values,
 including field names and representations after an `Any` erasure.
+Native `str` uses the same generated object representation for class instances,
+matching the interpreter's fallback conversion.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -107,15 +109,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-314 native-codegen tests
+315 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-757 tests passed
+758 tests passed
 ```
 
-The same 757 tests also pass with:
+The same 758 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
