@@ -82,6 +82,8 @@ nav = [
     { "Removed builtins" = "removed-builtins.md" },
   ] },
   { "Architecture" = "architecture.md" },
+  { "Compiler implementation plan" = "implementation-plan.md" },
+  { "Implementation handoff" = "handoff.md" },
   { "Rejected features" = "rejected-features.md" },
 ]
 

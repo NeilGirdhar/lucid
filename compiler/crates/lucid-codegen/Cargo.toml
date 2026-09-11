@@ -6,3 +6,12 @@ edition = "2024"
 [dependencies]
 lucid-syntax = { path = "../lucid-syntax" }
 lucid-checker = { path = "../lucid-checker" }
+lucid-cir = { path = "../lucid-cir" }
+lucid-abi = { path = "../lucid-abi" }
+num-bigint = "0.4"
+cranelift-codegen = "0.119"
+cranelift-frontend = "0.119"
+cranelift-jit = "0.119"
+cranelift-module = "0.119"
+cranelift-native = "0.119"
+cranelift-entity = "0.119"

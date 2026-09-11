@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -10,7 +10,12 @@ pub struct Span {
 
 impl Span {
     pub fn new(start: usize, end: usize, line: usize, column: usize) -> Self {
-        Self { start, end, line, column }
+        Self {
+            start,
+            end,
+            line,
+            column,
+        }
     }
 
     pub fn merge(self, other: Span) -> Self {
@@ -18,7 +23,11 @@ impl Span {
             start: self.start.min(other.start),
             end: self.end.max(other.end),
             line: self.line.min(other.line),
-            column: if self.start <= other.start { self.column } else { other.column },
+            column: if self.start <= other.start {
+                self.column
+            } else {
+                other.column
+            },
         }
     }
 }
@@ -40,7 +49,9 @@ pub enum TokenKind {
     // --- Literals ---
     Ident(String),
     Int(i64),
+    BigInt(String),
     Float(f64),
+    Complex(f64),
     Str(String),
     True,
     False,
@@ -73,6 +84,7 @@ pub enum TokenKind {
     FromVarName,
     ClassMethod,
     ClassVar,
+    ContextManager,
 
     // --- Preserved Python Keywords ---
     And,
@@ -110,50 +122,52 @@ pub enum TokenKind {
     Lambda,
 
     // --- Operators & Symbols ---
-    TripleStar, // ***
-    DoubleStar, // **
-    Star,       // *
-    Arrow,      // ->
-    Question,   // ?
-    Bang,       // !
-    Amp,        // &
-    Plus,       // +
-    Minus,      // -
-    Slash,      // /
-    DoubleSlash,// //
-    Percent,    // %
-    EqEq,       // ==
-    NotEq,      // !=
-    Lt,         // <
-    LtEq,       // <=
-    Gt,         // >
-    GtEq,       // >=
-    Pipe,       // |
-    Caret,      // ^
-    Tilde,      // ~
-    Shl,        // <<
-    Shr,        // >>
-    Walrus,     // :=
-    Eq,         // =
-    PlusEq,     // +=
-    MinusEq,    // -=
-    StarEq,     // *=
-    SlashEq,    // /=
-    PercentEq,  // %=
-    DoubleStarEq, // **=
+    TripleStar,    // ***
+    DoubleStar,    // **
+    Star,          // *
+    Arrow,         // ->
+    Question,      // ?
+    Bang,          // !
+    Amp,           // &
+    Plus,          // +
+    Minus,         // -
+    Slash,         // /
+    DoubleSlash,   // //
+    Percent,       // %
+    EqEq,          // ==
+    TripleEq,      // ===
+    NotEq,         // !=
+    TripleNotEq,   // !==
+    Lt,            // <
+    LtEq,          // <=
+    Gt,            // >
+    GtEq,          // >=
+    Pipe,          // |
+    Caret,         // ^
+    Tilde,         // ~
+    Shl,           // <<
+    Shr,           // >>
+    Walrus,        // :=
+    Eq,            // =
+    PlusEq,        // +=
+    MinusEq,       // -=
+    StarEq,        // *=
+    SlashEq,       // /=
+    PercentEq,     // %=
+    DoubleStarEq,  // **=
     DoubleSlashEq, // //=
-    At,         // @
-    Dot,        // .
-    Ellipsis,   // ...
-    Comma,      // ,
-    Colon,      // :
-    Semi,       // ;
-    LParen,     // (
-    RParen,     // )
-    LBracket,   // [
-    RBracket,   // ]
-    LBrace,     // {
-    RBrace,     // }
+    At,            // @
+    Dot,           // .
+    Ellipsis,      // ...
+    Comma,         // ,
+    Colon,         // :
+    Semi,          // ;
+    LParen,        // (
+    RParen,        // )
+    LBracket,      // [
+    RBracket,      // ]
+    LBrace,        // {
+    RBrace,        // }
 
     // --- Layout ---
     Newline,
@@ -167,7 +181,9 @@ impl fmt::Display for TokenKind {
         match self {
             TokenKind::Ident(s) => write!(f, "identifier '{s}'"),
             TokenKind::Int(n) => write!(f, "integer {n}"),
+            TokenKind::BigInt(n) => write!(f, "integer {n}"),
             TokenKind::Float(n) => write!(f, "float {n}"),
+            TokenKind::Complex(n) => write!(f, "complex {n}j"),
             TokenKind::Str(s) => write!(f, "string \"{s}\""),
             TokenKind::True => write!(f, "'true'"),
             TokenKind::False => write!(f, "'false'"),
@@ -198,6 +214,7 @@ impl fmt::Display for TokenKind {
             TokenKind::FromVarName => write!(f, "'from_var_name'"),
             TokenKind::ClassMethod => write!(f, "'classmethod'"),
             TokenKind::ClassVar => write!(f, "'classvar'"),
+            TokenKind::ContextManager => write!(f, "'contextmanager'"),
             TokenKind::And => write!(f, "'and'"),
             TokenKind::As => write!(f, "'as'"),
             TokenKind::Assert => write!(f, "'assert'"),
@@ -242,7 +259,9 @@ impl fmt::Display for TokenKind {
             TokenKind::DoubleSlash => write!(f, "'//'"),
             TokenKind::Percent => write!(f, "'%'"),
             TokenKind::EqEq => write!(f, "'=='"),
+            TokenKind::TripleEq => write!(f, "'==='"),
             TokenKind::NotEq => write!(f, "'!='"),
+            TokenKind::TripleNotEq => write!(f, "'!=='"),
             TokenKind::Lt => write!(f, "'<'"),
             TokenKind::LtEq => write!(f, "'<='"),
             TokenKind::Gt => write!(f, "'>'"),

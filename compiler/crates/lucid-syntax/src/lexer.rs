@@ -76,7 +76,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn current_pos(&self) -> (usize, usize, usize) {
-        let byte_pos = self.chars.get(self.cursor).map(|&(idx, _)| idx).unwrap_or(self.source.len());
+        let byte_pos = self
+            .chars
+            .get(self.cursor)
+            .map(|&(idx, _)| idx)
+            .unwrap_or(self.source.len());
         (byte_pos, self.line, self.column)
     }
 
@@ -85,7 +89,10 @@ impl<'a> Lexer<'a> {
         if self.pending_dedents > 0 {
             self.pending_dedents -= 1;
             let (pos, line, col) = self.current_pos();
-            return Ok(Some(Token::new(TokenKind::Dedent, Span::new(pos, pos, line, col))));
+            return Ok(Some(Token::new(
+                TokenKind::Dedent,
+                Span::new(pos, pos, line, col),
+            )));
         }
 
         // Handle indentation at start of line
@@ -109,19 +116,29 @@ impl<'a> Lexer<'a> {
 
             // Check if line is blank or just comment
             let next_c = self.chars.get(temp_cursor).map(|&(_, c)| c);
-            if next_c == Some('\n') || next_c == Some('\r') || next_c == Some('#') || next_c.is_none() {
+            if next_c == Some('\n')
+                || next_c == Some('\r')
+                || next_c == Some('#')
+                || next_c.is_none()
+            {
                 // Ignore indentation on empty/comment lines: consume blank/comment and advance to next line
                 self.cursor = temp_cursor;
-                if let Some(c) = self.peek_char() {
-                    if c == '#' {
-                        while let Some(ch) = self.peek_char() {
-                            if ch == '\n' { break; }
-                            self.advance_char();
+                if let Some(c) = self.peek_char()
+                    && c == '#'
+                {
+                    while let Some(ch) = self.peek_char() {
+                        if ch == '\n' {
+                            break;
                         }
+                        self.advance_char();
                     }
                 }
-                if self.peek_char() == Some('\r') { self.advance_char(); }
-                if self.peek_char() == Some('\n') { self.advance_char(); }
+                if self.peek_char() == Some('\r') {
+                    self.advance_char();
+                }
+                if self.peek_char() == Some('\n') {
+                    self.advance_char();
+                }
                 if self.cursor >= self.chars.len() {
                     self.at_line_start = false;
                     break;
@@ -162,8 +179,15 @@ impl<'a> Lexer<'a> {
 
                     if *self.indent_stack.last().unwrap_or(&0) != indent_spaces {
                         return Err(LexerError {
-                            message: format!("unindent does not match any outer indentation level ({indent_spaces} spaces)"),
-                            span: Span::new(start_pos, start_pos + indent_spaces, start_line, start_col),
+                            message: format!(
+                                "unindent does not match any outer indentation level ({indent_spaces} spaces)"
+                            ),
+                            span: Span::new(
+                                start_pos,
+                                start_pos + indent_spaces,
+                                start_line,
+                                start_col,
+                            ),
                         });
                     }
 
@@ -363,6 +387,13 @@ impl<'a> Lexer<'a> {
             self.advance_char();
             if self.peek_char() == Some('=') {
                 self.advance_char();
+                if self.peek_char() == Some('=') {
+                    self.advance_char();
+                    return Ok(Some(Token::new(
+                        TokenKind::TripleEq,
+                        Span::new(start_pos, start_pos + 3, start_line, start_col),
+                    )));
+                }
                 return Ok(Some(Token::new(
                     TokenKind::EqEq,
                     Span::new(start_pos, start_pos + 2, start_line, start_col),
@@ -379,6 +410,13 @@ impl<'a> Lexer<'a> {
             self.advance_char();
             if self.peek_char() == Some('=') {
                 self.advance_char();
+                if self.peek_char() == Some('=') {
+                    self.advance_char();
+                    return Ok(Some(Token::new(
+                        TokenKind::TripleNotEq,
+                        Span::new(start_pos, start_pos + 3, start_line, start_col),
+                    )));
+                }
                 return Ok(Some(Token::new(
                     TokenKind::NotEq,
                     Span::new(start_pos, start_pos + 2, start_line, start_col),
@@ -470,12 +508,30 @@ impl<'a> Lexer<'a> {
 
         // Single-character punctuation
         let single_tok = match c {
-            '(' => { self.open_brackets += 1; Some(TokenKind::LParen) }
-            ')' => { self.open_brackets = self.open_brackets.saturating_sub(1); Some(TokenKind::RParen) }
-            '[' => { self.open_brackets += 1; Some(TokenKind::LBracket) }
-            ']' => { self.open_brackets = self.open_brackets.saturating_sub(1); Some(TokenKind::RBracket) }
-            '{' => { self.open_brackets += 1; Some(TokenKind::LBrace) }
-            '}' => { self.open_brackets = self.open_brackets.saturating_sub(1); Some(TokenKind::RBrace) }
+            '(' => {
+                self.open_brackets += 1;
+                Some(TokenKind::LParen)
+            }
+            ')' => {
+                self.open_brackets = self.open_brackets.saturating_sub(1);
+                Some(TokenKind::RParen)
+            }
+            '[' => {
+                self.open_brackets += 1;
+                Some(TokenKind::LBracket)
+            }
+            ']' => {
+                self.open_brackets = self.open_brackets.saturating_sub(1);
+                Some(TokenKind::RBracket)
+            }
+            '{' => {
+                self.open_brackets += 1;
+                Some(TokenKind::LBrace)
+            }
+            '}' => {
+                self.open_brackets = self.open_brackets.saturating_sub(1);
+                Some(TokenKind::RBrace)
+            }
             ',' => Some(TokenKind::Comma),
             ';' => Some(TokenKind::Semi),
             '@' => Some(TokenKind::At),
@@ -508,8 +564,9 @@ impl<'a> Lexer<'a> {
         // Identifiers and keywords (including r"...", f"..." prefixes)
         if c.is_alphabetic() || c == '_' {
             // Check for f"..." or r"..."
-            if (c == 'r' || c == 'f') && (self.peek_next_char() == Some('"') || self.peek_next_char() == Some('\'')) {
-                let quote = self.peek_next_char().unwrap();
+            if (c == 'r' || c == 'f')
+                && let Some(quote @ ('"' | '\'')) = self.peek_next_char()
+            {
                 self.advance_char(); // advance prefix
                 return self.lex_string(quote, start_pos, start_line, start_col);
             }
@@ -523,7 +580,25 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    fn lex_string(&mut self, quote: char, start_pos: usize, start_line: usize, start_col: usize) -> Result<Option<Token>, LexerError> {
+    /// Advance past a lexical error so a recovery caller can continue
+    /// tokenizing when the error has a finite offending span. Errors that
+    /// consume the remainder of the source (for example, an unterminated
+    /// string) naturally return `false` because no further token can begin.
+    pub fn recover_from_error(&mut self, error: &LexerError) -> bool {
+        let before = self.cursor;
+        let end = error.span.end.min(self.source.len());
+        self.cursor = end.max(before.saturating_add(1)).min(self.source.len());
+        self.at_line_start = false;
+        self.cursor < self.source.len()
+    }
+
+    fn lex_string(
+        &mut self,
+        quote: char,
+        start_pos: usize,
+        start_line: usize,
+        start_col: usize,
+    ) -> Result<Option<Token>, LexerError> {
         self.advance_char(); // consume first quote
 
         // Check for triple quotes
@@ -562,7 +637,9 @@ impl<'a> Lexer<'a> {
                 }
                 Some(c) if c == quote => {
                     if is_triple {
-                        if self.peek_next_char() == Some(quote) && self.peek_char_at(2) == Some(quote) {
+                        if self.peek_next_char() == Some(quote)
+                            && self.peek_char_at(2) == Some(quote)
+                        {
                             self.advance_char();
                             self.advance_char();
                             self.advance_char();
@@ -590,9 +667,75 @@ impl<'a> Lexer<'a> {
         )))
     }
 
-    fn lex_number(&mut self, start_pos: usize, start_line: usize, start_col: usize) -> Result<Option<Token>, LexerError> {
+    fn lex_number(
+        &mut self,
+        start_pos: usize,
+        start_line: usize,
+        start_col: usize,
+    ) -> Result<Option<Token>, LexerError> {
         let mut is_float = false;
+        let mut is_complex = false;
         let mut num_str = String::new();
+
+        // Radix-prefixed integer literals are scanned as one token. Preserve
+        // the spelling for BigInt fallback, while using the native radix
+        // parser whenever the value fits in i64.
+        if self.peek_char() == Some('0')
+            && let Some(prefix @ ('x' | 'X' | 'o' | 'O' | 'b' | 'B')) = self.peek_next_char()
+        {
+            num_str.push('0');
+            num_str.push(prefix);
+            self.advance_char();
+            self.advance_char();
+            let digit_start = num_str.len();
+            while let Some(c) = self.peek_char() {
+                let valid = match prefix {
+                    'x' | 'X' => c.is_ascii_hexdigit(),
+                    'o' | 'O' => matches!(c, '0'..='7'),
+                    'b' | 'B' => matches!(c, '0' | '1'),
+                    _ => false,
+                };
+                if valid || c == '_' {
+                    if valid {
+                        num_str.push(c);
+                    }
+                    self.advance_char();
+                } else {
+                    break;
+                }
+            }
+            if num_str.len() == digit_start {
+                let (_, end, _) = self.current_pos();
+                return Err(LexerError {
+                    message: format!("invalid radix integer literal '{num_str}'"),
+                    span: Span::new(start_pos, end, start_line, start_col),
+                });
+            }
+            if self
+                .peek_char()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+            {
+                let (end, _, _) = self.current_pos();
+                return Err(LexerError {
+                    message: format!("invalid digit in radix integer literal '{num_str}'"),
+                    span: Span::new(start_pos, end, start_line, start_col),
+                });
+            }
+            let radix = match prefix {
+                'x' | 'X' => 16,
+                'o' | 'O' => 8,
+                _ => 2,
+            };
+            let digits = &num_str[2..];
+            let span = {
+                let (end_pos, _, _) = self.current_pos();
+                Span::new(start_pos, end_pos, start_line, start_col)
+            };
+            return Ok(Some(match i64::from_str_radix(digits, radix) {
+                Ok(value) => Token::new(TokenKind::Int(value), span),
+                Err(_) => Token::new(TokenKind::BigInt(num_str), span),
+            }));
+        }
 
         while let Some(c) = self.peek_char() {
             if c.is_ascii_digit() || c == '_' {
@@ -600,7 +743,13 @@ impl<'a> Lexer<'a> {
                     num_str.push(c);
                 }
                 self.advance_char();
-            } else if c == '.' && !is_float && self.peek_next_char().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            } else if c == '.'
+                && !is_float
+                && self
+                    .peek_next_char()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+            {
                 is_float = true;
                 num_str.push(c);
                 self.advance_char();
@@ -608,28 +757,37 @@ impl<'a> Lexer<'a> {
                 is_float = true;
                 num_str.push(c);
                 self.advance_char();
-                if let Some(sign) = self.peek_char() {
-                    if sign == '+' || sign == '-' {
-                        num_str.push(sign);
-                        self.advance_char();
-                    }
+                if let Some(sign) = self.peek_char()
+                    && (sign == '+' || sign == '-')
+                {
+                    num_str.push(sign);
+                    self.advance_char();
                 }
             } else {
                 break;
             }
         }
 
-        if let Some(c) = self.peek_char() {
-            if c == 'j' || c == 'J' {
-                is_float = true;
-                self.advance_char();
-            }
+        if let Some(c) = self.peek_char()
+            && (c == 'j' || c == 'J')
+        {
+            is_float = true;
+            is_complex = true;
+            self.advance_char();
         }
 
         let (end_pos, _, _) = self.current_pos();
         let span = Span::new(start_pos, end_pos, start_line, start_col);
 
-        if is_float {
+        if is_complex {
+            match num_str.parse::<f64>() {
+                Ok(f) => Ok(Some(Token::new(TokenKind::Complex(f), span))),
+                Err(_) => Err(LexerError {
+                    message: format!("invalid complex literal '{num_str}j'"),
+                    span,
+                }),
+            }
+        } else if is_float {
             match num_str.parse::<f64>() {
                 Ok(f) => Ok(Some(Token::new(TokenKind::Float(f), span))),
                 Err(_) => Err(LexerError {
@@ -640,15 +798,17 @@ impl<'a> Lexer<'a> {
         } else {
             match num_str.parse::<i64>() {
                 Ok(n) => Ok(Some(Token::new(TokenKind::Int(n), span))),
-                Err(_) => Err(LexerError {
-                    message: format!("invalid integer literal '{num_str}'"),
-                    span,
-                }),
+                Err(_) => Ok(Some(Token::new(TokenKind::BigInt(num_str), span))),
             }
         }
     }
 
-    fn lex_ident_or_keyword(&mut self, start_pos: usize, start_line: usize, start_col: usize) -> Result<Option<Token>, LexerError> {
+    fn lex_ident_or_keyword(
+        &mut self,
+        start_pos: usize,
+        start_line: usize,
+        start_col: usize,
+    ) -> Result<Option<Token>, LexerError> {
         let mut text = String::new();
         while let Some(c) = self.peek_char() {
             if c.is_alphanumeric() || c == '_' {
@@ -695,6 +855,7 @@ impl<'a> Lexer<'a> {
             "from_var_name" => TokenKind::FromVarName,
             "classmethod" => TokenKind::ClassMethod,
             "classvar" => TokenKind::ClassVar,
+            "contextmanager" => TokenKind::ContextManager,
 
             // Preserved Python keywords
             "and" => TokenKind::And,

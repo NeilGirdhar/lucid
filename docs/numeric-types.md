@@ -86,6 +86,10 @@ converted with `int(x)`. Integer operations are integer operations: indexing,
 bitwise operations, shifts, and integer arithmetic are available for integer
 values and for types that explicitly provide the relevant operation.
 
+Integer literals may use decimal, hexadecimal (`0x`), octal (`0o`), or binary
+(`0b`) notation. The spelling does not change the exact `int` type; values too
+large for the machine representation remain arbitrary-precision integers.
+
 ```python
 index: int = 3
 items[index]
@@ -342,4 +346,3 @@ cross-type hashing, and cross-type ordering exist only where explicitly defined.
 `complex` is not orderable; `bool` is, the ordinary way — `false < true`.
 Bitwise operators are integer-like operations, not general numeric
 operations, and are not provided by `bool`, `float`, or `complex`.
-

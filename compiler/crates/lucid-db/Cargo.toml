@@ -1,11 +1,12 @@
 [package]
-name = "lucid-runtime"
+name = "lucid-db"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 lucid-syntax = { path = "../lucid-syntax" }
+lucid-cir = { path = "../lucid-cir" }
 lucid-checker = { path = "../lucid-checker" }
-lucid-abi = { path = "../lucid-abi" }
+salsa = "0.28"
+rowan = "0.16"
 num-bigint = "0.4"
-num-traits = "0.2"

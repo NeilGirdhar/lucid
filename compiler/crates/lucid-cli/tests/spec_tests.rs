@@ -1,16 +1,25 @@
-use lucid_syntax::parse;
 use lucid_checker::TypeChecker;
 use lucid_runtime::{Interpreter, Value};
+use lucid_syntax::parse;
 
 fn run_lucid(source: &str) -> (Result<(), String>, Result<Value, String>) {
     let module = match parse(source) {
         Ok(m) => m,
-        Err(e) => return (Err(format!("parse error: {e}")), Err(format!("parse error: {e}"))),
+        Err(e) => {
+            return (
+                Err(format!("parse error: {e}")),
+                Err(format!("parse error: {e}")),
+            );
+        }
     };
     let mut checker = TypeChecker::new();
-    let check_res = checker.check_module(&module).map_err(|e| format!("type error: {}", e.message));
+    let check_res = checker
+        .check_module(&module)
+        .map_err(|e| format!("type error: {}", e.message));
     let mut interp = Interpreter::new();
-    let eval_res = interp.eval_module(&module).map_err(|e| format!("runtime error: {}", e.message));
+    let eval_res = interp
+        .eval_module(&module)
+        .map_err(|e| format!("runtime error: {}", e.message));
     (check_res, eval_res)
 }
 
@@ -39,7 +48,10 @@ fp = freeze(p)
 "#;
     let val = eval_ok(src);
     if let Value::Object { is_frozen, .. } = val {
-        assert!(*is_frozen.borrow(), "freeze() must transition object to deeply frozen");
+        assert!(
+            *is_frozen.borrow(),
+            "freeze() must transition object to deeply frozen"
+        );
     } else {
         panic!("expected Object, got {:?}", val);
     }
@@ -194,7 +206,11 @@ class Doc(Formatted, Printable):
         return construct(title)
 "#;
     let (chk, _evl) = run_lucid(src);
-    assert!(chk.is_ok(), "Type specification pillars should type check cleanly: {:?}", chk.err());
+    assert!(
+        chk.is_ok(),
+        "Type specification pillars should type check cleanly: {:?}",
+        chk.err()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -324,8 +340,10 @@ res = broken
 #[test]
 fn test_control_flow_with_statement() {
     let src = r#"
-x = 10
-with x as ctx:
+contextmanager def managed():
+    yield 10
+
+with managed() as ctx:
     y = 42
 res = y
 "#;
@@ -351,7 +369,11 @@ def sound(p: Pet) -> str:
             return "woof"
 "#;
     let (chk, _) = run_lucid(src);
-    assert!(chk.is_ok(), "Exhaustive match on Pet union should succeed: {:?}", chk.err());
+    assert!(
+        chk.is_ok(),
+        "Exhaustive match on Pet union should succeed: {:?}",
+        chk.err()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +388,10 @@ lst = [x * 2 for x in [1, 2, 3]]
 "#;
     let val = eval_ok(src);
     if let Value::List(items) = val {
-        assert_eq!(*items.borrow(), vec![Value::Int(2), Value::Int(4), Value::Int(6)]);
+        assert_eq!(
+            *items.borrow(),
+            vec![Value::Int(2), Value::Int(4), Value::Int(6)]
+        );
     } else {
         panic!("expected list, got {:?}", val);
     }
@@ -379,7 +404,10 @@ nums = [1, skip, 2, skip, 3]
 "#;
     let val = eval_ok(src);
     if let Value::List(items) = val {
-        assert_eq!(*items.borrow(), vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        assert_eq!(
+            *items.borrow(),
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
     } else {
         panic!("expected list without skip elements, got {:?}", val);
     }
@@ -389,7 +417,10 @@ nums = [1, skip, 2, skip, 3]
 fn test_collections_rejection_of_adjacent_string_concatenation() {
     let src = r#"path = "/api/" "users""#;
     let res = parse(src);
-    assert!(res.is_err(), "Lucid must reject implicit adjacent string literal concatenation");
+    assert!(
+        res.is_err(),
+        "Lucid must reject implicit adjacent string literal concatenation"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -540,14 +571,20 @@ fn test_multi_file_module_imports() {
     let helper_path = temp_dir.join("helper.lucid");
     let main_path = temp_dir.join("main.lucid");
 
-    fs::write(&helper_path, r#"
+    fs::write(
+        &helper_path,
+        r#"
 export def add_ten(x: int) -> int:
     return x + 10
 
 export multiplier = 3
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    fs::write(&main_path, r#"
+    fs::write(
+        &main_path,
+        r#"
 from .helper import add_ten, multiplier
 import .helper as h
 
@@ -555,7 +592,9 @@ res1 = add_ten(5)
 res2 = multiplier * 2
 res3 = h.multiplier * 3
 final_res = res1 + res2 + res3
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let source = fs::read_to_string(&main_path).unwrap();
     let module = parse(&source).unwrap();
@@ -572,5 +611,42 @@ final_res = res1 + res2 + res3
     // res1 = 15, res2 = 6, res3 = 9 => 15 + 6 + 9 = 30
     assert_eq!(final_res, Value::Int(30));
 
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_native_local_from_imports() {
+    use std::fs;
+    use std::process::Command;
+    let temp_dir =
+        std::env::temp_dir().join(format!("lucid_native_imports_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let helper_path = temp_dir.join("helper.lucid");
+    let main_path = temp_dir.join("main.lucid");
+    let output_path = temp_dir.join("main_bin");
+    fs::write(
+        &helper_path,
+        "export def add_ten(x: int) -> int:\n    return x + 10\n\nexport multiplier = 3\n",
+    )
+    .unwrap();
+    fs::write(&main_path, "from .helper import add_ten\nimport .helper as h\nprint(add_ten(5))\nprint(h.multiplier * 2)\n").unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "build",
+            main_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "native import build failed");
+    let run = Command::new(&output_path).output().unwrap();
+    assert!(
+        run.status.success(),
+        "native import program failed: {:?}",
+        run
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "15\n6\n");
     let _ = fs::remove_dir_all(&temp_dir);
 }

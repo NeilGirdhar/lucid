@@ -100,7 +100,9 @@ impl TypeExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum LiteralValue {
     Int(i64),
+    BigInt(String),
     Float(f64),
+    Complex(f64),
     Str(String),
     Bool(bool),
     None,
@@ -119,6 +121,8 @@ pub enum BinaryOp {
     Pow,
     Eq,
     NotEq,
+    Identity,
+    NotIdentity,
     Lt,
     LtEq,
     Gt,
@@ -151,7 +155,7 @@ pub struct Arg {
     pub name: Option<String>,
     pub value: Expr,
     pub is_spread: bool,
-    pub is_dict_spread: bool, // **kwargs
+    pub is_dict_spread: bool,   // **kwargs
     pub is_gather_spread: bool, // *** spread
     pub span: Span,
 }
@@ -201,6 +205,10 @@ pub enum Expr {
         span: Span,
     },
     Propagate {
+        expr: Box<Expr>,
+        span: Span,
+    },
+    Await {
         expr: Box<Expr>,
         span: Span,
     },
@@ -293,6 +301,7 @@ impl Expr {
             Expr::Call { span, .. } => *span,
             Expr::Construct { span, .. } => *span,
             Expr::Propagate { span, .. } => *span,
+            Expr::Await { span, .. } => *span,
             Expr::Attribute { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::Slice { span, .. } => *span,
@@ -324,6 +333,7 @@ pub enum Pattern {
     },
     RecordDestructure(Vec<(Option<String>, Pattern)>, Span),
     Tuple(Vec<Pattern>, Span),
+    Star(Box<Pattern>, Span),
     Wildcard(Span),
     Type(TypeExpr, Span),
 }
@@ -336,6 +346,7 @@ impl Pattern {
             Pattern::ClassDestructure { span, .. } => *span,
             Pattern::RecordDestructure(_, s) => *s,
             Pattern::Tuple(_, s) => *s,
+            Pattern::Star(_, s) => *s,
             Pattern::Wildcard(s) => *s,
             Pattern::Type(_, s) => *s,
         }
@@ -404,6 +415,7 @@ pub struct FieldDef {
     pub name: String,
     pub type_annotation: TypeExpr,
     pub default: Option<Expr>,
+    pub is_final: bool,
     pub doc: Option<String>,
     pub span: Span,
 }
@@ -478,8 +490,10 @@ pub enum InterfaceMember {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TraitMember {
     Method(FunctionDef),
+    ClassMethod(FunctionDef),
     Getter(GetterDef),
     Setter(SetterDef),
+    Field(FieldDef),
     Pass(Span),
     Ellipsis(Span),
 }
@@ -601,6 +615,19 @@ pub enum Stmt {
     },
     Raise {
         exception: Expr,
+        span: Span,
+    },
+    Yield {
+        value: Expr,
+        span: Span,
+    },
+    Assert {
+        condition: Expr,
+        message: Option<Expr>,
+        span: Span,
+    },
+    Delete {
+        names: Vec<String>,
         span: Span,
     },
     Break(Span),
