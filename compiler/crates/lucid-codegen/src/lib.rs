@@ -7531,7 +7531,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     ));
                                 }
                             };
-                            let object = self.emit_expr(&args[0].value)?;
+                            let mut object = self.emit_expr(&args[0].value)?;
                             let class_name = self
                                 .infer_expr_type(&args[0].value, &HashMap::new())
                                 .trim_end_matches('*')
@@ -7564,6 +7564,11 @@ static inline void lucid_print_val(LucidVal v) {
                                     "(lucid_dynamic_set_attr(lucid_wrap({object}), \"{}\", lucid_wrap({value})), lucid_none())",
                                     c_escape_string(attr_name)
                                 ));
+                            }
+                            if name == "setattr" && self.known_classes.contains_key(&class_name) {
+                                let object_tmp = self.new_temp();
+                                self.emit_line(&format!("{class_name}* {object_tmp} = {object};"));
+                                object = object_tmp;
                             }
                             let mut getter_owner = Some(class_name.clone());
                             while let Some(owner) = getter_owner.clone() {
@@ -12254,7 +12259,10 @@ class Box:
         self.value = new_value + 1
 
 b = Box(0)
-setattr(b, "value", 4)
+def make() -> Box:
+    print("make")
+    return b
+setattr(make(), "value", 4)
 print(b.value)
 "#;
         let module = parse(source).expect("setter program should parse");
@@ -12267,7 +12275,7 @@ print(b.value)
             .expect("compiled program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "make\n5\n");
     }
 
     #[test]
