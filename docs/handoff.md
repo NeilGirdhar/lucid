@@ -93,6 +93,9 @@ diverged:
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.
+* Native context-manager lowering and dynamic operation selection now return
+  explicit code-generation errors for malformed internal shapes instead of
+  relying on `unreachable!()` assertions.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`

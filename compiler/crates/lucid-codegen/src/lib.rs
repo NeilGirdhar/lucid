@@ -4426,7 +4426,11 @@ static inline void lucid_print_val(LucidVal v) {
         }
         let yield_value = match &method.body[yield_index] {
             Stmt::Yield { value, .. } => self.emit_expr(value)?,
-            _ => unreachable!(),
+            _ => {
+                return Err(CodegenError {
+                    message: "contextmanager yield location is invalid".to_string(),
+                });
+            }
         };
         self.emit_line(&format!(
             "LucidList* _args = lucid_list_new({});",
@@ -4525,7 +4529,11 @@ static inline void lucid_print_val(LucidVal v) {
         }
         let yield_value = match &method.body[yield_index] {
             Stmt::Yield { value, .. } => self.emit_expr(value)?,
-            _ => unreachable!(),
+            _ => {
+                return Err(CodegenError {
+                    message: "contextmanager yield location is invalid".to_string(),
+                });
+            }
         };
         self.emit_line(&format!(
             "LucidList* _args = lucid_list_new({});",
@@ -4855,7 +4863,11 @@ static inline void lucid_print_val(LucidVal v) {
         }
         let yield_value = match &f.body[yield_index] {
             Stmt::Yield { value, .. } => self.emit_expr(value)?,
-            _ => unreachable!(),
+            _ => {
+                return Err(CodegenError {
+                    message: "contextmanager yield location is invalid".to_string(),
+                });
+            }
         };
         self.emit_line(&format!(
             "LucidList* _args = lucid_list_new({});",
@@ -6166,7 +6178,11 @@ static inline void lucid_print_val(LucidVal v) {
                         BinaryOp::BitAnd => '&',
                         BinaryOp::BitOr => '|',
                         BinaryOp::BitXor => '^',
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(CodegenError {
+                                message: "invalid dynamic set operation".to_string(),
+                            });
+                        }
                     };
                     return Ok(format!(
                         "lucid_setop_value(lucid_wrap({l_str}), lucid_wrap({r_str}), '{symbol}')"
@@ -7857,7 +7873,12 @@ static inline void lucid_print_val(LucidVal v) {
                             } else {
                                 let function_name = match &args[0].value {
                                     Expr::Ident { name, .. } => name,
-                                    _ => unreachable!(),
+                                    _ => {
+                                        return Err(CodegenError {
+                                            message: "function reference must be an identifier"
+                                                .to_string(),
+                                        });
+                                    }
                                 };
                                 let function_name = self
                                     .function_aliases
