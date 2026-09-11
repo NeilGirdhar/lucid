@@ -2486,7 +2486,7 @@ impl Function {
                 left: ValueId(1),
                 right: ValueId(4),
             },
-            _ => unreachable!(),
+            _ => return None,
         };
         let function = Self {
             entry: BlockId(0),
@@ -2510,7 +2510,7 @@ impl Function {
                                     value: lucid_syntax::LiteralValue::Int(value),
                                     ..
                                 } => *value,
-                                _ => unreachable!(),
+                                _ => return None,
                             },
                         },
                         comparison,
@@ -2734,7 +2734,7 @@ impl Function {
                                 left: ValueId(4),
                                 right: ValueId(3),
                             },
-                            _ => unreachable!("validated accumulator update"),
+                            _ => return None,
                         },
                         Instruction::ConstInt {
                             result: ValueId(8),

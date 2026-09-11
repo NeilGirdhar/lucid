@@ -96,6 +96,9 @@ diverged:
 * Native context-manager lowering and dynamic operation selection now return
   explicit code-generation errors for malformed internal shapes instead of
   relying on `unreachable!()` assertions.
+* CIR counted-loop recognizers now reject malformed update and literal shapes
+  through their normal unsupported-result path instead of panicking while
+  constructing a control-flow graph.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`
