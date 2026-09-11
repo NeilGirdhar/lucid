@@ -2462,7 +2462,19 @@ impl Interpreter {
                         }
                     };
                     let value = match &args[0] {
-                        Value::Object { fields, .. } => fields.borrow().get(name).cloned(),
+                        Value::Object { fields, .. } => {
+                            let value = fields.borrow().get(name).cloned();
+                            if let Some(Value::Function { name: getter_name, .. }) = &value {
+                                if getter_name == &format!("__getter__{name}") {
+                                    return _interp.invoke_value(
+                                        value.expect("getter value was just matched"),
+                                        vec![(None, args[0].clone())],
+                                        Span::default(),
+                                    );
+                                }
+                            }
+                            value
+                        }
                         Value::Module { env, .. } => env.borrow().get(name),
                         _ => None,
                     };
@@ -2491,7 +2503,10 @@ impl Interpreter {
                         _ => return Ok(Value::Bool(false)),
                     };
                     let present = match &args[0] {
-                        Value::Object { fields, .. } => fields.borrow().contains_key(name),
+                        Value::Object { fields, .. } => {
+                            fields.borrow().contains_key(name)
+                                || fields.borrow().contains_key(&format!("__getter__{name}"))
+                        }
                         Value::Module { env, .. } => env.borrow().get(name).is_some(),
                         _ => false,
                     };
@@ -8248,6 +8263,36 @@ impl Interpreter {
                         is_async: method.is_async,
                     });
                 }
+                ClassMember::Getter(getter) => {
+                    fields.entry(getter.name.clone()).or_insert_with(|| Value::Function {
+                        name: format!("__getter__{}", getter.name),
+                        params: vec![Param {
+                            name: "self".into(), pattern: None, type_annotation: None,
+                            default: None, is_positional_only: false, is_keyword_only: false,
+                            is_variadic_positional: false, is_variadic_keyword: false,
+                            is_gather: false, span: getter.span,
+                        }],
+                        body: getter.body.clone(), closure: Rc::clone(&self.env),
+                        is_contextmanager: false, is_async: false,
+                    });
+                }
+                ClassMember::Setter(setter) => {
+                    let key = format!("__setter__{}", setter.name);
+                    fields.entry(key.clone()).or_insert_with(|| Value::Function {
+                        name: key,
+                        params: vec![
+                            Param {
+                                name: "self".into(), pattern: None, type_annotation: None,
+                                default: None, is_positional_only: false, is_keyword_only: false,
+                                is_variadic_positional: false, is_variadic_keyword: false,
+                                is_gather: false, span: setter.span,
+                            },
+                            setter.param.clone(),
+                        ],
+                        body: setter.body.clone(), closure: Rc::clone(&self.env),
+                        is_contextmanager: false, is_async: false,
+                    });
+                }
                 _ => {}
             }
         }
@@ -11575,5 +11620,16 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
                 Value::Str("teardown".into()),
             ]))))
         );
+    }
+
+    #[test]
+    fn reflection_invokes_inherited_getters() {
+        let module = parse(
+            "class Base:\n    value: int\n    getter doubled(self) -> int:\n        return self.value * 2\nclass Child(Base):\n    pass\nchild = Child(4)\nprint(getattr(child, \"doubled\"))\nprint(hasattr(child, \"doubled\"))\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::default();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.output, vec!["8", "true"]);
     }
 }

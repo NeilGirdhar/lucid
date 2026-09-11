@@ -32,6 +32,8 @@ receivers convert the supplied value to the setter parameter type and invoke
 the generated setter before falling back to a stored field.
 They also enforce the frozen-object mutation rule when no setter is present,
 so `setattr` cannot bypass immutability.
+The interpreter now mirrors native reflection for inherited getters: `getattr`
+evaluates the getter and `hasattr` reports it as present.
 
 ## Verified baseline
 
@@ -47,14 +49,14 @@ cargo test --workspace --all-targets --quiet
 1 CLI unit test
 31 CLI/spec tests
 291 native-codegen tests
-149 runtime tests
+150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-731 tests passed
+732 tests passed
 ```
 
-The same 731 tests also pass with:
+The same 732 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
