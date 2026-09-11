@@ -209,6 +209,7 @@ pub struct CCodeGenerator {
     function_aliases: HashMap<String, String>,
     partial_bindings: HashMap<String, (String, Vec<Arg>)>,
     module_aliases: HashMap<String, String>,
+    from_imports: HashMap<String, String>,
     bigint_names: HashSet<String>,
     /// Source-level names removed by `del` in the current emission scope.
     deleted_bindings: HashSet<String>,
@@ -309,6 +310,7 @@ impl CCodeGenerator {
             function_aliases: HashMap::new(),
             partial_bindings: HashMap::new(),
             module_aliases: HashMap::new(),
+            from_imports: HashMap::new(),
             bigint_names: HashSet::new(),
             deleted_bindings: HashSet::new(),
             alive_declarations: HashSet::new(),
@@ -529,18 +531,30 @@ impl CCodeGenerator {
 
     pub fn generate(&mut self, module: &Module) -> Result<String, CodegenError> {
         self.module_aliases.clear();
+        self.from_imports.clear();
         self.known_list_element_classes.clear();
         for stmt in &module.statements {
-            if let Stmt::Import { module, alias, .. } = stmt {
-                let bound = alias.clone().unwrap_or_else(|| {
-                    module
-                        .rsplit('.')
-                        .next()
-                        .unwrap_or(module)
-                        .trim_start_matches('.')
-                        .to_string()
-                });
-                self.module_aliases.insert(bound, module.clone());
+            match stmt {
+                Stmt::Import { module, alias, .. } => {
+                    let bound = alias.clone().unwrap_or_else(|| {
+                        module
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or(module)
+                            .trim_start_matches('.')
+                            .to_string()
+                    });
+                    self.module_aliases.insert(bound, module.clone());
+                }
+                Stmt::FromImport { module, names, .. } => {
+                    for (name, alias) in names {
+                        self.from_imports.insert(
+                            alias.clone().unwrap_or_else(|| name.clone()),
+                            module.clone(),
+                        );
+                    }
+                }
+                _ => {}
             }
         }
         // First pass: collect class metadata and function signatures
@@ -6330,6 +6344,19 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                 }
                 if let Expr::Ident { name, .. } = &**func {
+                    if self
+                        .from_imports
+                        .get(name)
+                        .is_some_and(|module| module == "time")
+                        && matches!(name.as_str(), "time" | "monotonic")
+                    {
+                        if !args.is_empty() {
+                            return Err(CodegenError {
+                                message: format!("{name}() takes no arguments"),
+                            });
+                        }
+                        return Ok("lucid_time_now()".to_string());
+                    }
                     if let Some(alias) = self.function_aliases.get(name).cloned() {
                         if let Some(factory) = alias.strip_prefix("__str_base_") {
                             let spec = match factory {
@@ -7222,6 +7249,14 @@ static inline void lucid_print_val(LucidVal v) {
                             self.indent -= 1;
                             self.emit_line("}");
                             return Ok(result_tmp);
+                        }
+                        "time" | "monotonic" => {
+                            if !args.is_empty() {
+                                return Err(CodegenError {
+                                    message: format!("{name}() takes no arguments"),
+                                });
+                            }
+                            return Ok("lucid_time_now()".to_string());
                         }
                         "abs" => {
                             if let Some(a) = args.first() {
@@ -12405,6 +12440,22 @@ print(all({1, 2}))
         let run = Command::new(&output)
             .output()
             .expect("compiled time program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
+    }
+
+    #[test]
+    fn native_from_time_import_supports_monotonic() {
+        let source = "from time import monotonic\nprint(monotonic() > 0)\n";
+        let module = parse(source).expect("from-time source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_from_time_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("from time import should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled from-time program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
