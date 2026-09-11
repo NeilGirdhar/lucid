@@ -55,6 +55,8 @@ Native `abs` likewise rejects extra or missing arguments before lowering.
 Native `round` validates that `ndigits` is an integer, and native `int` uses
 strict whole-string parsing for string literals instead of accepting a valid
 prefix followed by junk.
+Native `float` now applies the same strict whole-string parsing to string
+inputs.
 
 ## Verified baseline
 
@@ -69,15 +71,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-296 native-codegen tests
+297 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-737 tests passed
+738 tests passed
 ```
 
-The same 737 tests also pass with:
+The same 738 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

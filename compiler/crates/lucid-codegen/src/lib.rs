@@ -1871,6 +1871,18 @@ static inline double lucid_as_float(LucidVal v) {
     if (v.type == LUCID_TYPE_STR && v.s) return strtod(v.s, NULL);
     return 0.0;
 }
+static inline double lucid_float_builtin(LucidVal v) {
+    if (v.type == LUCID_TYPE_STR && v.s) {
+        char* end = NULL;
+        double result = strtod(v.s, &end);
+        while (end && isspace((unsigned char)*end)) ++end;
+        if (!end || end == v.s || *end != '\0') {
+            fprintf(stderr, "invalid literal for float()\n"); exit(1);
+        }
+        return result;
+    }
+    return lucid_as_float(v);
+}
 static inline bool lucid_as_bool(LucidVal v) {
     if (v.type == LUCID_TYPE_BOOL) return v.b;
     if (v.type == LUCID_TYPE_INT) return v.i != 0;
@@ -8416,7 +8428,7 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if let Some(a) = args.first() {
                                 let arg_str = self.emit_expr(&a.value)?;
-                                return Ok(format!("lucid_as_float(lucid_wrap({arg_str}))"));
+                                return Ok(format!("lucid_float_builtin(lucid_wrap({arg_str}))"));
                             }
                         }
                         "complex" => {
@@ -13523,6 +13535,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "invalid int literal should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("invalid literal for int()"));
+    }
+
+    #[test]
+    fn native_float_rejects_invalid_string_literals() {
+        let source = "print(float(\"1.2x\"))\n";
+        let module = parse(source).expect("invalid float source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_float_invalid_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("invalid float source should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "invalid float literal should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("invalid literal for float()"));
     }
 
     #[test]
