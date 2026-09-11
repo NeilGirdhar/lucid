@@ -6741,7 +6741,12 @@ impl TypeChecker {
                                     .get("complex")
                                     .cloned()
                                     .unwrap_or(Type::Float),
-                                _ => unreachable!(),
+                                _ => {
+                                    return Err(TypeError {
+                                        message: "invalid numeric special value".into(),
+                                        span: expr.span(),
+                                    })
+                                }
                             });
                         }
                         if name == "str" && matches!(attr.as_str(), "bin" | "oct" | "hex") {
@@ -7320,7 +7325,12 @@ impl TypeChecker {
                             },
                             "none" => Type::None,
                             "Never" => Type::Never,
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(TypeError {
+                                    message: format!("unsupported type name '{name}'"),
+                                    span: texpr.span(),
+                                })
+                            }
                         })
                     }
                     "typing.shape" | "shape" => {
