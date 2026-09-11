@@ -9072,6 +9072,15 @@ impl Interpreter {
             Value::List(l) => !l.borrow().is_empty(),
             Value::Dict(d) => !d.borrow().is_empty(),
             Value::Set(s) => !s.borrow().is_empty(),
+            Value::Range { start, stop, step } => {
+                if *step > 0 {
+                    start < stop
+                } else if *step < 0 {
+                    start > stop
+                } else {
+                    false
+                }
+            }
             Value::Skip => false,
             Value::Object { fields, .. } => {
                 if let Some(method) = fields.borrow().get("__bool__").cloned() {
@@ -9925,6 +9934,7 @@ with managed() as value:
     fn test_builtins_range_len_min_max_sum() {
         let src = r#"
 r = range(5)
+empty = range(5, 5)
 l = len(r)
 m1 = min(r)
 m2 = max(r)
@@ -9938,6 +9948,8 @@ s = sum(r)
         assert_eq!(interp.env.borrow().get("m1").unwrap(), Value::Int(0));
         assert_eq!(interp.env.borrow().get("m2").unwrap(), Value::Int(4));
         assert_eq!(interp.env.borrow().get("s").unwrap(), Value::Int(10));
+        let empty = interp.env.borrow().get("empty").unwrap().clone();
+        assert!(!interp.is_truthy(&empty));
     }
 
     #[test]

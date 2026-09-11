@@ -12518,6 +12518,10 @@ print(found)
         let source = r#"
 for x in range(3, 0, -1):
     print(x)
+if range(5, 5):
+    print(1)
+else:
+    print(0)
 "#;
         let module = parse(source).expect("descending range should parse");
         let output = std::env::temp_dir().join(format!(
@@ -12531,7 +12535,7 @@ for x in range(3, 0, -1):
             .expect("compiled descending range should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n2\n1\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n2\n1\n0\n");
     }
 
     #[test]
