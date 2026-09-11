@@ -115,6 +115,8 @@ Erased iteration also drains custom iterator objects through their `next()`
 callbacks until `iteration.done`.
 The same object protocol registry now preserves custom `__reversed__` methods
 for erased receivers.
+The `next()` builtin also dispatches custom iterator methods after an `Any`
+erasure.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -147,15 +149,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-335 native-codegen tests
+336 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-779 tests passed
+780 tests passed
 ```
 
-The same 779 tests also pass with:
+The same 780 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

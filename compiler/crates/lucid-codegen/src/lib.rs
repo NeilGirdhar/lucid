@@ -3325,6 +3325,10 @@ static inline LucidList* lucid_list_from_value(LucidVal value) {
     return lucid_iterable_to_list(value);
 }
 static inline LucidVal lucid_next_value(LucidVal value, bool has_default, LucidVal fallback) {
+    if (value.type == LUCID_TYPE_PTR && value.ptr) {
+        LucidObjectNext next = lucid_object_next(value.ptr);
+        if (next) return next(value.ptr);
+    }
     if (value.type == LUCID_TYPE_LIST && value.list && value.list->len > 0) {
         LucidVal first = value.list->items[0];
         for (int64_t i = 1; i < value.list->len; ++i) value.list->items[i - 1] = value.list->items[i];
@@ -12332,6 +12336,22 @@ print(" ".join(capitalized))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "custom next failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "6\n");
+    }
+
+    #[test]
+    fn native_next_dispatches_erased_custom_iterator() {
+        let source = "class Counter:\n    current: int\n    def next(self) -> Any:\n        self.current = self.current + 1\n        return self.current\ndef identity(value: Any) -> Any:\n    return value\nc = identity(Counter(4))\nprint(next(c))\nprint(next(c))";
+        let module = parse(source).expect("dynamic next source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_next_builtin_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic next should compile");
+        let run = Command::new(&output).output().expect("run dynamic next");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic next failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n6\n");
     }
 
     #[test]
