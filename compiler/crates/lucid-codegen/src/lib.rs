@@ -3329,7 +3329,7 @@ static inline LucidVal lucid_list_min(LucidList* l) {
     if (!l || l->len == 0) return lucid_none();
     LucidVal best = l->items[0];
     for (int64_t i = 1; i < l->len; i++)
-        if (lucid_as_float(l->items[i]) < lucid_as_float(best)) best = l->items[i];
+        if (lucid_lt(l->items[i], best)) best = l->items[i];
     return best;
 }
 
@@ -3337,7 +3337,7 @@ static inline LucidVal lucid_list_max(LucidList* l) {
     if (!l || l->len == 0) return lucid_none();
     LucidVal best = l->items[0];
     for (int64_t i = 1; i < l->len; i++)
-        if (lucid_as_float(l->items[i]) > lucid_as_float(best)) best = l->items[i];
+        if (lucid_gt(l->items[i], best)) best = l->items[i];
     return best;
 }
 static inline LucidVal lucid_min_value(LucidVal value) {
@@ -13781,6 +13781,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "object str failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "Point({\"x\": 1, \"y\": 2})\n");
+    }
+
+    #[test]
+    fn native_min_max_compare_bigints_exactly() {
+        let source = "values = [9007199254740993, 9007199254740992]\nprint(min(values))\nprint(max(values))\n";
+        let module = parse(source).expect("bigint min/max source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_min_max_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("bigint min/max should compile");
+        let run = Command::new(&output).output().expect("run bigint min/max");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "bigint min/max failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "9007199254740992\n9007199254740993\n");
     }
 
     #[test]
