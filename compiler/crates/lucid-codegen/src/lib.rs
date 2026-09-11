@@ -4620,12 +4620,14 @@ static inline void lucid_print_val(LucidVal v) {
                 if return_type == "void" {
                     return None;
                 }
-                let parameter_type = self
+                let parameter_types = self
                     .known_method_param_types
                     .get(&(owner.clone(), "__getitem__".to_string()))
-                    .and_then(|types| types.first())
                     .cloned()?;
-                Some((owner, parameter_type, return_type))
+                if parameter_types.is_empty() {
+                    return None;
+                }
+                Some((owner, parameter_types, return_type))
             });
         let setitem_owner = self
             .method_owner(name, "__setitem__")
@@ -4641,12 +4643,7 @@ static inline void lucid_print_val(LucidVal v) {
                     .get(&(owner.clone(), "__setitem__".to_string()))
                     .cloned()
                     .unwrap_or_else(|| "LucidVal".to_string());
-                Some((
-                    owner,
-                    parameter_types[0].clone(),
-                    parameter_types[1].clone(),
-                    return_type,
-                ))
+                Some((owner, parameter_types.clone(), return_type))
             });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
@@ -4727,28 +4724,53 @@ static inline void lucid_print_val(LucidVal v) {
                 "static bool {name}_contains(void* left, LucidVal right) {{ return {owner}___contains__(({owner}*)left, {item}); }}"
             ));
         }
-        if let Some((owner, parameter_type, return_type)) = &getitem_owner {
+        if let Some((owner, parameter_types, return_type)) = &getitem_owner {
+            let signature = parameter_types
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| format!("{ty} item{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
             self.emit_line(&format!(
-                "{return_type} {owner}___getitem__({owner}* self, {parameter_type} item);"
+                "{return_type} {owner}___getitem__({owner}* self, {signature});"
             ));
-            let item = match parameter_type.as_str() {
-                "LucidVal" => "right".to_string(),
-                "int64_t" => "lucid_as_int(right)".to_string(),
-                "double" => "lucid_as_float(right)".to_string(),
-                "bool" => "lucid_as_bool(right)".to_string(),
-                "const char*" | "char*" => "lucid_as_str(right)".to_string(),
-                "LucidList*" => "lucid_as_list(right)".to_string(),
-                "LucidDict*" => "lucid_as_dict(right)".to_string(),
-                "LucidSet*" => "lucid_as_set(right)".to_string(),
-                _ => format!("({parameter_type})lucid_as_ptr(right)"),
+            let convert = |parameter_type: &str, raw: &str| match parameter_type {
+                "LucidVal" => raw.to_string(),
+                "int64_t" => format!("lucid_as_int({raw})"),
+                "double" => format!("lucid_as_float({raw})"),
+                "bool" => format!("lucid_as_bool({raw})"),
+                "const char*" | "char*" => format!("lucid_as_str({raw})"),
+                "LucidList*" => format!("lucid_as_list({raw})"),
+                "LucidDict*" => format!("lucid_as_dict({raw})"),
+                "LucidSet*" => format!("lucid_as_set({raw})"),
+                _ => format!("({parameter_type})lucid_as_ptr({raw})"),
             };
+            let arguments = parameter_types
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| {
+                    let raw = if parameter_types.len() == 1 {
+                        "right".to_string()
+                    } else {
+                        format!("lucid_list_get(lucid_as_list(right), {index})")
+                    };
+                    convert(ty, &raw)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             self.emit_line(&format!(
-                "static LucidVal {name}_getitem(void* left, LucidVal right) {{ return lucid_wrap({owner}___getitem__(({owner}*)left, {item})); }}"
+                "static LucidVal {name}_getitem(void* left, LucidVal right) {{ return lucid_wrap({owner}___getitem__(({owner}*)left, {arguments})); }}"
             ));
         }
-        if let Some((owner, index_type, value_type, return_type)) = &setitem_owner {
+        if let Some((owner, parameter_types, return_type)) = &setitem_owner {
+            let signature = parameter_types
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| format!("{ty} item{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
             self.emit_line(&format!(
-                "{return_type} {owner}___setitem__({owner}* self, {index_type} index, {value_type} value);"
+                "{return_type} {owner}___setitem__({owner}* self, {signature});"
             ));
             let convert = |ty: &str, raw: &str| match ty {
                 "LucidVal" => raw.to_string(),
@@ -4761,10 +4783,24 @@ static inline void lucid_print_val(LucidVal v) {
                 "LucidSet*" => format!("lucid_as_set({raw})"),
                 _ => format!("({ty})lucid_as_ptr({raw})"),
             };
-            let index = convert(index_type, "index");
-            let value = convert(value_type, "value");
+            let value = convert(&parameter_types[1], "value");
+            let index_args = parameter_types[..parameter_types.len() - 1]
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| {
+                    let raw = if parameter_types.len() == 2 {
+                        "index".to_string()
+                    } else {
+                        format!("lucid_list_get(lucid_as_list(index), {index})")
+                    };
+                    convert(ty, &raw)
+                })
+                .collect::<Vec<_>>();
+            let mut arguments = index_args;
+            arguments.push(value);
             self.emit_line(&format!(
-                "static void {name}_setitem(void* left, LucidVal index, LucidVal value) {{ (void){owner}___setitem__(({owner}*)left, {index}, {value}); }}"
+                "static void {name}_setitem(void* left, LucidVal index, LucidVal value) {{ (void){owner}___setitem__(({owner}*)left, {}); }}",
+                arguments.join(", ")
             ));
         }
 
@@ -5957,15 +5993,27 @@ static inline void lucid_print_val(LucidVal v) {
                         index,
                         ..
                     } => {
-                        let idx_code = self.emit_expr(index)?;
-                        let val_code = self.emit_expr(value)?;
                         let receiver_type = self.infer_expr_type(arr_expr, &HashMap::new());
                         let receiver_class = receiver_type.trim_end_matches('*').to_string();
                         if let Some(owner) = self.method_owner(&receiver_class, "__setitem__") {
                             let arr_code = self.emit_expr(arr_expr)?;
-                            self.emit_line(&format!("{owner}___setitem__(({owner}*)({arr_code}), {idx_code}, {val_code});"));
+                            let indices = if let Expr::Record { fields, .. } = &**index {
+                                fields
+                                    .iter()
+                                    .map(|(_, expr)| self.emit_expr(expr))
+                                    .collect::<Result<Vec<_>, _>>()?
+                            } else {
+                                vec![self.emit_expr(index)?]
+                            };
+                            let val_code = self.emit_expr(value)?;
+                            self.emit_line(&format!(
+                                "{owner}___setitem__(({owner}*)({arr_code}), {}, {val_code});",
+                                indices.join(", ")
+                            ));
                             return Ok(());
                         }
+                        let idx_code = self.emit_expr(index)?;
+                        let val_code = self.emit_expr(value)?;
                         if receiver_type == "LucidVal" {
                             let arr_code = self.emit_expr(arr_expr)?;
                             self.emit_line(&format!(
@@ -11061,14 +11109,23 @@ static inline void lucid_print_val(LucidVal v) {
                         "lucid_list_slice(lucid_as_list(lucid_wrap({v_code})), {st}, {sp}, {step_code})"
                     ));
                 }
-                let idx_code = self.emit_expr(index)?;
                 let receiver_type = self.infer_expr_type(value, &HashMap::new());
                 let receiver_class = receiver_type.trim_end_matches('*').to_string();
                 if let Some(owner) = self.method_owner(&receiver_class, "__getitem__") {
+                    let indices = if let Expr::Record { fields, .. } = &**index {
+                        fields
+                            .iter()
+                            .map(|(_, expr)| self.emit_expr(expr))
+                            .collect::<Result<Vec<_>, _>>()?
+                    } else {
+                        vec![self.emit_expr(index)?]
+                    };
                     return Ok(format!(
-                        "{owner}___getitem__(({owner}*)({v_code}), {idx_code})"
+                        "{owner}___getitem__(({owner}*)({v_code}), {})",
+                        indices.join(", ")
                     ));
                 }
+                let idx_code = self.emit_expr(index)?;
                 if self.infer_expr_type(value, &HashMap::new()) == "LucidDict*" {
                     return Ok(format!(
                         "lucid_get_key(lucid_wrap({v_code}), lucid_wrap({idx_code}))"
@@ -11264,21 +11321,35 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Expr::Record { fields, .. } => {
                 let tmp = self.new_temp();
-                let mut instrs = vec![format!(
-                    "LucidDict* {tmp} = lucid_dict_new({});",
-                    fields.len()
-                )];
-                for (name, value) in fields {
-                    let field_name = name.clone().ok_or_else(|| CodegenError {
-                        message: "record fields require names in native codegen".to_string(),
-                    })?;
-                    let value_code = self.emit_expr(value)?;
-                    instrs.push(format!(
-                        "lucid_dict_set({tmp}, lucid_str(\"{}\"), lucid_wrap({value_code}));",
-                        field_name.replace('"', "\\\"")
-                    ));
+                if fields.iter().all(|(name, _)| name.is_none()) {
+                    let mut instrs = vec![format!(
+                        "LucidList* {tmp} = lucid_list_new({});",
+                        fields.len()
+                    )];
+                    for (_, value) in fields {
+                        let value_code = self.emit_expr(value)?;
+                        instrs.push(format!(
+                            "lucid_list_append({tmp}, lucid_wrap({value_code}));"
+                        ));
+                    }
+                    Ok(format!("({{ {} {tmp}; }})", instrs.join(" ")))
+                } else {
+                    let mut instrs = vec![format!(
+                        "LucidDict* {tmp} = lucid_dict_new({});",
+                        fields.len()
+                    )];
+                    for (name, value) in fields {
+                        let field_name = name.clone().ok_or_else(|| CodegenError {
+                            message: "record fields require names in native codegen".to_string(),
+                        })?;
+                        let value_code = self.emit_expr(value)?;
+                        instrs.push(format!(
+                            "lucid_dict_set({tmp}, lucid_str(\"{}\"), lucid_wrap({value_code}));",
+                            field_name.replace('"', "\\\"")
+                        ));
+                    }
+                    Ok(format!("({{ {} {tmp}; }})", instrs.join(" ")))
                 }
-                Ok(format!("({{ {} {tmp}; }})", instrs.join(" ")))
             }
             Expr::ListComp {
                 element,
@@ -12021,6 +12092,41 @@ print(" ".join(capitalized))
     }
 
     #[test]
+    fn native_multi_index_dispatches_separate_getitem_arguments() {
+        let source = "class Grid:\n    def __getitem__(self, row: int, col: int) -> int:\n        return row * 10 + col\ng = Grid()\nprint(g[2, 3])";
+        let module = parse(source).expect("multi-index source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_multi_getitem_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("multi-index should compile");
+        let run = Command::new(&output).output().expect("run multi-index");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "multi-index failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "23\n");
+    }
+
+    #[test]
+    fn native_erased_multi_index_dispatches_separate_getitem_arguments() {
+        let source = "class Grid:\n    def __getitem__(self, row: int, col: int) -> int:\n        return row * 10 + col\ndef identity(value: Any) -> Any:\n    return value\ng = identity(Grid())\nprint(g[2, 3])";
+        let module = parse(source).expect("dynamic multi-index source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_multi_getitem_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("dynamic multi-index should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic multi-index");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic multi-index failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "23\n");
+    }
+
+    #[test]
     fn native_index_assignment_dispatches_to_user_setitem() {
         let source = "class Box:\n    value: int\n    def __setitem__(self, index: int, value: int):\n        self.value = value + index\nb = Box(0)\nb[3] = 4\nprint(b.value)\n";
         let module = parse(source).expect("setitem source should parse");
@@ -12050,6 +12156,25 @@ print(" ".join(capitalized))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic setitem failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+    }
+
+    #[test]
+    fn native_erased_multi_index_dispatches_separate_setitem_arguments() {
+        let source = "class Grid:\n    value: int\n    def __setitem__(self, row: int, col: int, value: int):\n        self.value = row * 10 + col + value\ndef identity(value: Any) -> Any:\n    return value\ng = identity(Grid(0))\ng[2, 3] = 4\nprint(g.value)";
+        let module = parse(source).expect("dynamic multi-setitem source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_multi_setitem_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("dynamic multi-setitem should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic multi-setitem");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic multi-setitem failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "27\n");
     }
 
     #[test]

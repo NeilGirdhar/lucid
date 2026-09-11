@@ -107,6 +107,8 @@ Erased index assignment now dispatches custom `__setitem__` methods and
 preserves their mutation semantics.
 The object protocol registry now keeps both get and set index callbacks, so
 dynamic receivers no longer fall back to built-in container errors.
+Comma-separated indices now expand to separate native protocol arguments for
+both static and erased `__getitem__`/`__setitem__` calls.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -139,15 +141,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-329 native-codegen tests
+332 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-773 tests passed
+776 tests passed
 ```
 
-The same 773 tests also pass with:
+The same 776 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
