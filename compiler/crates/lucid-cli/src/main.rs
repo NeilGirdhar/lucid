@@ -638,9 +638,7 @@ fn run_native(path_str: &str, entry: Option<&str>) {
         .and_then(|config| config.library_context.as_ref())
         .is_some()
     {
-        eprintln!(
-            "Compilation Error: manifest library-context requires interpreted execution"
-        );
+        eprintln!("Compilation Error: manifest library-context requires interpreted execution");
         exit(1);
     }
     let resolved_entry = resolve_entry_target(path, entry);

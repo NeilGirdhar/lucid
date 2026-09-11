@@ -182,6 +182,10 @@ diverged:
   void fall-through.
   A no-`else` conditional whose `elif` guards are all statically false now
   follows the same typed optional path.
+* Primitive two-arm `match` functions with an integer or boolean literal and
+  a wildcard arm now lower through the checked conditional CIR builder. More
+  complex patterns remain explicit lowering work rather than being silently
+  interpreted by a compatibility fallback.
 * Pure discarded expressions before a return now pass through typed-CIR
   lowering; effectful expressions remain rejected instead of being dropped.
   Their rejection now carries a dedicated diagnostic explaining that an

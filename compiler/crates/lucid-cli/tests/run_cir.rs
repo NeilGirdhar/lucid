@@ -214,10 +214,8 @@ fn native_run_resolves_manifest_entry_point_target() {
 
 #[test]
 fn run_entry_enters_manifest_library_context() {
-    let root = std::env::temp_dir().join(format!(
-        "lucid_run_library_context_{}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("lucid_run_library_context_{}", std::process::id()));
     fs::create_dir_all(&root).expect("temporary project directory should be writable");
     fs::write(
         root.join("project.yaml"),

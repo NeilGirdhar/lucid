@@ -758,7 +758,10 @@ fn collect_typed_body<'db>(
                     && then_branch.len() == 1
                     && else_branch.as_ref().is_some_and(|body| body.len() == 1)
                     && let Stmt::Assignment {
-                        target: lucid_syntax::Expr::Ident { name: then_name, .. },
+                        target:
+                            lucid_syntax::Expr::Ident {
+                                name: then_name, ..
+                            },
                         value: then_value,
                         ..
                     }
@@ -769,7 +772,10 @@ fn collect_typed_body<'db>(
                     } = &then_branch[0]
                     && let Some(else_body) = else_branch.as_ref()
                     && let Stmt::Assignment {
-                        target: lucid_syntax::Expr::Ident { name: else_name, .. },
+                        target:
+                            lucid_syntax::Expr::Ident {
+                                name: else_name, ..
+                            },
                         value: else_value,
                         ..
                     }
@@ -1297,10 +1303,9 @@ pub fn lower_function_body(
             statements: source_function.body.clone(),
             span: source_function.span,
         };
-        if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
-            &module,
-            &function.parameter_names,
-        ) {
+        if let Ok(lowered) =
+            lucid_cir::Function::from_module_linear_with_params(&module, &function.parameter_names)
+        {
             return Ok(Arc::new(lowered));
         }
     }
@@ -1341,6 +1346,66 @@ pub fn lower_function_body(
         {
             return Ok(Arc::new(lowered));
         }
+    }
+    // Lower the primitive exhaustive match shape through the same checked
+    // conditional CIR builder. Restricting the subject to a name avoids
+    // evaluating an effectful expression once per arm; richer patterns stay
+    // an explicit unsupported lowering until CIR carries pattern coverage.
+    if !function.is_async
+        && !function.is_dispatch
+        && let [lucid_syntax::Stmt::Match { subject, arms, .. }] = source_function.body.as_slice()
+        && matches!(subject, lucid_syntax::Expr::Ident { .. })
+        && arms.len() == 2
+    {
+        let (literal_arm, wildcard_arm) = match (&arms[0].pattern, &arms[1].pattern) {
+            (lucid_syntax::Pattern::Literal(_, _), lucid_syntax::Pattern::Wildcard(_)) => {
+                (&arms[0], &arms[1])
+            }
+            (lucid_syntax::Pattern::Wildcard(_), lucid_syntax::Pattern::Literal(_, _)) => {
+                (&arms[1], &arms[0])
+            }
+            _ => {
+                return Err(Arc::from(
+                    "match function requires a literal and wildcard arm",
+                ));
+            }
+        };
+        let then_value = match literal_arm.body.as_slice() {
+            [
+                lucid_syntax::Stmt::Return {
+                    value: Some(value), ..
+                },
+            ] => value,
+            _ => return Err(Arc::from("unsupported match arm for function CIR lowering")),
+        };
+        let else_value = match wildcard_arm.body.as_slice() {
+            [
+                lucid_syntax::Stmt::Return {
+                    value: Some(value), ..
+                },
+            ] => value,
+            _ => return Err(Arc::from("unsupported match arm for function CIR lowering")),
+        };
+        let lucid_syntax::Pattern::Literal(literal, span) = &literal_arm.pattern else {
+            unreachable!()
+        };
+        let condition = lucid_syntax::Expr::Binary {
+            op: lucid_syntax::BinaryOp::Eq,
+            left: Box::new(subject.clone()),
+            right: Box::new(lucid_syntax::Expr::Literal {
+                value: literal.clone(),
+                span: *span,
+            }),
+            span: *span,
+        };
+        return lucid_cir::Function::from_parameterized_if(
+            &condition,
+            then_value,
+            else_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported match expression for function CIR lowering"));
     }
     // Prefer the typed expression graph for a complete conditional expression
     // or a statement-level `if` whose arms return directly. The collector
@@ -3517,6 +3582,16 @@ mod tests {
             .expect("dynamic conditional should lower through typed HIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("literal match should lower through conditional CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
 
         let file = db.add_file("void.lucid", "def answer():\n    return\n");
         let function = lower_function_body(&db, file, "answer".into())

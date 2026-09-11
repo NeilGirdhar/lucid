@@ -725,7 +725,12 @@ mod tests {
             BTreeMap::from([("serve".into(), ".cli.serve".into())])
         );
         assert!(config.entry_point("missing").is_err());
-        assert!(config.entry_point("bad name").unwrap_err().contains("invalid"));
+        assert!(
+            config
+                .entry_point("bad name")
+                .unwrap_err()
+                .contains("invalid")
+        );
         config.validate().expect("valid project should validate");
     }
 
@@ -760,7 +765,12 @@ mod tests {
         let external =
             parse_str("name: app\nversion: '1'\nentry-points:\n  run: cli.serve\n").unwrap();
         assert!(external.validate().unwrap_err().contains("dotted path"));
-        assert!(external.entry_point("run").unwrap_err().contains("dotted path"));
+        assert!(
+            external
+                .entry_point("run")
+                .unwrap_err()
+                .contains("dotted path")
+        );
         let private =
             parse_str("name: app\nversion: '1'\nentry-points:\n  run: ._internal.run\n").unwrap();
         assert!(private.validate().unwrap_err().contains("public"));
