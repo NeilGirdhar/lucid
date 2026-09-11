@@ -3269,7 +3269,9 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
         }
     }
     let module_result = parse_ast(db, file);
-    let module = module_result.as_ref().expect("parse success checked above");
+    let Ok(module) = module_result else {
+        return Arc::from(diagnostics);
+    };
     let mut checker = lucid_checker::TypeChecker::new();
     if let Err(error) = checker.check_module(module) {
         diagnostics.push(Diagnostic {

@@ -116,6 +116,8 @@ diverged:
   assertion.
 * Cranelift instruction-result extraction now returns a checked optional
   result, rejecting unknown instruction forms instead of panicking.
+* Project diagnostics now preserve already-collected errors if a repeated
+  parse query fails unexpectedly, rather than unwrapping its result.
 * Checker subtype and numeric-special-value paths now return ordinary
   negatives for malformed intermediate types instead of relying on internal
   `unreachable!()` assumptions.
