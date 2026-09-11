@@ -81,6 +81,8 @@ Dynamic `int` and `float` conversions now reject unsupported `none` and object
 values instead of silently producing zero.
 Native three-argument `pow` now performs modular exponentiation for BigInt
 operands instead of returning the integer NaN sentinel.
+The interpreter's three-argument `pow` path now accepts the same arbitrary-size
+integer operands and preserves the BigInt result.
 
 ## Verified baseline
 
@@ -96,14 +98,14 @@ cargo test --workspace --all-targets --quiet
 1 CLI unit test
 31 CLI/spec tests
 309 native-codegen tests
-150 runtime tests
+151 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-750 tests passed
+751 tests passed
 ```
 
-The same 750 tests also pass with:
+The same 751 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

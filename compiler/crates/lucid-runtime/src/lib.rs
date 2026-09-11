@@ -2867,6 +2867,19 @@ impl Interpreter {
                                 }
                                 Ok(Value::Int(result as i64))
                             }
+                            (base, exp, modulus)
+                                if matches!(base, Value::Int(_) | Value::BigInt(_))
+                                    && matches!(exp, Value::Int(_) | Value::BigInt(_))
+                                    && matches!(modulus, Value::Int(_) | Value::BigInt(_)) => {
+                                let base = match base { Value::Int(value) => BigInt::from(*value), Value::BigInt(value) => value.clone(), _ => unreachable!() };
+                                let exp = match exp { Value::Int(value) => BigInt::from(*value), Value::BigInt(value) => value.clone(), _ => unreachable!() };
+                                let modulus = match modulus { Value::Int(value) => BigInt::from(*value), Value::BigInt(value) => value.clone(), _ => unreachable!() };
+                                if modulus.is_zero() { return Err(RuntimeError { message: "three-argument pow() requires int arguments and a nonzero modulus".into(), span: Span::default() }); }
+                                if exp.sign() == num_bigint::Sign::Minus { return Ok(Value::Int(INT_NAN)); }
+                                let modulus = modulus.abs();
+                                let result = base.modpow(&exp, &modulus);
+                                Ok(Value::BigInt(result))
+                            }
                             _ => Err(RuntimeError { message: "three-argument pow() requires int arguments and a nonzero modulus".into(), span: Span::default() }),
                         }
                     } else if args.len() != 2 {
@@ -10254,6 +10267,14 @@ s = sum(r)
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(24)));
+    }
+
+    #[test]
+    fn test_three_argument_pow_supports_bigints() {
+        let module = parse("result = pow(100000000000000000000, 2, 1000)\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("result"), Some(Value::BigInt(BigInt::from(0))));
     }
 
     #[test]
