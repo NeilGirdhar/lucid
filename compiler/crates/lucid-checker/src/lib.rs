@@ -1794,6 +1794,12 @@ impl TypeChecker {
             self.collect_declaration(stmt)?;
         }
 
+        // Resolve class parents after every declaration is known. This makes
+        // forward references and trait-first base lists behave like ordinary
+        // class inheritance, and lets us reject cycles before member lookup or
+        // exhaustiveness analysis can recurse through them.
+        self.resolve_class_parents_and_check_cycles(module)?;
+
         // Pass 2: Verify single-inheritance and trait constraints
         for stmt in &module.statements {
             self.verify_structure(stmt)?;
@@ -1804,6 +1810,73 @@ impl TypeChecker {
             self.check_statement(stmt)?;
         }
 
+        Ok(())
+    }
+
+    fn resolve_class_parents_and_check_cycles(&mut self, module: &Module) -> Result<(), TypeError> {
+        let mut parents = HashMap::new();
+        let mut spans = HashMap::new();
+        fn collect(
+            stmt: &Stmt,
+            parents: &mut HashMap<String, String>,
+            spans: &mut HashMap<String, Span>,
+            classes: &HashMap<String, Type>,
+        ) {
+            match stmt {
+                Stmt::Export(inner) => collect(inner, parents, spans, classes),
+                Stmt::ClassDef {
+                    name, bases, span, ..
+                } => {
+                    spans.insert(name.clone(), *span);
+                    if let Some(parent) = bases.iter().find_map(|base| match base {
+                        TypeExpr::Named { name: base_name, .. }
+                            if classes.contains_key(base_name) => Some(base_name.clone()),
+                        _ => None,
+                    }) {
+                        parents.insert(name.clone(), parent);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for stmt in &module.statements {
+            collect(stmt, &mut parents, &mut spans, &self.env.classes);
+        }
+        self.env.class_parents = parents.clone();
+
+        fn visit(
+            node: &str,
+            parents: &HashMap<String, String>,
+            visiting: &mut HashSet<String>,
+            visited: &mut HashSet<String>,
+        ) -> bool {
+            if visited.contains(node) {
+                return false;
+            }
+            if !visiting.insert(node.to_owned()) {
+                return true;
+            }
+            if let Some(parent) = parents.get(node) {
+                if visit(parent, parents, visiting, visited) {
+                    return true;
+                }
+            }
+            visiting.remove(node);
+            visited.insert(node.to_owned());
+            false
+        }
+
+        let mut visiting = HashSet::new();
+        let mut visited = HashSet::new();
+        for class in parents.keys() {
+            if visit(class, &parents, &mut visiting, &mut visited) {
+                let span = spans.get(class).copied().unwrap_or_default();
+                return Err(TypeError {
+                    message: format!("cyclic class inheritance involving '{class}'"),
+                    span,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -8248,6 +8321,19 @@ class Child(Reusable, Base1, Base2):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("final and cannot be inherited"));
+    }
+
+    #[test]
+    fn test_cyclic_class_inheritance_is_rejected() {
+        let module = parse(
+            "class First(Second):\n    pass\n\nclass Second(First):\n    pass\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker
+            .check_module(&module)
+            .expect_err("cyclic inheritance must be rejected");
+        assert!(err.message.contains("cyclic class inheritance"));
     }
 
     #[test]

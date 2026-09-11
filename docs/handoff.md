@@ -33,7 +33,7 @@ profiles:
 
 ```text
 cargo test --workspace --all-targets --quiet
-68 checker tests
+69 checker tests
 65 CIR tests
 4 shared-ABI tests
 34 CLI/CIR integration tests
@@ -44,10 +44,10 @@ cargo test --workspace --all-targets --quiet
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-728 tests passed
+729 tests passed
 ```
 
-The same 728 tests also pass with:
+The same 729 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
@@ -116,6 +116,8 @@ diverged:
   Runtime and native hierarchy walks now track visited classes, preventing a
   malformed cyclic inheritance graph from recursing or hanging while checking
   ancestry, pattern matches, field layout, or dynamic type aliases.
+  The checker now resolves class parents after declaration collection and
+  rejects cyclic inheritance with a source diagnostic before later passes.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.
