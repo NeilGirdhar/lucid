@@ -13113,7 +13113,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_multiplication_preserves_container_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"ab\") * identity(2))\nitems = identity([1, 2]) * identity(2)\nprint(len(items))\nprint(items[2])\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\ntext = identity(\"ab\")\ncount = identity(2)\nprint(text * count)\nitems = identity([1, 2])\nitems = items * count\nprint(len(items))\nprint(items[2])\n";
         let module = parse(source).expect("dynamic multiplication should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_dynamic_mul_{}", std::process::id()));
