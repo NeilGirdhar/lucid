@@ -118,6 +118,9 @@ diverged:
   ancestry, pattern matches, field layout, or dynamic type aliases.
   The checker now resolves class parents after declaration collection and
   rejects cyclic inheritance with a source diagnostic before later passes.
+  Native object-tag growth now checks both counter and allocation-size
+  overflow before calling `realloc`, preserving a recoverable process failure
+  instead of allowing wrapped allocation sizes.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.

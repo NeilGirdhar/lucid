@@ -1021,11 +1021,17 @@ static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
 static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy) {
     if (!ptr) return;
+    if (lucid_object_tag_count == SIZE_MAX) {
+        fprintf(stderr, "too many registered objects\n"); exit(1);
+    }
     if (lucid_object_tag_count == lucid_object_tag_capacity) {
         if (lucid_object_tag_capacity > SIZE_MAX / 2) {
             fprintf(stderr, "too many registered objects\n"); exit(1);
         }
         size_t next = lucid_object_tag_capacity ? lucid_object_tag_capacity * 2 : 64;
+        if (next > SIZE_MAX / sizeof(LucidObjectTag)) {
+            fprintf(stderr, "object registry allocation overflow\n"); exit(1);
+        }
         LucidObjectTag* grown = (LucidObjectTag*)realloc(lucid_object_tags, sizeof(LucidObjectTag) * next);
         if (!grown) { fprintf(stderr, "out of memory registering object\n"); exit(1); }
         lucid_object_tags = grown;
