@@ -3185,6 +3185,9 @@ static int lucid_sorted_compare(const void* left, const void* right) {
     const LucidVal* b = (const LucidVal*)right;
     if (a->type == LUCID_TYPE_STR && b->type == LUCID_TYPE_STR)
         return strcmp(a->s ? a->s : "", b->s ? b->s : "");
+    if ((a->type == LUCID_TYPE_INT || a->type == LUCID_TYPE_BIGINT) &&
+        (b->type == LUCID_TYPE_INT || b->type == LUCID_TYPE_BIGINT))
+        return lucid_bigint_cmp(*a, *b);
     double av = lucid_as_float(*a);
     double bv = lucid_as_float(*b);
     return av < bv ? -1 : (av > bv ? 1 : 0);
@@ -13797,6 +13800,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "bigint min/max failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "9007199254740992\n9007199254740993\n");
+    }
+
+    #[test]
+    fn native_sorted_orders_bigints_exactly() {
+        let source = "print(sorted([9007199254740993, 9007199254740992])[0])\n";
+        let module = parse(source).expect("bigint sorted source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_sorted_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("bigint sorted should compile");
+        let run = Command::new(&output).output().expect("run bigint sorted");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "bigint sorted failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "9007199254740992\n");
     }
 
     #[test]
