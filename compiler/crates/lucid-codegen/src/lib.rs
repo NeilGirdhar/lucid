@@ -1206,11 +1206,11 @@ typedef bool (*LucidObjectTruthy)(void*);
 typedef const char* (*LucidObjectRepr)(void*);
 typedef int64_t (*LucidObjectHash)(void*);
 typedef bool (*LucidObjectEq)(void*, void*);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; } LucidObjectTag;
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq) {
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name) {
     if (!ptr) return;
     if (lucid_object_tag_count == SIZE_MAX) {
         fprintf(stderr, "too many registered objects\n"); exit(1);
@@ -1228,7 +1228,7 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
         lucid_object_tags = grown;
         lucid_object_tag_capacity = next;
     }
-    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq};
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     // A derived object has one registry entry for its concrete class and one
@@ -1257,9 +1257,11 @@ static inline LucidObjectHash lucid_object_hash(void* ptr) {
             return lucid_object_tags[i].hash;
     return NULL;
 }
-static inline LucidObjectEq lucid_object_eq(void* ptr) {
+static inline LucidObjectEq lucid_object_eq(void* left, void* right) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i)
-        if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].eq)
+        if (lucid_object_tags[i].ptr == left && lucid_object_tags[i].eq && lucid_object_tags[i].eq_class_name
+            && lucid_object_is(left, lucid_object_tags[i].eq_class_name)
+            && lucid_object_is(right, lucid_object_tags[i].eq_class_name))
             return lucid_object_tags[i].eq;
     return NULL;
 }
@@ -2432,12 +2434,8 @@ static inline bool lucid_eq(LucidVal a, LucidVal b) {
         return true;
     }
     if (a.type == LUCID_TYPE_PTR && b.type == LUCID_TYPE_PTR) {
-        const char* left_class = lucid_object_class_name(a.ptr);
-        const char* right_class = lucid_object_class_name(b.ptr);
-        if (left_class && right_class && strcmp(left_class, right_class) == 0) {
-            LucidObjectEq eq = lucid_object_eq(a.ptr);
-            if (eq) return eq(a.ptr, b.ptr);
-        }
+        LucidObjectEq eq = lucid_object_eq(a.ptr, b.ptr);
+        if (eq) return eq(a.ptr, b.ptr);
     }
     return a.ptr == b.ptr;
 }
@@ -4530,7 +4528,11 @@ static inline void lucid_print_val(LucidVal v) {
             .map(|_| format!("(LucidObjectEq){name}_eq"))
             .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback});"
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {});",
+            eq_owner
+                .as_ref()
+                .map(|owner| format!("\"{owner}\""))
+                .unwrap_or_else(|| "NULL".to_string())
         ));
         // Dynamic `is` checks need the complete class hierarchy, not only the
         // concrete allocation name. Register each ancestor as an alias so a
@@ -4542,7 +4544,7 @@ static inline void lucid_print_val(LucidVal v) {
                 break;
             }
             self.emit_line(&format!(
-                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL);"
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL);"
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
@@ -13965,6 +13967,28 @@ print(all({1, 2}))
         let run = Command::new(&output).output().expect("run dynamic object equality");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic object equality failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
+    }
+
+    #[test]
+    fn native_eq_dispatches_inherited_methods_across_erased_subtypes() {
+        let source = "class Key:\n    value: int\n    def __eq__(self, other: Key) -> bool:\n        return self.value == other.value\nclass Child(Key):\n    pass\ndef identity(value: Any) -> Any:\n    return value\nprint(identity(Child(7)) == identity(Key(7)))";
+        let module = parse(source).expect("inherited dynamic equality source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_inherited_eq_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("inherited dynamic equality should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run inherited dynamic equality");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "inherited dynamic equality failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 
