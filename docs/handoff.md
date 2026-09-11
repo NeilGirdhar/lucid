@@ -188,7 +188,8 @@ diverged:
   explicit lowering work rather than being silently interpreted by a
   compatibility fallback.
   The supported two-arm shape now carries its subject, arm results, and
-  literal discriminator as one typed-HIR node before CIR lowering.
+  literal discriminator as one typed-HIR node before CIR lowering, including
+  the simple branch-local assignment-and-return form.
 * Pure discarded expressions before a return now pass through typed-CIR
   lowering; effectful expressions remain rejected instead of being dropped.
   Their rejection now carries a dedicated diagnostic explaining that an

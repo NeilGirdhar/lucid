@@ -973,18 +973,8 @@ fn collect_typed_body<'db>(
                         literal,
                         lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_)
                     )
-                    && let [
-                        lucid_syntax::Stmt::Return {
-                            value: Some(literal_value),
-                            ..
-                        },
-                    ] = literal_arm.body.as_slice()
-                    && let [
-                        lucid_syntax::Stmt::Return {
-                            value: Some(wildcard_value),
-                            ..
-                        },
-                    ] = wildcard_arm.body.as_slice()
+                    && let Some(literal_value) = match_arm_result(literal_arm)
+                    && let Some(wildcard_value) = match_arm_result(wildcard_arm)
                 {
                     let literal_id = nodes
                         .iter()
@@ -1022,6 +1012,39 @@ fn collect_typed_body<'db>(
                             literal: None,
                             span: subject.span(),
                         });
+                    }
+                }
+
+                fn match_arm_result(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
+                    match arm.body.as_slice() {
+                        [
+                            lucid_syntax::Stmt::Return {
+                                value: Some(value), ..
+                            },
+                        ] => Some(value),
+                        [
+                            lucid_syntax::Stmt::Assignment {
+                                target: lucid_syntax::Expr::Ident { name, .. },
+                                value,
+                                ..
+                            },
+                            lucid_syntax::Stmt::Return {
+                                value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                                ..
+                            },
+                        ] if name == returned => Some(value),
+                        [
+                            lucid_syntax::Stmt::VarDef {
+                                pattern: lucid_syntax::Pattern::Ident(name, _),
+                                value: Some(value),
+                                ..
+                            },
+                            lucid_syntax::Stmt::Return {
+                                value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                                ..
+                            },
+                        ] if name == returned => Some(value),
+                        _ => None,
                     }
                 }
             }
@@ -3778,6 +3801,16 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("literal match should lower through conditional CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "match-local-cir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = 11\n            return selected\n        case _:\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match-local values should lower through typed CIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
 
