@@ -7607,6 +7607,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 "LucidVal" => format!("lucid_wrap({value})"),
                                 other => format!("({other})lucid_as_ptr(lucid_wrap({value}))"),
                             };
+                            self.emit_line(&format!(
+                                "if (lucid_object_frozen((void*)({object}))) {{ fprintf(stderr, \"cannot mutate frozen object\\n\"); exit(1); }}"
+                            ));
                             self.emit_line(&format!("({object})->{attr_name} = {converted};"));
                             return Ok("lucid_none()".to_string());
                         }
@@ -15258,7 +15261,7 @@ print(result[1])
 
     #[test]
     fn native_freeze_prevents_object_mutation() {
-        let source = "class Account:\n    balance: int\nacc = Account(100)\nfreeze(acc)\nacc.balance = 200\n";
+        let source = "class Account:\n    balance: int\nacc = Account(100)\nfreeze(acc)\nsetattr(acc, \"balance\", 200)\n";
         let module = parse(source).expect("native object freeze source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_freeze_object_test_{}",

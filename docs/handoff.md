@@ -30,6 +30,8 @@ Reflective writes now follow the same setter path as ordinary attribute
 assignment. Static receivers, inherited setters, and erased `Any`/union
 receivers convert the supplied value to the setter parameter type and invoke
 the generated setter before falling back to a stored field.
+They also enforce the frozen-object mutation rule when no setter is present,
+so `setattr` cannot bypass immutability.
 
 ## Verified baseline
 
