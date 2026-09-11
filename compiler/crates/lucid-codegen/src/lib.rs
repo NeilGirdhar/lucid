@@ -2806,7 +2806,7 @@ static inline void lucid_print_val(LucidVal v) {
                 } = &**func
                 {
                     if let Expr::Ident { name: obj_name, .. } = &**obj {
-                        if obj_name == "time" && attr == "time" {
+                        if obj_name == "time" && matches!(attr.as_str(), "time" | "monotonic") {
                             return "double".to_string();
                         }
                     }
@@ -8326,6 +8326,20 @@ static inline void lucid_print_val(LucidVal v) {
                     ..
                 } = &**func
                 {
+                    // The standard `time` module is represented as an
+                    // imported attribute call, not as a user-defined method.
+                    // Handle both clocks before type/module inference can
+                    // fall through to a `lucid_fn_*` symbol.
+                    if matches!(&**obj_expr, Expr::Ident { name, .. } if name == "time")
+                        && matches!(attr.as_str(), "time" | "monotonic")
+                    {
+                        if !args.is_empty() {
+                            return Err(CodegenError {
+                                message: format!("time.{attr}() takes no arguments"),
+                            });
+                        }
+                        return Ok("lucid_time_now()".to_string());
+                    }
                     if let Expr::Ident {
                         name: class_name, ..
                     } = &**obj_expr
@@ -8440,11 +8454,9 @@ static inline void lucid_print_val(LucidVal v) {
                             }).collect::<Result<Vec<_>, CodegenError>>()?;
                             return Ok(format!("{class_name}_new({})", values.join(", ")));
                         }
-                        if self
-                            .module_aliases
-                            .get(class_name)
-                            .is_some_and(|module| module != "math" && module != "sys")
-                        {
+                        if self.module_aliases.get(class_name).is_some_and(|module| {
+                            module != "math" && module != "sys" && module != "time"
+                        }) {
                             let arg_strs: Result<Vec<String>, CodegenError> = args
                                 .iter()
                                 .filter(|arg| !matches!(arg.value, Expr::Skip(_)))
@@ -8515,7 +8527,7 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                     }
                     if let Expr::Ident { name: obj_name, .. } = &**obj_expr {
-                        if obj_name == "time" && attr == "time" {
+                        if obj_name == "time" && matches!(attr.as_str(), "time" | "monotonic") {
                             return Ok("lucid_time_now()".to_string());
                         }
                         if self
@@ -12338,6 +12350,24 @@ print(all({1, 2}))
         let _ = fs::remove_file(&path);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "hello\n");
+    }
+
+    #[test]
+    fn native_time_monotonic_matches_runtime_module_api() {
+        let source = "import time\nprint(time.monotonic() > 0)\n";
+        let module = parse(source).expect("time module source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_time_monotonic_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("time.monotonic should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled time program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 
     #[test]
