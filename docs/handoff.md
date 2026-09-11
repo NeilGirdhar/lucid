@@ -89,6 +89,8 @@ Native erased binary arithmetic and bitwise operations now reach user-defined
 object dispatch overloads before applying built-in numeric and collection rules.
 The same erased bridge now handles dispatch-defined equality and ordering
 comparisons.
+Named multiple-dispatch calls now use generated erased bridges as well, with
+class-hierarchy matching before reporting an unsupported overload.
 Native dispatch collection also recognizes the specification's dunder operator
 spellings, such as `__add__`, when lowering binary expressions.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
@@ -161,15 +163,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-340 native-codegen tests
+341 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-784 tests passed
+785 tests passed
 ```
 
-The same 784 tests also pass with:
+The same 785 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

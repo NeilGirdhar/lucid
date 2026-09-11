@@ -1198,6 +1198,66 @@ impl CCodeGenerator {
             self.emit_line("");
         }
 
+        let operator_keys: HashSet<&str> = [
+            "+", "-", "*", "/", "//", "%", "**", "&", "|", "^", "<<", ">>",
+            "==", "!=", "<", "<=", ">", ">=",
+        ]
+        .into_iter()
+        .collect();
+        let dispatch_sets = self
+            .dispatch_signatures
+            .iter()
+            .filter(|(name, _)| !operator_keys.contains(name.as_str()))
+            .map(|(name, signatures)| (name.clone(), signatures.clone()))
+            .collect::<Vec<_>>();
+        for (name, signatures) in dispatch_sets {
+            let helper = format!("lucid_dynamic_dispatch_{}", Self::mangle_component(&name));
+            self.emit_line(&format!("static LucidVal {helper}(LucidList* args) {{"));
+            self.indent += 1;
+            self.emit_line("if (!args) { fprintf(stderr, \"dispatch requires arguments\\n\"); exit(1); }");
+            for (types, emitted) in signatures {
+                if types.is_empty()
+                    || types.iter().any(|ty| {
+                        let class = ty.trim_end_matches('*');
+                        !ty.ends_with('*') || !self.known_classes.contains_key(class)
+                    })
+                {
+                    continue;
+                }
+                let checks = types
+                    .iter()
+                    .enumerate()
+                    .map(|(index, ty)| {
+                        let class = ty.trim_end_matches('*');
+                        format!(
+                            "lucid_object_is(lucid_as_ptr(args->items[{index}]), \"{class}\")"
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" && ");
+                let call_args = types
+                    .iter()
+                    .enumerate()
+                    .map(|(index, ty)| {
+                        format!(
+                            "({ty})lucid_as_ptr(args->items[{index}])"
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.emit_line(&format!(
+                    "if (args->len == {} && {}) return lucid_wrap({emitted}({call_args}));",
+                    types.len(), checks
+                ));
+            }
+            self.emit_line(&format!(
+                "fprintf(stderr, \"no dispatch overload of '{name}' accepts the supplied arguments\\n\"); exit(1); return lucid_none();"
+            ));
+            self.indent -= 1;
+            self.emit_line("}");
+            self.emit_line("");
+        }
+
         for (operator, helper, fallback) in [
             ("==", "lucid_dynamic_eq", "lucid_eq(left, right)"),
             ("!=", "lucid_dynamic_ne", "(!lucid_eq(left, right))"),
@@ -10353,6 +10413,26 @@ static inline void lucid_print_val(LucidVal v) {
                                 .collect::<Result<Vec<_>, _>>()?;
                             (raw_args, rendered)
                         };
+                    if self.dispatch_signatures.contains_key(&resolved_name)
+                        && effective_args.iter().any(|arg| self.expr_is_dynamic_value(&arg.value))
+                    {
+                        let helper = format!(
+                            "lucid_dynamic_dispatch_{}",
+                            Self::mangle_component(&resolved_name)
+                        );
+                        let packed = format!(
+                            "({{ LucidList* _dispatch_args = lucid_list_new({}); {} _dispatch_args; }})",
+                            arg_strs.len(),
+                            arg_strs
+                                .iter()
+                                .map(|value| {
+                                    format!("lucid_list_append(_dispatch_args, lucid_wrap({value}));")
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        );
+                        return Ok(format!("{helper}({packed})"));
+                    }
                     let fn_name = if let Some(candidates) = self.dispatch_fns.get(&resolved_name) {
                         if let Some(signatures) = self.dispatch_signatures.get(&resolved_name) {
                             let actual = effective_args
@@ -13069,6 +13149,24 @@ print(c.x, c.y)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "animal\n");
+    }
+
+    #[test]
+    fn native_erased_arguments_dispatch_named_overload() {
+        let source = "class Animal:\n    pass\nclass Dog(Animal):\n    pass\ndispatch def identify(value: Animal) -> str:\n    return \"animal\"\ndef identity(value: Any) -> Any:\n    return value\nprint(identify(identity(Dog())))\n";
+        let module = parse(source).expect("erased named dispatch source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_erased_named_dispatch_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("erased named dispatch should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run erased named dispatch");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "erased named dispatch failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "animal\n");
     }
 
