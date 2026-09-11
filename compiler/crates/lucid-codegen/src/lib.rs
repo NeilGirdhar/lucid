@@ -1198,6 +1198,7 @@ impl CCodeGenerator {
 typedef struct LucidList LucidList;
 typedef struct LucidDict LucidDict;
 typedef struct LucidSet LucidSet;
+typedef struct LucidVal LucidVal;
 typedef struct LucidFuture LucidFuture;
 typedef struct LucidContext LucidContext;
 typedef struct LucidExceptionFrame LucidExceptionFrame;
@@ -1210,11 +1211,12 @@ typedef bool (*LucidObjectLt)(void*, void*);
 typedef bool (*LucidObjectLe)(void*, void*);
 typedef bool (*LucidObjectGt)(void*, void*);
 typedef bool (*LucidObjectGe)(void*, void*);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; } LucidObjectTag;
+typedef bool (*LucidObjectContains)(void*, LucidVal);
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name, LucidObjectLe le, const char* le_class_name, LucidObjectGt gt, const char* gt_class_name, LucidObjectGe ge, const char* ge_class_name) {
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name, LucidObjectLe le, const char* le_class_name, LucidObjectGt gt, const char* gt_class_name, LucidObjectGe ge, const char* ge_class_name, LucidObjectContains contains) {
     if (!ptr) return;
     if (lucid_object_tag_count == SIZE_MAX) {
         fprintf(stderr, "too many registered objects\n"); exit(1);
@@ -1232,7 +1234,7 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
         lucid_object_tags = grown;
         lucid_object_tag_capacity = next;
     }
-    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name, le, le_class_name, gt, gt_class_name, ge, ge_class_name};
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name, le, le_class_name, gt, gt_class_name, ge, ge_class_name, contains};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     // A derived object has one registry entry for its concrete class and one
@@ -1306,6 +1308,12 @@ static inline LucidObjectGe lucid_object_ge(void* left, void* right) {
             return lucid_object_tags[i].ge;
     return NULL;
 }
+static inline LucidObjectContains lucid_object_contains(void* ptr) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].contains)
+            return lucid_object_tags[i].contains;
+    return NULL;
+}
 static inline bool lucid_object_frozen(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i) if (lucid_object_tags[i].ptr == ptr) return lucid_object_tags[i].frozen;
     return false;
@@ -1341,7 +1349,7 @@ typedef enum {
     LUCID_TYPE_CONTEXT
 } LucidValType;
 
-typedef struct {
+typedef struct LucidVal {
     int64_t i;
     double f;
     double real;
@@ -2851,6 +2859,10 @@ static inline bool lucid_dict_contains(LucidDict* d, LucidVal key) {
     return false;
 }
 static inline bool lucid_contains_value(LucidVal container, LucidVal needle) {
+    if (container.type == LUCID_TYPE_PTR) {
+        LucidObjectContains contains = lucid_object_contains(container.ptr);
+        if (contains) return contains(container.ptr, needle);
+    }
     if (container.type == LUCID_TYPE_LIST) return lucid_list_contains(container.list, needle);
     if (container.type == LUCID_TYPE_SET) return lucid_set_contains(container.set, needle);
     if (container.type == LUCID_TYPE_DICT) return lucid_dict_contains(container.dict, needle);
@@ -4563,6 +4575,16 @@ static inline void lucid_print_val(LucidVal v) {
         let le_owner = comparison_owner("__le__");
         let gt_owner = comparison_owner("__gt__");
         let ge_owner = comparison_owner("__ge__");
+        let contains_owner = self
+            .method_owner(name, "__contains__")
+            .and_then(|owner| {
+                let parameter_type = self
+                    .known_method_param_types
+                    .get(&(owner.clone(), "__contains__".to_string()))
+                    .and_then(|types| types.first())
+                    .cloned()?;
+                Some((owner, parameter_type))
+            });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
             self.emit_line(&format!(
@@ -4623,6 +4645,25 @@ static inline void lucid_print_val(LucidVal v) {
                 ));
             }
         }
+        if let Some((owner, parameter_type)) = &contains_owner {
+            self.emit_line(&format!(
+                "bool {owner}___contains__({owner}* self, {parameter_type} item);"
+            ));
+            let item = match parameter_type.as_str() {
+                "LucidVal" => "right".to_string(),
+                "int64_t" => "lucid_as_int(right)".to_string(),
+                "double" => "lucid_as_float(right)".to_string(),
+                "bool" => "lucid_as_bool(right)".to_string(),
+                "const char*" | "char*" => "lucid_as_str(right)".to_string(),
+                "LucidList*" => "lucid_as_list(right)".to_string(),
+                "LucidDict*" => "lucid_as_dict(right)".to_string(),
+                "LucidSet*" => "lucid_as_set(right)".to_string(),
+                _ => format!("({parameter_type})lucid_as_ptr(right)"),
+            };
+            self.emit_line(&format!(
+                "static bool {name}_contains(void* left, LucidVal right) {{ return {owner}___contains__(({owner}*)left, {item}); }}"
+            ));
+        }
 
         self.emit_line(&format!("static const char* {name}_repr(void* raw) {{"));
         self.indent += 1;
@@ -4681,8 +4722,12 @@ static inline void lucid_print_val(LucidVal v) {
             .as_ref()
             .map(|_| format!("(LucidObjectGe){name}_ge"))
             .unwrap_or_else(|| "NULL".to_string());
+        let contains_callback = contains_owner
+            .as_ref()
+            .map(|_| format!("(LucidObjectContains){name}_contains"))
+            .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {}, {le_callback}, {}, {gt_callback}, {}, {ge_callback}, {});",
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {}, {le_callback}, {}, {gt_callback}, {}, {ge_callback}, {}, {contains_callback});",
             eq_owner
                 .as_ref()
                 .and_then(|(_, _, dispatch_class)| dispatch_class.as_deref())
@@ -4719,7 +4764,7 @@ static inline void lucid_print_val(LucidVal v) {
                 break;
             }
             self.emit_line(&format!(
-                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
@@ -12475,6 +12520,24 @@ print(c.x, c.y)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n1\n");
+    }
+
+    #[test]
+    fn native_membership_dispatches_erased_custom_contains_method() {
+        let source = "class Bag:\n    value: int\n    def __contains__(self, item: int) -> bool:\n        return item == self.value\ndef identity(value: Any) -> Any:\n    return value\nprint(4 in identity(Bag(4)))\nprint(3 not in identity(Bag(4)))";
+        let module = parse(source).expect("dynamic custom contains source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_contains_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic custom contains should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic custom contains");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic custom contains failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
     }
 
     #[test]
