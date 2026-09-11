@@ -105,6 +105,8 @@ Erased indexing now dispatches custom `__getitem__` methods and wraps their
 declared return values back into the universal value representation.
 Erased index assignment now dispatches custom `__setitem__` methods and
 preserves their mutation semantics.
+The object protocol registry now keeps both get and set index callbacks, so
+dynamic receivers no longer fall back to built-in container errors.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
