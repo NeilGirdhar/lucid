@@ -47,7 +47,7 @@ cargo test --workspace --all-targets --quiet
 687 tests passed
 ```
 
-The same 686 tests also pass with:
+The same 687 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
