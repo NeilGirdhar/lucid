@@ -2556,7 +2556,7 @@ static inline LucidVal lucid_div_value(LucidVal left, LucidVal right) {
     exit(1);
 }
 static inline LucidVal lucid_unary_value(LucidVal value, char op) {
-    if (op == '+' && (value.type == LUCID_TYPE_INT || value.type == LUCID_TYPE_FLOAT || value.type == LUCID_TYPE_COMPLEX))
+    if (op == '+' && (value.type == LUCID_TYPE_INT || value.type == LUCID_TYPE_FLOAT || value.type == LUCID_TYPE_COMPLEX || value.type == LUCID_TYPE_BIGINT))
         return value;
     if (op == '-' && value.type == LUCID_TYPE_INT)
         return lucid_int(lucid_checked_neg(value.i));
@@ -2564,8 +2564,12 @@ static inline LucidVal lucid_unary_value(LucidVal value, char op) {
         return lucid_float(-value.f);
     if (op == '-' && value.type == LUCID_TYPE_COMPLEX)
         return lucid_complex(-value.real, -value.imag);
+    if (op == '-' && value.type == LUCID_TYPE_BIGINT)
+        return lucid_bigint_neg(value);
     if (op == '~' && value.type == LUCID_TYPE_INT)
         return lucid_int(~value.i);
+    if (op == '~' && value.type == LUCID_TYPE_BIGINT)
+        return lucid_bigint_binop(lucid_bigint_neg(value), lucid_bigint("1"), '-');
     fprintf(stderr, "unsupported unary operand\n");
     exit(1);
 }
@@ -13425,7 +13429,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_unary_operations_preserve_numeric_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nvalue = identity(4)\nprint(-value)\nprint(+value)\nprint(~value)\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\nvalue = identity(4)\nprint(-value)\nprint(+value)\nprint(~value)\nbig = identity(100000000000000000001)\nprint(-big)\nprint(+big)\nprint(~big)\n";
         let module = parse(source).expect("dynamic unary operations should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_unary_{}",
@@ -13441,7 +13445,10 @@ print(all({1, 2}))
             run.status.success(),
             "dynamic unary operations failed: {run:?}"
         );
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "-4\n4\n-5\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "-4\n4\n-5\n-100000000000000000001\n100000000000000000001\n-100000000000000000002\n"
+        );
     }
 
     #[test]
