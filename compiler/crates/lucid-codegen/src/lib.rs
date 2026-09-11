@@ -7490,11 +7490,29 @@ static inline void lucid_print_val(LucidVal v) {
                                     ..
                                 } => field,
                                 _ => {
-                                    return Err(CodegenError {
-                                        message: format!(
-                                            "{name}() requires a literal attribute name in native code"
-                                        ),
-                                    });
+                                    let object = self.emit_expr(&args[0].value)?;
+                                    let attr = self.emit_expr(&args[attr_index].value)?;
+                                    let attr_code = format!("lucid_as_str(lucid_wrap({attr}))");
+                                    if name == "hasattr" {
+                                        return Ok(format!(
+                                            "lucid_dynamic_has_attr(lucid_wrap({object}), {attr_code})"
+                                        ));
+                                    }
+                                    if name == "setattr" {
+                                        let value = self.emit_expr(&args[2].value)?;
+                                        return Ok(format!(
+                                            "(lucid_dynamic_set_attr(lucid_wrap({object}), {attr_code}, lucid_wrap({value})), lucid_none())"
+                                        ));
+                                    }
+                                    let (fallback, has_default) = if args.len() == 3 {
+                                        let fallback = self.emit_expr(&args[2].value)?;
+                                        (format!("lucid_wrap({fallback})"), "true")
+                                    } else {
+                                        ("lucid_none()".to_string(), "false")
+                                    };
+                                    return Ok(format!(
+                                        "lucid_dynamic_attr(lucid_wrap({object}), {attr_code}, {fallback}, {has_default})"
+                                    ));
                                 }
                             };
                             let object = self.emit_expr(&args[0].value)?;
@@ -14505,6 +14523,10 @@ p = Point(4, 9)
 print(getattr(p, "x"))
 setattr(p, "x", 6)
 print(p.x)
+name = "x"
+print(getattr(p, name))
+setattr(p, name, 7)
+print(p.x)
 print(hasattr(p, "y"))
 print(hasattr(p, "z"))
 print(getattr(p, "z", 42))
@@ -14521,7 +14543,7 @@ print(getattr(p, "z", 42))
             .expect("compiled reflection program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n6\ntrue\nfalse\n42\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n6\n6\n7\ntrue\nfalse\n42\n");
     }
 
     #[test]

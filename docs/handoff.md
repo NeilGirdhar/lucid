@@ -37,6 +37,9 @@ evaluates the getter and `hasattr` reports it as present.
 Native `getattr` also honors its optional default for static objects, erased
 values, and missing attributes, matching the interpreter's three-argument
 form.
+Reflection builtins no longer require a literal attribute name in native
+codegen; computed strings use the same checked dynamic dispatch as erased
+values.
 
 ## Verified baseline
 
