@@ -237,7 +237,8 @@ diverged:
   correct when `del` occurs inside a conditional branch or context manager.
 * Runtime module reflection now preserves declaration insertion order for
   `fields(module)`, matching class reflection and native output instead of
-  exposing hash-map iteration order.
+  exposing hash-map iteration order. Deleting a binding removes it from the
+  reflected set, and rebinding records its new insertion position.
 * Interpreter `locals()` now excludes intrinsic builtin bindings, while still
   exposing a builtin name after user code rebinds it.
 * The checker now treats `Bytes` as a distinct immutable buffer type rather

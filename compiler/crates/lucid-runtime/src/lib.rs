@@ -566,7 +566,11 @@ impl Environment {
 
     pub fn delete_local(&mut self, name: &str) -> bool {
         self.final_bindings.remove(name);
-        self.bindings.remove(name).is_some()
+        let removed = self.bindings.remove(name).is_some();
+        if removed {
+            self.binding_order.retain(|bound| bound != name);
+        }
+        removed
     }
 
     pub fn mutate(&mut self, name: &str, value: Value) -> bool {
@@ -10376,6 +10380,27 @@ s = sum(r)
             Value::List(Rc::new(RefCell::new(vec![
                 Value::Str("zeta".into()),
                 Value::Str("alpha".into()),
+            ])))
+        );
+        let mut module_env = Environment::new();
+        module_env.set("zeta".into(), Value::Int(1));
+        module_env.set("alpha".into(), Value::Int(2));
+        module_env.delete_local("zeta");
+        module_env.set("zeta".into(), Value::Int(3));
+        let rebound_fields = ordered_interp
+            .call_named(
+                "fields",
+                &[Value::Module {
+                    name: "rebound".into(),
+                    env: Rc::new(RefCell::new(module_env)),
+                }],
+            )
+            .expect("rebound module fields should be reflectable");
+        assert_eq!(
+            rebound_fields,
+            Value::List(Rc::new(RefCell::new(vec![
+                Value::Str("alpha".into()),
+                Value::Str("zeta".into()),
             ])))
         );
     }
