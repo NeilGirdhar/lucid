@@ -2864,7 +2864,12 @@ impl Interpreter {
                                 Value::Set(values) => {
                                     Value::List(Rc::new(RefCell::new(values.borrow().clone())))
                                 }
-                                _ => unreachable!(),
+                                _ => {
+                                    return Err(RuntimeError {
+                                        message: "value is not iterable".into(),
+                                        span: Span::default(),
+                                    })
+                                }
                             })
                         }
                         Value::Object { fields, .. } => {

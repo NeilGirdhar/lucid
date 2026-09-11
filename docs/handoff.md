@@ -90,6 +90,9 @@ diverged:
   `__bool__`/`__len__` callback when they cross an `Any` boundary.
   Native object metadata grows on demand instead of silently dropping
   truthiness and freezing information after a fixed object-count limit.
+* The interpreter's supported-iterator dispatch now reports a recoverable
+  non-iterable error for malformed intermediate states instead of retaining an
+  internal panic path.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`
