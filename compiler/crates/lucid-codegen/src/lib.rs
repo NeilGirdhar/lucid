@@ -767,8 +767,9 @@ impl CCodeGenerator {
                         }) = &param.type_annotation
                         {
                             let emitted_name = self.dispatch_name(f, type_name);
+                            let dispatch_key = Self::dispatch_operator_key(&f.name);
                             self.dispatch_fns
-                                .entry(f.name.clone())
+                                .entry(dispatch_key.clone())
                                 .or_default()
                                 .push((type_name.clone(), emitted_name));
                             let signature = f
@@ -778,7 +779,7 @@ impl CCodeGenerator {
                                 .collect::<Vec<_>>();
                             let emitted_name = self.dispatch_name(f, type_name);
                             self.dispatch_signatures
-                                .entry(f.name.clone())
+                                .entry(dispatch_key)
                                 .or_default()
                                 .push((signature, emitted_name));
                         }
@@ -3753,6 +3754,25 @@ static inline void lucid_print_val(LucidVal v) {
             BinaryOp::Shr => ">>",
             _ => return None,
         })
+    }
+
+    fn dispatch_operator_key(name: &str) -> String {
+        match name {
+            "__add__" => "+",
+            "__sub__" => "-",
+            "__mul__" => "*",
+            "__truediv__" => "/",
+            "__floordiv__" => "//",
+            "__mod__" => "%",
+            "__pow__" => "**",
+            "__and__" => "&",
+            "__or__" => "|",
+            "__xor__" => "^",
+            "__lshift__" => "<<",
+            "__rshift__" => ">>",
+            other => other,
+        }
+        .to_string()
     }
 
     fn infer_expr_type(&self, expr: &Expr, vars: &HashMap<String, String>) -> String {
@@ -12905,7 +12925,7 @@ print(c.x, c.y)
 
     #[test]
     fn native_erased_operands_dispatch_custom_binary_operator() {
-        let source = "class Box:\n    value: int\ndispatch def +(left: Box, right: Box) -> int:\n    return left.value + right.value\ndef identity(value: Any) -> Any:\n    return value\nleft = identity(Box(2))\nright = identity(Box(3))\nprint(left + right)\n";
+        let source = "class Box:\n    value: int\ndispatch def __add__(left: Box, right: Box) -> int:\n    return left.value + right.value\ndef identity(value: Any) -> Any:\n    return value\nleft = identity(Box(2))\nright = identity(Box(3))\nprint(left + right)\n";
         let module = parse(source).expect("erased operator source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_erased_operator_{}",
