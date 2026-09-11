@@ -17248,6 +17248,22 @@ print(result[1])
     }
 
     #[test]
+    fn native_named_nested_closure_let_alias_preserves_capture() {
+        let source = "def run(threshold: int) -> bool:\n    def check(x: int) -> bool:\n        return x > threshold\n    let g = check\n    return g(4)\nprint(run(3))\n";
+        let module = parse(source).expect("nested closure let alias source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_named_nested_let_alias_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("nested closure let alias should compile");
+        let run = Command::new(&output).output().expect("run nested closure let alias");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "nested closure let alias failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
+    }
+
+    #[test]
     fn native_map_applies_expression_bodied_anonymous_functions() {
         let source = "print(map(def(x: int) -> int: x * 2, [1, 2])[1])\n";
         let module = parse(source).expect("anonymous map source should parse");
