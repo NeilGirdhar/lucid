@@ -44,6 +44,9 @@ Native reflection preserves receiver-before-default evaluation order when a
 missing static attribute supplies a fallback.
 `hasattr` also reports ordinary and inherited methods, matching the runtime
 object member set.
+Computed reflection arguments are materialized in source order before the
+dynamic helper runs, so receiver, name, value, and fallback side effects do
+not depend on C argument-order rules.
 
 ## Verified baseline
 
