@@ -128,10 +128,10 @@ cargo test --workspace --all-targets --quiet
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-765 tests passed
+766 tests passed
 ```
 
-The same 765 tests also pass with:
+The same 766 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
