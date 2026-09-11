@@ -83,6 +83,8 @@ Native `sorted` uses the same exact BigInt comparator, preserving order beyond
 the precision of `double`.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
+Native `format` now preserves decimal BigInt values when no format specifier
+is supplied, matching the interpreter's fallback representation.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -115,15 +117,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-318 native-codegen tests
+319 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-761 tests passed
+762 tests passed
 ```
 
-The same 761 tests also pass with:
+The same 762 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

@@ -2201,6 +2201,8 @@ static inline LucidVal lucid_format_value(LucidVal value, const char* spec) {
         if (strcmp(spec, "f") == 0) snprintf(out, 128, "%.6f", value.f);
         else if (*spec == '\0') snprintf(out, 128, "%.10g", value.f);
         else { fprintf(stderr, "unsupported format specifier '%s'\n", spec); exit(1); }
+    } else if (value.type == LUCID_TYPE_BIGINT && *spec == '\0') {
+        snprintf(out, 128, "%s", value.bigint ? value.bigint : "0");
     } else if (value.type == LUCID_TYPE_STR && *spec == '\0') snprintf(out, 128, "%s", value.s ? value.s : "");
     else if (value.type == LUCID_TYPE_BOOL && *spec == '\0') snprintf(out, 128, "%s", value.b ? "true" : "false");
     else if (value.type == LUCID_TYPE_NONE && *spec == '\0') snprintf(out, 128, "none");
@@ -13836,6 +13838,22 @@ print(all({1, 2}))
             .bytes()
             .fold(17i64, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte as i64));
         assert_eq!(String::from_utf8_lossy(&run.stdout), format!("{expected}\n"));
+    }
+
+    #[test]
+    fn native_format_preserves_bigint_decimal_values() {
+        let source = "print(format(100000000000000000000))\n";
+        let module = parse(source).expect("bigint format source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_format_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("bigint format should compile");
+        let run = Command::new(&output).output().expect("run bigint format");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "bigint format failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000000\n");
     }
 
     #[test]
