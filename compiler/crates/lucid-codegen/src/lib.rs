@@ -1205,11 +1205,12 @@ typedef void (*LucidObjectFreezer)(void*);
 typedef bool (*LucidObjectTruthy)(void*);
 typedef const char* (*LucidObjectRepr)(void*);
 typedef int64_t (*LucidObjectHash)(void*);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; } LucidObjectTag;
+typedef bool (*LucidObjectEq)(void*, void*);
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash) {
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq) {
     if (!ptr) return;
     if (lucid_object_tag_count == SIZE_MAX) {
         fprintf(stderr, "too many registered objects\n"); exit(1);
@@ -1227,7 +1228,7 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
         lucid_object_tags = grown;
         lucid_object_tag_capacity = next;
     }
-    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash};
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     // A derived object has one registry entry for its concrete class and one
@@ -1254,6 +1255,12 @@ static inline LucidObjectHash lucid_object_hash(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i)
         if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].hash)
             return lucid_object_tags[i].hash;
+    return NULL;
+}
+static inline LucidObjectEq lucid_object_eq(void* ptr) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].eq)
+            return lucid_object_tags[i].eq;
     return NULL;
 }
 static inline bool lucid_object_frozen(void* ptr) {
@@ -2423,6 +2430,14 @@ static inline bool lucid_eq(LucidVal a, LucidVal b) {
             if (!found) return false;
         }
         return true;
+    }
+    if (a.type == LUCID_TYPE_PTR && b.type == LUCID_TYPE_PTR) {
+        const char* left_class = lucid_object_class_name(a.ptr);
+        const char* right_class = lucid_object_class_name(b.ptr);
+        if (left_class && right_class && strcmp(left_class, right_class) == 0) {
+            LucidObjectEq eq = lucid_object_eq(a.ptr);
+            if (eq) return eq(a.ptr, b.ptr);
+        }
     }
     return a.ptr == b.ptr;
 }
@@ -4441,6 +4456,18 @@ static inline void lucid_print_val(LucidVal v) {
                     .get(&(owner.clone(), "__hash__".to_string()))
                     .is_some_and(|ty| ty == "int64_t")
             });
+        let eq_owner = self
+            .method_owner(name, "__eq__")
+            .filter(|owner| {
+                self.known_method_return_types
+                    .get(&(owner.clone(), "__eq__".to_string()))
+                    .is_some_and(|ty| ty == "bool")
+                    && self
+                        .known_method_param_types
+                        .get(&(owner.clone(), "__eq__".to_string()))
+                        .and_then(|types| types.first())
+                        .is_some_and(|ty| ty == &format!("{owner}*"))
+            });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
             self.emit_line(&format!(
@@ -4455,6 +4482,10 @@ static inline void lucid_print_val(LucidVal v) {
         }
         if let Some(owner) = &hash_owner {
             self.emit_line(&format!("int64_t {owner}___hash__({owner}* self);"));
+        }
+        if let Some(owner) = &eq_owner {
+            self.emit_line(&format!("bool {owner}___eq__({owner}* self, {owner}* other);"));
+            self.emit_line(&format!("static bool {name}_eq(void* left, void* right) {{ return {owner}___eq__(({owner}*)left, ({owner}*)right); }}"));
         }
 
         self.emit_line(&format!("static const char* {name}_repr(void* raw) {{"));
@@ -4494,8 +4525,12 @@ static inline void lucid_print_val(LucidVal v) {
             .as_ref()
             .map(|owner| format!("(LucidObjectHash){owner}___hash__"))
             .unwrap_or_else(|| "NULL".to_string());
+        let eq_callback = eq_owner
+            .as_ref()
+            .map(|_| format!("(LucidObjectEq){name}_eq"))
+            .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback});"
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback});"
         ));
         // Dynamic `is` checks need the complete class hierarchy, not only the
         // concrete allocation name. Register each ancestor as an alias so a
@@ -4507,7 +4542,7 @@ static inline void lucid_print_val(LucidVal v) {
                 break;
             }
             self.emit_line(&format!(
-                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL);"
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL);"
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
@@ -13915,6 +13950,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic object hash failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "70\n");
+    }
+
+    #[test]
+    fn native_eq_dispatches_erased_object_methods() {
+        let source = "class Key:\n    value: int\n    def __eq__(self, other: Key) -> bool:\n        return self.value == other.value\ndef identity(value: Any) -> Any:\n    return value\nprint(identity(Key(7)) == identity(Key(7)))\n";
+        let module = parse(source).expect("dynamic object equality source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_eq_object_dynamic_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic object equality should compile");
+        let run = Command::new(&output).output().expect("run dynamic object equality");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic object equality failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 
     #[test]
