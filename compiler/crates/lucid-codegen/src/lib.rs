@@ -1198,6 +1198,47 @@ impl CCodeGenerator {
             self.emit_line("");
         }
 
+        for (operator, helper, fallback) in [
+            ("==", "lucid_dynamic_eq", "lucid_eq(left, right)"),
+            ("!=", "lucid_dynamic_ne", "(!lucid_eq(left, right))"),
+            ("<", "lucid_dynamic_lt", "lucid_lt(left, right)"),
+            ("<=", "lucid_dynamic_le", "lucid_lte(left, right)"),
+            (">", "lucid_dynamic_gt", "lucid_gt(left, right)"),
+            (">=", "lucid_dynamic_ge", "lucid_gte(left, right)"),
+        ] {
+            if !self.dispatch_signatures.contains_key(operator) {
+                continue;
+            }
+            self.emit_line(&format!("static bool {helper}(LucidVal left, LucidVal right) {{"));
+            self.indent += 1;
+            self.emit_line("if (left.type == LUCID_TYPE_PTR && left.ptr && right.type == LUCID_TYPE_PTR && right.ptr) {");
+            self.indent += 1;
+            self.emit_line("const char* left_class = lucid_object_class_name(left.ptr); const char* right_class = lucid_object_class_name(right.ptr);");
+            if let Some(signatures) = self.dispatch_signatures.get(operator).cloned() {
+                for (types, emitted) in signatures {
+                    if types.len() < 2 {
+                        continue;
+                    }
+                    let left_class = types[0].trim_end_matches('*');
+                    let right_class = types[1].trim_end_matches('*');
+                    if !self.known_classes.contains_key(left_class)
+                        || !self.known_classes.contains_key(right_class)
+                    {
+                        continue;
+                    }
+                    self.emit_line(&format!(
+                        "if (left_class && right_class && strcmp(left_class, \"{left_class}\") == 0 && strcmp(right_class, \"{right_class}\") == 0) return (bool){emitted}(({left_class}*)left.ptr, ({right_class}*)right.ptr);"
+                    ));
+                }
+            }
+            self.indent -= 1;
+            self.emit_line("}");
+            self.emit_line(&format!("return {fallback};"));
+            self.indent -= 1;
+            self.emit_line("}");
+            self.emit_line("");
+        }
+
         // 4. Emit function bodies
         let top_function_aliases = self.function_aliases.clone();
         for stmt in &module.statements {
@@ -3787,6 +3828,12 @@ static inline void lucid_print_val(LucidVal v) {
             "__xor__" => "^",
             "__lshift__" => "<<",
             "__rshift__" => ">>",
+            "__eq__" => "==",
+            "__ne__" => "!=",
+            "__lt__" => "<",
+            "__le__" => "<=",
+            "__gt__" => ">",
+            "__ge__" => ">=",
             other => other,
         }
         .to_string()
@@ -7216,6 +7263,12 @@ static inline void lucid_print_val(LucidVal v) {
                         BinaryOp::BitXor => Some(("^", "lucid_dynamic_xor")),
                         BinaryOp::Shl => Some(("<<", "lucid_dynamic_shl")),
                         BinaryOp::Shr => Some((">>", "lucid_dynamic_shr")),
+                        BinaryOp::Eq => Some(("==", "lucid_dynamic_eq")),
+                        BinaryOp::NotEq => Some(("!=", "lucid_dynamic_ne")),
+                        BinaryOp::Lt => Some(("<", "lucid_dynamic_lt")),
+                        BinaryOp::LtEq => Some(("<=", "lucid_dynamic_le")),
+                        BinaryOp::Gt => Some((">", "lucid_dynamic_gt")),
+                        BinaryOp::GtEq => Some((">=", "lucid_dynamic_ge")),
                         _ => None,
                     } {
                         if self.dispatch_signatures.contains_key(operator) {
@@ -12956,7 +13009,7 @@ print(c.x, c.y)
 
     #[test]
     fn native_erased_operands_dispatch_custom_binary_operator() {
-        let source = "class Box:\n    value: int\ndispatch def __add__(left: Box, right: Box) -> int:\n    return left.value + right.value\ndispatch def __sub__(left: Box, right: Box) -> int:\n    return left.value - right.value\ndef identity(value: Any) -> Any:\n    return value\nleft = identity(Box(2))\nright = identity(Box(3))\nprint(left + right)\nprint(left - right)\n";
+        let source = "class Box:\n    value: int\ndispatch def __add__(left: Box, right: Box) -> int:\n    return left.value + right.value\ndispatch def __sub__(left: Box, right: Box) -> int:\n    return left.value - right.value\ndispatch def __lt__(left: Box, right: Box) -> bool:\n    return left.value < right.value\ndef identity(value: Any) -> Any:\n    return value\nleft = identity(Box(2))\nright = identity(Box(3))\nprint(left + right)\nprint(left - right)\nprint(left < right)\n";
         let module = parse(source).expect("erased operator source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_erased_operator_{}",
@@ -12967,7 +13020,7 @@ print(c.x, c.y)
         let run = Command::new(&output).output().expect("run erased operator");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "erased operator failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n-1\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n-1\ntrue\n");
     }
 
     #[test]
