@@ -1260,8 +1260,9 @@ static inline LucidObjectHash lucid_object_hash(void* ptr) {
 static inline LucidObjectEq lucid_object_eq(void* left, void* right) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i)
         if (lucid_object_tags[i].ptr == left && lucid_object_tags[i].eq && lucid_object_tags[i].eq_class_name
-            && lucid_object_is(left, lucid_object_tags[i].eq_class_name)
-            && lucid_object_is(right, lucid_object_tags[i].eq_class_name))
+            && (lucid_object_tags[i].eq_class_name[0] == '\0'
+                || (lucid_object_is(left, lucid_object_tags[i].eq_class_name)
+                    && lucid_object_is(right, lucid_object_tags[i].eq_class_name))))
             return lucid_object_tags[i].eq;
     return NULL;
 }
@@ -4456,15 +4457,27 @@ static inline void lucid_print_val(LucidVal v) {
             });
         let eq_owner = self
             .method_owner(name, "__eq__")
-            .filter(|owner| {
-                self.known_method_return_types
+            .and_then(|owner| {
+                if !self
+                    .known_method_return_types
                     .get(&(owner.clone(), "__eq__".to_string()))
                     .is_some_and(|ty| ty == "bool")
-                    && self
-                        .known_method_param_types
-                        .get(&(owner.clone(), "__eq__".to_string()))
-                        .and_then(|types| types.first())
-                        .is_some_and(|ty| ty == &format!("{owner}*"))
+                {
+                    return None;
+                }
+                let parameter_type = self
+                    .known_method_param_types
+                    .get(&(owner.clone(), "__eq__".to_string()))
+                    .and_then(|types| types.first())
+                    .cloned()?;
+                let dispatch_class = parameter_type
+                    .strip_suffix('*')
+                    .filter(|class| self.known_classes.contains_key(*class))
+                    .map(ToOwned::to_owned);
+                if parameter_type != "LucidVal" && dispatch_class.is_none() {
+                    return None;
+                }
+                Some((owner, parameter_type, dispatch_class))
             });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
@@ -4481,9 +4494,18 @@ static inline void lucid_print_val(LucidVal v) {
         if let Some(owner) = &hash_owner {
             self.emit_line(&format!("int64_t {owner}___hash__({owner}* self);"));
         }
-        if let Some(owner) = &eq_owner {
-            self.emit_line(&format!("bool {owner}___eq__({owner}* self, {owner}* other);"));
-            self.emit_line(&format!("static bool {name}_eq(void* left, void* right) {{ return {owner}___eq__(({owner}*)left, ({owner}*)right); }}"));
+        if let Some((owner, parameter_type, _)) = &eq_owner {
+            self.emit_line(&format!(
+                "bool {owner}___eq__({owner}* self, {parameter_type} other);"
+            ));
+            let other = if parameter_type == "LucidVal" {
+                "lucid_wrap(right)".to_string()
+            } else {
+                format!("({parameter_type})right")
+            };
+            self.emit_line(&format!(
+                "static bool {name}_eq(void* left, void* right) {{ return {owner}___eq__(({owner}*)left, {other}); }}"
+            ));
         }
 
         self.emit_line(&format!("static const char* {name}_repr(void* raw) {{"));
@@ -4531,8 +4553,9 @@ static inline void lucid_print_val(LucidVal v) {
             "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {});",
             eq_owner
                 .as_ref()
-                .map(|owner| format!("\"{owner}\""))
-                .unwrap_or_else(|| "NULL".to_string())
+                .and_then(|(_, _, dispatch_class)| dispatch_class.as_deref())
+                .map(|class| format!("\"{class}\""))
+                .unwrap_or_else(|| "\"\"".to_string())
         ));
         // Dynamic `is` checks need the complete class hierarchy, not only the
         // concrete allocation name. Register each ancestor as an alias so a
@@ -13989,6 +14012,22 @@ print(all({1, 2}))
             run.status.success(),
             "inherited dynamic equality failed: {run:?}"
         );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
+    }
+
+    #[test]
+    fn native_eq_dispatches_object_methods_with_any_parameter() {
+        let source = "class Key:\n    value: int\n    def __eq__(self, other: Any) -> bool:\n        return self.value == getattr(other, \"value\")\ndef identity(value: Any) -> Any:\n    return value\nprint(identity(Key(7)) == identity(Key(7)))";
+        let module = parse(source).expect("Any equality source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_any_eq_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("Any equality should compile");
+        let run = Command::new(&output).output().expect("run Any equality");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "Any equality failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 

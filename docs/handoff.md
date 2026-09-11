@@ -93,6 +93,8 @@ It also carries safe same-class `__eq__` callbacks, preserving user-defined
 equality after an object crosses an `Any` boundary.
 Inherited equality methods now retain their declaring parent type in the
 metadata, so erased parent/child instances can use the same callback safely.
+Equality methods accepting `Any` now also survive erasure and receive the
+tagged value ABI instead of falling back to pointer identity.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -125,15 +127,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-323 native-codegen tests
+324 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-767 tests passed
+768 tests passed
 ```
 
-The same 767 tests also pass with:
+The same 768 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
