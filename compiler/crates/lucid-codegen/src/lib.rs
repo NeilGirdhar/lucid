@@ -196,6 +196,7 @@ pub struct CCodeGenerator {
     dispatch_fns: HashMap<String, Vec<(String, String)>>,
     dispatch_signatures: HashMap<String, Vec<(Vec<String>, String)>>,
     var_types: HashMap<String, String>,
+    dynamic_vars: HashSet<String>,
     global_vars: HashMap<String, String>,
     in_setter: bool,
     current_class: Option<String>,
@@ -300,6 +301,7 @@ impl CCodeGenerator {
             dispatch_fns: HashMap::new(),
             dispatch_signatures: HashMap::new(),
             var_types: HashMap::new(),
+            dynamic_vars: HashSet::new(),
             global_vars: HashMap::new(),
             in_setter: false,
             current_class: None,
@@ -1545,6 +1547,12 @@ static inline LucidVal lucid_add_value(LucidVal left, LucidVal right) {
         return lucid_str(lucid_str_concat(left.s, right.s));
     if (left.type == LUCID_TYPE_LIST && right.type == LUCID_TYPE_LIST)
         return lucid_list_val(lucid_list_concat(left.list, right.list));
+    if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_INT)
+        return lucid_int(lucid_checked_add(left.i, right.i));
+    if ((left.type == LUCID_TYPE_INT || left.type == LUCID_TYPE_FLOAT) &&
+        (right.type == LUCID_TYPE_INT || right.type == LUCID_TYPE_FLOAT))
+        return lucid_float((left.type == LUCID_TYPE_FLOAT ? left.f : (double)left.i) +
+                           (right.type == LUCID_TYPE_FLOAT ? right.f : (double)right.i));
     fprintf(stderr, "unsupported operands for +\n");
     exit(1);
 }
@@ -2460,6 +2468,12 @@ static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
         return lucid_str(lucid_str_repeat(sequence.s, count_value.i));
     if (sequence.type == LUCID_TYPE_LIST && count_value.type == LUCID_TYPE_INT)
         return lucid_list_val(lucid_list_repeat_value(sequence.list, count_value.i));
+    if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_INT)
+        return lucid_int(lucid_checked_mul(left.i, right.i));
+    if ((left.type == LUCID_TYPE_INT || left.type == LUCID_TYPE_FLOAT) &&
+        (right.type == LUCID_TYPE_INT || right.type == LUCID_TYPE_FLOAT))
+        return lucid_float((left.type == LUCID_TYPE_FLOAT ? left.f : (double)left.i) *
+                           (right.type == LUCID_TYPE_FLOAT ? right.f : (double)right.i));
     fprintf(stderr, "unsupported operands for *\n");
     exit(1);
 }
@@ -3198,6 +3212,9 @@ static inline void lucid_print_val(LucidVal v) {
                         if self.expr_is_bigint(val) {
                             self.bigint_names.insert(name.clone());
                         }
+                        if ty == "LucidVal" && matches!(val, Expr::Call { .. }) {
+                            self.dynamic_vars.insert(name.clone());
+                        }
                     }
                     vars.insert(name.clone(), ty);
                 } else {
@@ -3228,6 +3245,9 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         if self.expr_is_bigint(value) {
                             self.bigint_names.insert(name.clone());
+                        }
+                        if ty == "LucidVal" && matches!(value, Expr::Call { .. }) {
+                            self.dynamic_vars.insert(name.clone());
                         }
                         vars.insert(name.clone(), ty);
                     }
@@ -3699,6 +3719,7 @@ static inline void lucid_print_val(LucidVal v) {
 
     fn expr_is_dynamic_value(&self, expr: &Expr) -> bool {
         match expr {
+            Expr::Ident { name, .. } => self.dynamic_vars.contains(name),
             Expr::Call { .. } => self.infer_expr_type(expr, &HashMap::new()) == "LucidVal",
             _ => false,
         }
@@ -13076,7 +13097,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_addition_preserves_container_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"a\") + identity(\"b\"))\nitems = identity([1]) + identity([2])\nprint(len(items))\nprint(items[1])\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"a\") + identity(\"b\"))\nleft = identity([1])\nright = identity([2])\nitems = left + right\nprint(len(items))\nprint(items[1])\n";
         let module = parse(source).expect("dynamic addition should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_dynamic_add_{}", std::process::id()));
