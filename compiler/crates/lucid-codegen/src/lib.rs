@@ -2315,6 +2315,17 @@ static inline LucidList* lucid_list_repeat(LucidVal v, int64_t n) {
     }
     return l;
 }
+static inline const char* lucid_str_repeat(const char* value, int64_t count) {
+    if (!value || count <= 0) return "";
+    size_t length = strlen(value);
+    if ((uint64_t)count > (SIZE_MAX - 1) / (length ? length : 1)) exit(1);
+    size_t total = length * (size_t)count;
+    char* result = (char*)malloc(total + 1);
+    if (!result) exit(1);
+    for (int64_t i = 0; i < count; ++i) memcpy(result + (size_t)i * length, value, length);
+    result[total] = '\0';
+    return result;
+}
 
 static inline bool lucid_checked_range_advance(int64_t current, int64_t step, int64_t* next) {
     if (step > 0 && current > INT64_MAX - step) return false;
@@ -5617,6 +5628,15 @@ static inline void lucid_print_val(LucidVal v) {
                 let r_str = self.emit_expr(right)?;
                 let l_ty = self.infer_expr_type(left, &HashMap::new());
                 let r_ty = self.infer_expr_type(right, &HashMap::new());
+
+                if *op == BinaryOp::Mul
+                    && matches!(l_ty.as_str(), "const char*" | "char*")
+                    && r_ty == "int64_t"
+                {
+                    return Ok(format!(
+                        "lucid_str_repeat({l_str}, lucid_int_val(lucid_wrap({r_str})))"
+                    ));
+                }
 
                 if self.expr_is_complex(left) || self.expr_is_complex(right) {
                     let lhs = format!("lucid_wrap({l_str})");
@@ -12618,6 +12638,24 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
+    }
+
+    #[test]
+    fn native_string_repeat_matches_runtime() {
+        let source = "print(\"ha\" * 3)\nprint(\"ha\" * -1)\n";
+        let module = parse(source).expect("string repeat source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_string_repeat_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("string repeat should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled string repeat program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "hahaha\n\n");
     }
 
     #[test]
