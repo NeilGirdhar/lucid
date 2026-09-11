@@ -1650,6 +1650,9 @@ static inline LucidVal lucid_pow(LucidVal base, LucidVal exponent) {
         snprintf(exponent_text, sizeof(exponent_text), "%ld", exponent.i);
         return lucid_bigint_pow(lucid_bigint(base_text), lucid_bigint(exponent_text));
     }
+    if ((base.type == LUCID_TYPE_BIGINT || base.type == LUCID_TYPE_INT) &&
+        (exponent.type == LUCID_TYPE_BIGINT || exponent.type == LUCID_TYPE_INT))
+        return lucid_bigint_pow(base, exponent);
     if ((base.type == LUCID_TYPE_INT || base.type == LUCID_TYPE_FLOAT) &&
         (exponent.type == LUCID_TYPE_INT || exponent.type == LUCID_TYPE_FLOAT))
         return lucid_float(pow(lucid_as_float(base), lucid_as_float(exponent)));
@@ -13337,7 +13340,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_power_preserves_numeric_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nbase = identity(2)\nexponent = identity(10)\nprint(base ** exponent)\nprint(identity(4.0) ** identity(0.5))\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\nbase = identity(2)\nexponent = identity(10)\nprint(base ** exponent)\nprint(identity(4.0) ** identity(0.5))\nprint(identity(100000000000000000001) ** identity(2))\n";
         let module = parse(source).expect("dynamic power should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_power_{}",
@@ -13350,7 +13353,10 @@ print(all({1, 2}))
             .expect("compiled dynamic power should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic power failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "1024\n2\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "1024\n2\n10000000000000000000200000000000000000001\n"
+        );
     }
 
     #[test]
