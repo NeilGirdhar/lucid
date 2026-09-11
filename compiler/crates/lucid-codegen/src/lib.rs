@@ -8406,6 +8406,16 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if let Some(a) = args.first() {
                                 let arg_str = self.emit_expr(&a.value)?;
+                                if let Expr::Literal {
+                                    value: LiteralValue::BigInt(value),
+                                    ..
+                                } = &a.value
+                                {
+                                    return Ok(format!(
+                                        "lucid_bigint(\"{}\")",
+                                        bigint_literal_decimal(value)
+                                    ));
+                                }
                                 return Ok(format!("lucid_int_builtin(lucid_wrap({arg_str}))"));
                             }
                         }
@@ -13535,6 +13545,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "invalid int literal should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("invalid literal for int()"));
+    }
+
+    #[test]
+    fn native_int_preserves_big_integer_literals() {
+        let source = "print(int(100000000000000000001))\n";
+        let module = parse(source).expect("big integer conversion source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_int_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("big integer conversion should compile");
+        let run = Command::new(&output).output().expect("run big integer conversion");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "big integer conversion failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
     }
 
     #[test]
