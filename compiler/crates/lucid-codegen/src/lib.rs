@@ -7611,9 +7611,9 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if !present {
                                 if name == "getattr" && args.len() == 3 {
+                                    let fallback = self.emit_expr(&args[2].value)?;
                                     return Ok(format!(
-                                        "lucid_wrap({})",
-                                        self.emit_expr(&args[2].value)?
+                                        "({{ (void)({object}); lucid_wrap({fallback}); }})"
                                     ));
                                 }
                                 return Err(CodegenError {
@@ -14544,6 +14544,30 @@ print(getattr(p, "z", 42))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n6\n6\n7\ntrue\nfalse\n42\n");
+    }
+
+    #[test]
+    fn native_getattr_default_evaluates_receiver_before_fallback() {
+        let source = r#"
+class Box:
+    value: int
+b = Box(1)
+def make() -> Box:
+    print("receiver")
+    return b
+print(getattr(make(), "missing", 42))
+"#;
+        let module = parse(source).expect("reflection default source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_reflection_default_order_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("reflection default should compile");
+        let run = Command::new(&output).output().expect("run reflection default");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "reflection default failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "receiver\n42\n");
     }
 
     #[test]

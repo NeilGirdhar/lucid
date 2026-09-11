@@ -40,6 +40,8 @@ form.
 Reflection builtins no longer require a literal attribute name in native
 codegen; computed strings use the same checked dynamic dispatch as erased
 values.
+Native reflection preserves receiver-before-default evaluation order when a
+missing static attribute supplies a fallback.
 
 ## Verified baseline
 
@@ -54,15 +56,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-291 native-codegen tests
+292 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-732 tests passed
+733 tests passed
 ```
 
-The same 732 tests also pass with:
+The same 733 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
