@@ -12533,6 +12533,25 @@ print(all({1, 2}))
     }
 
     #[test]
+    fn native_from_sys_import_supports_platform() {
+        let source = "from sys import platform\nprint(platform)\n";
+        let module = parse(source).expect("from-sys source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_from_sys_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("from sys import should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled from-sys program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            format!("{}\n", std::env::consts::OS)
+        );
+    }
+
+    #[test]
     fn native_sys_module_exposes_runtime_members() {
         let source = "import sys\nprint(sys.platform)\nprint(sys.version)\nprint(sys.argv[0])\n";
         let module = parse(source).expect("sys module source should parse");
