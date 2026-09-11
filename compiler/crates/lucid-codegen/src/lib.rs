@@ -2295,6 +2295,8 @@ static inline void lucid_list_set(LucidList* l, int64_t idx, LucidVal v) {
     l->items[idx] = v;
 }
 
+static inline bool lucid_dict_contains(LucidDict* d, LucidVal key);
+
 static inline LucidVal lucid_get_index(LucidVal container, int64_t idx) {
     if (container.type == LUCID_TYPE_LIST) {
         return lucid_list_get(container.list, idx);
@@ -2305,9 +2307,14 @@ static inline LucidVal lucid_get_index(LucidVal container, int64_t idx) {
     return lucid_none();
 }
 static inline LucidVal lucid_get_key(LucidVal container, LucidVal key) {
-    if (container.type == LUCID_TYPE_DICT)
-        return lucid_dict_get(container.dict, key, lucid_none());
-    return lucid_none();
+    if (container.type == LUCID_TYPE_DICT) {
+        if (lucid_dict_contains(container.dict, key))
+            return lucid_dict_get(container.dict, key, lucid_none());
+        fprintf(stderr, "key not found\n");
+        exit(1);
+    }
+    fprintf(stderr, "indexing not supported\n");
+    exit(1);
 }
 
 static inline LucidList* lucid_list_repeat(LucidVal v, int64_t n) {
@@ -12765,6 +12772,24 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "out-of-range indexing should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("out of range"));
+    }
+
+    #[test]
+    fn native_dict_indexing_rejects_missing_key() {
+        let source = "print({\"present\": 1}[\"missing\"])\n";
+        let module = parse(source).expect("missing-key source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_missing_dict_key_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("missing-key source should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled missing-key program should run");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "missing dict key should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("key not found"));
     }
 
     #[test]
