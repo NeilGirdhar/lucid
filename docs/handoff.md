@@ -109,6 +109,8 @@ The object protocol registry now keeps both get and set index callbacks, so
 dynamic receivers no longer fall back to built-in container errors.
 Comma-separated indices now expand to separate native protocol arguments for
 both static and erased `__getitem__`/`__setitem__` calls.
+Erased `for` loops now invoke custom `__iter__` callbacks before materializing
+their yielded collection.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -141,15 +143,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-332 native-codegen tests
+333 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-776 tests passed
+777 tests passed
 ```
 
-The same 776 tests also pass with:
+The same 777 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
