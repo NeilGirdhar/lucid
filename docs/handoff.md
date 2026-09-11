@@ -79,6 +79,8 @@ Native `chr` now requires an integer runtime value after erasure, matching the
 interpreter instead of coercing floats and strings.
 Dynamic `int` and `float` conversions now reject unsupported `none` and object
 values instead of silently producing zero.
+Native three-argument `pow` now performs modular exponentiation for BigInt
+operands instead of returning the integer NaN sentinel.
 
 ## Verified baseline
 
@@ -93,15 +95,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-308 native-codegen tests
+309 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-749 tests passed
+750 tests passed
 ```
 
-The same 749 tests also pass with:
+The same 750 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

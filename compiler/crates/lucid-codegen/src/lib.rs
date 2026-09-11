@@ -2014,6 +2014,25 @@ static inline LucidVal lucid_pow(LucidVal base, LucidVal exponent) {
     fprintf(stderr, "pow() arguments must be numeric\n"); exit(1);
 }
 static inline LucidVal lucid_pow_mod(LucidVal base, LucidVal exponent, LucidVal modulus) {
+    if (base.type == LUCID_TYPE_BIGINT && exponent.type == LUCID_TYPE_INT &&
+        modulus.type == LUCID_TYPE_BIGINT && exponent.i >= 0) {
+        LucidVal result = lucid_bigint("1");
+        if (lucid_bigint_cmp_mag(modulus.bigint ? modulus.bigint : "0", "0") == 0) return lucid_bigint("int.nan");
+        LucidVal power = lucid_bigint_divmod(base, modulus, true, false);
+        int64_t e = exponent.i;
+        while (e) {
+            if (e & 1) result = lucid_bigint_divmod(lucid_bigint_binop(result, power, '*'), modulus, true, false);
+            e >>= 1;
+            if (e) power = lucid_bigint_divmod(lucid_bigint_binop(power, power, '*'), modulus, true, false);
+        }
+        return result;
+    }
+    if (base.type == LUCID_TYPE_BIGINT && exponent.type == LUCID_TYPE_INT &&
+        modulus.type == LUCID_TYPE_INT && exponent.i >= 0) {
+        char modulus_text[64];
+        snprintf(modulus_text, sizeof(modulus_text), "%lld", (long long)modulus.i);
+        return lucid_pow_mod(base, exponent, lucid_bigint(modulus_text));
+    }
     if (base.type != LUCID_TYPE_INT || exponent.type != LUCID_TYPE_INT || modulus.type != LUCID_TYPE_INT || modulus.i == 0 || exponent.i < 0) return lucid_int(INT64_MIN);
     __int128 result = 1, power = exponent.i, mod = modulus.i;
     if (mod < 0) mod = -mod;
@@ -13694,6 +13713,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "chr(float) should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("an integer is required"));
+    }
+
+    #[test]
+    fn native_three_argument_pow_preserves_bigint_base() {
+        let source = "print(pow(100000000000000000000, 2, 1000))\n";
+        let module = parse(source).expect("bigint modular pow source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_pow_mod_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("bigint modular pow should compile");
+        let run = Command::new(&output).output().expect("run bigint modular pow");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "bigint modular pow failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n");
     }
 
     #[test]
