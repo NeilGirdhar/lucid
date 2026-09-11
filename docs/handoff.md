@@ -117,6 +117,8 @@ diverged:
   assertion.
 * Cranelift instruction-result extraction now returns a checked optional
   result, rejecting unknown instruction forms instead of panicking.
+* CIR execution now exposes an `UnsupportedInstruction` error for malformed
+  arithmetic instruction variants; the shared ABI maps it to `InvalidOperation`.
 * Project diagnostics now preserve already-collected errors if a repeated
   parse query fails unexpectedly, rather than unwrapping its result.
 * Checker subtype and numeric-special-value paths now return ordinary

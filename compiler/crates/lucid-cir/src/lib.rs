@@ -205,6 +205,7 @@ pub enum ExecuteError {
     DivisionByZero,
     ArithmeticOverflow,
     NegativeExponent,
+    UnsupportedInstruction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5967,11 +5968,7 @@ impl Function {
                                     .checked_sub(product)
                                     .ok_or(ExecuteError::ArithmeticOverflow)?
                             }
-                            _ => {
-                                return Err(ExecuteError::Invalid(VerifyError::UndefinedValue(
-                                    *result,
-                                )))
-                            }
+                            _ => return Err(ExecuteError::UnsupportedInstruction),
                         };
                         values.insert(*result, value);
                     }
