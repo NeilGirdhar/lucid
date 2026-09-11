@@ -1843,6 +1843,15 @@ impl TypeChecker {
             collect(stmt, &mut parents, &mut spans, &self.env.classes);
         }
         self.env.class_parents = parents.clone();
+        for (class, parent) in &parents {
+            if let Some(Type::Class {
+                parent: stored_parent,
+                ..
+            }) = self.env.classes.get_mut(class)
+            {
+                *stored_parent = Some(parent.clone());
+            }
+        }
 
         fn visit(
             node: &str,

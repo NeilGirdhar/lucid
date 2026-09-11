@@ -118,6 +118,8 @@ diverged:
   ancestry, pattern matches, field layout, or dynamic type aliases.
   The checker now resolves class parents after declaration collection and
   rejects cyclic inheritance with a source diagnostic before later passes.
+  Native inheritance coverage now also exercises a child declared before its
+  base, including inherited construction fields and dynamic type checks.
   Native object-tag growth now checks both counter and allocation-size
   overflow before calling `realloc`, preserving a recoverable process failure
   instead of allowing wrapped allocation sizes.

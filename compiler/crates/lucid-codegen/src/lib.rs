@@ -12179,7 +12179,7 @@ print(z is complex)
 
     #[test]
     fn native_identity_checks_follow_class_inheritance() {
-        let source = "class Base:\n    value: int\nclass Child(Base):\n    extra: int\nc = Child(1, 2)\nprint(c is Base)\nprint(c is Child)\nprint(c is not Base)\n";
+        let source = "class Child(Base):\n    extra: int\nclass Base:\n    value: int\nc = Child(1, 2)\nprint(c is Base)\nprint(c is Child)\nprint(c is not Base)\n";
         let module = parse(source).expect("inheritance identity source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_identity_inheritance_{}",
