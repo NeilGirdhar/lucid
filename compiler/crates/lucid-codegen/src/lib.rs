@@ -2239,6 +2239,14 @@ static inline bool lucid_dict_contains(LucidDict* d, LucidVal key) {
     for (int64_t i = 0; i < d->len; i++) if (lucid_eq(d->keys[i], key)) return true;
     return false;
 }
+static inline bool lucid_contains_value(LucidVal container, LucidVal needle) {
+    if (container.type == LUCID_TYPE_LIST) return lucid_list_contains(container.list, needle);
+    if (container.type == LUCID_TYPE_SET) return lucid_set_contains(container.set, needle);
+    if (container.type == LUCID_TYPE_DICT) return lucid_dict_contains(container.dict, needle);
+    if (container.type == LUCID_TYPE_STR) return lucid_str_contains(container.s, needle);
+    fprintf(stderr, "'in' operator not supported for value\n");
+    exit(1);
+}
 static inline void lucid_set_remove(LucidSet* s, LucidVal value) {
     if (!s) return;
     if (s->frozen) { fprintf(stderr, "cannot mutate frozen set\n"); exit(1); }
@@ -6501,6 +6509,16 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         if matches!(r_ty.as_str(), "const char*" | "char*") {
                             let check = format!("lucid_str_contains({r_str}, lucid_wrap({l_str}))");
+                            return if matches!(op, BinaryOp::NotIn) {
+                                Ok(format!("((bool)(!{check}))"))
+                            } else {
+                                Ok(format!("((bool)({check}))"))
+                            };
+                        }
+                        if r_ty == "LucidVal" {
+                            let check = format!(
+                                "lucid_contains_value(lucid_wrap({r_str}), lucid_wrap({l_str}))"
+                            );
                             return if matches!(op, BinaryOp::NotIn) {
                                 Ok(format!("((bool)(!{check}))"))
                             } else {
@@ -13046,6 +13064,27 @@ print(all({1, 2}))
             "dynamic multiplication failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "abab\n4\n1\n");
+    }
+
+    #[test]
+    fn native_dynamic_membership_preserves_container_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(\"ell\" in identity(\"hello\"))\nprint(\"answer\" in identity({\"answer\": 42}))\nprint(2 in identity([1, 2, 3]))\nprint(9 not in identity([1, 2, 3]))\n";
+        let module = parse(source).expect("dynamic membership should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_membership_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic membership should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic membership should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic membership failed: {run:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "true\ntrue\ntrue\ntrue\n"
+        );
     }
 
     #[test]
