@@ -3272,7 +3272,19 @@ static inline LucidList* lucid_iterable_to_list(LucidVal value) {
 }
 static inline LucidList* lucid_iter_value(LucidVal value) {
     if (value.type == LUCID_TYPE_LIST) return value.list;
+    if (value.type == LUCID_TYPE_PTR && value.ptr) {
+        LucidObjectIter iter = lucid_object_iter(value.ptr);
+        if (iter) return lucid_iter_value(iter(value.ptr));
+    }
     return lucid_iterable_to_list(value);
+}
+static inline LucidVal lucid_iter_dynamic(LucidVal value) {
+    if (value.type == LUCID_TYPE_PTR && value.ptr) {
+        LucidObjectIter iter = lucid_object_iter(value.ptr);
+        if (iter) return iter(value.ptr);
+    }
+    if (value.type == LUCID_TYPE_LIST) return value;
+    return lucid_wrap(lucid_iter_value(value));
 }
 
 static inline LucidList* lucid_reversed(LucidVal value) {
@@ -8661,6 +8673,11 @@ static inline void lucid_print_val(LucidVal v) {
                             if let Some(owner) = self.method_owner(class_name, "__iter__") {
                                 return Ok(format!("{owner}___iter__(({owner}*)({value}))"));
                             }
+                            if value_type == "LucidVal" {
+                                return Ok(format!(
+                                    "lucid_iter_dynamic(lucid_wrap({value}))"
+                                ));
+                            }
                             return Ok(format!("lucid_iter_value(lucid_wrap({value}))"));
                         }
                         "next" => {
@@ -12352,6 +12369,24 @@ print(" ".join(capitalized))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic next failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n6\n");
+    }
+
+    #[test]
+    fn native_iter_returns_erased_custom_iterator() {
+        let source = "class Counter:\n    current: int\n    def __iter__(self) -> Any:\n        return self\n    def next(self) -> Any:\n        self.current = self.current + 1\n        return self.current\ndef identity(value: Any) -> Any:\n    return value\nc = identity(Counter(4))\ni = iter(c)\nprint(next(i))";
+        let module = parse(source).expect("dynamic iter builtin source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_iter_builtin_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic iter builtin should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic iter builtin");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic iter builtin failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
     #[test]
