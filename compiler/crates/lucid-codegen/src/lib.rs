@@ -2949,6 +2949,14 @@ static inline void lucid_print_val(LucidVal v) {
                 if name == "e" && !self.global_vars.contains_key(name) {
                     return "double".to_string();
                 }
+                if matches!(name.as_str(), "platform" | "version")
+                    && !self.global_vars.contains_key(name)
+                {
+                    return "const char*".to_string();
+                }
+                if name == "argv" && !self.global_vars.contains_key(name) {
+                    return "LucidList*".to_string();
+                }
                 if let Some(ty) = vars
                     .get(name)
                     .or_else(|| self.var_types.get(name))
@@ -5513,15 +5521,37 @@ static inline void lucid_print_val(LucidVal v) {
                 c_escape_string(&type_form_name(type_expr))
             )),
             Expr::Skip(_) => Ok("lucid_none()".to_string()),
-            Expr::Ident { name, .. } => match name.as_str() {
-                "true" => Ok("true".to_string()),
-                "false" => Ok("false".to_string()),
-                "none" | "None" => Ok("lucid_none()".to_string()),
-                "pi" if !self.global_vars.contains_key(name) => Ok("M_PI".to_string()),
-                "e" if !self.global_vars.contains_key(name) => Ok("M_E".to_string()),
-                "self" => Ok("self".to_string()),
-                _ => Ok(format!("lucid_var_{name}")),
-            },
+            Expr::Ident { name, .. } => {
+                if self
+                    .from_imports
+                    .get(name)
+                    .is_some_and(|module| module == "math")
+                {
+                    match name.as_str() {
+                        "pi" => return Ok("M_PI".to_string()),
+                        "e" => return Ok("M_E".to_string()),
+                        _ => {}
+                    }
+                }
+                match name.as_str() {
+                    "true" => Ok("true".to_string()),
+                    "false" => Ok("false".to_string()),
+                    "none" | "None" => Ok("lucid_none()".to_string()),
+                    "pi" if !self.global_vars.contains_key(name) => Ok("M_PI".to_string()),
+                    "e" if !self.global_vars.contains_key(name) => Ok("M_E".to_string()),
+                    "platform" if !self.global_vars.contains_key(name) => {
+                        Ok("lucid_sys_platform()".to_string())
+                    }
+                    "version" if !self.global_vars.contains_key(name) => {
+                        Ok("lucid_sys_version()".to_string())
+                    }
+                    "argv" if !self.global_vars.contains_key(name) => {
+                        Ok("lucid_sys_argv()".to_string())
+                    }
+                    "self" => Ok("self".to_string()),
+                    _ => Ok(format!("lucid_var_{name}")),
+                }
+            }
             Expr::Binary {
                 op, left, right, ..
             } => {
@@ -6344,6 +6374,31 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                 }
                 if let Expr::Ident { name, .. } = &**func {
+                    if self
+                        .from_imports
+                        .get(name)
+                        .is_some_and(|module| module == "math")
+                        && matches!(
+                            name.as_str(),
+                            "sqrt" | "sin" | "cos" | "tan" | "floor" | "ceil"
+                        )
+                    {
+                        if args.len() != 1 {
+                            return Err(CodegenError {
+                                message: format!("{name}() takes exactly one argument"),
+                            });
+                        }
+                        let arg = self.emit_expr(&args[0].value)?;
+                        let numeric = format!("lucid_as_float(lucid_wrap({arg}))");
+                        return Ok(match name.as_str() {
+                            "sqrt" => format!("sqrt({numeric})"),
+                            "sin" => format!("sin({numeric})"),
+                            "cos" => format!("cos({numeric})"),
+                            "tan" => format!("tan({numeric})"),
+                            "floor" => format!("floor({numeric})"),
+                            _ => format!("ceil({numeric})"),
+                        });
+                    }
                     if self
                         .from_imports
                         .get(name)
@@ -12459,6 +12514,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
+    }
+
+    #[test]
+    fn native_from_math_import_supports_constants_and_functions() {
+        let source = "from math import pi, sqrt\nprint(pi > 3)\nprint(sqrt(9))\n";
+        let module = parse(source).expect("from-math source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_from_math_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("from math import should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled from-math program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n3\n");
     }
 
     #[test]
