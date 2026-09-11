@@ -1328,6 +1328,15 @@ static inline LucidVal lucid_bool(bool b) {
 static inline LucidVal lucid_str(const char* s) {
     LucidVal v = {0}; v.type = LUCID_TYPE_STR; v.s = s; v.ptr = (void*)s; return v;
 }
+static inline LucidVal lucid_env_var(LucidVal name, bool has_default, LucidVal fallback) {
+    if (name.type != LUCID_TYPE_STR || !name.s) {
+        fprintf(stderr, "env_var() name must be a string\n");
+        exit(1);
+    }
+    const char* value = getenv(name.s);
+    if (value) return lucid_str(value);
+    return has_default ? fallback : lucid_none();
+}
 
 static inline const char* lucid_str_concat(const char* a, const char* b) {
     if (!a) a = "";
@@ -6877,6 +6886,23 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             return Ok("lucid_none()".into());
                         }
+                        "env_var" => {
+                            if !(1..=2).contains(&args.len()) {
+                                return Err(CodegenError {
+                                    message: "env_var() takes one or two arguments".into(),
+                                });
+                            }
+                            let name = self.emit_expr(&args[0].value)?;
+                            let fallback = args
+                                .get(1)
+                                .map(|arg| self.emit_expr(&arg.value))
+                                .transpose()?
+                                .unwrap_or_else(|| "lucid_none()".into());
+                            return Ok(format!(
+                                "lucid_env_var(lucid_wrap({name}), {}, lucid_wrap({fallback}))",
+                                args.len() == 2
+                            ));
+                        }
                         "slice" => {
                             if !(1..=3).contains(&args.len()) {
                                 return Err(CodegenError {
@@ -12209,6 +12235,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "x\ny\nx\nmove\n");
+    }
+
+    #[test]
+    fn native_env_var_returns_default_for_missing_name() {
+        let source = "print(env_var(\"LUCID_CODEGEN_MISSING_ENV_VAR_9F4A\", \"fallback\"))\n";
+        let module = parse(source).expect("env_var source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_env_var_test_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("env_var source should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled env_var program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "fallback\n");
     }
 
     #[test]
