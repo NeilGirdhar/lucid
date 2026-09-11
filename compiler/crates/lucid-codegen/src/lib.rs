@@ -7503,13 +7503,18 @@ static inline void lucid_print_val(LucidVal v) {
                                 .trim_end_matches('*')
                                 .to_string();
                             if name == "getattr" && class_name == "LucidVal" {
+                                let object_tmp = self.new_temp();
+                                self.emit_line(&format!("LucidVal {object_tmp} = lucid_wrap({object});"));
                                 let (fallback, has_default) = if args.len() == 3 {
-                                    (format!("lucid_wrap({})", self.emit_expr(&args[2].value)?), "true")
+                                    let fallback_tmp = self.new_temp();
+                                    let fallback_expr = self.emit_expr(&args[2].value)?;
+                                    self.emit_line(&format!("LucidVal {fallback_tmp} = lucid_wrap({fallback_expr});"));
+                                    (fallback_tmp, "true")
                                 } else {
                                     ("lucid_none()".to_string(), "false")
                                 };
                                 return Ok(format!(
-                                    "lucid_dynamic_attr(lucid_wrap({object}), \"{}\", {fallback}, {has_default})",
+                                    "lucid_dynamic_attr({object_tmp}, \"{}\", {fallback}, {has_default})",
                                     c_escape_string(attr_name)
                                 ));
                             }
