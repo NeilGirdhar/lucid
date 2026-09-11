@@ -1601,6 +1601,12 @@ static inline LucidVal lucid_bigint_pow(LucidVal base, LucidVal exponent) {
 }
 static inline LucidVal lucid_complex_from_value(LucidVal value, bool has_imag, LucidVal imag) {
     if (value.type == LUCID_TYPE_COMPLEX && !has_imag) return value;
+    if (value.type != LUCID_TYPE_INT && value.type != LUCID_TYPE_FLOAT) {
+        fprintf(stderr, "complex() arguments must be numeric\n"); exit(1);
+    }
+    if (has_imag && imag.type != LUCID_TYPE_INT && imag.type != LUCID_TYPE_FLOAT) {
+        fprintf(stderr, "complex() arguments must be numeric\n"); exit(1);
+    }
     double real = value.type == LUCID_TYPE_FLOAT ? value.f : (double)value.i;
     double imaginary = imag.type == LUCID_TYPE_FLOAT ? imag.f : (double)imag.i;
     return lucid_complex(real, has_imag ? imaginary : 0.0);
@@ -13645,6 +13651,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "complex str failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "(3+4j)\n");
+    }
+
+    #[test]
+    fn native_complex_rejects_non_numeric_erased_values() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(complex(identity(\"3\")))\n";
+        let module = parse(source).expect("dynamic complex source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_complex_dynamic_invalid_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic complex should compile");
+        let run = Command::new(&output).output().expect("run dynamic complex");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "complex(str) should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("arguments must be numeric"));
     }
 
     #[test]
