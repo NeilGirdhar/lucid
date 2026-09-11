@@ -5548,6 +5548,9 @@ static inline void lucid_print_val(LucidVal v) {
                     "argv" if !self.global_vars.contains_key(name) => {
                         Ok("lucid_sys_argv()".to_string())
                     }
+                    "done" if !self.global_vars.contains_key(name) => {
+                        Ok("lucid_str(\"iteration.done\")".to_string())
+                    }
                     "self" => Ok("self".to_string()),
                     _ => Ok(format!("lucid_var_{name}")),
                 }
@@ -12549,6 +12552,24 @@ print(all({1, 2}))
             String::from_utf8_lossy(&run.stdout),
             format!("{}\n", std::env::consts::OS)
         );
+    }
+
+    #[test]
+    fn native_from_iteration_import_supports_done_sentinel() {
+        let source = "from iteration import done\nprint(done)\n";
+        let module = parse(source).expect("from-iteration source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_from_iteration_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("from iteration import should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled from-iteration program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "iteration.done\n");
     }
 
     #[test]
