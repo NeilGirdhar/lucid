@@ -1908,6 +1908,10 @@ static inline LucidVal lucid_int_dynamic(LucidVal v) {
         if (errno == ERANGE) return lucid_bigint(v.s);
         return lucid_int((int64_t)result);
     }
+    if (v.type != LUCID_TYPE_INT && v.type != LUCID_TYPE_FLOAT &&
+        v.type != LUCID_TYPE_BOOL && v.type != LUCID_TYPE_BIGINT) {
+        fprintf(stderr, "int() cannot convert value\n"); exit(1);
+    }
     return lucid_wrap(lucid_int_builtin(v));
 }
 static inline double lucid_as_float(LucidVal v) {
@@ -1926,6 +1930,10 @@ static inline double lucid_float_builtin(LucidVal v) {
             fprintf(stderr, "invalid literal for float()\n"); exit(1);
         }
         return result;
+    }
+    if (v.type != LUCID_TYPE_FLOAT && v.type != LUCID_TYPE_INT &&
+        v.type != LUCID_TYPE_BIGINT && v.type != LUCID_TYPE_BOOL) {
+        fprintf(stderr, "float() cannot convert value\n"); exit(1);
     }
     return lucid_as_float(v);
 }
@@ -13686,6 +13694,35 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "chr(float) should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("an integer is required"));
+    }
+
+    #[test]
+    fn native_numeric_conversions_reject_unsupported_erased_values() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(int(identity(none)))\n";
+        let module = parse(source).expect("dynamic int source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_int_dynamic_invalid_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic int should compile");
+        let run = Command::new(&output).output().expect("run dynamic int");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "int(none) should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("int() cannot convert"));
+
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(float(identity(none)))\n";
+        let module = parse(source).expect("dynamic float source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_float_dynamic_invalid_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic float should compile");
+        let run = Command::new(&output).output().expect("run dynamic float");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "float(none) should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("float() cannot convert"));
     }
 
     #[test]
