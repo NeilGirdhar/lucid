@@ -2488,6 +2488,20 @@ static inline LucidVal lucid_div_value(LucidVal left, LucidVal right) {
     fprintf(stderr, "unsupported operands for /\n");
     exit(1);
 }
+static inline LucidVal lucid_unary_value(LucidVal value, char op) {
+    if (op == '+' && (value.type == LUCID_TYPE_INT || value.type == LUCID_TYPE_FLOAT || value.type == LUCID_TYPE_COMPLEX))
+        return value;
+    if (op == '-' && value.type == LUCID_TYPE_INT)
+        return lucid_int(lucid_checked_neg(value.i));
+    if (op == '-' && value.type == LUCID_TYPE_FLOAT)
+        return lucid_float(-value.f);
+    if (op == '-' && value.type == LUCID_TYPE_COMPLEX)
+        return lucid_complex(-value.real, -value.imag);
+    if (op == '~' && value.type == LUCID_TYPE_INT)
+        return lucid_int(~value.i);
+    fprintf(stderr, "unsupported unary operand\n");
+    exit(1);
+}
 static inline LucidVal lucid_floor_div_value(LucidVal left, LucidVal right) {
     bool left_int = left.type == LUCID_TYPE_INT;
     bool right_int = right.type == LUCID_TYPE_INT;
@@ -6686,6 +6700,24 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Expr::Unary { op, expr, .. } => {
                 let e_str = self.emit_expr(expr)?;
+                if self.expr_is_dynamic_value(expr) {
+                    let symbol = match op {
+                        UnaryOp::Pos => '+',
+                        UnaryOp::Neg => '-',
+                        UnaryOp::Invert => '~',
+                        UnaryOp::Not => {
+                            return Ok(format!("(!{})", self.truthy_native(expr, &e_str)));
+                        }
+                        _ => {
+                            return Err(CodegenError {
+                                message: "unsupported dynamic unary operator".to_string(),
+                            });
+                        }
+                    };
+                    return Ok(format!(
+                        "lucid_unary_value(lucid_wrap({e_str}), '{symbol}')"
+                    ));
+                }
                 if self.expr_is_bigint(expr) {
                     return match op {
                         UnaryOp::Neg => Ok(format!("lucid_bigint_neg(lucid_wrap({e_str}))")),
@@ -13266,6 +13298,27 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic power failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1024\n2\n");
+    }
+
+    #[test]
+    fn native_dynamic_unary_operations_preserve_numeric_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nvalue = identity(4)\nprint(-value)\nprint(+value)\nprint(~value)\n";
+        let module = parse(source).expect("dynamic unary operations should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_unary_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic unary operations should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic unary operations should run");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "dynamic unary operations failed: {run:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "-4\n4\n-5\n");
     }
 
     #[test]
