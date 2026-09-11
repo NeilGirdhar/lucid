@@ -8933,6 +8933,18 @@ static inline void lucid_print_val(LucidVal v) {
                             "lucid_dict_get({obj_code}, lucid_wrap({key_code}), lucid_wrap({fallback}))"
                         ));
                     }
+                    if attr == "contains" && receiver_ty == "LucidDict*" {
+                        if args.len() != 1 {
+                            return Err(CodegenError {
+                                message: "contains() takes exactly one argument".to_string(),
+                            });
+                        }
+                        let obj_code = self.emit_expr(obj_expr)?;
+                        let key_code = self.emit_expr(&args[0].value)?;
+                        return Ok(format!(
+                            "lucid_dict_contains({obj_code}, lucid_wrap({key_code}))"
+                        ));
+                    }
                     if attr == "add"
                         && self.infer_expr_type(obj_expr, &HashMap::new()) == "LucidSet*"
                     {
@@ -12790,6 +12802,28 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "missing dict key should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("key not found"));
+    }
+
+    #[test]
+    fn native_dict_contains_reports_key_membership() {
+        let source = "items = {\"present\": 1}\nprint(items.contains(\"present\"))\nprint(items.contains(\"missing\"))\n";
+        let module = parse(source).expect("dict contains source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dict_contains_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dict contains should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dict contains program should run");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "native dict contains failed: {:?}",
+            run
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
     }
 
     #[test]
