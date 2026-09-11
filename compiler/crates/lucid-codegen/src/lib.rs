@@ -2191,6 +2191,10 @@ static inline bool lucid_list_contains(LucidList* l, LucidVal value) {
     for (int64_t i = 0; i < l->len; i++) if (lucid_eq(l->items[i], value)) return true;
     return false;
 }
+static inline bool lucid_str_contains(const char* haystack, LucidVal needle) {
+    return haystack && needle.type == LUCID_TYPE_STR && needle.s
+        && strstr(haystack, needle.s) != NULL;
+}
 static inline bool lucid_dict_contains(LucidDict* d, LucidVal key) {
     if (!d) return false;
     for (int64_t i = 0; i < d->len; i++) if (lucid_eq(d->keys[i], key)) return true;
@@ -6306,6 +6310,14 @@ static inline void lucid_print_val(LucidVal v) {
                                 Ok(format!("((bool)(!{call}))"))
                             } else {
                                 Ok(format!("((bool)({call}))"))
+                            };
+                        }
+                        if matches!(r_ty.as_str(), "const char*" | "char*") {
+                            let check = format!("lucid_str_contains({r_str}, lucid_wrap({l_str}))");
+                            return if matches!(op, BinaryOp::NotIn) {
+                                Ok(format!("((bool)(!{check}))"))
+                            } else {
+                                Ok(format!("((bool)({check}))"))
                             };
                         }
                         let helper = match r_ty.as_str() {
@@ -12570,6 +12582,42 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "iteration.done\n");
+    }
+
+    #[test]
+    fn native_string_membership_matches_interpreter() {
+        let source = "print(\"ell\" in \"hello\")\nprint(\"z\" not in \"hello\")\n";
+        let module = parse(source).expect("string membership source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_string_membership_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("string membership should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled membership program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
+    }
+
+    #[test]
+    fn native_string_membership_uses_substring_semantics() {
+        let source = "print(\"ell\" in \"hello\")\nprint(\"x\" not in \"hello\")\n";
+        let module = parse(source).expect("string membership source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_string_membership_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("string membership should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled string membership program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
     }
 
     #[test]
