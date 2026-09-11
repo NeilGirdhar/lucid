@@ -1206,11 +1206,12 @@ typedef bool (*LucidObjectTruthy)(void*);
 typedef const char* (*LucidObjectRepr)(void*);
 typedef int64_t (*LucidObjectHash)(void*);
 typedef bool (*LucidObjectEq)(void*, void*);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; } LucidObjectTag;
+typedef bool (*LucidObjectLt)(void*, void*);
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name) {
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name) {
     if (!ptr) return;
     if (lucid_object_tag_count == SIZE_MAX) {
         fprintf(stderr, "too many registered objects\n"); exit(1);
@@ -1228,7 +1229,7 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
         lucid_object_tags = grown;
         lucid_object_tag_capacity = next;
     }
-    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name};
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     // A derived object has one registry entry for its concrete class and one
@@ -1264,6 +1265,15 @@ static inline LucidObjectEq lucid_object_eq(void* left, void* right) {
                 || (lucid_object_is(left, lucid_object_tags[i].eq_class_name)
                     && lucid_object_is(right, lucid_object_tags[i].eq_class_name))))
             return lucid_object_tags[i].eq;
+    return NULL;
+}
+static inline LucidObjectLt lucid_object_lt(void* left, void* right) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == left && lucid_object_tags[i].lt && lucid_object_tags[i].lt_class_name
+            && (lucid_object_tags[i].lt_class_name[0] == '\0'
+                || (lucid_object_is(left, lucid_object_tags[i].lt_class_name)
+                    && lucid_object_is(right, lucid_object_tags[i].lt_class_name))))
+            return lucid_object_tags[i].lt;
     return NULL;
 }
 static inline bool lucid_object_frozen(void* ptr) {
@@ -2457,6 +2467,10 @@ static inline bool lucid_identity(LucidVal a, LucidVal b) {
     return a.ptr == b.ptr;
 }
 static inline bool lucid_lt(LucidVal a, LucidVal b) {
+    if (a.type == LUCID_TYPE_PTR && b.type == LUCID_TYPE_PTR) {
+        LucidObjectLt lt = lucid_object_lt(a.ptr, b.ptr);
+        if (lt) return lt(a.ptr, b.ptr);
+    }
     if (a.type == LUCID_TYPE_STR && b.type == LUCID_TYPE_STR)
         return strcmp(a.s ? a.s : "", b.s ? b.s : "") < 0;
     if ((a.type == LUCID_TYPE_BIGINT || a.type == LUCID_TYPE_INT) &&
@@ -4479,6 +4493,30 @@ static inline void lucid_print_val(LucidVal v) {
                 }
                 Some((owner, parameter_type, dispatch_class))
             });
+        let lt_owner = self
+            .method_owner(name, "__lt__")
+            .and_then(|owner| {
+                if !self
+                    .known_method_return_types
+                    .get(&(owner.clone(), "__lt__".to_string()))
+                    .is_some_and(|ty| ty == "bool")
+                {
+                    return None;
+                }
+                let parameter_type = self
+                    .known_method_param_types
+                    .get(&(owner.clone(), "__lt__".to_string()))
+                    .and_then(|types| types.first())
+                    .cloned()?;
+                let dispatch_class = parameter_type
+                    .strip_suffix('*')
+                    .filter(|class| self.known_classes.contains_key(*class))
+                    .map(ToOwned::to_owned);
+                if parameter_type != "LucidVal" && dispatch_class.is_none() {
+                    return None;
+                }
+                Some((owner, parameter_type, dispatch_class))
+            });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
             self.emit_line(&format!(
@@ -4505,6 +4543,19 @@ static inline void lucid_print_val(LucidVal v) {
             };
             self.emit_line(&format!(
                 "static bool {name}_eq(void* left, void* right) {{ return {owner}___eq__(({owner}*)left, {other}); }}"
+            ));
+        }
+        if let Some((owner, parameter_type, _)) = &lt_owner {
+            self.emit_line(&format!(
+                "bool {owner}___lt__({owner}* self, {parameter_type} other);"
+            ));
+            let other = if parameter_type == "LucidVal" {
+                "lucid_wrap(right)".to_string()
+            } else {
+                format!("({parameter_type})right")
+            };
+            self.emit_line(&format!(
+                "static bool {name}_lt(void* left, void* right) {{ return {owner}___lt__(({owner}*)left, {other}); }}"
             ));
         }
 
@@ -4549,9 +4600,18 @@ static inline void lucid_print_val(LucidVal v) {
             .as_ref()
             .map(|_| format!("(LucidObjectEq){name}_eq"))
             .unwrap_or_else(|| "NULL".to_string());
+        let lt_callback = lt_owner
+            .as_ref()
+            .map(|_| format!("(LucidObjectLt){name}_lt"))
+            .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {});",
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {});",
             eq_owner
+                .as_ref()
+                .and_then(|(_, _, dispatch_class)| dispatch_class.as_deref())
+                .map(|class| format!("\"{class}\""))
+                .unwrap_or_else(|| "\"\"".to_string()),
+            lt_owner
                 .as_ref()
                 .and_then(|(_, _, dispatch_class)| dispatch_class.as_deref())
                 .map(|class| format!("\"{class}\""))
@@ -4567,7 +4627,7 @@ static inline void lucid_print_val(LucidVal v) {
                 break;
             }
             self.emit_line(&format!(
-                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL);"
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
@@ -14028,6 +14088,24 @@ print(all({1, 2}))
         let run = Command::new(&output).output().expect("run Any equality");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "Any equality failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
+    }
+
+    #[test]
+    fn native_lt_dispatches_erased_object_methods() {
+        let source = "class Item:\n    value: int\n    def __lt__(self, other: Item) -> bool:\n        return self.value < other.value\ndef identity(value: Any) -> Any:\n    return value\nprint(identity(Item(1)) < identity(Item(2)))";
+        let module = parse(source).expect("dynamic object ordering source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_lt_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic object ordering should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic object ordering");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic object ordering failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 

@@ -95,6 +95,8 @@ Inherited equality methods now retain their declaring parent type in the
 metadata, so erased parent/child instances can use the same callback safely.
 Equality methods accepting `Any` now also survive erasure and receive the
 tagged value ABI instead of falling back to pointer identity.
+Native erased `<` now dispatches a class's `__lt__` method with the same
+declaring-class checks, including inherited methods and `Any` parameters.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
 Native `chr` now requires an integer runtime value after erasure, matching the
@@ -127,15 +129,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-324 native-codegen tests
+325 native-codegen tests
 153 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-768 tests passed
+769 tests passed
 ```
 
-The same 768 tests also pass with:
+The same 769 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
