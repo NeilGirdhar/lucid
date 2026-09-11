@@ -1091,10 +1091,13 @@ static inline void lucid_raise_value(LucidVal v) {
 }
 
 static inline const char* lucid_str_index(const char* s, int64_t idx) {
-    if (!s) return "";
+    if (!s) { fprintf(stderr, "index %lld out of range\n", (long long)idx); exit(1); }
     int64_t len = 0; for (const unsigned char* p = (const unsigned char*)s; *p; ++len) p += (*p < 0x80 ? 1 : ((*p & 0xe0) == 0xc0 ? 2 : ((*p & 0xf0) == 0xe0 ? 3 : 4)));
     if (idx < 0) idx += len;
-    if (idx < 0 || idx >= len) return "";
+    if (idx < 0 || idx >= len) {
+        fprintf(stderr, "index %lld out of range\n", (long long)idx);
+        exit(1);
+    }
     const unsigned char* p = (const unsigned char*)s;
     for (int64_t i = 0; i < idx; ++i) p += (*p < 0x80 ? 1 : ((*p & 0xe0) == 0xc0 ? 2 : ((*p & 0xf0) == 0xe0 ? 3 : 4)));
     int width = *p < 0x80 ? 1 : ((*p & 0xe0) == 0xc0 ? 2 : ((*p & 0xf0) == 0xe0 ? 3 : 4));
@@ -2267,7 +2270,10 @@ static inline LucidDict* lucid_dict_from_value(LucidVal value) {
 static inline LucidVal lucid_list_get(LucidList* l, int64_t idx) {
     if (__builtin_expect(!l, 0)) return lucid_none();
     if (__builtin_expect(idx < 0, 0)) idx += l->len;
-    if (__builtin_expect(idx < 0 || idx >= l->len, 0)) return lucid_none();
+    if (__builtin_expect(idx < 0 || idx >= l->len, 0)) {
+        fprintf(stderr, "index %lld out of range\n", (long long)idx);
+        exit(1);
+    }
     return l->items[idx];
 }
 
@@ -12741,6 +12747,24 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n3\n");
+    }
+
+    #[test]
+    fn native_collection_indexing_rejects_out_of_range() {
+        let source = "print([1][2])\n";
+        let module = parse(source).expect("invalid indexing source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_invalid_index_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("invalid indexing should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled invalid indexing program should run");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "out-of-range indexing should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("out of range"));
     }
 
     #[test]
