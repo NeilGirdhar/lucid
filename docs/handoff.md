@@ -87,6 +87,8 @@ Positive BigInt exponents now retain exact integer results in the interpreter,
 including exponents wider than the machine integer range.
 Native BigInt exponentiation now divides the decimal exponent directly, so it
 does not truncate exponents wider than `u64`.
+Native modular `pow` now accepts BigInt exponents and performs the same exact
+repeated-squaring reduction as the interpreter.
 
 ## Verified baseline
 
@@ -101,15 +103,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-311 native-codegen tests
+312 native-codegen tests
 152 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-753 tests passed
+754 tests passed
 ```
 
-The same 753 tests also pass with:
+The same 754 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

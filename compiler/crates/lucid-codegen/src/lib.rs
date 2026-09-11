@@ -2022,6 +2022,33 @@ static inline LucidVal lucid_pow(LucidVal base, LucidVal exponent) {
     fprintf(stderr, "pow() arguments must be numeric\n"); exit(1);
 }
 static inline LucidVal lucid_pow_mod(LucidVal base, LucidVal exponent, LucidVal modulus) {
+    if ((base.type == LUCID_TYPE_INT || base.type == LUCID_TYPE_BIGINT) &&
+        exponent.type == LUCID_TYPE_BIGINT &&
+        (modulus.type == LUCID_TYPE_INT || modulus.type == LUCID_TYPE_BIGINT)) {
+        char base_text[64], modulus_text[64];
+        LucidVal base_value = base.type == LUCID_TYPE_BIGINT
+            ? base
+            : lucid_bigint(lucid_bigint_text(base, base_text));
+        LucidVal modulus_value = modulus.type == LUCID_TYPE_BIGINT
+            ? modulus
+            : lucid_bigint(lucid_bigint_text(modulus, modulus_text));
+        if (lucid_bigint_cmp_mag(modulus_value.bigint ? modulus_value.bigint : "0", "0") == 0)
+            return lucid_bigint("int.nan");
+        if (exponent.bigint && exponent.bigint[0] == '-') return lucid_int(INT64_MIN);
+        LucidVal result = lucid_bigint("1");
+        LucidVal power = lucid_bigint_divmod(base_value, modulus_value, true, false);
+        LucidVal remaining = exponent;
+        LucidVal two = lucid_bigint("2");
+        while (remaining.bigint && strcmp(remaining.bigint, "0") != 0) {
+            LucidVal bit = lucid_bigint_divmod(remaining, two, true, false);
+            if (strcmp(bit.bigint ? bit.bigint : "0", "0") != 0)
+                result = lucid_bigint_divmod(lucid_bigint_binop(result, power, '*'), modulus_value, true, false);
+            remaining = lucid_bigint_divmod(remaining, two, false, false);
+            if (strcmp(remaining.bigint ? remaining.bigint : "0", "0") != 0)
+                power = lucid_bigint_divmod(lucid_bigint_binop(power, power, '*'), modulus_value, true, false);
+        }
+        return result;
+    }
     if (base.type == LUCID_TYPE_BIGINT && exponent.type == LUCID_TYPE_INT &&
         modulus.type == LUCID_TYPE_BIGINT && exponent.i >= 0) {
         LucidVal result = lucid_bigint("1");
@@ -13768,6 +13795,25 @@ print(all({1, 2}))
         let run = Command::new(&output).output().expect("run wide bigint exponent");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "wide bigint exponent failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+    }
+
+    #[test]
+    fn native_modular_pow_accepts_bigint_exponent() {
+        let source = "print(pow(2, 9223372036854775808, 3))\n";
+        let module = parse(source).expect("bigint modular exponent source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_pow_mod_bigint_exponent_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("bigint modular exponent should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run bigint modular exponent");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "bigint modular exponent failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
     }
 
