@@ -3646,6 +3646,13 @@ static inline void lucid_print_val(LucidVal v) {
         }
     }
 
+    fn expr_is_dynamic_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call { .. } => self.infer_expr_type(expr, &HashMap::new()) == "LucidVal",
+            _ => false,
+        }
+    }
+
     fn expr_is_bigint(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Literal {
@@ -5857,7 +5864,9 @@ static inline void lucid_print_val(LucidVal v) {
                             Ok(format!("lucid_str_concat({l_str}, {r_str})"))
                         } else if l_ty == "LucidList*" && r_ty == "LucidList*" {
                             Ok(format!("lucid_list_concat({l_str}, {r_str})"))
-                        } else if l_is_val && r_is_val {
+                        } else if self.expr_is_dynamic_value(left)
+                            && self.expr_is_dynamic_value(right)
+                        {
                             Ok(format!(
                                 "lucid_add_value(lucid_wrap({l_str}), lucid_wrap({r_str}))"
                             ))
