@@ -2280,6 +2280,14 @@ static inline LucidVal lucid_setop_value(LucidVal left, LucidVal right, char op)
     fprintf(stderr, "unsupported operands for %c\n", op);
     exit(1);
 }
+static inline LucidVal lucid_shift_value(LucidVal left, LucidVal right, bool left_shift) {
+    if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_INT) {
+        return lucid_int(left_shift ? lucid_checked_shl(left.i, right.i)
+                                    : lucid_checked_shr(left.i, right.i));
+    }
+    fprintf(stderr, "unsupported operands for %s\n", left_shift ? "<<" : ">>");
+    exit(1);
+}
 static inline bool lucid_set_disjoint(LucidSet* a, LucidSet* b) { if (!a || !b) return true; for (int64_t i = 0; i < a->len; ++i) if (lucid_set_contains(b, a->items[i])) return false; return true; }
 static inline bool lucid_set_disjoint_value(LucidSet* a, LucidVal other) {
     if (other.type == LUCID_TYPE_SET) return lucid_set_disjoint(a, other.set);
@@ -2578,7 +2586,7 @@ static inline LucidVal lucid_mod_value(LucidVal left, LucidVal right) {
         double rhs = right_int ? (double)right.i : right.f;
         return lucid_float(lucid_float_mod(lhs, rhs));
     }
-    fprintf(stderr, "unsupported operands for %\n");
+    fprintf(stderr, "unsupported operands for %%\n");
     exit(1);
 }
 
@@ -3200,6 +3208,12 @@ static inline void lucid_print_val(LucidVal v) {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Pow && l_ty == "LucidVal" && r_ty == "LucidVal" {
+                    return "LucidVal".to_string();
+                }
+                if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
+                    && l_ty == "LucidVal"
+                    && r_ty == "LucidVal"
+                {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
@@ -3836,7 +3850,9 @@ static inline void lucid_print_val(LucidVal v) {
     fn expr_is_dynamic_value(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Ident { name, .. } => self.dynamic_vars.contains(name),
-            Expr::Call { .. } => self.infer_expr_type(expr, &HashMap::new()) == "LucidVal",
+            Expr::Call { .. } | Expr::Binary { .. } => {
+                self.infer_expr_type(expr, &HashMap::new()) == "LucidVal"
+            }
             _ => false,
         }
     }
@@ -6087,6 +6103,15 @@ static inline void lucid_print_val(LucidVal v) {
                 {
                     return Ok(format!(
                         "lucid_pow(lucid_wrap({l_str}), lucid_wrap({r_str}))"
+                    ));
+                }
+                if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
+                    && self.expr_is_dynamic_value(left)
+                    && self.expr_is_dynamic_value(right)
+                {
+                    return Ok(format!(
+                        "lucid_shift_value(lucid_wrap({l_str}), lucid_wrap({r_str}), {})",
+                        *op == BinaryOp::Shl
                     ));
                 }
 
@@ -13378,6 +13403,24 @@ print(all({1, 2}))
             "dynamic unary operations failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "-4\n4\n-5\n");
+    }
+
+    #[test]
+    fn native_dynamic_shifts_preserve_numeric_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(2)\nshift = identity(3)\nprint(left << shift)\nprint(left << shift >> identity(1))\n";
+        let module = parse(source).expect("dynamic shifts should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_shifts_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic shifts should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic shifts should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic shifts failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "16\n8\n");
     }
 
     #[test]
