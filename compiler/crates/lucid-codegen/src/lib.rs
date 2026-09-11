@@ -205,6 +205,7 @@ pub struct CCodeGenerator {
     current_class: Option<String>,
     capture_assignment: Option<String>,
     loop_break_flags: Vec<String>,
+    loop_continue_updates: Vec<Option<(String, String, String)>>,
     finally_stack: Vec<Vec<Stmt>>,
     context_stack: Vec<Vec<String>>,
     complex_names: HashSet<String>,
@@ -315,6 +316,7 @@ impl CCodeGenerator {
             current_class: None,
             capture_assignment: None,
             loop_break_flags: Vec::new(),
+            loop_continue_updates: Vec::new(),
             finally_stack: Vec::new(),
             context_stack: Vec::new(),
             complex_names: HashSet::new(),
@@ -6865,9 +6867,11 @@ static inline void lucid_print_val(LucidVal v) {
                 self.emit_line(&format!("while ({cond_truth}) {{"));
                 self.indent += 1;
                 self.loop_break_flags.push(break_flag.clone());
+                self.loop_continue_updates.push(None);
                 for s in body {
                     self.emit_stmt(s)?;
                 }
+                self.loop_continue_updates.pop();
                 self.loop_break_flags.pop();
                 self.indent -= 1;
                 self.emit_line("}");
@@ -6931,11 +6935,17 @@ static inline void lucid_print_val(LucidVal v) {
                             self.emit_line(&format!("for (lucid_var_{var_name} = {start_tmp}; ({step_tmp} > 0 ? lucid_var_{var_name} < {stop_tmp} : lucid_var_{var_name} > {stop_tmp}); ) {{"));
                             self.indent += 1;
                             self.loop_break_flags.push(break_flag.clone());
+                            self.loop_continue_updates.push(Some((
+                                format!("lucid_var_{var_name}"),
+                                step_tmp.clone(),
+                                next_tmp.clone(),
+                            )));
                             for s in body {
                                 self.emit_stmt(s)?;
                             }
                             self.emit_line(&format!("if (!lucid_checked_range_advance(lucid_var_{var_name}, {step_tmp}, &{next_tmp})) {{ fprintf(stderr, \"range step overflow\\n\"); exit(1); }}"));
                             self.emit_line(&format!("lucid_var_{var_name} = {next_tmp};"));
+                            self.loop_continue_updates.pop();
                             self.loop_break_flags.pop();
                             self.indent -= 1;
                             self.emit_line("}");
@@ -6979,11 +6989,13 @@ static inline void lucid_print_val(LucidVal v) {
                     ));
                     self.emit_line(&format!("if ({item_tmp}.type == LUCID_TYPE_STR && {item_tmp}.s && strcmp({item_tmp}.s, \"iteration.done\") == 0) break;"));
                     self.loop_break_flags.push(break_flag.clone());
+                    self.loop_continue_updates.push(None);
                     self.emit_pattern_bindings(target, &item_tmp);
                     for s in body {
                         self.emit_stmt(s)?;
                     }
                     self.loop_break_flags.pop();
+                    self.loop_continue_updates.pop();
                     self.indent -= 1;
                     self.emit_line("}");
                     if let Some(clause) = if_broken {
@@ -7018,6 +7030,7 @@ static inline void lucid_print_val(LucidVal v) {
                 self.emit_line(&format!("for (int64_t {tmp_idx} = 0; {tmp_list} && {tmp_idx} < {tmp_list}->len; {tmp_idx}++) {{"));
                 self.indent += 1;
                 self.loop_break_flags.push(break_flag.clone());
+                self.loop_continue_updates.push(None);
                 let item_tmp = self.new_temp();
                 self.emit_line(&format!(
                     "LucidVal {item_tmp} = {tmp_list}->items[{tmp_idx}];"
@@ -7027,6 +7040,7 @@ static inline void lucid_print_val(LucidVal v) {
                     self.emit_stmt(s)?;
                 }
                 self.loop_break_flags.pop();
+                self.loop_continue_updates.pop();
                 self.indent -= 1;
                 self.emit_line("}");
                 if let Some(clause) = if_broken {
@@ -7232,6 +7246,10 @@ static inline void lucid_print_val(LucidVal v) {
             Stmt::Continue(_) => {
                 self.emit_finally_cleanups()?;
                 self.emit_context_cleanups();
+                if let Some(Some((current, step, next))) = self.loop_continue_updates.last().cloned() {
+                    self.emit_line(&format!("if (!lucid_checked_range_advance({current}, {step}, &{next})) {{ fprintf(stderr, \"range step overflow\\n\"); exit(1); }}"));
+                    self.emit_line(&format!("{current} = {next};"));
+                }
                 self.emit_line("continue;");
                 Ok(())
             }
@@ -14435,6 +14453,25 @@ with managed() as value:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "return context failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "enter\nexit\n3\n");
+    }
+
+    #[test]
+    fn native_contextmanager_unwinds_on_break_and_continue() {
+        let source = "contextmanager def managed() -> int:\n    print(\"enter\")\n    yield 1\n    print(\"exit\")\nfor item in range(2):\n    with managed() as value:\n        if item == 0:\n            continue\n        break\nprint(\"done\")\n";
+        let module = parse(source).expect("loop context source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_context_loop_exit_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("loop context should compile");
+        let run = Command::new(&output).output().expect("run loop context");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "loop context failed: {run:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "enter\nexit\nenter\nexit\ndone\n"
+        );
     }
 
     #[test]

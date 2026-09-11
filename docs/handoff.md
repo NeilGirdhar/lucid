@@ -102,6 +102,8 @@ Native capability checks on erased objects now resolve the runtime class and
 honor explicit `without` declarations instead of using a fixed answer.
 Native context-manager exits now run before `return`, `break`, or `continue`
 leaves a `with` body, including teardown on early function return.
+Range-loop `continue` now advances the loop state before restarting, avoiding
+an infinite loop and preserving checked step-overflow behavior.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
@@ -172,15 +174,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-344 native-codegen tests
+345 native-codegen tests
 153 runtime tests
 21 syntax tests
 50 compiler-database tests
 17 configuration tests
-789 tests passed
+790 tests passed
 ```
 
-The same 789 tests also pass with:
+The same 790 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
