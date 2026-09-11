@@ -205,6 +205,7 @@ pub struct CCodeGenerator {
     current_class: Option<String>,
     capture_assignment: Option<String>,
     loop_break_flags: Vec<String>,
+    finally_stack: Vec<Vec<Stmt>>,
     complex_names: HashSet<String>,
     anonymous_bindings: HashMap<String, (Vec<(String, String)>, Expr)>,
     /// Source-level names bound to named functions.  Native functions have
@@ -313,6 +314,7 @@ impl CCodeGenerator {
             current_class: None,
             capture_assignment: None,
             loop_break_flags: Vec::new(),
+            finally_stack: Vec::new(),
             complex_names: HashSet::new(),
             anonymous_bindings: HashMap::new(),
             function_aliases: HashMap::new(),
@@ -328,6 +330,16 @@ impl CCodeGenerator {
     fn new_temp(&mut self) -> String {
         self.temp_var_id += 1;
         format!("_lucid_tmp_{}", self.temp_var_id)
+    }
+
+    fn emit_finally_cleanups(&mut self) -> Result<(), CodegenError> {
+        let cleanups = self.finally_stack.clone();
+        for cleanup in cleanups.iter().rev() {
+            for statement in cleanup {
+                self.emit_stmt(statement)?;
+            }
+        }
+        Ok(())
     }
 
     fn indent_str(&self) -> String {
@@ -6994,6 +7006,9 @@ static inline void lucid_print_val(LucidVal v) {
                 finally_body,
                 ..
             } => {
+                if let Some(cleanup) = finally_body.clone() {
+                    self.finally_stack.push(cleanup);
+                }
                 let frame = self.new_temp();
                 let jump = self.new_temp();
                 let handler_jump = self.new_temp();
@@ -7049,11 +7064,15 @@ static inline void lucid_print_val(LucidVal v) {
                         "if ({handler_jump} != 0) lucid_raise_value(lucid_pending_exception);"
                     ));
                 }
+                if finally_body.is_some() {
+                    self.finally_stack.pop();
+                }
                 Ok(())
             }
             Stmt::Return { value, .. } => {
                 if let Some(val_expr) = value {
                     let val_code = self.emit_expr(val_expr)?;
+                    self.emit_finally_cleanups()?;
                     if self.current_fn_async {
                         self.emit_line(&format!("return lucid_future(lucid_wrap({val_code}));"));
                         return Ok(());
@@ -7087,6 +7106,7 @@ static inline void lucid_print_val(LucidVal v) {
                         self.emit_line(&format!("return {val_code};"));
                     }
                 } else {
+                    self.emit_finally_cleanups()?;
                     if self.current_fn_async {
                         self.emit_line("return lucid_future(lucid_none());");
                     } else {
@@ -7159,6 +7179,7 @@ static inline void lucid_print_val(LucidVal v) {
                 Ok(())
             }
             Stmt::Break(_) => {
+                self.emit_finally_cleanups()?;
                 if let Some(flag) = self.loop_break_flags.last().cloned() {
                     self.emit_line(&format!("{flag} = true;"));
                 }
@@ -7166,6 +7187,7 @@ static inline void lucid_print_val(LucidVal v) {
                 Ok(())
             }
             Stmt::Continue(_) => {
+                self.emit_finally_cleanups()?;
                 self.emit_line("continue;");
                 Ok(())
             }
@@ -13615,6 +13637,22 @@ finally:
         let _ = fs::remove_file(&output);
         assert!(!run.status.success());
         assert_eq!(String::from_utf8_lossy(&run.stdout), "clean\n");
+    }
+
+    #[test]
+    fn native_return_runs_finally_before_leaving_try() {
+        let source = "def compute() -> int:\n    try:\n        return 7\n    finally:\n        print(\"clean\")\nprint(compute())\n";
+        let module = parse(source).expect("return-finally source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_return_finally_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("return-finally should compile");
+        let run = Command::new(&output).output().expect("run return-finally");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "return-finally failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "clean\n7\n");
     }
 
     #[test]
