@@ -1330,6 +1330,33 @@ impl CCodeGenerator {
             self.emit_line("");
         }
 
+        self.emit_line("static bool lucid_dynamic_capability(LucidVal value, const char* capability) {");
+        self.indent += 1;
+        self.emit_line("if (!capability) return false;");
+        self.emit_line("const char* class_name = (value.type == LUCID_TYPE_PTR && value.ptr) ? lucid_object_class_name(value.ptr) : NULL;");
+        let mut capability_classes: Vec<String> = self.known_classes.keys().cloned().collect();
+        capability_classes.sort();
+        for class in capability_classes {
+            self.emit_line(&format!("if (class_name && strcmp(class_name, \"{class}\") == 0) {{"));
+            self.indent += 1;
+            for capability in ["Eq", "Ord", "Hashable", "Sized", "Iterable", "Collection", "Sequence", "Reversible", "Set", "Container", "Shape"] {
+                if self.class_has_capability(&class, capability) {
+                    self.emit_line(&format!("if (strcmp(capability, \"{capability}\") == 0) return true;"));
+                }
+            }
+            self.indent -= 1;
+            self.emit_line("}");
+        }
+        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR;");
+        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0 || strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR;");
+        self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0 || strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;");
+        self.emit_line("if (strcmp(capability, \"Set\") == 0) return value.type == LUCID_TYPE_SET;");
+        self.emit_line("if (strcmp(capability, \"Eq\") == 0 || strcmp(capability, \"Ord\") == 0 || strcmp(capability, \"Hashable\") == 0) return value.type != LUCID_TYPE_NONE;");
+        self.emit_line("return false;");
+        self.indent -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
         // 4. Emit function bodies
         let top_function_aliases = self.function_aliases.clone();
         for stmt in &module.statements {
@@ -7835,7 +7862,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "trait" | "interface" => "((bool)0)".to_string(),
                                 "Sized" => {
-                                    if matches!(
+                                    if left_ty == "LucidVal" {
+                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Sized\")")
+                                    } else if matches!(
                                         left_ty.as_str(),
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
@@ -7845,7 +7874,9 @@ static inline void lucid_print_val(LucidVal v) {
                                     }
                                 }
                                 "Container" => {
-                                    if matches!(
+                                    if left_ty == "LucidVal" {
+                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Container\")")
+                                    } else if matches!(
                                         left_ty.as_str(),
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
@@ -7855,7 +7886,9 @@ static inline void lucid_print_val(LucidVal v) {
                                     }
                                 }
                                 "Iterable" | "Collection" => {
-                                    if matches!(
+                                    if left_ty == "LucidVal" {
+                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\")", type_name)
+                                    } else if matches!(
                                         left_ty.as_str(),
                                         "LucidList*" | "LucidSet*" | "LucidDict*"
                                     ) {
@@ -7865,28 +7898,36 @@ static inline void lucid_print_val(LucidVal v) {
                                     }
                                 }
                                 "Sequence" | "Reversible" => {
-                                    if left_ty == "LucidList*" {
+                                    if left_ty == "LucidVal" {
+                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\")", type_name)
+                                    } else if left_ty == "LucidList*" {
                                         "((bool)1)".into()
                                     } else {
                                         "((bool)0)".into()
                                     }
                                 }
                                 "Set" => {
-                                    if left_ty == "LucidSet*" {
+                                    if left_ty == "LucidVal" {
+                                        "lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\")".into()
+                                    } else if left_ty == "LucidSet*" {
                                         "((bool)1)".into()
                                     } else {
                                         "((bool)0)".into()
                                     }
                                 }
                                 "Buffer" => {
-                                    if matches!(left_ty.as_str(), "const char*" | "LucidList*") {
+                                    if left_ty == "LucidVal" {
+                                        "lucid_dynamic_capability(lucid_wrap({l_str}), \"Buffer\")".into()
+                                    } else if matches!(left_ty.as_str(), "const char*" | "LucidList*") {
                                         "((bool)1)".into()
                                     } else {
                                         "((bool)0)".into()
                                     }
                                 }
                                 "Shape" => {
-                                    if left_ty == "LucidList*" {
+                                    if left_ty == "LucidVal" {
+                                        "lucid_dynamic_capability(lucid_wrap({l_str}), \"Shape\")".into()
+                                    } else if left_ty == "LucidList*" {
                                         "((bool)1)".into()
                                     } else {
                                         "((bool)0)".into()
@@ -7896,6 +7937,8 @@ static inline void lucid_print_val(LucidVal v) {
                                     let capability = type_name;
                                     if is_none_expr(left) {
                                         "((bool)0)".into()
+                                    } else if left_ty == "LucidVal" {
+                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"{capability}\")")
                                     } else if self
                                         .known_classes
                                         .contains_key(left_ty.trim_end_matches('*'))
@@ -8056,7 +8099,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "trait" | "interface" => "((bool)1)".into(),
                                 "Sized" | "Container" => {
-                                    if matches!(
+                                    if left_ty == "LucidVal" {
+                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{type_name}\"))")
+                                    } else if matches!(
                                         left_ty.as_str(),
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
@@ -8069,6 +8114,8 @@ static inline void lucid_print_val(LucidVal v) {
                                     let capability = type_name;
                                     if is_none_expr(left) {
                                         "((bool)1)".into()
+                                    } else if left_ty == "LucidVal" {
+                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{capability}\"))")
                                     } else if self
                                         .known_classes
                                         .contains_key(left_ty.trim_end_matches('*'))
@@ -8085,7 +8132,9 @@ static inline void lucid_print_val(LucidVal v) {
                                     }
                                 }
                                 "Iterable" | "Collection" => {
-                                    if matches!(
+                                    if left_ty == "LucidVal" {
+                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))", type_name)
+                                    } else if matches!(
                                         left_ty.as_str(),
                                         "LucidList*" | "LucidSet*" | "LucidDict*"
                                     ) {
@@ -8095,21 +8144,27 @@ static inline void lucid_print_val(LucidVal v) {
                                     }
                                 }
                                 "Sequence" | "Reversible" => {
-                                    if left_ty == "LucidList*" {
+                                    if left_ty == "LucidVal" {
+                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))", type_name)
+                                    } else if left_ty == "LucidList*" {
                                         "((bool)0)".into()
                                     } else {
                                         "((bool)1)".into()
                                     }
                                 }
                                 "Set" => {
-                                    if left_ty == "LucidSet*" {
+                                    if left_ty == "LucidVal" {
+                                        "(!lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\"))".into()
+                                    } else if left_ty == "LucidSet*" {
                                         "((bool)0)".into()
                                     } else {
                                         "((bool)1)".into()
                                     }
                                 }
                                 "Buffer" | "Shape" => {
-                                    if matches!(left_ty.as_str(), "const char*" | "LucidList*") {
+                                    if left_ty == "LucidVal" {
+                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))", type_name)
+                                    } else if matches!(left_ty.as_str(), "const char*" | "LucidList*") {
                                         "((bool)0)".into()
                                     } else {
                                         "((bool)1)".into()
@@ -13949,6 +14004,22 @@ print(z is complex)
             String::from_utf8_lossy(&run.stdout),
             "true\ntrue\ntrue\ntrue\nfalse\n"
         );
+    }
+
+    #[test]
+    fn native_erased_capability_checks_inspect_runtime_class() {
+        let source = "class Bag without Iterable:\n    def __len__(self) -> int:\n        return 1\ndef identity(value: Any) -> Any:\n    return value\nvalue = identity(Bag())\nprint(value is Sized)\nprint(value is not Iterable)\n";
+        let module = parse(source).expect("erased capability source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_erased_capability_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("erased capability should compile");
+        let run = Command::new(&output).output().expect("run erased capability");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "erased capability failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
     }
 
     #[test]

@@ -98,6 +98,8 @@ Lossless CST construction now recovers across multiple independent lexical
 errors instead of converting the first error's entire suffix into one token.
 Native control-flow exits from `try` blocks now run active `finally` cleanup
 before `return`, `break`, or `continue` leaves the protected scope.
+Native capability checks on erased objects now resolve the runtime class and
+honor explicit `without` declarations instead of using a fixed answer.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
@@ -168,15 +170,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-342 native-codegen tests
+343 native-codegen tests
 153 runtime tests
 21 syntax tests
 50 compiler-database tests
 17 configuration tests
-787 tests passed
+788 tests passed
 ```
 
-The same 787 tests also pass with:
+The same 788 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
