@@ -125,6 +125,9 @@ binding instead of being lowered as an undeclared native variable.
 not erase the nested closure call shape.
 Higher-order builtins such as `map` also retain the captured binding after a
 nested-function alias.
+The native runtime now has the tagged closure value and packed-argument call
+primitives that form the ABI foundation; constructing and lowering escaping
+closures remains the next step.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier

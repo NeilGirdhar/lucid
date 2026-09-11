@@ -7983,13 +7983,7 @@ static inline void lucid_print_val(LucidVal v) {
                                         }
                                         _ => false,
                                     };
-                                    if callable {
-                                        "((bool)1)".to_string()
-                                    } else if left_ty == "LucidVal" {
-                                        format!("((bool)lucid_is_callable(lucid_wrap({l_str})))")
-                                    } else {
-                                        "((bool)0)".to_string()
-                                    }
+                                    format!("((bool){})", callable)
                                 }
                                 "class" => {
                                     if left_ty.ends_with('*') {
@@ -8226,13 +8220,7 @@ static inline void lucid_print_val(LucidVal v) {
                                         }
                                         _ => false,
                                     };
-                                    if callable {
-                                        "((bool)0)".to_string()
-                                    } else if left_ty == "LucidVal" {
-                                        format!("((bool)(!lucid_is_callable(lucid_wrap({l_str}))))")
-                                    } else {
-                                        "((bool)1)".to_string()
-                                    }
+                                    format!("((bool){})", !callable)
                                 }
                                 "class" => {
                                     if left_ty.ends_with('*') {
