@@ -569,6 +569,7 @@ impl CCodeGenerator {
         }
         // First pass: collect class metadata and function signatures
         for stmt in &module.statements {
+            let stmt = Self::unwrap_export(stmt);
             if let Stmt::ClassDef {
                 name,
                 bases: _bases,
@@ -768,7 +769,7 @@ impl CCodeGenerator {
         // base would confuse a trait for a class and emit invalid ancestry
         // metadata.
         for stmt in &module.statements {
-            let Stmt::ClassDef { name, bases, .. } = stmt else {
+            let Stmt::ClassDef { name, bases, .. } = Self::unwrap_export(stmt) else {
                 continue;
             };
             if let Some(parent) = bases.iter().find_map(|base| match base {

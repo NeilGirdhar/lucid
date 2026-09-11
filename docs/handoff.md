@@ -107,6 +107,9 @@ diverged:
   trait bases and resolves it after collecting all class declarations. Trait
   order and forward class declarations therefore cannot create invalid
   `_freeze` aliases or corrupt inherited field layout.
+  The same metadata pass now unwraps `export` declarations, so exported
+  classes participate in native inheritance, construction, and type checks
+  exactly like local declarations.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.
