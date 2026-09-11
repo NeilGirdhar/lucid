@@ -127,9 +127,9 @@ diverged:
   through a checked object-attribute dispatcher, so `value = fallible()?` can
   be inspected after propagation without treating the `LucidVal` wrapper as a
   C struct.
-  Zero-argument instance methods on those union values now dispatch through
-  the same concrete-class registry, preserving method calls after a fallible
-  result is returned.
+  Instance methods with positional arguments on those union values now
+  dispatch through the same concrete-class registry, converting arguments to
+  each selected method's declared native type before the call.
   The checker now rejects `?` at module scope, where no enclosing function
   return type can accept the propagated error; this prevents native `return`
   generation from producing invalid top-level C control flow.

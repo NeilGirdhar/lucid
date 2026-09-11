@@ -175,6 +175,7 @@ pub struct CCodeGenerator {
     known_field_defaults: HashMap<(String, String), Option<Expr>>,
     known_methods: HashMap<String, String>,
     known_method_param_names: HashMap<(String, String), Vec<String>>,
+    known_method_param_types: HashMap<(String, String), Vec<String>>,
     known_method_return_types: HashMap<(String, String), String>,
     known_method_defaults: HashMap<(String, String), Vec<Option<Expr>>>,
     known_method_gather: HashMap<(String, String), (usize, String)>,
@@ -281,6 +282,7 @@ impl CCodeGenerator {
             known_field_defaults: HashMap::new(),
             known_methods: HashMap::new(),
             known_method_param_names: HashMap::new(),
+            known_method_param_types: HashMap::new(),
             known_method_return_types: HashMap::new(),
             known_method_defaults: HashMap::new(),
             known_method_gather: HashMap::new(),
@@ -601,6 +603,14 @@ impl CCodeGenerator {
                                 (name.clone(), m.name.clone()),
                                 m.params.iter().skip(1).map(|p| p.name.clone()).collect(),
                             );
+                            self.known_method_param_types.insert(
+                                (name.clone(), m.name.clone()),
+                                m.params
+                                    .iter()
+                                    .skip(1)
+                                    .map(|p| self.map_type_expr(p.type_annotation.as_ref()))
+                                    .collect(),
+                            );
                             self.known_method_return_types.insert(
                                 (name.clone(), m.name.clone()),
                                 self.map_type_expr(m.return_type.as_ref()),
@@ -641,6 +651,14 @@ impl CCodeGenerator {
                             self.known_method_param_names.insert(
                                 (name.clone(), m.name.clone()),
                                 m.params.iter().skip(1).map(|p| p.name.clone()).collect(),
+                            );
+                            self.known_method_param_types.insert(
+                                (name.clone(), m.name.clone()),
+                                m.params
+                                    .iter()
+                                    .skip(1)
+                                    .map(|p| self.map_type_expr(p.type_annotation.as_ref()))
+                                    .collect(),
                             );
                             self.known_method_return_types.insert(
                                 (name.clone(), m.name.clone()),
@@ -9740,10 +9758,15 @@ static inline void lucid_print_val(LucidVal v) {
                         return Ok(format!("{helper}(lucid_as_str(lucid_wrap({obj_code})))"));
                     }
                     if receiver_ty == "LucidVal" {
-                        if !args.is_empty() {
+                        if args.iter().any(|arg| {
+                            arg.name.is_some()
+                                || arg.is_spread
+                                || arg.is_dict_spread
+                                || arg.is_gather_spread
+                        }) {
                             return Err(CodegenError {
                                 message: format!(
-                                    "dynamic method '{attr}' with arguments is not supported by the native backend"
+                                    "dynamic method '{attr}' requires positional, non-spread arguments"
                                 ),
                             });
                         }
@@ -9751,16 +9774,55 @@ static inline void lucid_print_val(LucidVal v) {
                         let class_name = self.new_temp();
                         let result = self.new_temp();
                         let matched = self.new_temp();
+                        let mut arg_temps = Vec::new();
                         let mut classes: Vec<String> = self.known_classes.keys().cloned().collect();
                         classes.sort();
                         let mut lines = vec![format!(
                             "LucidVal {object} = lucid_wrap({}); const char* {class_name} = lucid_object_class_name({object}.ptr); LucidVal {result} = lucid_none(); bool {matched} = false;",
                             self.emit_expr(obj_expr)?
                         )];
+                        for arg in args {
+                            let temp = self.new_temp();
+                            lines.push(format!(
+                                "LucidVal {temp} = lucid_wrap({});",
+                                self.emit_expr(&arg.value)?
+                            ));
+                            arg_temps.push(temp);
+                        }
                         for candidate in classes {
                             if let Some(owner) = self.method_owner(&candidate, attr) {
+                                let Some(param_types) = self
+                                    .known_method_param_types
+                                    .get(&(owner.clone(), attr.clone()))
+                                    .cloned()
+                                else {
+                                    continue;
+                                };
+                                if param_types.len() != arg_temps.len() {
+                                    continue;
+                                }
+                                let converted = param_types
+                                    .iter()
+                                    .zip(&arg_temps)
+                                    .map(|(ty, temp)| match ty.as_str() {
+                                        "LucidVal" => temp.clone(),
+                                        "int64_t" => format!("lucid_as_int({temp})"),
+                                        "double" => format!("lucid_as_float({temp})"),
+                                        "bool" => format!("lucid_as_bool({temp})"),
+                                        "const char*" => format!("lucid_as_str({temp})"),
+                                        "LucidList*" => format!("lucid_as_list({temp})"),
+                                        "LucidDict*" => format!("lucid_as_dict({temp})"),
+                                        "LucidSet*" => format!("lucid_as_set({temp})"),
+                                        other => format!("({other})lucid_as_ptr({temp})"),
+                                    })
+                                    .collect::<Vec<_>>();
+                                let call_args = if converted.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(", {}", converted.join(", "))
+                                };
                                 lines.push(format!(
-                                    "if (!{matched} && {class_name} && strcmp({class_name}, \"{candidate}\") == 0) {{ {result} = lucid_wrap({owner}_{attr}(({owner}*){object}.ptr)); {matched} = true; }}"
+                                    "if (!{matched} && {class_name} && strcmp({class_name}, \"{candidate}\") == 0) {{ {result} = lucid_wrap({owner}_{attr}(({owner}*){object}.ptr{call_args})); {matched} = true; }}"
                                 ));
                             }
                         }
