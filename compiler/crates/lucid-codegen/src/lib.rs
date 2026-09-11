@@ -2423,6 +2423,20 @@ static inline const char* lucid_str_repeat(const char* value, int64_t count) {
     result[total] = '\0';
     return result;
 }
+static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
+    LucidVal sequence = left;
+    LucidVal count_value = right;
+    if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_LIST) {
+        sequence = right;
+        count_value = left;
+    }
+    if (sequence.type == LUCID_TYPE_STR && count_value.type == LUCID_TYPE_INT)
+        return lucid_str(lucid_str_repeat(sequence.s, count_value.i));
+    if (sequence.type == LUCID_TYPE_LIST && count_value.type == LUCID_TYPE_INT)
+        return lucid_list_val(lucid_list_repeat_value(sequence.list, count_value.i));
+    fprintf(stderr, "unsupported operands for *\n");
+    exit(1);
+}
 
 static inline bool lucid_checked_range_advance(int64_t current, int64_t step, int64_t* next) {
     if (step > 0 && current > INT64_MAX - step) return false;
@@ -3019,6 +3033,9 @@ static inline void lucid_print_val(LucidVal v) {
                     return "LucidList*".to_string();
                 }
                 if *op == BinaryOp::Add && l_ty == "LucidVal" && r_ty == "LucidVal" {
+                    return "LucidVal".to_string();
+                }
+                if *op == BinaryOp::Mul && l_ty == "LucidVal" && r_ty == "LucidVal" {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
@@ -5888,7 +5905,11 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                     }
                     BinaryOp::Mul => {
-                        if l_is_val || r_is_val {
+                        if self.expr_is_dynamic_value(left) && self.expr_is_dynamic_value(right) {
+                            Ok(format!(
+                                "lucid_mul_value(lucid_wrap({l_str}), lucid_wrap({r_str}))"
+                            ))
+                        } else if l_is_val || r_is_val {
                             Ok(format!("(lucid_num({l_str}) * lucid_num({r_str}))"))
                         } else if l_ty == "int64_t" && r_ty == "int64_t" {
                             Ok(format!("lucid_checked_mul({l_str}, {r_str})"))
@@ -13006,6 +13027,25 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic addition failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "ab\n2\n2\n");
+    }
+
+    #[test]
+    fn native_dynamic_multiplication_preserves_container_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"ab\") * identity(2))\nitems = identity([1, 2]) * identity(2)\nprint(len(items))\nprint(items[2])\n";
+        let module = parse(source).expect("dynamic multiplication should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_dynamic_mul_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic multiplication should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic multiplication should run");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "dynamic multiplication failed: {run:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "abab\n4\n1\n");
     }
 
     #[test]
