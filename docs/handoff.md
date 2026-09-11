@@ -113,6 +113,9 @@ diverged:
   Checker member collection no longer treats the first base as a class
   parent; class-parent resolution remains based on declared class types, so a
   trait listed first cannot hide a later class parent.
+  Runtime and native hierarchy walks now track visited classes, preventing a
+  malformed cyclic inheritance graph from recursing or hanging while checking
+  ancestry, pattern matches, field layout, or dynamic type aliases.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.

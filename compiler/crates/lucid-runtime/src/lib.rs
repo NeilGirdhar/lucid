@@ -852,14 +852,26 @@ impl Interpreter {
     }
 
     fn is_subclass(&self, class_name: &str, parent_name: &str) -> bool {
-        self.classes.get(class_name).is_some_and(|class| {
-            class.bases.iter().any(|base| match base {
-                TypeExpr::Named { name, .. } => {
-                    name == parent_name || self.is_subclass(name, parent_name)
+        let mut pending = vec![class_name.to_owned()];
+        let mut seen = HashSet::new();
+        while let Some(current) = pending.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            let Some(class) = self.classes.get(&current) else {
+                continue;
+            };
+            for base in &class.bases {
+                let TypeExpr::Named { name, .. } = base else {
+                    continue;
+                };
+                if name == parent_name {
+                    return true;
                 }
-                _ => false,
-            })
-        })
+                pending.push(name.clone());
+            }
+        }
+        false
     }
 
     fn class_var_get(&self, class_name: &str, name: &str) -> Option<Value> {

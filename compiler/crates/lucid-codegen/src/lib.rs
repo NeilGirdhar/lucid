@@ -787,7 +787,11 @@ impl CCodeGenerator {
         for class in class_names {
             let mut chain = Vec::new();
             let mut current = self.known_parents.get(&class).cloned();
+            let mut seen = HashSet::new();
             while let Some(parent) = current {
+                if !seen.insert(parent.clone()) {
+                    break;
+                }
                 chain.push(parent.clone());
                 current = self.known_parents.get(&parent).cloned();
             }
@@ -3698,7 +3702,11 @@ static inline void lucid_print_val(LucidVal v) {
             .keys()
             .filter(|candidate| {
                 let mut current = Some(candidate.as_str());
+                let mut seen = HashSet::new();
                 while let Some(name) = current {
+                    if !seen.insert(name) {
+                        break;
+                    }
                     if name == expected {
                         return true;
                     }
@@ -3712,7 +3720,11 @@ static inline void lucid_print_val(LucidVal v) {
 
     fn class_is_subtype(&self, actual: &str, expected: &str) -> bool {
         let mut current = Some(actual);
+        let mut seen = HashSet::new();
         while let Some(name) = current {
+            if !seen.insert(name) {
+                break;
+            }
             if name == expected {
                 return true;
             }
@@ -4063,7 +4075,11 @@ static inline void lucid_print_val(LucidVal v) {
         // concrete allocation name. Register each ancestor as an alias so a
         // value erased to `Any` still satisfies parent-type tests.
         let mut ancestor = self.known_parents.get(name).cloned();
+        let mut seen_ancestors = HashSet::new();
         while let Some(parent) = ancestor {
+            if !seen_ancestors.insert(parent.clone()) {
+                break;
+            }
             self.emit_line(&format!(
                 "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL);"
             ));
