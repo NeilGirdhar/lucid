@@ -1959,6 +1959,7 @@ static inline const char* lucid_to_str(LucidVal v) {
     }
     if (v.type == LUCID_TYPE_BIGINT) { snprintf(buf, 64, "%s", v.bigint ? v.bigint : "0"); return buf; }
     if (v.type == LUCID_TYPE_FLOAT) { snprintf(buf, 64, "%.10g", v.f); return buf; }
+    if (v.type == LUCID_TYPE_COMPLEX) { snprintf(buf, 64, "(%g%+gj)", v.real, v.imag); return buf; }
     if (v.type == LUCID_TYPE_BOOL) return v.b ? "true" : "false";
     return "none";
 }
@@ -13628,6 +13629,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "special abs failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "int.nan\nint.inf\n");
+    }
+
+    #[test]
+    fn native_str_formats_complex_values() {
+        let source = "print(str(3 + 4j))\n";
+        let module = parse(source).expect("complex str source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_str_complex_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("complex str should compile");
+        let run = Command::new(&output).output().expect("run complex str");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "complex str failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "(3+4j)\n");
     }
 
     #[test]
