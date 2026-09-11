@@ -8325,10 +8325,13 @@ static inline void lucid_print_val(LucidVal v) {
                             return Ok("lucid_time_now()".to_string());
                         }
                         "abs" => {
-                            if let Some(a) = args.first() {
-                                let arg_str = self.emit_expr(&a.value)?;
-                                return Ok(format!("lucid_abs_value(lucid_wrap({arg_str}))"));
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    message: "abs() takes exactly one argument".to_string(),
+                                });
                             }
+                            let arg_str = self.emit_expr(&args[0].value)?;
+                            return Ok(format!("lucid_abs_value(lucid_wrap({arg_str}))"));
                         }
                         "sqrt" | "sin" | "cos" | "tan" | "floor" | "ceil" => {
                             if args.len() != 1 {
@@ -8372,6 +8375,11 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                         }
                         "int" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    message: "int() takes exactly one argument".into(),
+                                });
+                            }
                             if let Some(a) = args.first() {
                                 let arg_str = self.emit_expr(&a.value)?;
                                 return Ok(format!("lucid_as_int(lucid_wrap({arg_str}))"));
@@ -8389,6 +8397,11 @@ static inline void lucid_print_val(LucidVal v) {
                             ));
                         }
                         "float" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    message: "float() takes exactly one argument".into(),
+                                });
+                            }
                             if let Some(a) = args.first() {
                                 let arg_str = self.emit_expr(&a.value)?;
                                 return Ok(format!("lucid_as_float(lucid_wrap({arg_str}))"));
@@ -8663,24 +8676,44 @@ static inline void lucid_print_val(LucidVal v) {
                             return Ok(format!("lucid_range_to_list({start}, {stop}, {step})"));
                         }
                         "str" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    message: "str() takes exactly one argument".into(),
+                                });
+                            }
                             if let Some(a) = args.first() {
                                 let value = self.emit_expr(&a.value)?;
                                 return Ok(format!("lucid_to_str(lucid_wrap({value}))"));
                             }
                         }
                         "bytes" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    message: "bytes() takes exactly one argument".into(),
+                                });
+                            }
                             if let Some(a) = args.first() {
                                 let value = self.emit_expr(&a.value)?;
                                 return Ok(format!("lucid_bytes(lucid_wrap({value}))"));
                             }
                         }
                         "bytearray" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    message: "bytearray() takes exactly one argument".into(),
+                                });
+                            }
                             if let Some(a) = args.first() {
                                 let value = self.emit_expr(&a.value)?;
                                 return Ok(format!("lucid_bytearray(lucid_wrap({value}))"));
                             }
                         }
                         "memoryview" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    message: "memoryview() takes exactly one argument".into(),
+                                });
+                            }
                             if let Some(a) = args.first() {
                                 return self.emit_expr(&a.value);
                             }
@@ -13432,6 +13465,21 @@ print(all({1, 2}))
             error
                 .to_string()
                 .contains("round() takes one or two arguments")
+        );
+    }
+
+    #[test]
+    fn native_abs_rejects_wrong_arity() {
+        let module = parse("print(abs(1, 2))\n").expect("abs source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_abs_arity_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        let error = compile_to_native(&module, &output, 0).expect_err("abs arity should fail");
+        let _ = fs::remove_file(&output);
+        assert!(
+            error
+                .to_string()
+                .contains("abs() takes exactly one argument")
         );
     }
 
