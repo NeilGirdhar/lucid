@@ -1825,11 +1825,8 @@ impl TypeChecker {
         match stmt {
             Stmt::Export(inner) => self.collect_class_members(inner),
             Stmt::ClassDef {
-                name, bases, body, ..
+                name, body, ..
             } => {
-                if let Some(TypeExpr::Named { name: parent, .. }) = bases.first() {
-                    self.env.class_parents.insert(name.clone(), parent.clone());
-                }
                 let names = self.env.class_members.entry(name.clone()).or_default();
                 for member in body {
                     match member {
@@ -8222,7 +8219,10 @@ class Base1:
 class Base2:
     y: int
 
-class Child(Base1, Base2):
+trait Reusable:
+    pass
+
+class Child(Reusable, Base1, Base2):
     z: int
 "#;
         let module = parse(src).unwrap();

@@ -110,6 +110,9 @@ diverged:
   The same metadata pass now unwraps `export` declarations, so exported
   classes participate in native inheritance, construction, and type checks
   exactly like local declarations.
+  Checker member collection no longer treats the first base as a class
+  parent; class-parent resolution remains based on declared class types, so a
+  trait listed first cannot hide a later class parent.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.
