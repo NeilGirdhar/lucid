@@ -1074,14 +1074,14 @@ fn collect_typed_body<'db>(
                             lucid_syntax::Pattern::Literal(
                                 lucid_syntax::LiteralValue::Int(value),
                                 _,
-                            ) => format!("i{value}"),
+                            ) => Ok(format!("i{value}")),
                             lucid_syntax::Pattern::Literal(
                                 lucid_syntax::LiteralValue::Bool(value),
                                 _,
-                            ) => format!("b{value}"),
-                            _ => unreachable!(),
+                            ) => Ok(format!("b{value}")),
+                            _ => Err(Arc::from("unsupported match literal pattern")),
                         })
-                        .collect::<Vec<_>>()
+                        .collect::<Result<Vec<_>, Arc<str>>>()?
                         .join(",");
                     let mut children = vec![subject_id];
                     let mut result_ids = Vec::with_capacity(arms.len());
@@ -1104,7 +1104,9 @@ fn collect_typed_body<'db>(
                         children.extend(result_ids);
                         let id = u32::try_from(nodes.len())
                             .map_err(|_| Arc::<str>::from("too many expressions"))?;
-                        let result = match_arm_result(&arms[0]).expect("validated match result");
+                        let Some(result) = match_arm_result(&arms[0]) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
                         let ty = checker
                             .type_of_expr(result)
                             .map_err(|error| Arc::<str>::from(error.message))?
@@ -1815,14 +1817,18 @@ pub fn lower_function_body(
         })
     {
         let selected_elif = elif_branches.iter().find_map(|(elif_condition, branch)| {
-            (static_truth(elif_condition) == Some(true)).then(|| match branch.as_slice() {
-                [
-                    lucid_syntax::Stmt::Return {
-                        value: Some(value), ..
-                    },
-                ] => value,
-                _ => unreachable!("validated static elif return"),
-            })
+            if static_truth(elif_condition) == Some(true) {
+                match branch.as_slice() {
+                    [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        },
+                    ] => Some(value),
+                    _ => None,
+                }
+            } else {
+                None
+            }
         });
         if selected_elif.is_none() && else_branch.is_none() {
             let nodes = function

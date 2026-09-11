@@ -101,6 +101,8 @@ diverged:
   constructing a control-flow graph.
 * Database typed-HIR match collection now reports malformed match results as a
   lowering error instead of unwrapping an intermediate option.
+  Static `elif` extraction follows the same checked path when selecting a
+  compile-time branch.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`
