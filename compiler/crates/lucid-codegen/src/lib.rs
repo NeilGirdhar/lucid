@@ -1337,6 +1337,29 @@ static inline LucidVal lucid_env_var(LucidVal name, bool has_default, LucidVal f
     if (value) return lucid_str(value);
     return has_default ? fallback : lucid_none();
 }
+static inline LucidVal lucid_sys_platform(void) {
+#if defined(_WIN32)
+    return lucid_str("windows");
+#elif defined(__APPLE__)
+    return lucid_str("macos");
+#elif defined(__linux__)
+    return lucid_str("linux");
+#elif defined(__FreeBSD__)
+    return lucid_str("freebsd");
+#else
+    return lucid_str("unknown");
+#endif
+}
+static inline LucidVal lucid_sys_version(void) { return lucid_str("0.1.0"); }
+static inline LucidVal lucid_sys_argv(void) {
+    LucidList* values = lucid_list_new(1);
+    lucid_list_append(values, lucid_str("lucid"));
+    LucidVal result = {0};
+    result.type = LUCID_TYPE_LIST;
+    result.list = values;
+    result.ptr = (void*)values;
+    return result;
+}
 static inline LucidVal lucid_read_file(LucidVal path) {
     if (path.type != LUCID_TYPE_STR || !path.s) {
         fprintf(stderr, "read_file() path must be a string\n");
@@ -2808,6 +2831,9 @@ static inline void lucid_print_val(LucidVal v) {
                     if let Expr::Ident { name: obj_name, .. } = &**obj {
                         if obj_name == "time" && matches!(attr.as_str(), "time" | "monotonic") {
                             return "double".to_string();
+                        }
+                        if obj_name == "sys" && matches!(attr.as_str(), "platform" | "version") {
+                            return "const char*".to_string();
                         }
                     }
                     if attr == "next" {
@@ -8530,6 +8556,17 @@ static inline void lucid_print_val(LucidVal v) {
                         if obj_name == "time" && matches!(attr.as_str(), "time" | "monotonic") {
                             return Ok("lucid_time_now()".to_string());
                         }
+                        if obj_name == "sys" {
+                            return match attr.as_str() {
+                                "platform" => {
+                                    Ok(format!("lucid_str(\"{}\")", std::env::consts::OS))
+                                }
+                                "version" => Ok("lucid_str(\"0.1.0\")".to_string()),
+                                _ => Err(CodegenError {
+                                    message: format!("unknown sys member '{attr}'"),
+                                }),
+                            };
+                        }
                         if self
                             .module_aliases
                             .get(obj_name)
@@ -9201,6 +9238,9 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         ("math", "pi") => return Ok("M_PI".to_string()),
                         ("math", "e") => return Ok("M_E".to_string()),
+                        ("sys", "platform") => return Ok("lucid_sys_platform()".to_string()),
+                        ("sys", "version") => return Ok("lucid_sys_version()".to_string()),
+                        ("sys", "argv") => return Ok("lucid_sys_argv()".to_string()),
                         _ => {}
                     }
                     if self
@@ -12368,6 +12408,46 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
+    }
+
+    #[test]
+    fn native_sys_module_exposes_runtime_members() {
+        let source = "import sys\nprint(sys.platform)\nprint(sys.version)\nprint(sys.argv[0])\n";
+        let module = parse(source).expect("sys module source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_sys_module_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("sys module should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled sys program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        assert!(stdout.lines().next().is_some_and(|line| !line.is_empty()));
+        assert!(
+            stdout.contains("0.1.0\nlucid\n"),
+            "unexpected output: {stdout}"
+        );
+    }
+
+    #[test]
+    fn native_sys_metadata_matches_runtime_module_api() {
+        let source = "import sys\nprint(sys.platform)\nprint(sys.version)\n";
+        let module = parse(source).expect("sys module source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_sys_metadata_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("sys metadata should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled sys program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            format!("{}\n0.1.0\n", std::env::consts::OS)
+        );
     }
 
     #[test]
