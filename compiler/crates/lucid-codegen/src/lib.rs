@@ -7273,6 +7273,35 @@ static inline void lucid_print_val(LucidVal v) {
                 self.emit_line("continue;");
                 Ok(())
             }
+            Stmt::Function(function) if self.in_function => {
+                if let [Stmt::Return {
+                    value: Some(body_expr),
+                    ..
+                }] = function.body.as_slice()
+                {
+                    let parameter_specs = function
+                        .params
+                        .iter()
+                        .map(|param| {
+                            (
+                                param.name.clone(),
+                                self.map_type_expr(param.type_annotation.as_ref()),
+                            )
+                        })
+                        .collect();
+                    self.anonymous_bindings.insert(
+                        function.name.clone(),
+                        (parameter_specs, body_expr.clone()),
+                    );
+                    return Ok(());
+                }
+                Err(CodegenError {
+                    message: format!(
+                        "native nested function '{}' requires an expression-bodied return",
+                        function.name
+                    ),
+                })
+            }
             Stmt::Expr(expr) => {
                 let code = self.emit_expr(expr)?;
                 self.emit_line(&format!("{code};"));
@@ -17179,6 +17208,22 @@ print(result[1])
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "12");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_named_nested_expression_functions_can_call_captured_locals() {
+        let source = "def run(threshold: int) -> bool:\n    def check(x: int) -> bool:\n        return x > threshold\n    return check(4)\nprint(run(3))\nprint(run(5))\n";
+        let module = parse(source).expect("nested expression function source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_named_nested_call_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("nested expression function should compile");
+        let run = Command::new(&output).output().expect("run nested expression function");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "nested expression function failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
     }
 
     #[test]
