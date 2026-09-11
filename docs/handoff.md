@@ -104,6 +104,8 @@ Native context-manager exits now run before `return`, `break`, or `continue`
 leaves a `with` body, including teardown on early function return.
 Range-loop `continue` now advances the loop state before restarting, avoiding
 an infinite loop and preserving checked step-overflow behavior.
+Context-manager teardown is also covered for both `continue` and `break`
+inside range loops, preserving cleanup before loop control transfers.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
