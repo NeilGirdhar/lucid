@@ -1594,9 +1594,17 @@ static inline LucidVal lucid_bigint_divmod(LucidVal a, LucidVal b, bool remainde
 static inline LucidVal lucid_bigint_pow(LucidVal base, LucidVal exponent) {
     char eb[64]; const char* es = lucid_bigint_text(exponent, eb);
     if (*es == '-') { char ab[64]; return lucid_float(pow(strtod(lucid_bigint_text(base, ab), NULL), strtod(es, NULL))); }
-    unsigned long long e = strtoull(lucid_bigint_mag(es), NULL, 10);
     LucidVal result = lucid_bigint("1"), power = base;
-    while (e) { if (e & 1ULL) result = lucid_bigint_binop(result, power, '*'); e >>= 1; if (e) power = lucid_bigint_binop(power, power, '*'); }
+    LucidVal remaining = lucid_bigint(lucid_bigint_mag(es));
+    LucidVal two = lucid_bigint("2");
+    while (strcmp(remaining.bigint ? remaining.bigint : "0", "0") != 0) {
+        LucidVal bit = lucid_bigint_divmod(remaining, two, true, false);
+        if (strcmp(bit.bigint ? bit.bigint : "0", "0") != 0)
+            result = lucid_bigint_binop(result, power, '*');
+        remaining = lucid_bigint_divmod(remaining, two, false, false);
+        if (strcmp(remaining.bigint ? remaining.bigint : "0", "0") != 0)
+            power = lucid_bigint_binop(power, power, '*');
+    }
     return result;
 }
 static inline LucidVal lucid_complex_from_value(LucidVal value, bool has_imag, LucidVal imag) {
@@ -13744,6 +13752,22 @@ print(all({1, 2}))
         let run = Command::new(&output).output().expect("run bigint exponent");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "bigint exponent failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+    }
+
+    #[test]
+    fn native_bigint_exponent_handles_values_wider_than_u64() {
+        let source = "print((-1) ** 18446744073709551616)\n";
+        let module = parse(source).expect("wide bigint exponent source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_bigint_wide_exponent_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("wide bigint exponent should compile");
+        let run = Command::new(&output).output().expect("run wide bigint exponent");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "wide bigint exponent failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
     }
 

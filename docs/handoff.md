@@ -85,6 +85,8 @@ The interpreter's three-argument `pow` path now accepts the same arbitrary-size
 integer operands and preserves the BigInt result.
 Positive BigInt exponents now retain exact integer results in the interpreter,
 including exponents wider than the machine integer range.
+Native BigInt exponentiation now divides the decimal exponent directly, so it
+does not truncate exponents wider than `u64`.
 
 ## Verified baseline
 
@@ -99,15 +101,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-310 native-codegen tests
+311 native-codegen tests
 152 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-752 tests passed
+753 tests passed
 ```
 
-The same 752 tests also pass with:
+The same 753 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
