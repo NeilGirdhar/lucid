@@ -2308,16 +2308,9 @@ static inline void lucid_list_set(LucidList* l, int64_t idx, LucidVal v) {
     if (__builtin_expect(!l, 0)) return;
     if (l->frozen) { fprintf(stderr, "cannot mutate frozen list\n"); exit(1); }
     if (__builtin_expect(idx < 0, 0)) idx += l->len;
-    if (__builtin_expect(idx < 0, 0)) return;
-    if (__builtin_expect(idx >= l->len, 0)) {
-        if (idx >= l->cap) {
-            l->cap = idx + 8;
-            l->items = (LucidVal*)realloc(l->items, sizeof(LucidVal) * l->cap);
-        }
-        for (int64_t i = l->len; i < idx; i++) {
-            l->items[i] = lucid_none();
-        }
-        l->len = idx + 1;
+    if (__builtin_expect(idx < 0 || idx >= l->len, 0)) {
+        fprintf(stderr, "index %lld out of range\n", (long long)idx);
+        exit(1);
     }
     l->items[idx] = v;
 }
@@ -12816,6 +12809,24 @@ print(all({1, 2}))
             .expect("compiled invalid indexing program should run");
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "out-of-range indexing should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("out of range"));
+    }
+
+    #[test]
+    fn native_list_assignment_rejects_out_of_range() {
+        let source = "items = [1]\nitems[1] = 2\n";
+        let module = parse(source).expect("invalid assignment source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_invalid_list_assignment_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("invalid assignment should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled invalid assignment should run");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "out-of-range assignment should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("out of range"));
     }
 
