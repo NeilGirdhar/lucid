@@ -2604,6 +2604,14 @@ static inline const char* lucid_str_slice(const char* source, int64_t start, int
     out[pos] = '\0';
     return out;
 }
+static inline LucidVal lucid_slice_value(LucidVal value, int64_t start, int64_t stop, int64_t step) {
+    if (value.type == LUCID_TYPE_STR)
+        return lucid_str(lucid_str_slice(value.s, start, stop, step));
+    if (value.type == LUCID_TYPE_LIST)
+        return lucid_list_val(lucid_list_slice(value.list, start, stop, step));
+    fprintf(stderr, "slicing not supported\n");
+    exit(1);
+}
 
 static inline int64_t _len_list(LucidList* l) { return l ? l->len : 0; }
 static inline int64_t _len_str(const char* s) {
@@ -9415,6 +9423,11 @@ static inline void lucid_print_val(LucidVal v) {
                             "lucid_str_slice({v_code}, {st}, {sp}, {step_code})"
                         ));
                     }
+                    if self.infer_expr_type(value, &HashMap::new()) == "LucidVal" {
+                        return Ok(format!(
+                            "lucid_slice_value(lucid_wrap({v_code}), {st}, {sp}, {step_code})"
+                        ));
+                    }
                     return Ok(format!(
                         "lucid_list_slice(lucid_as_list(lucid_wrap({v_code})), {st}, {sp}, {step_code})"
                     ));
@@ -12847,6 +12860,24 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "non-container indexing should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("indexing not supported"));
+    }
+
+    #[test]
+    fn native_dynamic_slicing_preserves_container_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(identity(\"hello\")[1:4])\nprint(len(identity([1, 2, 3, 4])[1:3]))\nprint(identity([1, 2, 3, 4])[1:3][0])\n";
+        let module = parse(source).expect("dynamic slicing source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_slice_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic slicing should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic slicing program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic slicing failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "ell\n2\n2\n");
     }
 
     #[test]
