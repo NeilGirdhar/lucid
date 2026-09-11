@@ -85,8 +85,8 @@ Native `sorted` now materializes erased custom iterables and compares object
 values through their registered `__lt__` callbacks.
 Native `len(Any)` now dispatches to a declared custom `__len__` method instead
 of treating erased class instances as zero-length values.
-Native erased binary addition now reaches user-defined object dispatch
-overloads before applying the built-in numeric and collection rules.
+Native erased binary arithmetic and bitwise operations now reach user-defined
+object dispatch overloads before applying built-in numeric and collection rules.
 Native dispatch collection also recognizes the specification's dunder operator
 spellings, such as `__add__`, when lowering binary expressions.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
