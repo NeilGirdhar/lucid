@@ -1829,8 +1829,9 @@ impl TypeChecker {
                 } => {
                     spans.insert(name.clone(), *span);
                     if let Some(parent) = bases.iter().find_map(|base| match base {
-                        TypeExpr::Named { name: base_name, .. }
-                            if classes.contains_key(base_name) => Some(base_name.clone()),
+                        TypeExpr::Named {
+                            name: base_name, ..
+                        } if classes.contains_key(base_name) => Some(base_name.clone()),
                         _ => None,
                     }) {
                         parents.insert(name.clone(), parent);
@@ -1906,9 +1907,7 @@ impl TypeChecker {
     fn collect_class_members(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Export(inner) => self.collect_class_members(inner),
-            Stmt::ClassDef {
-                name, body, ..
-            } => {
+            Stmt::ClassDef { name, body, .. } => {
                 let names = self.env.class_members.entry(name.clone()).or_default();
                 for member in body {
                     match member {
@@ -8340,10 +8339,8 @@ class Child(Reusable, Base1, Base2):
 
     #[test]
     fn test_cyclic_class_inheritance_is_rejected() {
-        let module = parse(
-            "class First(Second):\n    pass\n\nclass Second(First):\n    pass\n",
-        )
-        .unwrap();
+        let module =
+            parse("class First(Second):\n    pass\n\nclass Second(First):\n    pass\n").unwrap();
         let mut checker = TypeChecker::new();
         let err = checker
             .check_module(&module)

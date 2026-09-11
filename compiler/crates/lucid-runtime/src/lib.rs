@@ -2464,7 +2464,10 @@ impl Interpreter {
                     let value = match &args[0] {
                         Value::Object { fields, .. } => {
                             let value = fields.borrow().get(name).cloned();
-                            if let Some(Value::Function { name: getter_name, .. }) = &value {
+                            if let Some(Value::Function {
+                                name: getter_name, ..
+                            }) = &value
+                            {
                                 if getter_name == &format!("__getter__{name}") {
                                     return _interp.invoke_value(
                                         value.expect("getter value was just matched"),
@@ -8264,34 +8267,54 @@ impl Interpreter {
                     });
                 }
                 ClassMember::Getter(getter) => {
-                    fields.entry(getter.name.clone()).or_insert_with(|| Value::Function {
-                        name: format!("__getter__{}", getter.name),
-                        params: vec![Param {
-                            name: "self".into(), pattern: None, type_annotation: None,
-                            default: None, is_positional_only: false, is_keyword_only: false,
-                            is_variadic_positional: false, is_variadic_keyword: false,
-                            is_gather: false, span: getter.span,
-                        }],
-                        body: getter.body.clone(), closure: Rc::clone(&self.env),
-                        is_contextmanager: false, is_async: false,
-                    });
+                    fields
+                        .entry(getter.name.clone())
+                        .or_insert_with(|| Value::Function {
+                            name: format!("__getter__{}", getter.name),
+                            params: vec![Param {
+                                name: "self".into(),
+                                pattern: None,
+                                type_annotation: None,
+                                default: None,
+                                is_positional_only: false,
+                                is_keyword_only: false,
+                                is_variadic_positional: false,
+                                is_variadic_keyword: false,
+                                is_gather: false,
+                                span: getter.span,
+                            }],
+                            body: getter.body.clone(),
+                            closure: Rc::clone(&self.env),
+                            is_contextmanager: false,
+                            is_async: false,
+                        });
                 }
                 ClassMember::Setter(setter) => {
                     let key = format!("__setter__{}", setter.name);
-                    fields.entry(key.clone()).or_insert_with(|| Value::Function {
-                        name: key,
-                        params: vec![
-                            Param {
-                                name: "self".into(), pattern: None, type_annotation: None,
-                                default: None, is_positional_only: false, is_keyword_only: false,
-                                is_variadic_positional: false, is_variadic_keyword: false,
-                                is_gather: false, span: setter.span,
-                            },
-                            setter.param.clone(),
-                        ],
-                        body: setter.body.clone(), closure: Rc::clone(&self.env),
-                        is_contextmanager: false, is_async: false,
-                    });
+                    fields
+                        .entry(key.clone())
+                        .or_insert_with(|| Value::Function {
+                            name: key,
+                            params: vec![
+                                Param {
+                                    name: "self".into(),
+                                    pattern: None,
+                                    type_annotation: None,
+                                    default: None,
+                                    is_positional_only: false,
+                                    is_keyword_only: false,
+                                    is_variadic_positional: false,
+                                    is_variadic_keyword: false,
+                                    is_gather: false,
+                                    span: setter.span,
+                                },
+                                setter.param.clone(),
+                            ],
+                            body: setter.body.clone(),
+                            closure: Rc::clone(&self.env),
+                            is_contextmanager: false,
+                            is_async: false,
+                        });
                 }
                 _ => {}
             }
@@ -9022,7 +9045,10 @@ impl Interpreter {
                 Value::Str(_) if name == "str" => true,
                 Value::None if name == "none" => true,
                 Value::Object { class_name, .. }
-                    if class_name == name || self.is_subclass(class_name, name) => true,
+                    if class_name == name || self.is_subclass(class_name, name) =>
+                {
+                    true
+                }
                 _ if !matches!(
                     name.as_str(),
                     "int" | "float" | "bool" | "str" | "none" | "None"
@@ -9047,7 +9073,10 @@ impl Interpreter {
                     Value::List(_) if name == "list" => true,
                     Value::Dict(_) if name == "dict" => true,
                     Value::Object { class_name, .. }
-                        if class_name == name || self.is_subclass(class_name, name) => true,
+                        if class_name == name || self.is_subclass(class_name, name) =>
+                    {
+                        true
+                    }
                     Value::Int(_) if name == "int" => true,
                     Value::Float(_) if name == "float" => true,
                     Value::Complex(_, _) if name == "complex" => true,
@@ -11111,7 +11140,10 @@ is_not_other = child is not Box
             interp.env.borrow().get("is_complex"),
             Some(Value::Bool(true))
         );
-        assert_eq!(interp.env.borrow().get("is_parent"), Some(Value::Bool(true)));
+        assert_eq!(
+            interp.env.borrow().get("is_parent"),
+            Some(Value::Bool(true))
+        );
         assert_eq!(
             interp.env.borrow().get("is_not_other"),
             Some(Value::Bool(true))

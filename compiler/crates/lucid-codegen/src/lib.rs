@@ -797,8 +797,9 @@ impl CCodeGenerator {
                 continue;
             };
             if let Some(parent) = bases.iter().find_map(|base| match base {
-                TypeExpr::Named { name: base_name, .. }
-                    if self.known_classes.contains_key(base_name) => Some(base_name.clone()),
+                TypeExpr::Named {
+                    name: base_name, ..
+                } if self.known_classes.contains_key(base_name) => Some(base_name.clone()),
                 _ => None,
             }) {
                 self.known_parents.insert(name.clone(), parent);
@@ -976,7 +977,9 @@ impl CCodeGenerator {
                     .map(|(_, getter)| getter.clone())
                     .collect();
                 for getter in getters {
-                    self.emit_line(&format!("if (strcmp(attr, \"{getter}\") == 0) return true;"));
+                    self.emit_line(&format!(
+                        "if (strcmp(attr, \"{getter}\") == 0) return true;"
+                    ));
                 }
                 let methods: Vec<String> = self
                     .known_method_param_names
@@ -985,7 +988,9 @@ impl CCodeGenerator {
                     .map(|(_, method)| method.clone())
                     .collect();
                 for method in methods {
-                    self.emit_line(&format!("if (strcmp(attr, \"{method}\") == 0) return true;"));
+                    self.emit_line(&format!(
+                        "if (strcmp(attr, \"{method}\") == 0) return true;"
+                    ));
                 }
                 owner = self.known_parents.get(&candidate).cloned();
             }
@@ -1003,7 +1008,9 @@ impl CCodeGenerator {
         let mut setter_classes: Vec<String> = self.known_classes.keys().cloned().collect();
         setter_classes.sort();
         for class in setter_classes {
-            self.emit_line(&format!("if (class_name && strcmp(class_name, \"{class}\") == 0) {{"));
+            self.emit_line(&format!(
+                "if (class_name && strcmp(class_name, \"{class}\") == 0) {{"
+            ));
             self.indent += 1;
             let mut setter_owner = Some(class.clone());
             while let Some(owner) = setter_owner.clone() {
@@ -7501,10 +7508,14 @@ static inline void lucid_print_val(LucidVal v) {
                                 _ => {
                                     let object = self.emit_expr(&args[0].value)?;
                                     let object_tmp = self.new_temp();
-                                    self.emit_line(&format!("LucidVal {object_tmp} = lucid_wrap({object});"));
+                                    self.emit_line(&format!(
+                                        "LucidVal {object_tmp} = lucid_wrap({object});"
+                                    ));
                                     let attr = self.emit_expr(&args[attr_index].value)?;
                                     let attr_tmp = self.new_temp();
-                                    self.emit_line(&format!("const char* {attr_tmp} = lucid_as_str(lucid_wrap({attr}));"));
+                                    self.emit_line(&format!(
+                                        "const char* {attr_tmp} = lucid_as_str(lucid_wrap({attr}));"
+                                    ));
                                     if name == "hasattr" {
                                         return Ok(format!(
                                             "lucid_dynamic_has_attr({object_tmp}, {attr_tmp})"
@@ -7513,7 +7524,9 @@ static inline void lucid_print_val(LucidVal v) {
                                     if name == "setattr" {
                                         let value = self.emit_expr(&args[2].value)?;
                                         let value_tmp = self.new_temp();
-                                        self.emit_line(&format!("LucidVal {value_tmp} = lucid_wrap({value});"));
+                                        self.emit_line(&format!(
+                                            "LucidVal {value_tmp} = lucid_wrap({value});"
+                                        ));
                                         return Ok(format!(
                                             "(lucid_dynamic_set_attr({object_tmp}, {attr_tmp}, {value_tmp}), lucid_none())"
                                         ));
@@ -7521,7 +7534,9 @@ static inline void lucid_print_val(LucidVal v) {
                                     let (fallback, has_default) = if args.len() == 3 {
                                         let fallback = self.emit_expr(&args[2].value)?;
                                         let fallback_tmp = self.new_temp();
-                                        self.emit_line(&format!("LucidVal {fallback_tmp} = lucid_wrap({fallback});"));
+                                        self.emit_line(&format!(
+                                            "LucidVal {fallback_tmp} = lucid_wrap({fallback});"
+                                        ));
                                         (fallback_tmp, "true")
                                     } else {
                                         ("lucid_none()".to_string(), "false")
@@ -7538,11 +7553,15 @@ static inline void lucid_print_val(LucidVal v) {
                                 .to_string();
                             if name == "getattr" && class_name == "LucidVal" {
                                 let object_tmp = self.new_temp();
-                                self.emit_line(&format!("LucidVal {object_tmp} = lucid_wrap({object});"));
+                                self.emit_line(&format!(
+                                    "LucidVal {object_tmp} = lucid_wrap({object});"
+                                ));
                                 let (fallback, has_default) = if args.len() == 3 {
                                     let fallback_tmp = self.new_temp();
                                     let fallback_expr = self.emit_expr(&args[2].value)?;
-                                    self.emit_line(&format!("LucidVal {fallback_tmp} = lucid_wrap({fallback_expr});"));
+                                    self.emit_line(&format!(
+                                        "LucidVal {fallback_tmp} = lucid_wrap({fallback_expr});"
+                                    ));
                                     (fallback_tmp, "true")
                                 } else {
                                     ("lucid_none()".to_string(), "false")
@@ -7601,15 +7620,29 @@ static inline void lucid_print_val(LucidVal v) {
                                             .cloned()
                                             .unwrap_or_else(|| "LucidVal".to_string());
                                         let converted = match setter_type.as_str() {
-                                            "int64_t" => format!("lucid_as_int(lucid_wrap({value}))"),
-                                            "double" => format!("lucid_as_float(lucid_wrap({value}))"),
+                                            "int64_t" => {
+                                                format!("lucid_as_int(lucid_wrap({value}))")
+                                            }
+                                            "double" => {
+                                                format!("lucid_as_float(lucid_wrap({value}))")
+                                            }
                                             "bool" => format!("lucid_as_bool(lucid_wrap({value}))"),
-                                            "const char*" => format!("lucid_as_str(lucid_wrap({value}))"),
-                                            "LucidList*" => format!("lucid_as_list(lucid_wrap({value}))"),
-                                            "LucidDict*" => format!("lucid_as_dict(lucid_wrap({value}))"),
-                                            "LucidSet*" => format!("lucid_as_set(lucid_wrap({value}))"),
+                                            "const char*" => {
+                                                format!("lucid_as_str(lucid_wrap({value}))")
+                                            }
+                                            "LucidList*" => {
+                                                format!("lucid_as_list(lucid_wrap({value}))")
+                                            }
+                                            "LucidDict*" => {
+                                                format!("lucid_as_dict(lucid_wrap({value}))")
+                                            }
+                                            "LucidSet*" => {
+                                                format!("lucid_as_set(lucid_wrap({value}))")
+                                            }
                                             "LucidVal" => format!("lucid_wrap({value})"),
-                                            other => format!("({other})lucid_as_ptr(lucid_wrap({value}))"),
+                                            other => format!(
+                                                "({other})lucid_as_ptr(lucid_wrap({value}))"
+                                            ),
                                         };
                                         let receiver = if owner == class_name {
                                             object.clone()
@@ -7627,9 +7660,15 @@ static inline void lucid_print_val(LucidVal v) {
                                 self.known_classes.get(&class_name).is_some_and(|fields| {
                                     fields.iter().any(|field| field == attr_name)
                                 });
-                            let method_present = self.method_owner(&class_name, attr_name).is_some();
+                            let method_present =
+                                self.method_owner(&class_name, attr_name).is_some();
                             if name == "hasattr" {
-                                return Ok(if present || method_present { "true" } else { "false" }.to_string());
+                                return Ok(if present || method_present {
+                                    "true"
+                                } else {
+                                    "false"
+                                }
+                                .to_string());
                             }
                             if !present {
                                 if name == "getattr" && args.len() == 3 {
@@ -8309,6 +8348,11 @@ static inline void lucid_print_val(LucidVal v) {
                             });
                         }
                         "round" => {
+                            if args.len() > 2 {
+                                return Err(CodegenError {
+                                    message: "round() takes one or two arguments".to_string(),
+                                });
+                            }
                             if args.len() == 1 {
                                 let arg_str = self.emit_expr(&args[0].value)?;
                                 return Ok(format!(
@@ -12247,7 +12291,10 @@ print(getattr(p, "total"), hasattr(p, "total"), hasattr(p, "missing"))
             .expect("compiled program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "5 Point\n5 true false\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "5 Point\n5 true false\n"
+        );
     }
 
     #[test]
@@ -12626,10 +12673,8 @@ setattr(value, "message", "updated")
 print(getattr(value, "message"))
 "#;
         let module = parse(source).expect("union getattr source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_native_union_getattr_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_native_union_getattr_{}", std::process::id()));
         compile_to_native(&module, &output, 0).expect("union getattr should compile");
         let result = std::process::Command::new(&output)
             .output()
@@ -13373,6 +13418,21 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n3\n2.6\n");
+    }
+
+    #[test]
+    fn native_round_rejects_more_than_two_arguments() {
+        let module = parse("print(round(1.25, 1, 0))\n").expect("round source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_round_arity_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        let error = compile_to_native(&module, &output, 0).expect_err("round arity should fail");
+        let _ = fs::remove_file(&output);
+        assert!(
+            error
+                .to_string()
+                .contains("round() takes one or two arguments")
+        );
     }
 
     #[test]
@@ -14575,7 +14635,10 @@ print(getattr(p, "z", 42))
             .expect("compiled reflection program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n6\n6\n7\nattribute\n7\ntrue\nfalse\ntrue\n42\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "4\n6\n6\n7\nattribute\n7\ntrue\nfalse\ntrue\n42\n"
+        );
     }
 
     #[test]
@@ -14596,7 +14659,9 @@ print(getattr(make(), "missing", 42))
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("reflection default should compile");
-        let run = Command::new(&output).output().expect("run reflection default");
+        let run = Command::new(&output)
+            .output()
+            .expect("run reflection default");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "reflection default failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "receiver\n42\n");
