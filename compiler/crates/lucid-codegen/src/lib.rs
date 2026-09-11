@@ -2189,6 +2189,17 @@ static inline LucidSet* lucid_set_xor(LucidSet* a, LucidSet* b) {
     LucidSet* out = lucid_set_difference(a, b); if (b) for (int64_t i = 0; i < b->len; ++i) if (!a || !lucid_set_contains(a, b->items[i])) lucid_set_add(out, b->items[i]); return out;
 }
 static inline bool lucid_set_disjoint(LucidSet* a, LucidSet* b) { if (!a || !b) return true; for (int64_t i = 0; i < a->len; ++i) if (lucid_set_contains(b, a->items[i])) return false; return true; }
+static inline bool lucid_set_disjoint_value(LucidSet* a, LucidVal other) {
+    if (other.type == LUCID_TYPE_SET) return lucid_set_disjoint(a, other.set);
+    if (other.type == LUCID_TYPE_LIST) {
+        if (!a || !other.list) return true;
+        for (int64_t i = 0; i < a->len; ++i)
+            for (int64_t j = 0; j < other.list->len; ++j)
+                if (lucid_eq(a->items[i], other.list->items[j])) return false;
+        return true;
+    }
+    fprintf(stderr, "isdisjoint() argument must be iterable\n"); exit(1);
+}
 static inline bool lucid_list_contains(LucidList* l, LucidVal value) {
     if (!l) return false;
     for (int64_t i = 0; i < l->len; i++) if (lucid_eq(l->items[i], value)) return true;
@@ -8984,7 +8995,7 @@ static inline void lucid_print_val(LucidVal v) {
                         let obj_code = self.emit_expr(obj_expr)?;
                         let value_code = self.emit_expr(&args[0].value)?;
                         return Ok(format!(
-                            "lucid_set_disjoint({obj_code}, lucid_as_set(lucid_wrap({value_code})))"
+                            "lucid_set_disjoint_value({obj_code}, lucid_wrap({value_code}))"
                         ));
                     }
                     if attr == "remove"
@@ -13644,6 +13655,23 @@ print(result[1])
             String::from_utf8_lossy(&run.stdout),
             "[set len=1]\n[set len=3]\n[set len=1]\n[set len=2]\ntrue\n"
         );
+    }
+
+    #[test]
+    fn native_set_isdisjoint_accepts_lists() {
+        let source =
+            "items = {1, 2}\nprint(items.isdisjoint([3, 4]))\nprint(items.isdisjoint([2, 4]))\n";
+        let module = parse(source).expect("list isdisjoint source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_set_isdisjoint_list_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("list isdisjoint should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native isdisjoint failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
     }
 
     #[test]
