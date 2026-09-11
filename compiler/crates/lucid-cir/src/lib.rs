@@ -5270,6 +5270,103 @@ impl Function {
         Ok(function)
     }
 
+    /// Lower a parameterized match whose scrutinee is one positional value,
+    /// every explicit arm is an integer/boolean literal, and the final arm is
+    /// a wildcard.  Each arm returns a primitive literal.  The decision chain
+    /// is represented directly in CIR so only the selected arm executes.
+    pub fn from_parameterized_literal_match(
+        parameter_count: usize,
+        parameter_index: usize,
+        arms: &[(TypedLiteral, TypedLiteral)],
+        wildcard: TypedLiteral,
+    ) -> Result<Self, LowerError> {
+        if arms.is_empty() || parameter_index >= parameter_count {
+            return Err(LowerError::UnsupportedExpression);
+        }
+        let mut blocks = Vec::with_capacity(arms.len() * 2 + 2);
+        let params = (0..parameter_count)
+            .map(|index| Instruction::Param {
+                result: ValueId(index as u32),
+                index: index as u32,
+            })
+            .collect::<Vec<_>>();
+        let mut next_value = parameter_count as u32;
+        let merge_block = BlockId((arms.len() * 2 + 1) as u32);
+        let value_instruction = |literal: TypedLiteral, result: ValueId| match literal {
+            TypedLiteral::Int(value) => Instruction::ConstInt { result, value },
+            TypedLiteral::Bool(value) => Instruction::ConstBool { result, value },
+        };
+        let mut incoming = Vec::with_capacity(arms.len() + 1);
+        for (index, (pattern, result_literal)) in arms.iter().enumerate() {
+            let test_block = BlockId((index * 2) as u32);
+            let arm_block = BlockId((index * 2 + 1) as u32);
+            let next_test = if index + 1 < arms.len() {
+                BlockId(((index + 1) * 2) as u32)
+            } else {
+                BlockId((arms.len() * 2) as u32)
+            };
+            let pattern_value = ValueId(next_value);
+            next_value += 1;
+            let condition_value = ValueId(next_value);
+            next_value += 1;
+            let result_value = ValueId(next_value);
+            next_value += 1;
+            let mut test_instructions = if index == 0 {
+                params.clone()
+            } else {
+                Vec::new()
+            };
+            test_instructions.push(value_instruction(*pattern, pattern_value));
+            test_instructions.push(Instruction::CmpEq {
+                result: condition_value,
+                left: ValueId(parameter_index as u32),
+                right: pattern_value,
+            });
+            let arm_instructions = vec![value_instruction(*result_literal, result_value)];
+            incoming.push((arm_block, result_value));
+            blocks.push(Block {
+                id: test_block,
+                instructions: test_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: arm_block,
+                    else_block: next_test,
+                },
+            });
+            blocks.push(Block {
+                id: arm_block,
+                instructions: arm_instructions,
+                terminator: Terminator::Jump(merge_block),
+            });
+        }
+        let wildcard_block = BlockId((arms.len() * 2) as u32);
+        let wildcard_value = ValueId(next_value);
+        next_value += 1;
+        incoming.push((wildcard_block, wildcard_value));
+        blocks.push(Block {
+            id: wildcard_block,
+            instructions: vec![value_instruction(wildcard, wildcard_value)],
+            terminator: Terminator::Jump(merge_block),
+        });
+        let result = ValueId(next_value);
+        blocks.push(Block {
+            id: merge_block,
+            instructions: vec![Instruction::Phi {
+                result,
+                incomings: incoming,
+            }],
+            terminator: Terminator::Return(Some(result)),
+        });
+        let function = Self {
+            entry: BlockId(0),
+            blocks,
+        };
+        function
+            .verify()
+            .map_err(|_| LowerError::UnsupportedExpression)?;
+        Ok(function)
+    }
+
     /// Validate block and SSA-value references before either backend consumes
     /// the function. Every definition must dominate each use, including uses
     /// in terminators. This makes the SSA contract explicit instead of

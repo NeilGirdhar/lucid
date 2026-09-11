@@ -1355,8 +1355,88 @@ pub fn lower_function_body(
         && !function.is_dispatch
         && let [lucid_syntax::Stmt::Match { subject, arms, .. }] = source_function.body.as_slice()
         && matches!(subject, lucid_syntax::Expr::Ident { .. })
-        && arms.len() == 2
     {
+        let parameter_index = match subject {
+            lucid_syntax::Expr::Ident { name, .. } => function
+                .parameter_names
+                .iter()
+                .position(|parameter| parameter == name),
+            _ => None,
+        };
+        let primitive_literal = |expr: &lucid_syntax::Expr| match expr {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(lucid_cir::TypedLiteral::Int(*value)),
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Bool(value),
+                ..
+            } => Some(lucid_cir::TypedLiteral::Bool(*value)),
+            _ => None,
+        };
+        if arms.len() >= 3
+            && let Some(parameter_index) = parameter_index
+            && arms[..arms.len() - 1]
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+            && matches!(
+                arms.last().map(|arm| &arm.pattern),
+                Some(lucid_syntax::Pattern::Wildcard(_))
+            )
+        {
+            let explicit = arms[..arms.len() - 1]
+                .iter()
+                .map(|arm| {
+                    let lucid_syntax::Pattern::Literal(pattern, _) = &arm.pattern else {
+                        unreachable!()
+                    };
+                    let pattern = match pattern {
+                        lucid_syntax::LiteralValue::Int(value) => {
+                            lucid_cir::TypedLiteral::Int(*value)
+                        }
+                        lucid_syntax::LiteralValue::Bool(value) => {
+                            lucid_cir::TypedLiteral::Bool(*value)
+                        }
+                        _ => return None,
+                    };
+                    let [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        },
+                    ] = arm.body.as_slice()
+                    else {
+                        return None;
+                    };
+                    Some((pattern, primitive_literal(value)?))
+                })
+                .collect::<Option<Vec<_>>>();
+            let wildcard = arms.last().and_then(|arm| {
+                let [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] = arm.body.as_slice()
+                else {
+                    return None;
+                };
+                primitive_literal(value)
+            });
+            if let (Some(explicit), Some(wildcard)) = (explicit, wildcard) {
+                return lucid_cir::Function::from_parameterized_literal_match(
+                    function.parameter_names.len(),
+                    parameter_index,
+                    &explicit,
+                    wildcard,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported literal match for function CIR lowering"));
+            }
+        }
+        if arms.len() != 2 {
+            return Err(Arc::from(
+                "unsupported match shape for function CIR lowering",
+            ));
+        }
         let (literal_arm, wildcard_arm) = match (&arms[0].pattern, &arms[1].pattern) {
             (lucid_syntax::Pattern::Literal(_, _), lucid_syntax::Pattern::Wildcard(_)) => {
                 (&arms[0], &arms[1])
@@ -3591,6 +3671,17 @@ mod tests {
             .as_ref()
             .expect("literal match should lower through conditional CIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case 2:\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
 
         let file = db.add_file("void.lucid", "def answer():\n    return\n");
