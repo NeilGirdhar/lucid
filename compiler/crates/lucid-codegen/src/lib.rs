@@ -2350,6 +2350,25 @@ static inline LucidVal lucid_get_index_value(LucidVal container, LucidVal index)
     fprintf(stderr, "indexing not supported\n");
     exit(1);
 }
+static inline void lucid_set_index_value(LucidVal container, LucidVal index, LucidVal value) {
+    if (container.type == LUCID_TYPE_DICT) {
+        lucid_dict_set(container.dict, index, value);
+        return;
+    }
+    if (container.type == LUCID_TYPE_LIST) {
+        if (index.type != LUCID_TYPE_INT) {
+            fprintf(stderr, "list indices must be integers\n");
+            exit(1);
+        }
+        lucid_list_set(container.list, index.i, value);
+        return;
+    }
+    if (container.type == LUCID_TYPE_STR)
+        fprintf(stderr, "cannot assign to string index\n");
+    else
+        fprintf(stderr, "index assignment not supported\n");
+    exit(1);
+}
 
 static inline LucidList* lucid_list_repeat(LucidVal v, int64_t n) {
     if (n < 0) n = 0;
@@ -4751,6 +4770,13 @@ static inline void lucid_print_val(LucidVal v) {
                         if let Some(owner) = self.method_owner(&receiver_class, "__setitem__") {
                             let arr_code = self.emit_expr(arr_expr)?;
                             self.emit_line(&format!("{owner}___setitem__(({owner}*)({arr_code}), {idx_code}, {val_code});"));
+                            return Ok(());
+                        }
+                        if receiver_type == "LucidVal" {
+                            let arr_code = self.emit_expr(arr_expr)?;
+                            self.emit_line(&format!(
+                                "lucid_set_index_value(lucid_wrap({arr_code}), lucid_wrap({idx_code}), lucid_wrap({val_code}));"
+                            ));
                             return Ok(());
                         }
                         // Check for 2D index assignment: a[i][j] = val
@@ -12915,6 +12941,28 @@ print(all({1, 2}))
         assert!(
             run.status.success(),
             "dynamic dictionary indexing failed: {run:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+    }
+
+    #[test]
+    fn native_dynamic_dict_assignment_preserves_container_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nitems = identity({\"answer\": 1})\nitems[\"answer\"] = 42\nprint(items[\"answer\"])\n";
+        let module = parse(source).expect("dynamic dictionary assignment should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_dict_assignment_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("dynamic dictionary assignment should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic dictionary assignment should run");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "dynamic dictionary assignment failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
     }
