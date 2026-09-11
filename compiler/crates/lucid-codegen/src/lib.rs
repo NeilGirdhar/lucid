@@ -3368,6 +3368,14 @@ static inline bool lucid_all(LucidVal value) {
 static int lucid_sorted_compare(const void* left, const void* right) {
     const LucidVal* a = (const LucidVal*)left;
     const LucidVal* b = (const LucidVal*)right;
+    if (a->type == LUCID_TYPE_PTR && b->type == LUCID_TYPE_PTR) {
+        LucidObjectLt lt = lucid_object_lt(a->ptr, b->ptr);
+        if (lt) {
+            if (lt(a->ptr, b->ptr)) return -1;
+            if (lt(b->ptr, a->ptr)) return 1;
+            return 0;
+        }
+    }
     if (a->type == LUCID_TYPE_STR && b->type == LUCID_TYPE_STR)
         return strcmp(a->s ? a->s : "", b->s ? b->s : "");
     if ((a->type == LUCID_TYPE_INT || a->type == LUCID_TYPE_BIGINT) &&
@@ -3379,19 +3387,10 @@ static int lucid_sorted_compare(const void* left, const void* right) {
 }
 
 static inline LucidList* lucid_sorted(LucidVal value) {
-    if (value.type == LUCID_TYPE_SET && value.set) {
-        LucidList* out = lucid_list_new(value.set->len);
-        for (int64_t i = 0; i < value.set->len; ++i)
-            lucid_list_append(out, value.set->items[i]);
-        qsort(out->items, (size_t)out->len, sizeof(LucidVal), lucid_sorted_compare);
-        return out;
-    }
-    if (value.type != LUCID_TYPE_LIST || !value.list) {
-        fprintf(stderr, "sorted() argument is not iterable\n"); exit(1);
-    }
-    LucidList* out = lucid_list_new(value.list->len);
-    for (int64_t i = 0; i < value.list->len; ++i)
-        lucid_list_append(out, value.list->items[i]);
+    LucidList* source = lucid_iterable_to_list(value);
+    LucidList* out = lucid_list_new(source ? source->len : 0);
+    if (source) for (int64_t i = 0; i < source->len; ++i)
+        lucid_list_append(out, source->items[i]);
     qsort(out->items, (size_t)out->len, sizeof(LucidVal), lucid_sorted_compare);
     return out;
 }
@@ -13173,6 +13172,22 @@ print(c.x, c.y)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+    }
+
+    #[test]
+    fn native_sorted_dispatches_erased_iterables_and_less_than() {
+        let source = "class Item:\n    value: int\n    def __lt__(self, other: Item) -> bool:\n        return self.value < other.value\nclass Bag:\n    def __iter__(self) -> Any:\n        return [Item(3), Item(1), Item(2)]\ndef identity(value: Any) -> Any:\n    return value\nprint(sorted(identity(Bag()))[0].value)";
+        let module = parse(source).expect("dynamic sorted source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_sorted_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic sorted should compile");
+        let run = Command::new(&output).output().expect("run dynamic sorted");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic sorted failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
     }
 
