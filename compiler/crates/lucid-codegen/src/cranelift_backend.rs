@@ -376,6 +376,11 @@ impl CompiledFunction {
                 crate::native_abi::NativeErrorCode::UnexpectedArgumentCount,
             );
         }
+        if args.len() > 16 {
+            return crate::native_abi::NativeResult::error(
+                crate::native_abi::NativeErrorCode::InvalidOperation,
+            );
+        }
         if !self.result_abi {
             if self.returns_value {
                 return crate::native_abi::NativeResult::ok(unsafe { self.call_with_args(args) });
@@ -711,6 +716,14 @@ impl CompiledFunction {
             unsafe {
                 out.write(crate::native_abi::NativeResult::error(
                     crate::native_abi::NativeErrorCode::UnexpectedArgumentCount,
+                ));
+            }
+            return false;
+        }
+        if args.len() > 16 {
+            unsafe {
+                out.write(crate::native_abi::NativeResult::error(
+                    crate::native_abi::NativeErrorCode::InvalidOperation,
                 ));
             }
             return false;

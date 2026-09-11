@@ -108,6 +108,9 @@ diverged:
 * CIR verification and shape/type lowering now report missing blocks or
   malformed intermediate shapes through checked results rather than internal
   `expect`/`unreachable!()` paths.
+* Parameterized native result adapters reject signatures above the fixed
+  sixteen-argument ABI limit with `InvalidOperation` before entering unsafe
+  legacy calls, including pointer-output FFI adapters.
 * Checker subtype and numeric-special-value paths now return ordinary
   negatives for malformed intermediate types instead of relying on internal
   `unreachable!()` assumptions.
