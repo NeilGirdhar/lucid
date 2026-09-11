@@ -1876,6 +1876,19 @@ static inline int64_t lucid_int_builtin(LucidVal v) {
 static inline int64_t lucid_round_to_int(double value) {
     return lucid_as_int(lucid_float(round(value)));
 }
+static inline int64_t lucid_round_dynamic(LucidVal value) {
+    if (value.type == LUCID_TYPE_INT) return value.i;
+    if (value.type == LUCID_TYPE_FLOAT) return lucid_round_to_int(value.f);
+    fprintf(stderr, "type does not define round\n"); exit(1);
+}
+static inline LucidVal lucid_round_places_dynamic(LucidVal value, int64_t places) {
+    if (value.type == LUCID_TYPE_INT) return lucid_int(value.i);
+    if (value.type == LUCID_TYPE_FLOAT) {
+        double factor = pow(10.0, (double)places);
+        return lucid_float(round(value.f * factor) / factor);
+    }
+    fprintf(stderr, "type does not define round\n"); exit(1);
+}
 static inline LucidVal lucid_int_dynamic(LucidVal v) {
     if (v.type == LUCID_TYPE_BIGINT && v.bigint) return v;
     if (v.type == LUCID_TYPE_STR && v.s) {
@@ -3468,7 +3481,16 @@ static inline void lucid_print_val(LucidVal v) {
                             if args.len() == 1 {
                                 "int64_t".to_string()
                             } else {
-                                "double".to_string()
+                                if args
+                                    .first()
+                                    .is_some_and(|arg| {
+                                        self.infer_expr_type(&arg.value, vars) == "LucidVal"
+                                    })
+                                {
+                                    "LucidVal".to_string()
+                                } else {
+                                    "double".to_string()
+                                }
                             }
                         }
                         "list" | "sorted" => "LucidList*".to_string(),
@@ -8424,6 +8446,12 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if args.len() == 1 {
                                 let arg_str = self.emit_expr(&args[0].value)?;
+                                let arg_type = self.infer_expr_type(&args[0].value, &HashMap::new());
+                                if arg_type == "LucidVal" {
+                                    return Ok(format!(
+                                        "lucid_round_dynamic(lucid_wrap({arg_str}))"
+                                    ));
+                                }
                                 return Ok(format!(
                                     "lucid_round_to_int(lucid_as_float(lucid_wrap({arg_str})))"
                                 ));
@@ -8434,6 +8462,13 @@ static inline void lucid_print_val(LucidVal v) {
                                     == "int64_t"
                                 {
                                     return Ok(format!("lucid_as_int(lucid_wrap({arg0}))"));
+                                }
+                                if self.infer_expr_type(&args[0].value, &HashMap::new())
+                                    == "LucidVal"
+                                {
+                                    return Ok(format!(
+                                        "lucid_round_places_dynamic(lucid_wrap({arg0}), lucid_as_int(lucid_wrap({arg1})))"
+                                    ));
                                 }
                                 return Ok(format!(
                                     "({{ LucidVal _round_value = lucid_wrap({arg0}); LucidVal _round_places = lucid_wrap({arg1}); if (_round_places.type != LUCID_TYPE_INT) {{ fprintf(stderr, \"round() ndigits must be an int\\n\"); exit(1); }} lucid_round_places(lucid_as_float(_round_value), _round_places.i); }})"
@@ -13704,6 +13739,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "special round failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "int.inf\nint.nan\n0\n");
+    }
+
+    #[test]
+    fn native_round_rejects_bigint_through_any() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(round(identity(100000000000000000001)))\n";
+        let module = parse(source).expect("dynamic round source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_round_dynamic_bigint_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic round should compile");
+        let run = Command::new(&output).output().expect("run dynamic round");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "round(BigInt) should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("does not define round"));
     }
 
     #[test]

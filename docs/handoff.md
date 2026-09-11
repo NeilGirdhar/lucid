@@ -69,6 +69,8 @@ The one-argument native `round` path uses the same guarded conversion for
 float infinities and NaN.
 Native and interpreter `abs` preserve the `int.nan` and `-int.inf` sentinel
 values instead of overflowing on their reserved machine representations.
+Native `round` now rejects BigInt values that arrive through erased `Any`,
+matching the interpreter's numeric capability dispatch.
 
 ## Verified baseline
 
@@ -83,15 +85,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-303 native-codegen tests
+304 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-744 tests passed
+745 tests passed
 ```
 
-The same 744 tests also pass with:
+The same 745 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
