@@ -2477,6 +2477,17 @@ static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
     fprintf(stderr, "unsupported operands for *\n");
     exit(1);
 }
+static inline LucidVal lucid_div_value(LucidVal left, LucidVal right) {
+    bool left_numeric = left.type == LUCID_TYPE_INT || left.type == LUCID_TYPE_FLOAT;
+    bool right_numeric = right.type == LUCID_TYPE_INT || right.type == LUCID_TYPE_FLOAT;
+    if (left_numeric && right_numeric) {
+        double lhs = left.type == LUCID_TYPE_FLOAT ? left.f : (double)left.i;
+        double rhs = right.type == LUCID_TYPE_FLOAT ? right.f : (double)right.i;
+        return lucid_float(lhs / rhs);
+    }
+    fprintf(stderr, "unsupported operands for /\n");
+    exit(1);
+}
 
 static inline bool lucid_checked_range_advance(int64_t current, int64_t step, int64_t* next) {
     if (step > 0 && current > INT64_MAX - step) return false;
@@ -3084,6 +3095,9 @@ static inline void lucid_print_val(LucidVal v) {
                 ) && l_ty == "LucidVal"
                     && r_ty == "LucidVal"
                 {
+                    return "LucidVal".to_string();
+                }
+                if *op == BinaryOp::Div && l_ty == "LucidVal" && r_ty == "LucidVal" {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
@@ -5942,6 +5956,14 @@ static inline void lucid_print_val(LucidVal v) {
                     };
                     return Ok(format!(
                         "lucid_setop_value(lucid_wrap({l_str}), lucid_wrap({r_str}), '{symbol}')"
+                    ));
+                }
+                if *op == BinaryOp::Div
+                    && self.expr_is_dynamic_value(left)
+                    && self.expr_is_dynamic_value(right)
+                {
+                    return Ok(format!(
+                        "lucid_div_value(lucid_wrap({l_str}), lucid_wrap({r_str}))"
                     ));
                 }
 
@@ -13128,6 +13150,24 @@ print(all({1, 2}))
             "dynamic multiplication failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "abab\n4\n1\n");
+    }
+
+    #[test]
+    fn native_dynamic_division_preserves_numeric_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(7)\nright = identity(2)\nprint(left / right)\n";
+        let module = parse(source).expect("dynamic division should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_division_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic division should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic division should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic division failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3.5\n");
     }
 
     #[test]
