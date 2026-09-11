@@ -571,7 +571,7 @@ impl CCodeGenerator {
         for stmt in &module.statements {
             if let Stmt::ClassDef {
                 name,
-                bases,
+                bases: _bases,
                 without_traits,
                 body,
                 ..
@@ -687,12 +687,6 @@ impl CCodeGenerator {
                     }
                 }
                 self.known_classes.insert(name.clone(), fields);
-                if let Some(parent) = bases.iter().find_map(|base| match base {
-                    TypeExpr::Named { name, .. } => Some(name.clone()),
-                    _ => None,
-                }) {
-                    self.known_parents.insert(name.clone(), parent);
-                }
                 self.known_class_members.insert(name.clone(), members);
             } else if let Stmt::Function(f) = stmt {
                 let is_contextmanager = f.decorators.iter().any(|decorator| {
@@ -765,6 +759,24 @@ impl CCodeGenerator {
                         }
                     }
                 }
+            }
+        }
+
+        // Resolve the single class parent only after every class has been
+        // collected. A class may list traits alongside its parent, and the
+        // parent may be declared later in the file; selecting the first named
+        // base would confuse a trait for a class and emit invalid ancestry
+        // metadata.
+        for stmt in &module.statements {
+            let Stmt::ClassDef { name, bases, .. } = stmt else {
+                continue;
+            };
+            if let Some(parent) = bases.iter().find_map(|base| match base {
+                TypeExpr::Named { name: base_name, .. }
+                    if self.known_classes.contains_key(base_name) => Some(base_name.clone()),
+                _ => None,
+            }) {
+                self.known_parents.insert(name.clone(), parent);
             }
         }
 

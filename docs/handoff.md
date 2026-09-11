@@ -103,6 +103,10 @@ diverged:
   The interpreter now applies the same ancestry rule to `is`, `is not`, and
   class-pattern matching, keeping erased and statically known checks aligned
   across both execution paths.
+  Native ancestry collection now distinguishes the one class parent from
+  trait bases and resolves it after collecting all class declarations. Trait
+  order and forward class declarations therefore cannot create invalid
+  `_freeze` aliases or corrupt inherited field layout.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.
