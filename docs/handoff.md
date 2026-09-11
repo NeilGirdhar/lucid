@@ -34,7 +34,7 @@ profiles:
 ```text
 cargo test --workspace --all-targets --quiet
 68 checker tests
-64 CIR tests
+65 CIR tests
 4 shared-ABI tests
 34 CLI/CIR integration tests
 1 CLI unit test
@@ -44,7 +44,7 @@ cargo test --workspace --all-targets --quiet
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-686 tests passed
+687 tests passed
 ```
 
 The same 686 tests also pass with:
