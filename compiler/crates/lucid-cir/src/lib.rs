@@ -4376,7 +4376,7 @@ impl Function {
                             let short_circuits = match op {
                                 lucid_syntax::BinaryOp::And => !left_truth,
                                 lucid_syntax::BinaryOp::Or => left_truth,
-                                _ => unreachable!(),
+                                _ => return Err(LowerError::UnsupportedExpression),
                             };
                             if short_circuits {
                                 let result = ValueId(*next);
@@ -4832,7 +4832,7 @@ impl Function {
                 let (then_block, else_block, short_value) = match op {
                     lucid_syntax::BinaryOp::And => (right_block, short_block, false),
                     lucid_syntax::BinaryOp::Or => (short_block, right_block, true),
-                    _ => unreachable!(),
+                    _ => return Err(LowerError::UnsupportedExpression),
                 };
                 let mut right_instructions = Vec::new();
                 let right_value = lower(right, &mut right_instructions, &mut next)?;
