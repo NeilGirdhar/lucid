@@ -7757,11 +7757,14 @@ impl TypeChecker {
                         }
                         let shapes = resolved_args
                             .iter()
-                            .map(|value| match value {
-                                Type::Shape(shape) => shape,
-                                _ => unreachable!(),
+                            .filter_map(|value| match value {
+                                Type::Shape(shape) => Some(shape),
+                                _ => None,
                             })
                             .collect::<Vec<_>>();
+                        if shapes.len() != resolved_args.len() {
+                            return Ok(Type::TypeVar("shape-op".into()));
+                        }
                         let rank = shapes[0].len();
                         if shapes.iter().any(|shape| shape.len() != rank) {
                             return Err(TypeError {

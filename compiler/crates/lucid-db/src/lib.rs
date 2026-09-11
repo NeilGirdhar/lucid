@@ -1583,7 +1583,7 @@ pub fn lower_function_body(
                 .iter()
                 .map(|arm| {
                     let lucid_syntax::Pattern::Literal(pattern, _) = &arm.pattern else {
-                        unreachable!()
+                        return None;
                     };
                     let pattern = match pattern {
                         lucid_syntax::LiteralValue::Int(value) => {
@@ -1662,7 +1662,7 @@ pub fn lower_function_body(
             _ => return Err(Arc::from("unsupported match arm for function CIR lowering")),
         };
         let lucid_syntax::Pattern::Literal(literal, span) = &literal_arm.pattern else {
-            unreachable!()
+            return Err(Arc::from("unsupported match literal pattern"));
         };
         let condition = lucid_syntax::Expr::Binary {
             op: lucid_syntax::BinaryOp::Eq,

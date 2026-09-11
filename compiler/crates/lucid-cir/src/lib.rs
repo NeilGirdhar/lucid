@@ -5607,13 +5607,10 @@ impl Function {
             if !reachable.insert(block) {
                 continue;
             }
-            let successors = match &self
-                .blocks
-                .iter()
-                .find(|candidate| candidate.id == block)
-                .expect("validated block")
-                .terminator
-            {
+            let Some(current) = self.blocks.iter().find(|candidate| candidate.id == block) else {
+                return Err(VerifyError::MissingBlock(block));
+            };
+            let successors = match &current.terminator {
                 Terminator::Jump(target) => vec![*target],
                 Terminator::Branch {
                     then_block,
@@ -5970,7 +5967,11 @@ impl Function {
                                     .checked_sub(product)
                                     .ok_or(ExecuteError::ArithmeticOverflow)?
                             }
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(ExecuteError::Invalid(VerifyError::UndefinedValue(
+                                    *result,
+                                )))
+                            }
                         };
                         values.insert(*result, value);
                     }

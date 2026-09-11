@@ -105,6 +105,9 @@ diverged:
   compile-time branch.
 * CIR short-circuit lowering now rejects impossible operator shapes through
   its normal unsupported-expression result instead of panicking.
+* CIR verification and shape/type lowering now report missing blocks or
+  malformed intermediate shapes through checked results rather than internal
+  `expect`/`unreachable!()` paths.
 * Checker subtype and numeric-special-value paths now return ordinary
   negatives for malformed intermediate types instead of relying on internal
   `unreachable!()` assumptions.
