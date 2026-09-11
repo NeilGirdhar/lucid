@@ -2268,7 +2268,7 @@ impl Function {
         let lucid_syntax::Stmt::While {
             condition,
             body,
-            if_broken: None,
+            if_broken,
             ..
         } = while_statement
         else {
@@ -2314,6 +2314,12 @@ impl Function {
                     &body[1],
                     lucid_syntax::Stmt::Continue(_) | lucid_syntax::Stmt::Pass(_)
                 ))
+        {
+            return None;
+        }
+        if if_broken
+            .as_ref()
+            .is_some_and(|body| !matches!(body.as_slice(), [lucid_syntax::Stmt::Pass(_)]))
         {
             return None;
         }
@@ -2561,7 +2567,7 @@ impl Function {
             target: lucid_syntax::Pattern::Ident(index_name, _),
             iterable: lucid_syntax::Expr::Call { func, args, .. },
             body,
-            if_broken: None,
+            if_broken,
             ..
         }, lucid_syntax::Stmt::Return {
             value:
@@ -2586,21 +2592,27 @@ impl Function {
         {
             return None;
         }
+        if if_broken
+            .as_ref()
+            .is_some_and(|body| !matches!(body.as_slice(), [lucid_syntax::Stmt::Pass(_)]))
+        {
+            return None;
+        }
         if args.iter().any(|arg| {
             arg.name.is_some() || arg.is_spread || arg.is_dict_spread || arg.is_gather_spread
         }) {
             return None;
         }
-        let ordinary_addition = match &body[0] {
+        let accumulator_update = match &body[0] {
             lucid_syntax::Stmt::AugAssign {
                 target:
                     lucid_syntax::Expr::Ident {
                         name: update_name, ..
                     },
-                op: lucid_syntax::BinaryOp::Add,
+                op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
                 value: lucid_syntax::Expr::Ident { name: add_name, .. },
                 ..
-            } => update_name == acc_name && add_name == index_name,
+            } if update_name == acc_name && add_name == index_name => Some(update_op.clone()),
             lucid_syntax::Stmt::Assignment {
                 target:
                     lucid_syntax::Expr::Ident {
@@ -2608,22 +2620,20 @@ impl Function {
                     },
                 value:
                     lucid_syntax::Expr::Binary {
-                        op: lucid_syntax::BinaryOp::Add,
+                        op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
                         left,
                         right,
                         ..
                     },
                 ..
             } => {
-                matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
+                (matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
                     && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
-                    && update_name == acc_name
+                    && update_name == acc_name).then_some(update_op.clone())
             }
-            _ => false,
+            _ => None,
         };
-        if !ordinary_addition {
-            return None;
-        }
+        let accumulator_update = accumulator_update?;
         let zero = lucid_syntax::Expr::Literal {
             value: lucid_syntax::LiteralValue::Int(0),
             span: lucid_syntax::Span::default(),
@@ -2713,10 +2723,18 @@ impl Function {
                 Block {
                     id: BlockId(2),
                     instructions: vec![
-                        Instruction::Add {
-                            result: ValueId(6),
-                            left: ValueId(4),
-                            right: ValueId(3),
+                        match accumulator_update {
+                            lucid_syntax::BinaryOp::Add => Instruction::Add {
+                                result: ValueId(6),
+                                left: ValueId(4),
+                                right: ValueId(3),
+                            },
+                            lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                                result: ValueId(6),
+                                left: ValueId(4),
+                                right: ValueId(3),
+                            },
+                            _ => unreachable!("validated accumulator update"),
                         },
                         Instruction::ConstInt {
                             result: ValueId(8),
@@ -6501,6 +6519,13 @@ return n
             .expect("trailing pass should lower with the induction loop");
         assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
 
+        let module =
+            lucid_syntax::parse("while n > 0:\n    n -= 1\nif_broken:\n    pass\nreturn n\n")
+                .expect("if_broken pass fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("if_broken pass should lower with the induction loop");
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
+
         let module = lucid_syntax::parse(
             r#"while n > 0:
     n = n - 1
@@ -6546,6 +6571,13 @@ return total
             .expect("range accumulation should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
+        let module =
+            lucid_syntax::parse("total = 20\nfor i in range(n):\n    total -= i\nreturn total\n")
+                .expect("range subtraction fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range subtraction should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
         let module = lucid_syntax::parse(
             r#"total = 0
 for i in range(n):
@@ -6565,6 +6597,14 @@ return total
         .expect("range pass fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("trailing pass in range loop should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            "total = 0\nfor i in range(n):\n    total += i\nif_broken:\n    pass\nreturn total\n",
+        )
+        .expect("range if_broken pass fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("if_broken pass in range loop should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
