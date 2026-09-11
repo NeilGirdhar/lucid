@@ -108,6 +108,9 @@ Range-loop `continue` now advances the loop state before restarting, avoiding
 an infinite loop and preserving checked step-overflow behavior.
 Context-manager teardown is also covered for both `continue` and `break`
 inside range loops, preserving cleanup before loop control transfers.
+Loop transfers now unwind only the context-manager scopes they actually leave;
+an inner loop can `continue` or `break` without tearing down an enclosing
+`with` block.
 `finally` bodies that themselves return no longer recursively re-enter their
 own cleanup during native lowering.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
@@ -180,12 +183,12 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-346 native-codegen tests
+347 native-codegen tests
 153 runtime tests
 22 syntax tests
 50 compiler-database tests
 17 configuration tests
-792 tests passed
+793 tests passed
 ```
 
 The same 792 tests also pass with:

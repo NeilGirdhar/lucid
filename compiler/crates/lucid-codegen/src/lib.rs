@@ -206,6 +206,7 @@ pub struct CCodeGenerator {
     capture_assignment: Option<String>,
     loop_break_flags: Vec<String>,
     loop_continue_updates: Vec<Option<(String, String, String)>>,
+    loop_context_depths: Vec<usize>,
     finally_stack: Vec<Vec<Stmt>>,
     context_stack: Vec<Vec<String>>,
     complex_names: HashSet<String>,
@@ -317,6 +318,7 @@ impl CCodeGenerator {
             capture_assignment: None,
             loop_break_flags: Vec::new(),
             loop_continue_updates: Vec::new(),
+            loop_context_depths: Vec::new(),
             finally_stack: Vec::new(),
             context_stack: Vec::new(),
             complex_names: HashSet::new(),
@@ -352,8 +354,13 @@ impl CCodeGenerator {
     }
 
     fn emit_context_cleanups(&mut self) {
+        self.emit_context_cleanups_from(0);
+    }
+
+    fn emit_context_cleanups_from(&mut self, depth: usize) {
         let contexts = self.context_stack.clone();
-        for scope in contexts.iter().rev() {
+        let start = depth.min(contexts.len());
+        for scope in contexts[start..].iter().rev() {
             for context in scope.iter().rev() {
                 self.emit_line(&format!("lucid_context_exit({context}, false);"));
             }
@@ -6873,9 +6880,11 @@ static inline void lucid_print_val(LucidVal v) {
                 self.indent += 1;
                 self.loop_break_flags.push(break_flag.clone());
                 self.loop_continue_updates.push(None);
+                self.loop_context_depths.push(self.context_stack.len());
                 for s in body {
                     self.emit_stmt(s)?;
                 }
+                self.loop_context_depths.pop();
                 self.loop_continue_updates.pop();
                 self.loop_break_flags.pop();
                 self.indent -= 1;
@@ -6945,9 +6954,11 @@ static inline void lucid_print_val(LucidVal v) {
                                 step_tmp.clone(),
                                 next_tmp.clone(),
                             )));
+                            self.loop_context_depths.push(self.context_stack.len());
                             for s in body {
                                 self.emit_stmt(s)?;
                             }
+                            self.loop_context_depths.pop();
                             self.emit_line(&format!("if (!lucid_checked_range_advance(lucid_var_{var_name}, {step_tmp}, &{next_tmp})) {{ fprintf(stderr, \"range step overflow\\n\"); exit(1); }}"));
                             self.emit_line(&format!("lucid_var_{var_name} = {next_tmp};"));
                             self.loop_continue_updates.pop();
@@ -6995,11 +7006,13 @@ static inline void lucid_print_val(LucidVal v) {
                     self.emit_line(&format!("if ({item_tmp}.type == LUCID_TYPE_STR && {item_tmp}.s && strcmp({item_tmp}.s, \"iteration.done\") == 0) break;"));
                     self.loop_break_flags.push(break_flag.clone());
                     self.loop_continue_updates.push(None);
+                    self.loop_context_depths.push(self.context_stack.len());
                     self.emit_pattern_bindings(target, &item_tmp);
                     for s in body {
                         self.emit_stmt(s)?;
                     }
                     self.loop_break_flags.pop();
+                    self.loop_context_depths.pop();
                     self.loop_continue_updates.pop();
                     self.indent -= 1;
                     self.emit_line("}");
@@ -7036,6 +7049,7 @@ static inline void lucid_print_val(LucidVal v) {
                 self.indent += 1;
                 self.loop_break_flags.push(break_flag.clone());
                 self.loop_continue_updates.push(None);
+                self.loop_context_depths.push(self.context_stack.len());
                 let item_tmp = self.new_temp();
                 self.emit_line(&format!(
                     "LucidVal {item_tmp} = {tmp_list}->items[{tmp_idx}];"
@@ -7045,6 +7059,7 @@ static inline void lucid_print_val(LucidVal v) {
                     self.emit_stmt(s)?;
                 }
                 self.loop_break_flags.pop();
+                self.loop_context_depths.pop();
                 self.loop_continue_updates.pop();
                 self.indent -= 1;
                 self.emit_line("}");
@@ -7241,7 +7256,8 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Stmt::Break(_) => {
                 self.emit_finally_cleanups()?;
-                self.emit_context_cleanups();
+                let depth = self.loop_context_depths.last().copied().unwrap_or(0);
+                self.emit_context_cleanups_from(depth);
                 if let Some(flag) = self.loop_break_flags.last().cloned() {
                     self.emit_line(&format!("{flag} = true;"));
                 }
@@ -7250,7 +7266,8 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Stmt::Continue(_) => {
                 self.emit_finally_cleanups()?;
-                self.emit_context_cleanups();
+                let depth = self.loop_context_depths.last().copied().unwrap_or(0);
+                self.emit_context_cleanups_from(depth);
                 if let Some(Some((current, step, next))) = self.loop_continue_updates.last().cloned() {
                     self.emit_line(&format!("if (!lucid_checked_range_advance({current}, {step}, &{next})) {{ fprintf(stderr, \"range step overflow\\n\"); exit(1); }}"));
                     self.emit_line(&format!("{current} = {next};"));
@@ -14495,6 +14512,22 @@ with managed() as value:
             String::from_utf8_lossy(&run.stdout),
             "enter\nexit\nenter\nexit\ndone\n"
         );
+    }
+
+    #[test]
+    fn native_inner_loop_continue_keeps_enclosing_context() {
+        let source = "contextmanager def managed() -> int:\n    print(\"enter\")\n    yield 1\n    print(\"exit\")\nwith managed():\n    for item in range(2):\n        continue\n    print(\"after\")\n";
+        let module = parse(source).expect("nested loop context source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_context_nested_loop_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("nested loop context should compile");
+        let run = Command::new(&output).output().expect("run nested loop context");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "nested loop context failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "enter\nafter\nexit\n");
     }
 
     #[test]
