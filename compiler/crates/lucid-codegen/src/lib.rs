@@ -2213,6 +2213,23 @@ static inline LucidSet* lucid_set_xor_value(LucidSet* a, LucidVal other) {
     if (other.type != LUCID_TYPE_SET) { fprintf(stderr, "unsupported operands for ^\n"); exit(1); }
     return lucid_set_xor(a, other.set);
 }
+static inline LucidVal lucid_setop_value(LucidVal left, LucidVal right, char op) {
+    if (left.type == LUCID_TYPE_SET && right.type == LUCID_TYPE_SET) {
+        LucidSet* result = NULL;
+        if (op == '&') result = lucid_set_intersection(left.set, right.set);
+        else if (op == '|') result = lucid_set_union(left.set, right.set);
+        else if (op == '-') result = lucid_set_difference(left.set, right.set);
+        else if (op == '^') result = lucid_set_xor(left.set, right.set);
+        if (result) return lucid_set_val(result);
+    }
+    if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_INT) {
+        if (op == '&') return lucid_int(left.i & right.i);
+        if (op == '|') return lucid_int(left.i | right.i);
+        if (op == '^') return lucid_int(left.i ^ right.i);
+    }
+    fprintf(stderr, "unsupported operands for %c\n", op);
+    exit(1);
+}
 static inline bool lucid_set_disjoint(LucidSet* a, LucidSet* b) { if (!a || !b) return true; for (int64_t i = 0; i < a->len; ++i) if (lucid_set_contains(b, a->items[i])) return false; return true; }
 static inline bool lucid_set_disjoint_value(LucidSet* a, LucidVal other) {
     if (other.type == LUCID_TYPE_SET) return lucid_set_disjoint(a, other.set);
@@ -3044,6 +3061,14 @@ static inline void lucid_print_val(LucidVal v) {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Mul && l_ty == "LucidVal" && r_ty == "LucidVal" {
+                    return "LucidVal".to_string();
+                }
+                if matches!(
+                    op,
+                    BinaryOp::Sub | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                ) && l_ty == "LucidVal"
+                    && r_ty == "LucidVal"
+                {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Mul && (l_ty == "LucidList*" || r_ty == "LucidList*") {
@@ -5878,6 +5903,23 @@ static inline void lucid_print_val(LucidVal v) {
                 {
                     return Ok(format!(
                         "lucid_set_difference_value({l_str}, lucid_wrap({r_str}))"
+                    ));
+                }
+                if matches!(
+                    op,
+                    BinaryOp::Sub | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                ) && self.expr_is_dynamic_value(left)
+                    && self.expr_is_dynamic_value(right)
+                {
+                    let symbol = match op {
+                        BinaryOp::Sub => '-',
+                        BinaryOp::BitAnd => '&',
+                        BinaryOp::BitOr => '|',
+                        BinaryOp::BitXor => '^',
+                        _ => unreachable!(),
+                    };
+                    return Ok(format!(
+                        "lucid_setop_value(lucid_wrap({l_str}), lucid_wrap({r_str}), '{symbol}')"
                     ));
                 }
 
@@ -13085,6 +13127,24 @@ print(all({1, 2}))
             String::from_utf8_lossy(&run.stdout),
             "true\ntrue\ntrue\ntrue\n"
         );
+    }
+
+    #[test]
+    fn native_dynamic_set_algebra_preserves_container_kind() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(len(identity({1, 2}) & identity({2, 3})))\nprint(len(identity({1, 2}) | identity({2, 3})))\nprint(len(identity({1, 2}) - identity({2, 3})))\nprint(len(identity({1, 2}) ^ identity({2, 3})))\n";
+        let module = parse(source).expect("dynamic set algebra should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_set_algebra_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic set algebra should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled dynamic set algebra should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic set algebra failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n3\n1\n2\n");
     }
 
     #[test]
