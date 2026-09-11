@@ -996,7 +996,7 @@ fn collect_typed_body<'db>(
                             lucid_syntax::LiteralValue::Bool(value) => {
                                 format!("literal-bool:{value}")
                             }
-                            _ => unreachable!(),
+                            _ => return Err(Arc::from("unsupported match literal")),
                         };
                         let ty = checker
                             .type_of_expr(literal_value)
@@ -1086,7 +1086,9 @@ fn collect_typed_body<'db>(
                     let mut children = vec![subject_id];
                     let mut result_ids = Vec::with_capacity(arms.len());
                     for arm in arms {
-                        let value = match_arm_result(arm).expect("validated match result");
+                        let Some(value) = match_arm_result(arm) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
                         let Some(id) = nodes
                             .iter()
                             .rev()

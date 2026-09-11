@@ -99,6 +99,8 @@ diverged:
 * CIR counted-loop recognizers now reject malformed update and literal shapes
   through their normal unsupported-result path instead of panicking while
   constructing a control-flow graph.
+* Database typed-HIR match collection now reports malformed match results as a
+  lowering error instead of unwrapping an intermediate option.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`
