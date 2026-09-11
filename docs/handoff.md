@@ -75,6 +75,8 @@ Native `str` now renders complex values in the same `(real+imagj)` form as
 the interpreter.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
+Native `chr` now requires an integer runtime value after erasure, matching the
+interpreter instead of coercing floats and strings.
 
 ## Verified baseline
 
@@ -89,15 +91,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-306 native-codegen tests
+307 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-747 tests passed
+748 tests passed
 ```
 
-The same 747 tests also pass with:
+The same 748 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

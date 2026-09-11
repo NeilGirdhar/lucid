@@ -2168,6 +2168,9 @@ static inline LucidVal lucid_ord_value(LucidVal value) {
     return lucid_int(code);
 }
 static inline LucidVal lucid_chr_value(LucidVal value) {
+    if (value.type != LUCID_TYPE_INT) {
+        fprintf(stderr, "an integer is required (got non-integer value)\n"); exit(1);
+    }
     int64_t code = lucid_as_int(value);
     if (code < 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) { fprintf(stderr, "chr() argument out of range\n"); exit(1); }
     int width = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
@@ -13667,6 +13670,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "complex(str) should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("arguments must be numeric"));
+    }
+
+    #[test]
+    fn native_chr_rejects_non_integer_erased_values() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(chr(identity(65.0)))\n";
+        let module = parse(source).expect("dynamic chr source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_chr_dynamic_invalid_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic chr should compile");
+        let run = Command::new(&output).output().expect("run dynamic chr");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "chr(float) should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("an integer is required"));
     }
 
     #[test]
