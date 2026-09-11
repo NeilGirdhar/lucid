@@ -235,6 +235,9 @@ diverged:
   interpreter's lifetime semantics until a deleted name is rebound.
 * Native binding liveness is now represented at runtime, so `locals()` remains
   correct when `del` occurs inside a conditional branch or context manager.
+* Runtime module reflection now preserves declaration insertion order for
+  `fields(module)`, matching class reflection and native output instead of
+  exposing hash-map iteration order.
 * Interpreter `locals()` now excludes intrinsic builtin bindings, while still
   exposing a builtin name after user code rebinds it.
 * The checker now treats `Bytes` as a distinct immutable buffer type rather

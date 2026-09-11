@@ -514,6 +514,9 @@ impl fmt::Debug for Value {
 #[derive(Default, Clone)]
 pub struct Environment {
     pub bindings: HashMap<String, Value>,
+    /// Insertion order for module reflection. Local lookup remains hash-based,
+    /// while `fields(module)` must expose declarations deterministically.
+    pub binding_order: Vec<String>,
     pub parent: Option<Rc<RefCell<Environment>>>,
     pub final_bindings: HashSet<String>,
 }
@@ -526,6 +529,7 @@ impl Environment {
     pub fn with_parent(parent: Rc<RefCell<Environment>>) -> Self {
         Self {
             bindings: HashMap::new(),
+            binding_order: Vec::new(),
             parent: Some(parent),
             final_bindings: HashSet::new(),
         }
@@ -542,6 +546,9 @@ impl Environment {
     }
 
     pub fn set(&mut self, name: String, value: Value) {
+        if !self.bindings.contains_key(&name) {
+            self.binding_order.push(name.clone());
+        }
         self.bindings.insert(name, value);
     }
 
@@ -2554,9 +2561,7 @@ impl Interpreter {
                                 declared
                             }
                         }
-                        Value::Module { env, .. } => {
-                            env.borrow().bindings.keys().cloned().collect()
-                        }
+                        Value::Module { env, .. } => env.borrow().binding_order.clone(),
                         Value::ClassRef(class_name) => interp
                             .classes
                             .get(class_name)
@@ -10353,6 +10358,25 @@ s = sum(r)
                 Value::Str("zeta".into()),
                 Value::Str("alpha".into()),
             ]))))
+        );
+        let mut module_env = Environment::new();
+        module_env.set("zeta".into(), Value::Int(1));
+        module_env.set("alpha".into(), Value::Int(2));
+        let module_fields = ordered_interp
+            .call_named(
+                "fields",
+                &[Value::Module {
+                    name: "ordered".into(),
+                    env: Rc::new(RefCell::new(module_env)),
+                }],
+            )
+            .expect("module fields should be reflectable");
+        assert_eq!(
+            module_fields,
+            Value::List(Rc::new(RefCell::new(vec![
+                Value::Str("zeta".into()),
+                Value::Str("alpha".into()),
+            ])))
         );
     }
 
