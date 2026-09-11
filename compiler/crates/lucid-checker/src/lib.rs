@@ -618,7 +618,7 @@ impl Type {
                         ..
                     } = self
                     else {
-                        unreachable!()
+                        return false;
                     };
                     if source_args.is_empty() || target_args.is_empty() {
                         return true;
@@ -6669,7 +6669,12 @@ impl TypeChecker {
                                 .get("complex")
                                 .cloned()
                                 .unwrap_or(Type::Float),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(TypeError {
+                                    message: "invalid numeric special value".into(),
+                                    span: expr.span(),
+                                })
+                            }
                         });
                     }
                 }

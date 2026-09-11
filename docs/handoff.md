@@ -103,6 +103,9 @@ diverged:
   lowering error instead of unwrapping an intermediate option.
   Static `elif` extraction follows the same checked path when selecting a
   compile-time branch.
+* Checker subtype and numeric-special-value paths now return ordinary
+  negatives for malformed intermediate types instead of relying on internal
+  `unreachable!()` assumptions.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`
