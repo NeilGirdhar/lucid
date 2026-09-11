@@ -39,15 +39,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-290 native-codegen tests
+291 native-codegen tests
 149 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-730 tests passed
+731 tests passed
 ```
 
-The same 730 tests also pass with:
+The same 731 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
@@ -130,6 +130,8 @@ diverged:
   Instance methods with positional arguments on those union values now
   dispatch through the same concrete-class registry, converting arguments to
   each selected method's declared native type before the call.
+  Reflective `getattr` reads on those union values use the same dispatcher,
+  rather than assuming a statically known struct layout.
   The checker now rejects `?` at module scope, where no enclosing function
   return type can accept the propagated error; this prevents native `return`
   generation from producing invalid top-level C control flow.

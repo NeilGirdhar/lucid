@@ -7393,6 +7393,12 @@ static inline void lucid_print_val(LucidVal v) {
                                 .infer_expr_type(&args[0].value, &HashMap::new())
                                 .trim_end_matches('*')
                                 .to_string();
+                            if name == "getattr" && class_name == "LucidVal" {
+                                return Ok(format!(
+                                    "lucid_dynamic_attr(lucid_wrap({object}), \"{}\")",
+                                    c_escape_string(attr_name)
+                                ));
+                            }
                             let present =
                                 self.known_classes.get(&class_name).is_some_and(|fields| {
                                     fields.iter().any(|field| field == attr_name)
@@ -12362,6 +12368,29 @@ print(z is complex)
             String::from_utf8_lossy(&result.stdout),
             "101\nitem missing\nitem missing\nitem missing\n"
         );
+    }
+
+    #[test]
+    fn native_getattr_supports_propagated_union_values() {
+        let source = r#"
+class NotFoundError:
+    message: str
+def get_value() -> int | NotFoundError:
+    return NotFoundError("item missing")
+print(getattr(get_value(), "message"))
+"#;
+        let module = parse(source).expect("union getattr source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_union_getattr_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("union getattr should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        let _ = std::fs::remove_file(output);
+        assert!(result.status.success(), "native program failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout), "item missing\n");
     }
 
     #[test]
