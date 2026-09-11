@@ -52,6 +52,9 @@ checks and setter dispatch.
 Native `round` now enforces the same one-or-two-argument arity as the
 interpreter instead of silently discarding extras.
 Native `abs` likewise rejects extra or missing arguments before lowering.
+Native `round` validates that `ndigits` is an integer, and native `int` uses
+strict whole-string parsing for string literals instead of accepting a valid
+prefix followed by junk.
 
 ## Verified baseline
 
@@ -66,15 +69,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-294 native-codegen tests
+296 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-735 tests passed
+737 tests passed
 ```
 
-The same 735 tests also pass with:
+The same 737 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

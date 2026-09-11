@@ -1852,6 +1852,18 @@ static inline int64_t lucid_as_int(LucidVal v) {
     if (v.type == LUCID_TYPE_BIGINT && v.bigint) return (int64_t)strtoll(v.bigint, NULL, 10);
     return 0;
 }
+static inline int64_t lucid_int_builtin(LucidVal v) {
+    if (v.type == LUCID_TYPE_STR && v.s) {
+        char* end = NULL;
+        int64_t result = (int64_t)strtoll(v.s, &end, 10);
+        while (end && isspace((unsigned char)*end)) ++end;
+        if (!end || end == v.s || *end != '\0') {
+            fprintf(stderr, "invalid literal for int()\n"); exit(1);
+        }
+        return result;
+    }
+    return lucid_as_int(v);
+}
 static inline double lucid_as_float(LucidVal v) {
     if (v.type == LUCID_TYPE_FLOAT) return v.f;
     if (v.type == LUCID_TYPE_INT) return (double)v.i;
@@ -8370,7 +8382,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     return Ok(format!("lucid_as_int(lucid_wrap({arg0}))"));
                                 }
                                 return Ok(format!(
-                                    "lucid_round_places(lucid_as_float(lucid_wrap({arg0})), lucid_as_int(lucid_wrap({arg1})))"
+                                    "({{ LucidVal _round_value = lucid_wrap({arg0}); LucidVal _round_places = lucid_wrap({arg1}); if (_round_places.type != LUCID_TYPE_INT) {{ fprintf(stderr, \"round() ndigits must be an int\\n\"); exit(1); }} lucid_round_places(lucid_as_float(_round_value), _round_places.i); }})"
                                 ));
                             }
                         }
@@ -8382,7 +8394,7 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if let Some(a) = args.first() {
                                 let arg_str = self.emit_expr(&a.value)?;
-                                return Ok(format!("lucid_as_int(lucid_wrap({arg_str}))"));
+                                return Ok(format!("lucid_int_builtin(lucid_wrap({arg_str}))"));
                             }
                         }
                         "bool" => {
@@ -13469,6 +13481,22 @@ print(all({1, 2}))
     }
 
     #[test]
+    fn native_round_rejects_non_integer_ndigits() {
+        let source = "print(round(1.25, 1.5))\n";
+        let module = parse(source).expect("round ndigits source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_round_ndigits_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("round ndigits should compile");
+        let run = Command::new(&output).output().expect("run round ndigits");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "non-integer ndigits should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("ndigits must be an int"));
+    }
+
+    #[test]
     fn native_abs_rejects_wrong_arity() {
         let module = parse("print(abs(1, 2))\n").expect("abs source should parse");
         let output =
@@ -13481,6 +13509,20 @@ print(all({1, 2}))
                 .to_string()
                 .contains("abs() takes exactly one argument")
         );
+    }
+
+    #[test]
+    fn native_int_rejects_invalid_string_literals() {
+        let source = "print(int(\"12x\"))\n";
+        let module = parse(source).expect("invalid int source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_int_invalid_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("invalid int source should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "invalid int literal should fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("invalid literal for int()"));
     }
 
     #[test]
