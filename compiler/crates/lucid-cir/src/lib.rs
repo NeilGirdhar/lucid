@@ -7988,6 +7988,24 @@ return total
     }
 
     #[test]
+    fn lowers_parameterized_literal_match_to_decision_chain() {
+        let function = Function::from_parameterized_literal_match(
+            1,
+            0,
+            &[
+                (TypedLiteral::Int(1), TypedLiteral::Int(11)),
+                (TypedLiteral::Int(2), TypedLiteral::Int(22)),
+            ],
+            TypedLiteral::Int(33),
+        )
+        .expect("literal match should lower");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[9]), Ok(Some(33)));
+        assert!(function.verify().is_ok());
+    }
+
+    #[test]
     fn lowers_declaration_only_and_empty_modules_to_void_cir() {
         let empty = lucid_syntax::parse("").unwrap();
         let empty_function = Function::from_module(&empty).expect("empty module should lower");
