@@ -1635,6 +1635,18 @@ gaps are architectural rather than isolated syntax features:
 5. Generic specialization, representation selection, the complete runtime ABI,
    Cranelift lowering, source-mapped native diagnostics, and foreign/Python ABI
    boundaries remain incomplete.
+   The closure ABI milestone is now specified concretely: add a tagged
+   `LUCID_TYPE_CLOSURE` value containing a reference-counted environment and a
+   typed entry descriptor; lower each captured slot into that environment;
+   allocate recursive binding cells before constructing the closure; and make
+   calls pass the closure environment as an implicit first argument. The CIR
+   call instruction must carry the resolved signature and capture layout so
+   both the interpreter and native backend use the same representation. A
+   closure returned from a function must therefore retain its environment
+   after the activation ends, while non-capturing functions may use a shared
+   empty environment. The current native inline-expression path is only a
+   temporary optimization for direct calls and must be removed once this ABI
+   exists.
 6. Shape semantics are open in [Shapes](shape.md): literal-count inference for
    dispatch by rank or shape still needs precise rules and tests; type-level
    `stack` shape inference now has a concrete implementation.
