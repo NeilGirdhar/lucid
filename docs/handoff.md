@@ -108,6 +108,8 @@ Range-loop `continue` now advances the loop state before restarting, avoiding
 an infinite loop and preserving checked step-overflow behavior.
 Context-manager teardown is also covered for both `continue` and `break`
 inside range loops, preserving cleanup before loop control transfers.
+`finally` bodies that themselves return no longer recursively re-enter their
+own cleanup during native lowering.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
@@ -178,15 +180,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-345 native-codegen tests
+346 native-codegen tests
 153 runtime tests
 22 syntax tests
 50 compiler-database tests
 17 configuration tests
-791 tests passed
+792 tests passed
 ```
 
-The same 791 tests also pass with:
+The same 792 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

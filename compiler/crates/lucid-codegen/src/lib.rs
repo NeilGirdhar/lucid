@@ -338,11 +338,16 @@ impl CCodeGenerator {
 
     fn emit_finally_cleanups(&mut self) -> Result<(), CodegenError> {
         let cleanups = self.finally_stack.clone();
-        for cleanup in cleanups.iter().rev() {
+        for (index, cleanup) in cleanups.iter().enumerate().rev() {
+            // Do not leave the cleanup currently being emitted on the active
+            // stack, or a return inside `finally` would recursively emit the
+            // same body forever. Outer cleanup frames remain active.
+            self.finally_stack = cleanups[..index].to_vec();
             for statement in cleanup {
                 self.emit_stmt(statement)?;
             }
         }
+        self.finally_stack = cleanups;
         Ok(())
     }
 
@@ -7108,6 +7113,9 @@ static inline void lucid_print_val(LucidVal v) {
                 }
                 self.emit_line("}");
                 self.emit_line(&format!("lucid_current_exception = {frame}.previous;"));
+                if finally_body.is_some() {
+                    self.finally_stack.pop();
+                }
                 if let Some(cleanup) = finally_body {
                     for statement in cleanup {
                         self.emit_stmt(statement)?;
@@ -7117,9 +7125,6 @@ static inline void lucid_print_val(LucidVal v) {
                     self.emit_line(&format!(
                         "if ({handler_jump} != 0) lucid_raise_value(lucid_pending_exception);"
                     ));
-                }
-                if finally_body.is_some() {
-                    self.finally_stack.pop();
                 }
                 Ok(())
             }
@@ -13743,6 +13748,24 @@ finally:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "return-finally failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "clean\n7\n");
+    }
+
+    #[test]
+    fn native_return_inside_finally_does_not_reenter_its_cleanup() {
+        let source = "def compute() -> int:\n    try:\n        return 1\n    finally:\n        return 2\nprint(compute())\n";
+        let module = parse(source).expect("nested return-finally source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_nested_return_finally_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("nested return-finally should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run nested return-finally");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "nested return-finally failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
     }
 
     #[test]
