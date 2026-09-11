@@ -2203,6 +2203,10 @@ static inline LucidVal lucid_format_value(LucidVal value, const char* spec) {
         else { fprintf(stderr, "unsupported format specifier '%s'\n", spec); exit(1); }
     } else if (value.type == LUCID_TYPE_BIGINT && *spec == '\0') {
         snprintf(out, 128, "%s", value.bigint ? value.bigint : "0");
+    } else if (value.type == LUCID_TYPE_PTR && *spec == '\0') {
+        LucidObjectRepr repr = lucid_object_repr(value.ptr);
+        if (repr) { free(out); return lucid_str(repr(value.ptr)); }
+        snprintf(out, 128, "<value>");
     } else if (value.type == LUCID_TYPE_STR && *spec == '\0') snprintf(out, 128, "%s", value.s ? value.s : "");
     else if (value.type == LUCID_TYPE_BOOL && *spec == '\0') snprintf(out, 128, "%s", value.b ? "true" : "false");
     else if (value.type == LUCID_TYPE_NONE && *spec == '\0') snprintf(out, 128, "none");
@@ -13854,6 +13858,22 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "bigint format failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000000\n");
+    }
+
+    #[test]
+    fn native_format_uses_object_representation() {
+        let source = "class Point:\n    x: int\np = Point(1)\nprint(format(p))\n";
+        let module = parse(source).expect("object format source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_format_object_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("object format should compile");
+        let run = Command::new(&output).output().expect("run object format");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "object format failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "Point({\"x\": 1})\n");
     }
 
     #[test]
