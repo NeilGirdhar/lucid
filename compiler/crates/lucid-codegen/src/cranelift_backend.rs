@@ -1047,7 +1047,7 @@ pub fn compile_integer_result_function(
             }
             match block.terminator {
                 Terminator::Return(Some(returned)) => {
-                    block.instructions.last().map(instruction_result) == Some(returned)
+                    block.instructions.last().map(instruction_result) == Some(Some(returned))
                 }
                 _ => false,
             }
@@ -1059,7 +1059,8 @@ pub fn compile_integer_result_function(
     let Terminator::Return(Some(returned)) = block.terminator else {
         return Err(CraneliftError::UnsupportedControlFlow);
     };
-    let final_is_returned = block.instructions.last().map(instruction_result) == Some(returned);
+    let final_is_returned =
+        block.instructions.last().map(instruction_result) == Some(Some(returned));
     let straight_line_arithmetic =
         block
             .instructions
@@ -1301,7 +1302,11 @@ fn compile_integer_function_impl(
             if matches!(instruction, Instruction::Phi { .. }) {
                 continue;
             }
-            let result = instruction_result(instruction);
+            let result = instruction_result(instruction).ok_or_else(|| {
+                CraneliftError::UnsupportedInstruction(format!(
+                    "instruction has no result: {instruction:?}"
+                ))
+            })?;
             let value = match instruction {
                 Instruction::Param { index, .. } => {
                     *function_params.get(*index as usize).ok_or_else(|| {
@@ -2188,7 +2193,7 @@ pub fn compile_integer_module(
     compile_integer_function(&function)
 }
 
-fn instruction_result(instruction: &Instruction) -> ValueId {
+fn instruction_result(instruction: &Instruction) -> Option<ValueId> {
     match instruction {
         Instruction::Param { result, .. }
         | Instruction::ConstInt { result, .. }
@@ -2215,8 +2220,8 @@ fn instruction_result(instruction: &Instruction) -> ValueId {
         | Instruction::CmpLe { result, .. }
         | Instruction::CmpLt { result, .. }
         | Instruction::CmpGe { result, .. }
-        | Instruction::CmpGt { result, .. } => *result,
-        _ => unreachable!(),
+        | Instruction::CmpGt { result, .. } => Some(*result),
+        _ => None,
     }
 }
 

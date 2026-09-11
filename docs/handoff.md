@@ -114,6 +114,8 @@ diverged:
 * Cranelift power lowering now reports a missing constant exponent as an
   explicit unsupported-instruction error instead of relying on an internal
   assertion.
+* Cranelift instruction-result extraction now returns a checked optional
+  result, rejecting unknown instruction forms instead of panicking.
 * Checker subtype and numeric-special-value paths now return ordinary
   negatives for malformed intermediate types instead of relying on internal
   `unreachable!()` assumptions.
