@@ -127,6 +127,9 @@ diverged:
   through a checked object-attribute dispatcher, so `value = fallible()?` can
   be inspected after propagation without treating the `LucidVal` wrapper as a
   C struct.
+  The checker now rejects `?` at module scope, where no enclosing function
+  return type can accept the propagated error; this prevents native `return`
+  generation from producing invalid top-level C control flow.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.

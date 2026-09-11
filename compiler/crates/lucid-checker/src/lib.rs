@@ -6462,6 +6462,12 @@ impl TypeChecker {
             }
             Expr::Propagate { expr, span } => {
                 let inner = self.type_of_expr(expr)?;
+                if self.env.current_return_type.is_none() {
+                    return Err(TypeError {
+                        message: "cannot use '?' outside a function".into(),
+                        span: *span,
+                    });
+                }
                 // In Lucid: read_file(path)? extracts Ok value or propagates Error
                 match inner {
                     Type::Union(variants) => {
@@ -8591,7 +8597,7 @@ class Child(Base):
         let module = parse("result = 1?\n").unwrap();
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
-        assert!(err.message.contains("non-recoverable"));
+        assert!(err.message.contains("outside a function"));
         let module = parse("result = \"bad\" / 2\n").unwrap();
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
