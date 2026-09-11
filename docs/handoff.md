@@ -42,6 +42,8 @@ codegen; computed strings use the same checked dynamic dispatch as erased
 values.
 Native reflection preserves receiver-before-default evaluation order when a
 missing static attribute supplies a fallback.
+`hasattr` also reports ordinary and inherited methods, matching the runtime
+object member set.
 
 ## Verified baseline
 

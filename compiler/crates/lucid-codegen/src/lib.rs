@@ -978,6 +978,15 @@ impl CCodeGenerator {
                 for getter in getters {
                     self.emit_line(&format!("if (strcmp(attr, \"{getter}\") == 0) return true;"));
                 }
+                let methods: Vec<String> = self
+                    .known_method_param_names
+                    .keys()
+                    .filter(|(class_name, _)| class_name == &candidate)
+                    .map(|(_, method)| method.clone())
+                    .collect();
+                for method in methods {
+                    self.emit_line(&format!("if (strcmp(attr, \"{method}\") == 0) return true;"));
+                }
                 owner = self.known_parents.get(&candidate).cloned();
             }
             self.indent -= 1;
@@ -7606,8 +7615,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 self.known_classes.get(&class_name).is_some_and(|fields| {
                                     fields.iter().any(|field| field == attr_name)
                                 });
+                            let method_present = self.method_owner(&class_name, attr_name).is_some();
                             if name == "hasattr" {
-                                return Ok(if present { "true" } else { "false" }.to_string());
+                                return Ok(if present || method_present { "true" } else { "false" }.to_string());
                             }
                             if !present {
                                 if name == "getattr" && args.len() == 3 {
@@ -14519,6 +14529,8 @@ print(all({1, 2}))
 class Point:
     x: int
     y: int
+    def render(self) -> int:
+        return self.x + self.y
 p = Point(4, 9)
 print(getattr(p, "x"))
 setattr(p, "x", 6)
@@ -14529,6 +14541,7 @@ setattr(p, name, 7)
 print(p.x)
 print(hasattr(p, "y"))
 print(hasattr(p, "z"))
+print(hasattr(p, "render"))
 print(getattr(p, "z", 42))
 "#;
         let module = parse(source).expect("reflection source should parse");
@@ -14543,7 +14556,7 @@ print(getattr(p, "z", 42))
             .expect("compiled reflection program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n6\n6\n7\ntrue\nfalse\n42\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n6\n6\n7\ntrue\nfalse\ntrue\n42\n");
     }
 
     #[test]
