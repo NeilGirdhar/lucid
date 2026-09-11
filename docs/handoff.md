@@ -72,9 +72,8 @@ uv run zensical build --clean --strict
 No issues found
 ```
 
-`git diff --check` is clean. The working tree contains intentional,
-uncommitted implementation and documentation changes; preserve them when
-continuing the work. A repository-wide `cargo fmt --check` currently reports
+`git diff --check` is clean. The implementation is backed up on the active
+development branch. A repository-wide `cargo fmt --check` currently reports
 large formatting differences in the existing codebase, so do not apply a
 whole-tree formatter as part of an unrelated change.
 
@@ -83,6 +82,11 @@ whole-tree formatter as part of an unrelated change.
 The most recent changes tightened behavior where the two execution paths had
 diverged:
 
+* Truthiness now agrees across the interpreter and native backend for empty
+  lists, dictionaries, sets, strings, and ranges, as well as zero BigInts and
+  zero complex values. Native typed collection and string conditions use
+  single-evaluation helpers, so checking a value cannot duplicate calls or
+  other side effects.
 * Logical `and` and `or` now short-circuit while honoring user-defined
   truthiness through `__bool__` and `__len__`.
 * BigInt inversion follows `~n = -n - 1` for arbitrary values, and `sum`
