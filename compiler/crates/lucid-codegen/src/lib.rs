@@ -1460,6 +1460,7 @@ typedef struct LucidSet LucidSet;
 typedef struct LucidVal LucidVal;
 typedef struct LucidFuture LucidFuture;
 typedef struct LucidContext LucidContext;
+typedef struct LucidClosure LucidClosure;
 typedef struct LucidExceptionFrame LucidExceptionFrame;
 typedef void (*LucidObjectFreezer)(void*);
 typedef bool (*LucidObjectTruthy)(void*);
@@ -1475,6 +1476,14 @@ typedef LucidVal (*LucidObjectGetItem)(void*, LucidVal);
 typedef void (*LucidObjectSetItem)(void*, LucidVal, LucidVal);
 typedef LucidVal (*LucidObjectIter)(void*);
 typedef LucidVal (*LucidObjectNext)(void*);
+// First-class function values use a stable erased call ABI.  The environment
+// is owned by the closure and remains valid until the closure is released;
+// generated closures may use it for captured locals while non-capturing
+// functions pass NULL.  `drop_env` is optional so static environments need
+// no allocation, and the call entry point always receives a packed argument
+// list to preserve the language's dynamic argument conventions.
+typedef LucidVal (*LucidClosureCall)(void*, LucidList*);
+typedef void (*LucidClosureDrop)(void*);
 typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; LucidObjectGetItem getitem; LucidObjectSetItem setitem; LucidObjectIter iter; LucidObjectNext next; LucidObjectIter reversed; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
@@ -1640,7 +1649,8 @@ typedef enum {
     LUCID_TYPE_SET,
     LUCID_TYPE_PTR,
     LUCID_TYPE_FUTURE,
-    LUCID_TYPE_CONTEXT
+    LUCID_TYPE_CONTEXT,
+    LUCID_TYPE_FUNCTION
 } LucidValType;
 
 typedef struct LucidVal {
@@ -1688,6 +1698,12 @@ struct LucidFuture {
     bool awaited;
 };
 
+struct LucidClosure {
+    LucidClosureCall call;
+    LucidClosureDrop drop_env;
+    void* env;
+};
+
 struct LucidContext {
     LucidVal value;
     void (*teardown)(LucidList*);
@@ -1733,6 +1749,29 @@ static inline const char* lucid_str_index(const char* s, int64_t idx) {
 
 static inline LucidVal lucid_none(void) {
     LucidVal v = {0}; v.type = LUCID_TYPE_NONE; return v;
+}
+static inline LucidVal lucid_closure(LucidClosureCall call, void* env, LucidClosureDrop drop_env) {
+    if (!call) { fprintf(stderr, "cannot construct a closure without a call entry point\n"); exit(1); }
+    LucidClosure* closure = (LucidClosure*)malloc(sizeof(LucidClosure));
+    if (!closure) { fprintf(stderr, "out of memory allocating closure\n"); exit(1); }
+    closure->call = call;
+    closure->drop_env = drop_env;
+    closure->env = env;
+    LucidVal value = {0};
+    value.type = LUCID_TYPE_FUNCTION;
+    value.ptr = (void*)closure;
+    return value;
+}
+static inline bool lucid_is_callable(LucidVal value) {
+    return value.type == LUCID_TYPE_FUNCTION && value.ptr != NULL &&
+           ((LucidClosure*)value.ptr)->call != NULL;
+}
+static inline LucidVal lucid_call(LucidVal value, LucidList* args) {
+    if (!lucid_is_callable(value)) {
+        fprintf(stderr, "value is not callable\n"); exit(1);
+    }
+    LucidClosure* closure = (LucidClosure*)value.ptr;
+    return closure->call(closure->env, args);
 }
 static inline LucidVal lucid_future(LucidVal (*thunk)(LucidList*), LucidList* args) {
     LucidFuture* future = (LucidFuture*)malloc(sizeof(LucidFuture));
@@ -3836,6 +3875,7 @@ static inline void lucid_print_val(LucidVal v) {
         case LUCID_TYPE_PTR: printf("[obj %p]", v.ptr); break;
         case LUCID_TYPE_FUTURE: printf("<future>"); break;
         case LUCID_TYPE_CONTEXT: printf("<context>"); break;
+        case LUCID_TYPE_FUNCTION: printf("<function>"); break;
     }
 }
 
@@ -7943,7 +7983,13 @@ static inline void lucid_print_val(LucidVal v) {
                                         }
                                         _ => false,
                                     };
-                                    format!("((bool){})", callable)
+                                    if callable {
+                                        "((bool)1)".to_string()
+                                    } else if left_ty == "LucidVal" {
+                                        format!("((bool)lucid_is_callable(lucid_wrap({l_str})))")
+                                    } else {
+                                        "((bool)0)".to_string()
+                                    }
                                 }
                                 "class" => {
                                     if left_ty.ends_with('*') {
@@ -8180,7 +8226,13 @@ static inline void lucid_print_val(LucidVal v) {
                                         }
                                         _ => false,
                                     };
-                                    format!("((bool){})", !callable)
+                                    if callable {
+                                        "((bool)0)".to_string()
+                                    } else if left_ty == "LucidVal" {
+                                        format!("((bool)(!lucid_is_callable(lucid_wrap({l_str}))))")
+                                    } else {
+                                        "((bool)1)".to_string()
+                                    }
                                 }
                                 "class" => {
                                     if left_ty.ends_with('*') {
