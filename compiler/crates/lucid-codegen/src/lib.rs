@@ -1213,11 +1213,12 @@ typedef bool (*LucidObjectGt)(void*, void*);
 typedef bool (*LucidObjectGe)(void*, void*);
 typedef bool (*LucidObjectContains)(void*, LucidVal);
 typedef LucidVal (*LucidObjectGetItem)(void*, LucidVal);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; LucidObjectGetItem getitem; } LucidObjectTag;
+typedef void (*LucidObjectSetItem)(void*, LucidVal, LucidVal);
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; LucidObjectGetItem getitem; LucidObjectSetItem setitem; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name, LucidObjectLe le, const char* le_class_name, LucidObjectGt gt, const char* gt_class_name, LucidObjectGe ge, const char* ge_class_name, LucidObjectContains contains, LucidObjectGetItem getitem) {
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name, LucidObjectLe le, const char* le_class_name, LucidObjectGt gt, const char* gt_class_name, LucidObjectGe ge, const char* ge_class_name, LucidObjectContains contains, LucidObjectGetItem getitem, LucidObjectSetItem setitem) {
     if (!ptr) return;
     if (lucid_object_tag_count == SIZE_MAX) {
         fprintf(stderr, "too many registered objects\n"); exit(1);
@@ -1235,7 +1236,7 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
         lucid_object_tags = grown;
         lucid_object_tag_capacity = next;
     }
-    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name, le, le_class_name, gt, gt_class_name, ge, ge_class_name, contains, getitem};
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name, le, le_class_name, gt, gt_class_name, ge, ge_class_name, contains, getitem, setitem};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     // A derived object has one registry entry for its concrete class and one
@@ -1319,6 +1320,12 @@ static inline LucidObjectGetItem lucid_object_getitem(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i)
         if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].getitem)
             return lucid_object_tags[i].getitem;
+    return NULL;
+}
+static inline LucidObjectSetItem lucid_object_setitem(void* ptr) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].setitem)
+            return lucid_object_tags[i].setitem;
     return NULL;
 }
 static inline bool lucid_object_frozen(void* ptr) {
@@ -3002,6 +3009,13 @@ static inline LucidVal lucid_get_index_value(LucidVal container, LucidVal index)
     exit(1);
 }
 static inline void lucid_set_index_value(LucidVal container, LucidVal index, LucidVal value) {
+    if (container.type == LUCID_TYPE_PTR) {
+        LucidObjectSetItem setitem = lucid_object_setitem(container.ptr);
+        if (setitem) {
+            setitem(container.ptr, index, value);
+            return;
+        }
+    }
     if (container.type == LUCID_TYPE_DICT) {
         lucid_dict_set(container.dict, index, value);
         return;
@@ -4613,6 +4627,27 @@ static inline void lucid_print_val(LucidVal v) {
                     .cloned()?;
                 Some((owner, parameter_type, return_type))
             });
+        let setitem_owner = self
+            .method_owner(name, "__setitem__")
+            .and_then(|owner| {
+                let parameter_types = self
+                    .known_method_param_types
+                    .get(&(owner.clone(), "__setitem__".to_string()))?;
+                if parameter_types.len() < 2 {
+                    return None;
+                }
+                let return_type = self
+                    .known_method_return_types
+                    .get(&(owner.clone(), "__setitem__".to_string()))
+                    .cloned()
+                    .unwrap_or_else(|| "LucidVal".to_string());
+                Some((
+                    owner,
+                    parameter_types[0].clone(),
+                    parameter_types[1].clone(),
+                    return_type,
+                ))
+            });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
             self.emit_line(&format!(
@@ -4711,6 +4746,27 @@ static inline void lucid_print_val(LucidVal v) {
                 "static LucidVal {name}_getitem(void* left, LucidVal right) {{ return lucid_wrap({owner}___getitem__(({owner}*)left, {item})); }}"
             ));
         }
+        if let Some((owner, index_type, value_type, return_type)) = &setitem_owner {
+            self.emit_line(&format!(
+                "{return_type} {owner}___setitem__({owner}* self, {index_type} index, {value_type} value);"
+            ));
+            let convert = |ty: &str, raw: &str| match ty {
+                "LucidVal" => raw.to_string(),
+                "int64_t" => format!("lucid_as_int({raw})"),
+                "double" => format!("lucid_as_float({raw})"),
+                "bool" => format!("lucid_as_bool({raw})"),
+                "const char*" | "char*" => format!("lucid_as_str({raw})"),
+                "LucidList*" => format!("lucid_as_list({raw})"),
+                "LucidDict*" => format!("lucid_as_dict({raw})"),
+                "LucidSet*" => format!("lucid_as_set({raw})"),
+                _ => format!("({ty})lucid_as_ptr({raw})"),
+            };
+            let index = convert(index_type, "index");
+            let value = convert(value_type, "value");
+            self.emit_line(&format!(
+                "static void {name}_setitem(void* left, LucidVal index, LucidVal value) {{ (void){owner}___setitem__(({owner}*)left, {index}, {value}); }}"
+            ));
+        }
 
         self.emit_line(&format!("static const char* {name}_repr(void* raw) {{"));
         self.indent += 1;
@@ -4777,8 +4833,12 @@ static inline void lucid_print_val(LucidVal v) {
             .as_ref()
             .map(|_| format!("(LucidObjectGetItem){name}_getitem"))
             .unwrap_or_else(|| "NULL".to_string());
+        let setitem_callback = setitem_owner
+            .as_ref()
+            .map(|_| format!("(LucidObjectSetItem){name}_setitem"))
+            .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {}, {le_callback}, {}, {gt_callback}, {}, {ge_callback}, {}, {contains_callback}, {getitem_callback});",
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {}, {le_callback}, {}, {gt_callback}, {}, {ge_callback}, {}, {contains_callback}, {getitem_callback}, {setitem_callback});",
             eq_owner
                 .as_ref()
                 .and_then(|(_, _, dispatch_class)| dispatch_class.as_deref())
@@ -4815,7 +4875,7 @@ static inline void lucid_print_val(LucidVal v) {
                 break;
             }
             self.emit_line(&format!(
-                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
@@ -11973,6 +12033,22 @@ print(" ".join(capitalized))
             .expect("compiled setitem should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+    }
+
+    #[test]
+    fn native_index_assignment_dispatches_erased_user_setitem() {
+        let source = "class Box:\n    value: int\n    def __setitem__(self, index: int, value: int):\n        self.value = value + index\ndef identity(value: Any) -> Any:\n    return value\nb = identity(Box(0))\nb[3] = 4\nprint(b.value)";
+        let module = parse(source).expect("dynamic setitem source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_dynamic_setitem_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dynamic setitem should compile");
+        let run = Command::new(&output).output().expect("run dynamic setitem");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dynamic setitem failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
     }
 
