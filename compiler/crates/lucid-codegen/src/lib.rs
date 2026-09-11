@@ -2544,6 +2544,9 @@ static inline LucidVal lucid_unary_value(LucidVal value, char op) {
     exit(1);
 }
 static inline LucidVal lucid_floor_div_value(LucidVal left, LucidVal right) {
+    if ((left.type == LUCID_TYPE_BIGINT || left.type == LUCID_TYPE_INT) &&
+        (right.type == LUCID_TYPE_BIGINT || right.type == LUCID_TYPE_INT))
+        return lucid_bigint_divmod(left, right, false, true);
     bool left_int = left.type == LUCID_TYPE_INT;
     bool right_int = right.type == LUCID_TYPE_INT;
     bool left_numeric = left_int || left.type == LUCID_TYPE_FLOAT;
@@ -2559,6 +2562,9 @@ static inline LucidVal lucid_floor_div_value(LucidVal left, LucidVal right) {
     exit(1);
 }
 static inline LucidVal lucid_mod_value(LucidVal left, LucidVal right) {
+    if ((left.type == LUCID_TYPE_BIGINT || left.type == LUCID_TYPE_INT) &&
+        (right.type == LUCID_TYPE_BIGINT || right.type == LUCID_TYPE_INT))
+        return lucid_bigint_divmod(left, right, true, true);
     bool left_int = left.type == LUCID_TYPE_INT;
     bool right_int = right.type == LUCID_TYPE_INT;
     bool left_numeric = left_int || left.type == LUCID_TYPE_FLOAT;
@@ -13307,7 +13313,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_floor_division_and_remainder_preserve_numeric_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(7)\nright = identity(2)\nprint(left // right)\nprint(left % right)\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\nleft = identity(7)\nright = identity(2)\nprint(left // right)\nprint(left % right)\nprint(identity(100000000000000000001) // identity(2))\nprint(identity(100000000000000000001) % identity(2))\n";
         let module = parse(source).expect("dynamic floor operations should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_floor_ops_{}",
@@ -13323,7 +13329,10 @@ print(all({1, 2}))
             run.status.success(),
             "dynamic floor operations failed: {run:?}"
         );
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n1\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "3\n1\n50000000000000000000\n1\n"
+        );
     }
 
     #[test]
