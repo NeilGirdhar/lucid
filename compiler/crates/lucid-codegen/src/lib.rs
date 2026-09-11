@@ -11548,7 +11548,7 @@ print(c.x, c.y)
 
     #[test]
     fn native_logical_conditions_preserve_custom_truthiness() {
-        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nf: Flag = Flag(false)\nif f and true:\n    print(1)\nelse:\n    print(0)\nif f or false:\n    print(1)\nelse:\n    print(0)\ndef identity(value: Any) -> Any:\n    return value\ndynamic = identity(Flag(false))\nif dynamic:\n    print(1)\nelse:\n    print(0)\n";
+        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nclass Sized:\n    items: list[int]\n    def __len__(self) -> int:\n        return len(self.items)\nf: Flag = Flag(false)\nif f and true:\n    print(1)\nelse:\n    print(0)\nif f or false:\n    print(1)\nelse:\n    print(0)\ndef identity(value: Any) -> Any:\n    return value\ndynamic = identity(Flag(false))\nif dynamic:\n    print(1)\nelse:\n    print(0)\ndynamic_sized = identity(Sized([]))\nif dynamic_sized:\n    print(1)\nelse:\n    print(0)\n";
         let module = parse(source).expect("logical condition source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_logical_truthiness_{}",
@@ -11559,7 +11559,7 @@ print(c.x, c.y)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n0\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n0\n0\n");
     }
 
     #[test]

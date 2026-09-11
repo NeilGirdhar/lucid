@@ -87,7 +87,8 @@ diverged:
   zero complex values. Native typed collection and string conditions use
   single-evaluation helpers, so checking a value cannot duplicate calls or
   other side effects. Tagged object values retain their class-specific
-  `__bool__`/`__len__` callback when they cross an `Any` boundary.
+  `__bool__`/`__len__` callback when they cross an `Any` boundary, with
+  coverage for both protocol forms.
   Native object metadata grows on demand instead of silently dropping
   truthiness and freezing information after a fixed object-count limit.
 * The interpreter's supported-iterator dispatch now reports a recoverable
