@@ -206,6 +206,7 @@ pub struct CCodeGenerator {
     capture_assignment: Option<String>,
     loop_break_flags: Vec<String>,
     finally_stack: Vec<Vec<Stmt>>,
+    context_stack: Vec<Vec<String>>,
     complex_names: HashSet<String>,
     anonymous_bindings: HashMap<String, (Vec<(String, String)>, Expr)>,
     /// Source-level names bound to named functions.  Native functions have
@@ -315,6 +316,7 @@ impl CCodeGenerator {
             capture_assignment: None,
             loop_break_flags: Vec::new(),
             finally_stack: Vec::new(),
+            context_stack: Vec::new(),
             complex_names: HashSet::new(),
             anonymous_bindings: HashMap::new(),
             function_aliases: HashMap::new(),
@@ -340,6 +342,15 @@ impl CCodeGenerator {
             }
         }
         Ok(())
+    }
+
+    fn emit_context_cleanups(&mut self) {
+        let contexts = self.context_stack.clone();
+        for scope in contexts.iter().rev() {
+            for context in scope.iter().rev() {
+                self.emit_line(&format!("lucid_context_exit({context}, false);"));
+            }
+        }
     }
 
     fn indent_str(&self) -> String {
@@ -6821,9 +6832,11 @@ static inline void lucid_print_val(LucidVal v) {
                         self.emit_pattern_bindings(pattern, &value_tmp);
                     }
                 }
+                self.context_stack.push(contexts.clone());
                 for statement in body {
                     self.emit_stmt(statement)?;
                 }
+                self.context_stack.pop();
                 for context_name in contexts.iter().rev() {
                     self.emit_line(&format!("lucid_context_exit({context_name}, false);"));
                 }
@@ -7100,6 +7113,7 @@ static inline void lucid_print_val(LucidVal v) {
                 if let Some(val_expr) = value {
                     let val_code = self.emit_expr(val_expr)?;
                     self.emit_finally_cleanups()?;
+                    self.emit_context_cleanups();
                     if self.current_fn_async {
                         self.emit_line(&format!("return lucid_future(lucid_wrap({val_code}));"));
                         return Ok(());
@@ -7134,6 +7148,7 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                 } else {
                     self.emit_finally_cleanups()?;
+                    self.emit_context_cleanups();
                     if self.current_fn_async {
                         self.emit_line("return lucid_future(lucid_none());");
                     } else {
@@ -7207,6 +7222,7 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Stmt::Break(_) => {
                 self.emit_finally_cleanups()?;
+                self.emit_context_cleanups();
                 if let Some(flag) = self.loop_break_flags.last().cloned() {
                     self.emit_line(&format!("{flag} = true;"));
                 }
@@ -7215,6 +7231,7 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Stmt::Continue(_) => {
                 self.emit_finally_cleanups()?;
+                self.emit_context_cleanups();
                 self.emit_line("continue;");
                 Ok(())
             }
@@ -14402,6 +14419,22 @@ with managed() as value:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "setup\n3\nteardown\n");
+    }
+
+    #[test]
+    fn native_contextmanager_runs_teardown_before_return() {
+        let source = "contextmanager def managed() -> int:\n    print(\"enter\")\n    yield 3\n    print(\"exit\")\ndef run() -> int:\n    with managed() as value:\n        return value\nprint(run())\n";
+        let module = parse(source).expect("return context source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_context_return_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("return context should compile");
+        let run = Command::new(&output).output().expect("run return context");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "return context failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "enter\nexit\n3\n");
     }
 
     #[test]
