@@ -13153,7 +13153,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_dynamic_set_algebra_preserves_container_kind() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(len(identity({1, 2}) & identity({2, 3})))\nprint(len(identity({1, 2}) | identity({2, 3})))\nprint(len(identity({1, 2}) - identity({2, 3})))\nprint(len(identity({1, 2}) ^ identity({2, 3})))\nprint(identity(5) - identity(2))\n";
+        let source = "def identity(value: Any) -> Any:\n    return value\na = identity({1, 2})\nb = identity({2, 3})\nprint(len(a & b))\nprint(len(a | b))\nprint(len(a - b))\nprint(len(a ^ b))\nprint(identity(5) - identity(2))\n";
         let module = parse(source).expect("dynamic set algebra should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_set_algebra_{}",
