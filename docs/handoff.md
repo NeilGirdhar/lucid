@@ -65,6 +65,8 @@ String inputs that overflow the machine integer range now promote to a native
 BigInt as they do in the interpreter, including statically known strings.
 Float-to-int conversion now matches Rust's saturating cast semantics for
 infinities and maps NaN to zero instead of relying on undefined C casts.
+The one-argument native `round` path uses the same guarded conversion for
+float infinities and NaN.
 
 ## Verified baseline
 
@@ -79,15 +81,15 @@ cargo test --workspace --all-targets --quiet
 34 CLI/CIR integration tests
 1 CLI unit test
 31 CLI/spec tests
-301 native-codegen tests
+302 native-codegen tests
 150 runtime tests
 20 syntax tests
 50 compiler-database tests
 17 configuration tests
-742 tests passed
+743 tests passed
 ```
 
-The same 742 tests also pass with:
+The same 743 tests also pass with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet

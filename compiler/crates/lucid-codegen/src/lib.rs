@@ -1872,6 +1872,9 @@ static inline int64_t lucid_int_builtin(LucidVal v) {
     }
     return lucid_as_int(v);
 }
+static inline int64_t lucid_round_to_int(double value) {
+    return lucid_as_int(lucid_float(round(value)));
+}
 static inline LucidVal lucid_int_dynamic(LucidVal v) {
     if (v.type == LUCID_TYPE_BIGINT && v.bigint) return v;
     if (v.type == LUCID_TYPE_STR && v.s) {
@@ -8417,7 +8420,7 @@ static inline void lucid_print_val(LucidVal v) {
                             if args.len() == 1 {
                                 let arg_str = self.emit_expr(&args[0].value)?;
                                 return Ok(format!(
-                                    "(int64_t)round(lucid_as_float(lucid_wrap({arg_str})))"
+                                    "lucid_round_to_int(lucid_as_float(lucid_wrap({arg_str})))"
                                 ));
                             } else if args.len() >= 2 {
                                 let arg0 = self.emit_expr(&args[0].value)?;
@@ -13661,6 +13664,24 @@ print(all({1, 2}))
             .expect("run special int conversion");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "special int conversion failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "int.inf\nint.nan\n0\n");
+    }
+
+    #[test]
+    fn native_round_float_special_values_match_interpreter_casts() {
+        let source = "print(round(float.inf))\nprint(round(-float.inf))\nprint(round(float.nan))\n";
+        let module = parse(source).expect("special round source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_round_float_special_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("special round should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run special round");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "special round failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "int.inf\nint.nan\n0\n");
     }
 
