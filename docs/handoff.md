@@ -100,6 +100,9 @@ diverged:
   scans all entries for a pointer rather than stopping at the concrete-class
   entry; this preserves inheritance semantics without adding a second object
   representation.
+  The interpreter now applies the same ancestry rule to `is`, `is not`, and
+  class-pattern matching, keeping erased and statically known checks aligned
+  across both execution paths.
 * The interpreter's supported-iterator dispatch now reports a recoverable
   non-iterable error for malformed intermediate states instead of retaining an
   internal panic path.

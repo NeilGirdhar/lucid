@@ -1885,7 +1885,12 @@ impl Interpreter {
                                     | Value::BuiltinFunction { .. }
                                     | Value::Partial { .. }
                             ),
-                            name => lval.type_name() == name,
+                            name => match &lval {
+                                Value::Object { class_name, .. } => {
+                                    class_name == name || self.is_subclass(class_name, name)
+                                }
+                                _ => lval.type_name() == name,
+                            },
                         }));
                     }
                 }
@@ -1917,7 +1922,12 @@ impl Interpreter {
                                     | Value::BuiltinFunction { .. }
                                     | Value::Partial { .. }
                             ),
-                            name => lval.type_name() == name,
+                            name => match &lval {
+                                Value::Object { class_name, .. } => {
+                                    class_name == name || self.is_subclass(class_name, name)
+                                }
+                                _ => lval.type_name() == name,
+                            },
                         }));
                     }
                 }
@@ -8954,7 +8964,8 @@ impl Interpreter {
                 Value::Bool(_) if name == "bool" => true,
                 Value::Str(_) if name == "str" => true,
                 Value::None if name == "none" => true,
-                Value::Object { class_name, .. } if class_name == name => true,
+                Value::Object { class_name, .. }
+                    if class_name == name || self.is_subclass(class_name, name) => true,
                 _ if !matches!(
                     name.as_str(),
                     "int" | "float" | "bool" | "str" | "none" | "None"
@@ -8978,7 +8989,8 @@ impl Interpreter {
                 TypeExpr::Named { name, .. } => match value {
                     Value::List(_) if name == "list" => true,
                     Value::Dict(_) if name == "dict" => true,
-                    Value::Object { class_name, .. } if class_name == name => true,
+                    Value::Object { class_name, .. }
+                        if class_name == name || self.is_subclass(class_name, name) => true,
                     Value::Int(_) if name == "int" => true,
                     Value::Float(_) if name == "float" => true,
                     Value::Complex(_, _) if name == "complex" => true,
@@ -11012,14 +11024,21 @@ location = SourceLocation.caller()
         let src = r#"
 class Box:
     value: int
+class Base:
+    pass
+class Child(Base):
+    pass
 
 value = 1
 z = 2j
+child = Child()
 is_class = value is class
 is_trait = value is trait
 is_int = value is int
 identity = value === value
 is_complex = z is complex
+is_parent = child is Base
+is_not_other = child is not Box
 "#;
         let module = parse(src).unwrap();
         let mut interp = Interpreter::new();
@@ -11033,6 +11052,11 @@ is_complex = z is complex
         assert_eq!(interp.env.borrow().get("identity"), Some(Value::Bool(true)));
         assert_eq!(
             interp.env.borrow().get("is_complex"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(interp.env.borrow().get("is_parent"), Some(Value::Bool(true)));
+        assert_eq!(
+            interp.env.borrow().get("is_not_other"),
             Some(Value::Bool(true))
         );
     }
