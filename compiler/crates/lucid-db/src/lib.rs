@@ -4198,8 +4198,7 @@ pub fn lower_function_body(
                 }
             }
             statements if statements.len() >= 2 => {
-                let Some(lucid_syntax::Stmt::Return { value: Some(_), .. }) = statements.last()
-                else {
+                let Some(lucid_syntax::Stmt::Return { .. }) = statements.last() else {
                     return Err(Arc::from(
                         "multi-statement function bodies are not yet supported by CIR lowering",
                     ));
@@ -6551,6 +6550,19 @@ mod tests {
                 .flat_map(|block| &block.instructions)
                 .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
         );
+    }
+
+    #[test]
+    fn database_lowers_pure_discarded_expression_before_bare_return() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "pure-discarded-before-bare-return.lucid",
+            "def discard(value: int):\n    value + 1\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("pure discarded expression before bare return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
     }
 
     #[test]

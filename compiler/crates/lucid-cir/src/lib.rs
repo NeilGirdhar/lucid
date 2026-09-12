@@ -4016,6 +4016,10 @@ impl Function {
                         Err(LowerError::UnsupportedExpression)
                     }
                 }
+                lucid_syntax::Stmt::Expr(expr) => {
+                    let _ = lower(expr, bindings, instructions, next)?;
+                    Ok(())
+                }
                 lucid_syntax::Stmt::Assignment { .. }
                 | lucid_syntax::Stmt::AugAssign { .. }
                 | lucid_syntax::Stmt::VarDef { .. }
@@ -4027,7 +4031,6 @@ impl Function {
                 | lucid_syntax::Stmt::Delete { .. }
                 | lucid_syntax::Stmt::Break(_)
                 | lucid_syntax::Stmt::Continue(_)
-                | lucid_syntax::Stmt::Expr(_)
                 | lucid_syntax::Stmt::With { .. } => Err(LowerError::UnsupportedExpression),
                 lucid_syntax::Stmt::Assert { condition, .. } => match constant_truth(condition) {
                     Some(true) => Ok(()),
