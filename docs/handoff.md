@@ -460,8 +460,8 @@ diverged:
   Statically false void `elif` arms inside dynamic void ladders are also
   skipped before lowering, preserving the live dynamic conditions.
 * Primitive literal `match` functions now lower through verified CIR decision
-  chains: two-arm matches support expression results, while larger matches
-  support literal results followed by a wildcard. More complex patterns remain
+  chains: two-arm matches and larger literal chains support primitive
+  expression results followed by a wildcard. More complex patterns remain
   explicit lowering work rather than being silently interpreted by a
   compatibility fallback.
   The supported two-arm shape now carries its subject, arm results, and

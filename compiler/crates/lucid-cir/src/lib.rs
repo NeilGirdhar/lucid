@@ -725,34 +725,45 @@ impl Function {
                     if patterns.len() + 2 != node.children.len() {
                         return Err(LowerError::UnsupportedExpression);
                     }
-                    let outputs = node.children[1..]
-                        .iter()
-                        .map(|id| nodes.get(*id as usize).and_then(|node| node.literal))
-                        .collect::<Option<Vec<_>>>();
-                    let Some(outputs) = outputs else {
-                        return Err(LowerError::UnsupportedExpression);
-                    };
-                    let subject = nodes
-                        .get(node.children[0] as usize)
-                        .and_then(|node| node.detail.as_deref())
-                        .and_then(|name| {
-                            parameter_names
-                                .iter()
-                                .position(|parameter| parameter == name)
+                    let mut expanded = nodes.to_vec();
+                    let mut fallback = node.children[patterns.len() + 1];
+                    for (pattern, result) in
+                        patterns.into_iter().zip(node.children[1..].iter()).rev()
+                    {
+                        let literal_id = u32::try_from(expanded.len())
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        expanded.push(TypedExprNode {
+                            id: literal_id,
+                            kind: "literal".into(),
+                            detail: None,
+                            children: Vec::new(),
+                            literal: Some(pattern),
                         });
-                    let Some(subject) = subject else {
-                        return Err(LowerError::UnsupportedExpression);
-                    };
-                    let wildcard = outputs[patterns.len()];
-                    let arms = patterns
-                        .into_iter()
-                        .zip(outputs.into_iter().take(node.children.len() - 2))
-                        .collect::<Vec<_>>();
-                    return Self::from_parameterized_literal_match(
-                        parameter_names.len(),
-                        subject,
-                        &arms,
-                        wildcard,
+                        let comparison_id = u32::try_from(expanded.len())
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        expanded.push(TypedExprNode {
+                            id: comparison_id,
+                            kind: "binary".into(),
+                            detail: Some("Eq".into()),
+                            children: vec![node.children[0], literal_id],
+                            literal: None,
+                        });
+                        let if_id = u32::try_from(expanded.len())
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        expanded.push(TypedExprNode {
+                            id: if_id,
+                            kind: "if".into(),
+                            detail: None,
+                            children: vec![comparison_id, *result, fallback],
+                            literal: None,
+                        });
+                        fallback = if_id;
+                    }
+                    return Self::from_typed_graph(
+                        &expanded,
+                        &[fallback],
+                        parameter_names,
+                        local_bindings,
                     );
                 }
                 if node.id == roots[0]

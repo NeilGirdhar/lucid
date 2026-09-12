@@ -1240,18 +1240,7 @@ fn collect_typed_body<'db>(
                     && arms[..arms.len() - 1]
                         .iter()
                         .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
-                    && arms.iter().all(|arm| {
-                        match_arm_result(arm).is_some_and(|value| {
-                            matches!(
-                                value,
-                                lucid_syntax::Expr::Literal {
-                                    value: lucid_syntax::LiteralValue::Int(_)
-                                        | lucid_syntax::LiteralValue::Bool(_),
-                                    ..
-                                }
-                            )
-                        })
-                    })
+                    && arms.iter().all(|arm| match_arm_result(arm).is_some())
                 {
                     let detail = arms[..arms.len() - 1]
                         .iter()
@@ -7474,6 +7463,15 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("multi-arm expression match should lower through a CIR ladder");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm expression match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
@@ -7485,6 +7483,15 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("multi-arm local expression match should lower through a CIR ladder");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm local expression match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
