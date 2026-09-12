@@ -9903,7 +9903,7 @@ impl Interpreter {
                 Value::Set(_) if name == "set" => true,
                 Value::Dict(_) if name == "dict" => true,
                 Value::DottedPath(_) if name == "DottedPath" => true,
-                Value::None if name == "none" => true,
+                Value::None if matches!(name.as_str(), "none" | "None") => true,
                 Value::Object { class_name, .. }
                     if class_name == name || self.is_subclass(class_name, name) =>
                 {
@@ -10665,6 +10665,13 @@ match path:
         path_result = 1
     case _:
         path_result = 0
+
+doc = sample.__doc__
+match doc:
+    case None:
+        none_result = 1
+    case _:
+        none_result = 0
 "#;
         let module = parse(src).unwrap();
         let mut interp = Interpreter::new();
@@ -10677,6 +10684,7 @@ match path:
         assert_eq!(env.get("set_result"), Some(Value::Int(1)));
         assert_eq!(env.get("dict_result"), Some(Value::Int(1)));
         assert_eq!(env.get("path_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("none_result"), Some(Value::Int(1)));
     }
 
     #[test]

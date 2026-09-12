@@ -15591,7 +15591,7 @@ print(" ".join(capitalized))
 
     #[test]
     fn native_match_buffer_patterns_test_buffer_values() {
-        let source = "data = b\"ab\"\nmatch data:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\nview = memoryview(data)\nmatch view:\n    case MemoryView:\n        print(1)\n    case _:\n        print(0)\nitems = [1, 2]\nmatch items:\n    case list:\n        print(1)\n    case _:\n        print(0)\nunique = {1, 2}\nmatch unique:\n    case set:\n        print(1)\n    case _:\n        print(0)\nmapping = {\"a\": 1}\nmatch mapping:\n    case dict:\n        print(1)\n    case _:\n        print(0)\ndef sample() -> int:\n    return 1\npath = sample.__path__\nmatch path:\n    case DottedPath:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\n";
+        let source = "data = b\"ab\"\nmatch data:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\nview = memoryview(data)\nmatch view:\n    case MemoryView:\n        print(1)\n    case _:\n        print(0)\nitems = [1, 2]\nmatch items:\n    case list:\n        print(1)\n    case _:\n        print(0)\nunique = {1, 2}\nmatch unique:\n    case set:\n        print(1)\n    case _:\n        print(0)\nmapping = {\"a\": 1}\nmatch mapping:\n    case dict:\n        print(1)\n    case _:\n        print(0)\ndef sample() -> int:\n    return 1\npath = sample.__path__\nmatch path:\n    case DottedPath:\n        print(1)\n    case _:\n        print(0)\ndoc = sample.__doc__\nmatch doc:\n    case None:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\n";
         let module = parse(source).expect("buffer match pattern source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_buffer_match_pattern_{}",
@@ -15604,7 +15604,7 @@ print(" ".join(capitalized))
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
-            "1\n1\n1\n1\n1\n1\n0"
+            "1\n1\n1\n1\n1\n1\n1\n0"
         );
         let _ = std::fs::remove_file(output);
     }

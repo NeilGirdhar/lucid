@@ -1179,16 +1179,17 @@ diverged:
   well, while union subjects accept a pattern that can match any variant.
   The local-binding pre-scan now follows the same rule: uppercase
   identifier patterns and builtin type names such as `complex`, `bytes`,
-  `MemoryView`, `list`, `set`, `dict`, and `DottedPath` are treated as
-  type/class patterns, not new local bindings, so predeclared locals stay
-  aligned with match checking.
+  `MemoryView`, `list`, `set`, `dict`, `DottedPath`, and `None` are treated
+  as type/class or singleton patterns, not new local bindings, so predeclared
+  locals stay aligned with match checking.
   Runtime and native codegen use the same binding predicate for pattern-local
   variables, so type/class patterns no longer synthesize bogus runtime
   bindings or `lucid_var_*` locals in generated C.
   Native `case complex` now emits a real `LUCID_TYPE_COMPLEX` condition
   instead of falling through as an unbound match-all identifier.
   Runtime and native `case bytes`/`case MemoryView`/`case list`/`case set`/
-  `case dict`/`case DottedPath` now test those value kinds the same way.
+  `case dict`/`case DottedPath` now test those value kinds the same way, and
+  uppercase `case None` matches the singleton consistently in both backends.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
