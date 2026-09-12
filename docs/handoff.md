@@ -1194,7 +1194,9 @@ diverged:
   no longer binds a local named `range`; the checker and typed-HIR local scans
   follow the same non-binding rule. Native `range(...)` now produces a
   first-class `LUCID_TYPE_RANGE` value, so `case range` tests the range tag
-  instead of treating a range expression as a list.
+  instead of treating a range expression as a list. Native condition lowering
+  also dispatches statically typed `LucidRange*` expressions through range
+  truthiness, so empty ranges are false even before value erasure.
   Native class-like identifier patterns that are not known classes now fail
   codegen instead of compiling as unconditional matches; lowercase binding
   patterns remain the match-all binding form.

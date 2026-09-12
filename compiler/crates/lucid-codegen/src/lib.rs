@@ -464,6 +464,7 @@ impl CCodeGenerator {
             match ty.as_str() {
                 "const char*" | "char*" => format!("lucid_str_truthy({code})"),
                 "LucidList*" => format!("lucid_list_truthy({code})"),
+                "LucidRange*" => format!("lucid_range_truthy({code})"),
                 "LucidDict*" => format!("lucid_dict_truthy({code})"),
                 "LucidSet*" => format!("lucid_set_truthy({code})"),
                 _ => format!("lucid_bool_val({code})"),
