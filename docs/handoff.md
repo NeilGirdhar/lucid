@@ -1783,6 +1783,9 @@ diverged:
 * A first dynamic `if` diamond now lowers to branch blocks plus a verified Phi
   merge when both branches assign one literal value; Cranelift executes it
   through the same CFG.
+  Branch-local assignments in that diamond may now be followed by proven no-op
+  statements such as `pass`, statically true `assert`, dead `while`, and empty
+  `for`, matching the no-op handling used by straight-line lowering.
 * The same diamond accepts one statically selected `elif` arm, preserving
   branch selection without lowering an incomplete conditional chain.
 * The compiler database now exposes an incremental resolved-module HIR
