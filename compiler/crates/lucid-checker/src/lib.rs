@@ -4806,7 +4806,17 @@ impl TypeChecker {
                         span: *span,
                     });
                 };
-                if !val_type.is_subtype_of(expected, &self.env) {
+                let contextual_container_ok = value.as_ref().is_some_and(|expr| {
+                    matches!(
+                        expr,
+                        Expr::List { .. }
+                            | Expr::Dict { .. }
+                            | Expr::ListComp { .. }
+                            | Expr::DictComp { .. }
+                    )
+                }) && self
+                    .contextual_type_conforms_to_expected(&val_type, expected, 0);
+                if !val_type.is_subtype_of(expected, &self.env) && !contextual_container_ok {
                     return Err(TypeError {
                         message: format!(
                             "return type mismatch: expected {:?}, got {:?}",
@@ -5567,6 +5577,10 @@ impl TypeChecker {
                     );
                     self.env.exact_variables.remove(alias);
                 }
+                let subject_name = match subject {
+                    Expr::Ident { name, .. } => Some(name.as_str()),
+                    _ => None,
+                };
                 for arm in arms {
                     if let Some(guard) = &arm.guard {
                         let guard_type = self.type_of_expr(guard)?;
@@ -5580,33 +5594,15 @@ impl TypeChecker {
                     let saved_vars = self.env.variables.clone();
                     let saved_exact_vars = self.env.exact_variables.clone();
                     self.bind_match_pattern_types(&arm.pattern, &subject_type);
+                    let narrowed = self.match_pattern_narrowed_type(&arm.pattern, &subject_type);
+                    if let Some(name) = subject_name {
+                        self.env.variables.insert(
+                            name.to_string(),
+                            (narrowed.clone(), MutabilityView::ReadOnly),
+                        );
+                        self.env.exact_variables.remove(name);
+                    }
                     if let Some(alias) = subject_alias {
-                        let narrowed = match &arm.pattern {
-                            Pattern::Type(type_expr, _) => self
-                                .resolve_type_expr(type_expr)
-                                .unwrap_or(subject_type.clone()),
-                            Pattern::ClassDestructure { class_name, .. } => self
-                                .env
-                                .classes
-                                .get(class_name)
-                                .cloned()
-                                .unwrap_or(subject_type.clone()),
-                            Pattern::Ident(name, _) => self
-                                .env
-                                .classes
-                                .get(name)
-                                .cloned()
-                                .or_else(|| match name.as_str() {
-                                    "int" => Some(Type::Int),
-                                    "float" => Some(Type::Float),
-                                    "bool" => Some(Type::Bool),
-                                    "str" => Some(Type::Str),
-                                    "none" => Some(Type::None),
-                                    _ => None,
-                                })
-                                .unwrap_or(subject_type.clone()),
-                            _ => subject_type.clone(),
-                        };
                         self.env
                             .variables
                             .insert(alias.clone(), (narrowed, MutabilityView::ReadOnly));
@@ -6202,13 +6198,54 @@ impl TypeChecker {
         Ok(())
     }
 
+    fn named_pattern_type(&self, name: &str) -> Option<Type> {
+        self.env.classes.get(name).cloned().or_else(|| match name {
+            "int" => Some(Type::Int),
+            "float" => Some(Type::Float),
+            "bool" => Some(Type::Bool),
+            "str" => Some(Type::Str),
+            "none" | "None" => Some(Type::None),
+            _ if name
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase()) =>
+            {
+                Some(Type::Class {
+                    name: name.to_string(),
+                    type_args: Vec::new(),
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                })
+            }
+            _ => None,
+        })
+    }
+
+    fn match_pattern_narrowed_type(&self, pattern: &Pattern, subject_type: &Type) -> Type {
+        match pattern {
+            Pattern::Type(type_expr, _) => self
+                .resolve_type_expr(type_expr)
+                .unwrap_or_else(|_| subject_type.clone()),
+            Pattern::ClassDestructure { class_name, .. } => self
+                .named_pattern_type(class_name)
+                .unwrap_or_else(|| subject_type.clone()),
+            Pattern::Ident(name, _) => self
+                .named_pattern_type(name)
+                .unwrap_or_else(|| subject_type.clone()),
+            _ => subject_type.clone(),
+        }
+    }
+
     fn bind_match_pattern_types(&mut self, pattern: &Pattern, subject_type: &Type) {
         match pattern {
             Pattern::Ident(name, _)
                 if !matches!(
                     name.as_str(),
                     "_" | "int" | "float" | "bool" | "str" | "none" | "None"
-                ) && !self.env.classes.contains_key(name) =>
+                ) && self.named_pattern_type(name).is_none() =>
             {
                 self.env.variables.insert(
                     name.clone(),
@@ -6730,6 +6767,68 @@ impl TypeChecker {
                 Ok(true)
             }
             _ => Ok(self.type_of_expr(expr)?.is_subtype_of(expected, &self.env)),
+        }
+    }
+
+    fn contextual_type_conforms_to_expected(
+        &self,
+        actual: &Type,
+        expected: &Type,
+        depth: usize,
+    ) -> bool {
+        if depth > 64 {
+            return false;
+        }
+        if actual.is_subtype_of(expected, &self.env) {
+            return true;
+        }
+        if let Type::Union(parts) = actual {
+            return parts
+                .iter()
+                .all(|part| self.contextual_type_conforms_to_expected(part, expected, depth + 1));
+        }
+        if let Type::Union(parts) = expected {
+            return parts
+                .iter()
+                .any(|part| self.contextual_type_conforms_to_expected(actual, part, depth + 1));
+        }
+        if let Some(expanded) = self.expand_type_alias_placeholder(actual) {
+            return self.contextual_type_conforms_to_expected(&expanded, expected, depth + 1);
+        }
+        if let Some(expanded) = self.expand_type_alias_placeholder(expected) {
+            return self.contextual_type_conforms_to_expected(actual, &expanded, depth + 1);
+        }
+        match (actual, expected) {
+            (
+                Type::Class {
+                    name: actual_name,
+                    type_args: actual_args,
+                    ..
+                },
+                Type::Class {
+                    name: expected_name,
+                    type_args: expected_args,
+                    ..
+                },
+            ) if actual_name == expected_name
+                && matches!(
+                    actual_name.as_str(),
+                    "list" | "set" | "frozenset" | "dict" | "frozendict"
+                )
+                && actual_args.len() == expected_args.len() =>
+            {
+                actual_args
+                    .iter()
+                    .zip(expected_args.iter())
+                    .all(|(actual_arg, expected_arg)| {
+                        self.contextual_type_conforms_to_expected(
+                            actual_arg,
+                            expected_arg,
+                            depth + 1,
+                        )
+                    })
+            }
+            _ => false,
         }
     }
 
@@ -9419,13 +9518,7 @@ impl TypeChecker {
                 }
                 let elem_t = self.iterable_element_type(&iter_t);
                 let mut sub = self.clone();
-                if let Pattern::Ident(name, _) = target {
-                    if name != "_" {
-                        sub.env
-                            .variables
-                            .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
-                    }
-                }
+                sub.bind_match_pattern_types(target, &elem_t);
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
                     if !sub.is_truthy_type(&condition_type) {
@@ -9465,13 +9558,7 @@ impl TypeChecker {
                 }
                 let elem_t = self.iterable_element_type(&iter_t);
                 let mut sub = self.clone();
-                if let Pattern::Ident(name, _) = target {
-                    if name != "_" {
-                        sub.env
-                            .variables
-                            .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
-                    }
-                }
+                sub.bind_match_pattern_types(target, &elem_t);
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
                     if !sub.is_truthy_type(&condition_type) {
@@ -9512,13 +9599,7 @@ impl TypeChecker {
                 }
                 let elem_t = self.iterable_element_type(&iter_t);
                 let mut sub = self.clone();
-                if let Pattern::Ident(name, _) = target {
-                    if name != "_" {
-                        sub.env
-                            .variables
-                            .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
-                    }
-                }
+                sub.bind_match_pattern_types(target, &elem_t);
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
                     if !sub.is_truthy_type(&condition_type) {
@@ -11569,6 +11650,27 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("nested literals should contextually satisfy recursive alias annotations");
+    }
+
+    #[test]
+    fn match_type_patterns_narrow_subject_identifier() {
+        let module = parse(
+            "type PyTree[L] = L | list[PyTree[L]] | dict[str, PyTree[L]]\n\ndef tree_map(tree: PyTree[Array], f: (Array) -> bool) -> PyTree[bool]:\n    match tree:\n        case Array:\n            return f(tree)\n        case list[PyTree[Array]]:\n            return [tree_map(item, f) for item in tree]\n        case dict[str, PyTree[Array]]:\n            return {k: tree_map(v, f) for k, v in tree.items()}\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("type patterns should narrow the matched subject inside each arm");
+    }
+
+    #[test]
+    fn comprehensions_bind_tuple_targets() {
+        let module =
+            parse("pairs = [(\"Ada\", 10)]\nscores = {name: score for name, score in pairs}\n")
+                .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("comprehension tuple targets should bind their nested names");
     }
 
     #[test]
