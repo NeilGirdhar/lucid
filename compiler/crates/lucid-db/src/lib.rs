@@ -1790,7 +1790,7 @@ pub fn lower_function_body(
             };
             let mut bindings = Vec::new();
             for statement in setup {
-                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                if branch_noop_statement(statement) {
                     continue;
                 }
                 let (name, value) = match statement {
@@ -6765,12 +6765,44 @@ mod tests {
         );
 
         let file = db.add_file(
+            "constant-subject-noop-setup-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            assert(true)\n            if false:\n                return value\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject no-op setup before void match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
             "constant-subject-setup-fallthrough-match.lucid",
             "def answer(value: int):\n    match true as flag:\n        case true:\n            temporary = value + 1\n        case _:\n            return value\n",
         );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("constant subject setup-only match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-noop-setup-fallthrough-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            while false:\n                return value\n            temporary = value + 1\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject no-op setup-only match should preserve setup");
         assert_eq!(function.execute_with_args(&[42]), Ok(None));
         assert!(
             function

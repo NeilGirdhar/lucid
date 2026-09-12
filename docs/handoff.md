@@ -534,7 +534,9 @@ diverged:
   unlowered.
   The same no-op recognizer now feeds primitive match value and void arm
   extraction, so match arms can contain harmless setup without leaving CIR
-  lowering.
+  lowering. Selected match arms that preserve setup before void or fall-through
+  completion use the same recognizer, while effectful discarded expressions still
+  reject.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.
