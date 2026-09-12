@@ -6790,6 +6790,8 @@ impl TypeChecker {
                         | "bytes"
                         | "Bytes"
                         | "MemoryView"
+                        | "list"
+                        | "dict"
                         | "none"
                         | "None"
                 ) && self.named_pattern_type(name).is_none() =>
@@ -11976,6 +11978,8 @@ fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
                     | "bytes"
                     | "Bytes"
                     | "MemoryView"
+                    | "list"
+                    | "dict"
                     | "none"
                     | "None"
             ) && !looks_like_class_name(name) =>
@@ -12430,6 +12434,8 @@ mod tests {
                     Pattern::Ident("complex".into(), Span::default()),
                     Pattern::Ident("bytes".into(), Span::default()),
                     Pattern::Ident("MemoryView".into(), Span::default()),
+                    Pattern::Ident("list".into(), Span::default()),
+                    Pattern::Ident("dict".into(), Span::default()),
                 ],
                 Span::default(),
             ),
@@ -12441,6 +12447,8 @@ mod tests {
         assert!(!names.contains("complex"));
         assert!(!names.contains("bytes"));
         assert!(!names.contains("MemoryView"));
+        assert!(!names.contains("list"));
+        assert!(!names.contains("dict"));
         assert!(names.contains("value"));
     }
 

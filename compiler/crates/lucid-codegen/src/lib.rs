@@ -277,6 +277,8 @@ impl CCodeGenerator {
                 | "bytes"
                 | "Bytes"
                 | "MemoryView"
+                | "list"
+                | "dict"
                 | "none"
                 | "None"
         ) && !name.chars().next().is_some_and(char::is_uppercase)
@@ -5429,6 +5431,8 @@ static inline void lucid_print_val(LucidVal v) {
                 "complex" => format!("{subject}.type == LUCID_TYPE_COMPLEX"),
                 "bytes" | "Bytes" => format!("{subject}.type == LUCID_TYPE_BYTES"),
                 "MemoryView" => format!("{subject}.type == LUCID_TYPE_MEMORYVIEW"),
+                "list" => format!("{subject}.type == LUCID_TYPE_LIST"),
+                "dict" => format!("{subject}.type == LUCID_TYPE_DICT"),
                 "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
                 name if self.known_classes.contains_key(name) => {
                     let names = self.class_pattern_names(name);
@@ -15225,6 +15229,8 @@ mod tests {
         assert!(!CCodeGenerator::pattern_identifier_binds("complex"));
         assert!(!CCodeGenerator::pattern_identifier_binds("bytes"));
         assert!(!CCodeGenerator::pattern_identifier_binds("MemoryView"));
+        assert!(!CCodeGenerator::pattern_identifier_binds("list"));
+        assert!(!CCodeGenerator::pattern_identifier_binds("dict"));
         assert!(!CCodeGenerator::pattern_identifier_binds("_"));
         assert!(CCodeGenerator::pattern_identifier_binds("value"));
     }
@@ -15579,7 +15585,7 @@ print(" ".join(capitalized))
 
     #[test]
     fn native_match_buffer_patterns_test_buffer_values() {
-        let source = "data = b\"ab\"\nmatch data:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\nview = memoryview(data)\nmatch view:\n    case MemoryView:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\n";
+        let source = "data = b\"ab\"\nmatch data:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\nview = memoryview(data)\nmatch view:\n    case MemoryView:\n        print(1)\n    case _:\n        print(0)\nitems = [1, 2]\nmatch items:\n    case list:\n        print(1)\n    case _:\n        print(0)\nmapping = {\"a\": 1}\nmatch mapping:\n    case dict:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\n";
         let module = parse(source).expect("buffer match pattern source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_buffer_match_pattern_{}",
@@ -15590,7 +15596,10 @@ print(" ".join(capitalized))
             .output()
             .expect("run native binary");
         assert!(result.status.success(), "native program failed: {result:?}");
-        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "1\n1\n0");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout).trim(),
+            "1\n1\n1\n1\n0"
+        );
         let _ = std::fs::remove_file(output);
     }
 

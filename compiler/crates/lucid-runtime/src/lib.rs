@@ -949,6 +949,8 @@ impl Interpreter {
                 | "bytes"
                 | "Bytes"
                 | "MemoryView"
+                | "list"
+                | "dict"
                 | "none"
                 | "None"
         ) && !name.chars().next().is_some_and(char::is_uppercase)
@@ -9895,6 +9897,8 @@ impl Interpreter {
                 Value::Str(_) if name == "str" => true,
                 Value::Bytes(_) if matches!(name.as_str(), "bytes" | "Bytes") => true,
                 Value::MemoryView { .. } if name == "MemoryView" => true,
+                Value::List(_) if name == "list" => true,
+                Value::Dict(_) if name == "dict" => true,
                 Value::None if name == "none" => true,
                 Value::Object { class_name, .. }
                     if class_name == name || self.is_subclass(class_name, name) =>
@@ -10087,6 +10091,8 @@ mod tests {
         assert!(!Interpreter::pattern_identifier_binds("complex"));
         assert!(!Interpreter::pattern_identifier_binds("bytes"));
         assert!(!Interpreter::pattern_identifier_binds("MemoryView"));
+        assert!(!Interpreter::pattern_identifier_binds("list"));
+        assert!(!Interpreter::pattern_identifier_binds("dict"));
         assert!(!Interpreter::pattern_identifier_binds("_"));
         assert!(Interpreter::pattern_identifier_binds("value"));
     }
@@ -10623,6 +10629,20 @@ match other:
         other_result = 1
     case _:
         other_result = 0
+
+items = [1, 2]
+match items:
+    case list:
+        list_result = 1
+    case _:
+        list_result = 0
+
+mapping = {"a": 1}
+match mapping:
+    case dict:
+        dict_result = 1
+    case _:
+        dict_result = 0
 "#;
         let module = parse(src).unwrap();
         let mut interp = Interpreter::new();
@@ -10631,6 +10651,8 @@ match other:
         assert_eq!(env.get("bytes_result"), Some(Value::Int(1)));
         assert_eq!(env.get("view_result"), Some(Value::Int(1)));
         assert_eq!(env.get("other_result"), Some(Value::Int(0)));
+        assert_eq!(env.get("list_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("dict_result"), Some(Value::Int(1)));
     }
 
     #[test]
