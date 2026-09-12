@@ -6573,6 +6573,26 @@ static inline void lucid_print_val(LucidVal v) {
                     || class_name.ends_with("Arguments")
                     || class_name.ends_with("Parameters");
                 if !is_bundle {
+                    self.emit_line(&format!(
+                        "if (args && args->len > {}) {{ fprintf(stderr, \"too many arguments for gathered class\\n\"); exit(1); }}",
+                        index + fields.len()
+                    ));
+                    let allowed_names = f.params[..index]
+                        .iter()
+                        .filter(|previous| !previous.is_variadic_keyword && !previous.is_gather)
+                        .map(|previous| c_escape_string(&previous.name))
+                        .chain(fields.iter().map(|field| c_escape_string(field)))
+                        .collect::<Vec<_>>();
+                    let unexpected = allowed_names
+                        .iter()
+                        .map(|name| format!("strcmp(lucid_as_str(kwargs->keys[_closure_i]), \"{name}\") != 0"))
+                        .collect::<Vec<_>>()
+                        .join(" && ");
+                    if !unexpected.is_empty() {
+                        self.emit_line(&format!(
+                            "for (int64_t _closure_i = 0; kwargs && _closure_i < kwargs->len; ++_closure_i) if ({unexpected}) {{ fprintf(stderr, \"unknown keyword for gathered class\\n\"); exit(1); }}"
+                        ));
+                    }
                     let constructor_args = fields
                         .iter()
                         .enumerate()
@@ -15830,6 +15850,24 @@ print(z is complex)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "named class gather value failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
+    }
+
+    #[test]
+    fn native_named_class_gather_adapter_rejects_unknown_keyword() {
+        let source = "class Options:\n    retries: int\ndef render(***rest: Options) -> int:\n    return rest.retries\nfs = [render]\nprint(fs[0](retries=3, unexpected=4))\n";
+        let module = parse(source).expect("invalid named gather source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_named_class_gather_invalid_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("invalid named gather should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run invalid named gather");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "unknown gather keyword unexpectedly succeeded");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("unknown keyword"));
     }
 
     #[test]
