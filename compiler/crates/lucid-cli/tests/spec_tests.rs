@@ -470,6 +470,36 @@ res = broken
 }
 
 #[test]
+fn test_control_flow_continue_does_not_trigger_if_broken() {
+    let src = r#"
+broken = false
+total = 0
+for x in [1, 2, 3]:
+    if x == 2:
+        continue
+    total += x
+if_broken:
+    broken = true
+
+res = total
+"#;
+    let val = eval_ok(src);
+    assert_eq!(val, Value::Int(4));
+
+    let src = r#"
+broken = false
+for x in [1, 2, 3]:
+    continue
+if_broken:
+    broken = true
+
+res = broken
+"#;
+    let val = eval_ok(src);
+    assert_eq!(val, Value::Bool(false));
+}
+
+#[test]
 fn test_control_flow_with_statement() {
     let src = r#"
 contextmanager def managed():

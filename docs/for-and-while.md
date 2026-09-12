@@ -142,15 +142,24 @@ for row in rows:
     if_broken:
         break
 ```
-## Unspecified simple statements
 
-This sketch has not yet specified Lucid's full behavior for `break` or
-`continue`. `assert`, `del`, and `pass` are all fully settled. `assert`
-is covered on its own — see [Assert](assert.md). `del`
-is a compile-time error on a declared field (see [No del on fields](classes.md)), removed entirely in favor of explicit methods on a
-mapping or sequence index (see [No __delitem__](indexing.md)), and
-retained for exactly one purpose beyond those: [ending a local
-name's lifetime early](names.md#del-ends-a-names-lifetime-early).
+## Loop control statements
+
+`break` exits the innermost loop. If that loop has an `if_broken`
+clause, control enters that clause before continuing after the loop.
+Without `if_broken`, control continues at the first statement after the
+loop. `break` outside a loop is a compile-time error.
+
+`continue` skips the rest of the current iteration of the innermost loop
+and starts the next iteration. It does not run `if_broken`, because the
+loop did not break. `continue` outside a loop is a compile-time error.
+
+`assert`, `del`, and `pass` are also fully settled. `assert` is covered
+on its own — see [Assert](assert.md). `del` is a compile-time error on
+a declared field (see [No del on fields](classes.md)), removed entirely
+in favor of explicit methods on a mapping or sequence index (see
+[No __delitem__](indexing.md)), and retained for exactly one purpose
+beyond those: [ending a local name's lifetime early](names.md#del-ends-a-names-lifetime-early).
 `pass` keeps its ordinary Python meaning: a statement that does
 nothing, standing in wherever the grammar requires a statement and the
 author has none to write. That makes it the statement-level counterpart

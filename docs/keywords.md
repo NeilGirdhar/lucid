@@ -13,7 +13,7 @@ one new or narrowed meaning:
 `async`, `await`,
 [`break`](for-and-while.md#if_broken-loop-clauses),
 [`class`](types.md#what-class-means-in-lucid),
-[`continue`](for-and-while.md#unspecified-simple-statements),
+[`continue`](for-and-while.md#loop-control-statements),
 [`def`](calls.md#anonymous-functions),
 [`del`](names.md#del-ends-a-names-lifetime-early),
 [`elif`](match.md#exhaustive-pattern-matching),
@@ -22,7 +22,7 @@ one new or narrowed meaning:
 [`from`](import.md), [`if`](if.md), [`import`](import.md), `in`,
 [`is`](identity-checks.md), [`not`](type-operations.md#negation-types),
 [`or`](type-operations.md#intersection-types),
-[`pass`](for-and-while.md#unspecified-simple-statements),
+[`pass`](for-and-while.md#loop-control-statements),
 [`raise`](exceptions.md),
 [`return`](match.md#exhaustive-pattern-matching),
 [`try`](exceptions.md), [`while`](for-and-while.md),
@@ -65,4 +65,3 @@ declarations — see the `No global` and `No nonlocal` rules in
 Lucid discards `lambda`. It's spelled `def:` now, generalized: an
 anonymous function is just a `def` with no name (see
 [Anonymous functions](calls.md)).
-
