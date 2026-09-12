@@ -2075,7 +2075,8 @@ pub fn lower_function_body(
                 | lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Int(_)
                         | lucid_syntax::LiteralValue::Bool(_)
-                        | lucid_syntax::LiteralValue::Str(_),
+                        | lucid_syntax::LiteralValue::Str(_)
+                        | lucid_syntax::LiteralValue::None,
                     ..
                 }
         )
@@ -2117,6 +2118,7 @@ pub fn lower_function_body(
             Int(i64),
             Bool(bool),
             Str(&'a str),
+            None,
         }
         fn primitive_literal(expr: &lucid_syntax::Expr) -> Option<PrimitiveMatchLiteral<'_>> {
             match expr {
@@ -2132,6 +2134,10 @@ pub fn lower_function_body(
                     value: lucid_syntax::LiteralValue::Str(value),
                     ..
                 } => Some(PrimitiveMatchLiteral::Str(value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::None,
+                    ..
+                } => Some(PrimitiveMatchLiteral::None),
                 _ => None,
             }
         }
@@ -2398,6 +2404,9 @@ pub fn lower_function_body(
                 }
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Str(value), _) => {
                     Some(PrimitiveMatchLiteral::Str(value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::None, _) => {
+                    Some(PrimitiveMatchLiteral::None)
                 }
                 _ => None,
             }
@@ -7786,6 +7795,40 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("constant string subject void match should fold to selected arm");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-none-subject-match.lucid",
+            "def choose():\n    match none as value:\n        case none:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant none subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-none-subject-fallback-match.lucid",
+            "def choose():\n    match none as value:\n        case 1:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant none subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-none-subject-void-match.lucid",
+            "def answer(value: int):\n    match none as state:\n        case none:\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant none subject void match should fold to selected arm");
         assert_eq!(function.execute_with_args(&[41]), Ok(None));
         assert!(
             function
