@@ -1277,6 +1277,30 @@ impl TypeChecker {
                 is_sealed: true,
             },
         );
+        env.classes.insert(
+            "Decimal".to_string(),
+            Type::Class {
+                name: "Decimal".into(),
+                type_args: Vec::new(),
+                parent: None,
+                traits: vec!["SupportsFloat".into()],
+                interfaces: Vec::new(),
+                fields: [("value".to_string(), Type::Str)].into_iter().collect(),
+                is_sealed: true,
+            },
+        );
+        env.class_members
+            .entry("Decimal".into())
+            .or_default()
+            .insert("value".into());
+        env.class_implemented_members
+            .entry("Decimal".into())
+            .or_default()
+            .insert("value".into());
+        env.class_constructor_arity.insert("Decimal".into(), 1);
+        env.class_constructor_required.insert("Decimal".into(), 1);
+        env.class_field_order
+            .insert("Decimal".into(), vec!["value".into()]);
         env.classes.insert("none".to_string(), Type::None);
         env.traits.insert(
             "Callable".into(),
@@ -11561,6 +11585,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("standard exception classes should be available as builtins");
+    }
+
+    #[test]
+    fn builtin_decimal_satisfies_supports_float() {
+        let module = parse(
+            "def mean(xs: Iterable[SupportsFloat]) -> float:\n    total = 0.0\n    count = 0\n    for x in xs:\n        total += float(x)\n        count += 1\n    return total / count\n\nmean([1, 2.5, Decimal(\"3.5\")])\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("Decimal should be available as a SupportsFloat numeric class");
     }
 
     #[test]
