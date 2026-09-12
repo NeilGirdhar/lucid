@@ -428,8 +428,9 @@ diverged:
   value and void calls, separating argument-count errors from incompatible
   return-ABI requests without invoking assertion-based unsafe entry points.
 * Typed-CIR function lowering now accepts pure local bindings before a bare
-  `return`, preserving initializer instructions while emitting a verified
-  void terminator; this shape no longer needs the AST linear fallback.
+  `return` or final `pass`, preserving initializer instructions while emitting
+  a verified void terminator; this shape no longer needs the AST linear
+  fallback.
   Straight-line augmented assignments, including updates inside statically
   selected branches, now route through the shared linear CIR builder as well,
   so read-modify-write updates no longer bounce off the typed-local adapter.
