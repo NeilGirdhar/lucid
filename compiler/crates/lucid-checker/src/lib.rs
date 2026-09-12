@@ -6499,6 +6499,16 @@ impl TypeChecker {
                             span: func.span(),
                         });
                     }
+                    if name == "print" {
+                        for argument in args {
+                            if matches!(argument.value, Expr::Skip(_))
+                                || matches!(&argument.value, Expr::Ident { name, .. } if name == "_")
+                            {
+                                continue;
+                            }
+                            self.type_of_expr(&argument.value)?;
+                        }
+                    }
                     if name == "round" && args.len() == 2 {
                         let digits = self.type_of_expr(&args[1].value)?;
                         if !digits.is_subtype_of(&Type::Int, &self.env) {
@@ -12360,7 +12370,11 @@ def reject(value: not int) -> none:
 
     #[test]
     fn test_removed_string_codepoint_builtins_are_rejected_statically() {
-        for source in ["letter = chr(65)\n", "codepoint = ord(\"A\")\n"] {
+        for source in [
+            "letter = chr(65)\n",
+            "codepoint = ord(\"A\")\n",
+            "print(chr(65))\n",
+        ] {
             let mut checker = TypeChecker::new();
             let error = checker
                 .check_module(&parse(source).unwrap())
