@@ -2993,6 +2993,28 @@ impl Function {
                 }
                 (op.clone(), Function::int_literal_expr(right.as_ref())?)
             }
+            lucid_syntax::Stmt::Assignment {
+                target:
+                    lucid_syntax::Expr::Ident {
+                        name: update_name, ..
+                    },
+                value:
+                    lucid_syntax::Expr::Binary {
+                        op: lucid_syntax::BinaryOp::Add,
+                        left,
+                        right,
+                        ..
+                    },
+                ..
+            } if update_name == name
+                && Function::int_literal_expr(left.as_ref()).is_some()
+                && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name: right_name, .. } if right_name == name) =>
+            {
+                (
+                    lucid_syntax::BinaryOp::Add,
+                    Function::int_literal_expr(left.as_ref())?,
+                )
+            }
             _ => return None,
         };
         if !matches!(
@@ -3557,6 +3579,27 @@ impl Function {
                     Some((
                         update_op.clone(),
                         Function::int_literal_expr(right.as_ref())?,
+                    ))
+                }
+                lucid_syntax::Stmt::Assignment {
+                    target:
+                        lucid_syntax::Expr::Ident {
+                            name: update_name, ..
+                        },
+                    value:
+                        lucid_syntax::Expr::Binary {
+                            op: lucid_syntax::BinaryOp::Add,
+                            left,
+                            right,
+                            ..
+                        },
+                    ..
+                } if update_name == target
+                    && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
+                {
+                    Some((
+                        lucid_syntax::BinaryOp::Add,
+                        Function::int_literal_expr(left.as_ref())?,
                     ))
                 }
                 _ => None,
@@ -9283,6 +9326,17 @@ return n
         assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
 
         let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n = -1 + n
+return n
+"#,
+        )
+        .expect("commuted-update loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("commuted-update counted loop should lower");
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
             r#"value = -3
 while value < 0:
     value += 1
@@ -9434,6 +9488,19 @@ return total
         .expect("signed-update while accumulator fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("signed-update while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = -1
+while n > 0:
+    total += n
+    n = -1 + n
+return total
+"#,
+        )
+        .expect("commuted-update while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("commuted-update while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(9)));
 
         let module = lucid_syntax::parse(

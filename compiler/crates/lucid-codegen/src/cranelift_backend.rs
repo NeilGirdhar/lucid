@@ -2469,6 +2469,26 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_commuted_update_while_induction_accumulation_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = -1
+while n > 0:
+    total += n
+    n = -1 + n
+return total
+"#,
+        )
+        .expect("commuted-update while induction accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("commuted-update while induction accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile commuted-update while accumulation CFG");
+        let result = unsafe { compiled.call_result_with_args(&[4]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 9);
+    }
+
+    #[test]
     fn result_abi_executes_parameter_bound_while_accumulation_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0
