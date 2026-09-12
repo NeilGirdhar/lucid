@@ -5333,6 +5333,20 @@ static inline void lucid_print_val(LucidVal v) {
         }
     }
 
+    fn reject_raw_string_iterable_arg(
+        &self,
+        builtin: &str,
+        expr: &Expr,
+    ) -> Result<(), CodegenError> {
+        let arg_type = self.infer_expr_type(expr, &HashMap::new());
+        if matches!(arg_type.as_str(), "const char*" | "char*") {
+            return Err(CodegenError {
+                message: format!("{builtin}() does not accept raw str; use str.chars instead"),
+            });
+        }
+        Ok(())
+    }
+
     fn collect_vars_from_stmt(&mut self, stmt: &Stmt, vars: &mut HashMap<String, String>) {
         match stmt {
             Stmt::VarDef {
@@ -11867,6 +11881,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "reversed() takes exactly one argument".to_string(),
                                 });
                             }
+                            self.reject_raw_string_iterable_arg("reversed", &args[0].value)?;
                             let arg_str = self.emit_expr(&args[0].value)?;
                             let arg_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let class_name = arg_type.trim_end_matches('*');
@@ -11881,6 +11896,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "enumerate() takes one or two arguments".to_string(),
                                 });
                             }
+                            self.reject_raw_string_iterable_arg("enumerate", &args[0].value)?;
                             let value = self.emit_expr(&args[0].value)?;
                             let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let value_class = value_type.trim_end_matches('*');
@@ -11907,6 +11923,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: format!("{name}() takes exactly one argument"),
                                 });
                             }
+                            self.reject_raw_string_iterable_arg(name, &args[0].value)?;
                             let value = self.emit_expr(&args[0].value)?;
                             let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let value_class = value_type.trim_end_matches('*');
@@ -11943,6 +11960,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "sorted() takes exactly one argument".to_string(),
                                 });
                             }
+                            self.reject_raw_string_iterable_arg("sorted", &args[0].value)?;
                             let value = self.emit_expr(&args[0].value)?;
                             if let Some(element_class) = self.indexed_element_class(&args[0].value)
                             {
@@ -11988,6 +12006,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "iter() takes exactly one argument".to_string(),
                                 });
                             }
+                            self.reject_raw_string_iterable_arg("iter", &args[0].value)?;
                             let value = self.emit_expr(&args[0].value)?;
                             let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let class_name = value_type.trim_end_matches('*');
@@ -12143,6 +12162,7 @@ static inline void lucid_print_val(LucidVal v) {
                                 args.len()
                             ));
                             for arg in args {
+                                self.reject_raw_string_iterable_arg("zip", &arg.value)?;
                                 let value = self.emit_expr(&arg.value)?;
                                 let arg_type = self.infer_expr_type(&arg.value, &HashMap::new());
                                 let class_name = arg_type.trim_end_matches('*');
@@ -12168,6 +12188,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "map() takes exactly two arguments".to_string(),
                                 });
                             }
+                            self.reject_raw_string_iterable_arg("map", &args[1].value)?;
                             enum MapBody {
                                 Expression(String, Expr),
                                 Block(Vec<(String, String)>, Vec<Stmt>),
@@ -12518,6 +12539,7 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         "sum" => {
                             if let Some(a) = args.first() {
+                                self.reject_raw_string_iterable_arg("sum", &a.value)?;
                                 let arg_str = self.emit_expr(&a.value)?;
                                 if args.len() > 2 {
                                     return Err(CodegenError {
@@ -12583,6 +12605,9 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         "min" | "max" => {
                             if let Some(a) = args.first() {
+                                if args.len() == 1 {
+                                    self.reject_raw_string_iterable_arg(name, &a.value)?;
+                                }
                                 let arg_str = self.emit_expr(&a.value)?;
                                 let arg_type = self.infer_expr_type(&a.value, &HashMap::new());
                                 let arg_class = arg_type.trim_end_matches('*');
@@ -12635,6 +12660,7 @@ static inline void lucid_print_val(LucidVal v) {
                                 });
                             }
                             if let Some(a) = args.first() {
+                                self.reject_raw_string_iterable_arg("list", &a.value)?;
                                 if let Expr::Call {
                                     func: inner_func,
                                     args: inner_args,
@@ -12697,6 +12723,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "set() takes zero or one argument".to_string(),
                                 });
                             }
+                            self.reject_raw_string_iterable_arg("set", &args[0].value)?;
                             let value = self.emit_expr(&args[0].value)?;
                             let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let class_name = value_type.trim_end_matches('*');
@@ -12722,6 +12749,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "dict() takes zero or one argument".to_string(),
                                 });
                             }
+                            self.reject_raw_string_iterable_arg("dict", &args[0].value)?;
                             let value = self.emit_expr(&args[0].value)?;
                             let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let class_name = value_type.trim_end_matches('*');
@@ -19300,7 +19328,7 @@ else:
         let source = r#"
 print(reversed([1, 2, 3])[0])
 print(list(range(3, 0, -1))[0])
-print(reversed("abc")[0])
+print(reversed("abc".chars)[0])
 print(reversed({1, 2})[0])
 "#;
         let module = parse(source).expect("reversed source should parse");
@@ -19323,7 +19351,7 @@ print(reversed({1, 2})[0])
         let source = r#"
 print(zip([1, 2], [3, 4])[1][0])
 print(enumerate([7, 8], 4)[1][0])
-print(zip("ab", {8, 9})[1][0])
+print(zip("ab".chars, {8, 9})[1][0])
 "#;
         let module = parse(source).expect("zip/enumerate source should parse");
         let output = std::env::temp_dir().join(format!(
@@ -19346,7 +19374,7 @@ print(zip("ab", {8, 9})[1][0])
 print(any([false, 0, 3]))
 print(all([true, 1, 2]))
 print(all([true, 0, 2]))
-print(any(""))
+print(any("".chars))
 print(all({1, 2}))
 "#;
         let module = parse(source).expect("any/all source should parse");
@@ -19363,6 +19391,41 @@ print(all({1, 2}))
             String::from_utf8_lossy(&run.stdout),
             "true\ntrue\nfalse\nfalse\ntrue\n"
         );
+    }
+
+    #[test]
+    fn native_iterable_builtins_reject_raw_strings() {
+        for source in [
+            "print(list(\"abc\"))\n",
+            "print(set(\"abc\"))\n",
+            "print(dict(\"abc\"))\n",
+            "print(iter(\"abc\"))\n",
+            "print(reversed(\"abc\"))\n",
+            "print(enumerate(\"abc\"))\n",
+            "print(any(\"abc\"))\n",
+            "print(all(\"abc\"))\n",
+            "print(sorted(\"abc\"))\n",
+            "print(sum(\"abc\"))\n",
+            "print(min(\"abc\"))\n",
+            "print(max(\"abc\"))\n",
+            "print(zip(\"abc\", [1, 2, 3]))\n",
+            "def keep(x: str) -> str:\n    return x\nprint(map(keep, \"abc\"))\n",
+        ] {
+            let module = parse(source).expect("raw string iterable source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_codegen_raw_string_iterable_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("raw string iterable builtin should fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(
+                error.message.contains("raw str"),
+                "{source}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]
@@ -19383,7 +19446,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_pow_and_iter_match_builtin_behavior() {
-        let source = "print(pow(2, 3))\nprint(iter([4, 5])[1])\nprint(iter(\"ab\")[1])\nprint(iter({6, 7})[0])\n";
+        let source = "print(pow(2, 3))\nprint(iter([4, 5])[1])\nprint(iter(\"ab\".chars)[1])\nprint(iter({6, 7})[0])\n";
         let module = parse(source).expect("pow/iter source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_pow_iter_test_{}",
@@ -21044,8 +21107,8 @@ print(all({1, 2}))
     }
 
     #[test]
-    fn native_list_splits_strings_into_characters() {
-        let source = "print(list(\"abc\")[1])\n";
+    fn native_list_materializes_string_chars_view() {
+        let source = "print(list(\"abc\".chars)[1])\n";
         let module = parse(source).expect("string-to-list source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_string_to_list_test_{}",
@@ -21115,7 +21178,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_strings_handle_unicode_codepoints() {
-        let source = "print(len(\"aé😀\"))\nprint(list(\"aé😀\")[1])\n";
+        let source = "print(len(\"aé😀\"))\nprint(list(\"aé😀\".chars)[1])\n";
         let module = parse(source).expect("unicode string source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_unicode_string_test_{}",
@@ -22443,7 +22506,7 @@ print(result[1])
 
     #[test]
     fn native_set_and_dict_conversion_builtins() {
-        let source = "a = set([1, 2, 1])\nb = set(\"aba\")\nc = dict([[\"x\", 4], [\"y\", 5]])\nprint(len(a))\nprint(len(b))\nprint(c[\"x\"])\nprint(len(set()))\nprint(len(dict()))\n";
+        let source = "a = set([1, 2, 1])\nb = set(\"aba\".chars)\nc = dict([[\"x\", 4], [\"y\", 5]])\nprint(len(a))\nprint(len(b))\nprint(c[\"x\"])\nprint(len(set()))\nprint(len(dict()))\n";
         let module = parse(source).expect("set/dict source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_set_dict_test_{}",

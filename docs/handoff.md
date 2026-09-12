@@ -374,8 +374,8 @@ diverged:
 * Runtime loops and comprehensions now reject raw strings as iterables, matching
   the checker and the specification; callers use the immutable `str.chars`
   view for character iteration.
-* `any`, `all`, `iter`, `enumerate`, and `reversed` apply the same raw-string
-  restriction; explicitly string-friendly helpers such as `zip` remain so.
+* `any`, `all`, `iter`, `enumerate`, `reversed`, `sorted`, `zip`, `map`,
+  collection constructors, and reducers apply the same raw-string restriction.
 * Loop and comprehension targets use fresh iteration environments, so closures
   retain each iteration's value and comprehension targets do not rebind outer
   names.

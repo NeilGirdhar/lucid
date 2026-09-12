@@ -2607,13 +2607,6 @@ impl Interpreter {
                         .map(|value| match value {
                             Value::List(items) => Ok(items.borrow().clone()),
                             Value::Set(items) => Ok(items.borrow().clone()),
-                            // `zip` is one of the collection helpers that
-                            // intentionally accepts a raw string, treating
-                            // it as its sequence of characters.
-                            Value::Str(value) => Ok(value
-                                .chars()
-                                .map(|c| Value::Str(c.to_string()))
-                                .collect()),
                             Value::Range { start, stop, step } => Ok(materialize_range(*start, *stop, *step)),
                             Value::Object { fields, .. } => {
                                 let method = fields.borrow().get("__iter__").cloned().ok_or_else(|| RuntimeError { message: "object is not iterable".into(), span: Span::default() })?;
@@ -11540,7 +11533,7 @@ s = sum(r)
 
     #[test]
     fn test_iterable_builtins_accept_strings_and_sets() {
-        let module = parse("a = reversed(\"abc\".chars)\nb = enumerate({4, 5}, 7)\nc = zip(\"ab\", {8, 9})\nd = any(\"\".chars)\ne = all({1, 2})\n").unwrap();
+        let module = parse("a = reversed(\"abc\".chars)\nb = enumerate({4, 5}, 7)\nc = zip(\"ab\".chars, {8, 9})\nd = any(\"\".chars)\ne = all({1, 2})\n").unwrap();
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(
