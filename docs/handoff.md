@@ -1170,7 +1170,9 @@ diverged:
   element/key types, while allowing user-defined `__contains__` protocols.
   Match exhaustiveness now ignores guarded arms unless an unguarded wildcard
   covers the remaining space. Literal `int`, `bool`, `float`, and `str`
-  patterns now cover their corresponding literal union variants.
+  patterns now cover their corresponding literal union variants. Literal match
+  patterns are also checked against the subject type, so cross-category literal
+  patterns fail while unreachable arms for singleton subjects remain valid.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an

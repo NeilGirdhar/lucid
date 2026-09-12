@@ -6046,6 +6046,11 @@ impl TypeChecker {
                     _ => None,
                 };
                 for arm in arms {
+                    self.check_destructure_pattern(
+                        &arm.pattern,
+                        &subject_type,
+                        arm.pattern.span(),
+                    )?;
                     if let Some(guard) = &arm.guard {
                         let guard_type = self.type_of_expr(guard)?;
                         if !self.is_truthy_type(&guard_type) {
@@ -6837,7 +6842,86 @@ impl TypeChecker {
         subject_type: &Type,
         span: Span,
     ) -> Result<(), TypeError> {
+        fn literal_value_type(value: &LiteralValue, env: &TypeEnvironment) -> Type {
+            match value {
+                LiteralValue::Int(value) => Type::LiteralInt(*value),
+                LiteralValue::BigInt(_) => Type::Int,
+                LiteralValue::Float(value) => Type::LiteralFloat(*value),
+                LiteralValue::Complex(_) => {
+                    env.classes.get("complex").cloned().unwrap_or(Type::Float)
+                }
+                LiteralValue::Str(value) => Type::LiteralStr(value.clone()),
+                LiteralValue::Bytes(_) => Type::Class {
+                    name: "Bytes".into(),
+                    type_args: Vec::new(),
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: vec!["Buffer".into(), "Sized".into(), "Container".into()],
+                    fields: HashMap::new(),
+                    is_sealed: true,
+                },
+                LiteralValue::Bool(value) => Type::LiteralBool(*value),
+                LiteralValue::None => Type::None,
+                LiteralValue::Sentinel(_) => Type::TypeVar("Sentinel".into()),
+                LiteralValue::Ellipsis => Type::Never,
+            }
+        }
+        fn pattern_type_may_match(
+            pattern_type: &Type,
+            subject_type: &Type,
+            env: &TypeEnvironment,
+        ) -> bool {
+            fn singleton_value_type(ty: &Type) -> bool {
+                matches!(
+                    ty,
+                    Type::LiteralInt(_)
+                        | Type::LiteralBool(_)
+                        | Type::LiteralFloat(_)
+                        | Type::LiteralStr(_)
+                        | Type::None
+                        | Type::Never
+                )
+            }
+            match subject_type {
+                Type::TypeVar(name) if name == "Any" => true,
+                Type::Union(variants) => variants
+                    .iter()
+                    .any(|variant| pattern_type_may_match(pattern_type, variant, env)),
+                other => {
+                    singleton_value_type(other)
+                        || pattern_type.is_subtype_of(other, env)
+                        || types_may_overlap(pattern_type, other, env)
+                        || pattern_type.runtime_dispatch_key() == other.runtime_dispatch_key()
+                }
+            }
+        }
+        if let Type::Union(variants) = subject_type {
+            if variants.iter().any(|variant| {
+                self.check_destructure_pattern(pattern, variant, span)
+                    .is_ok()
+            }) {
+                return Ok(());
+            }
+            return Err(TypeError {
+                message: format!("pattern cannot match subject type {:?}", subject_type),
+                span,
+            });
+        }
         match pattern {
+            Pattern::Literal(value, _) => {
+                let pattern_type = literal_value_type(value, &self.env);
+                if pattern_type_may_match(&pattern_type, subject_type, &self.env) {
+                    Ok(())
+                } else {
+                    Err(TypeError {
+                        message: format!(
+                            "literal pattern {:?} cannot match subject type {:?}",
+                            value, subject_type
+                        ),
+                        span,
+                    })
+                }
+            }
             Pattern::ClassDestructure {
                 class_name, fields, ..
             } => {
@@ -12578,6 +12662,14 @@ def render(s: Shape) -> int:
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&guarded_literal).unwrap_err();
         assert!(err.message.contains("non-exhaustive match"));
+
+        let incompatible_literal = parse(
+            "def render(s: int) -> int:\n    match s:\n        case \"no\":\n            return 0\n        case _:\n            return 1\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&incompatible_literal).unwrap_err();
+        assert!(err.message.contains("cannot match subject type"));
 
         let missing_alias = parse(
             "def render(value: int) -> int:\n    match value + 1:\n        case _:\n            return value\n",
