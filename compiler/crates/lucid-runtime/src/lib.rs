@@ -6472,9 +6472,13 @@ impl Interpreter {
                                 matches!(lval, Value::List(_) | Value::Range { .. })
                             }
                             "Set" => matches!(lval, Value::Set(_)),
-                            "Buffer" => {
-                                matches!(lval, Value::Bytes(_) | Value::Str(_) | Value::List(_))
-                            }
+                            "Buffer" => match &lval {
+                                Value::Bytes(_) | Value::MemoryView { .. } | Value::List(_) => true,
+                                Value::Object { fields, .. } => {
+                                    fields.borrow().contains_key("__buffer__")
+                                }
+                                _ => false,
+                            },
                             "Shape" => matches!(lval, Value::List(_)),
                             "Eq" | "Ord" | "Hashable" => match &lval {
                                 Value::None => false,
@@ -11876,6 +11880,8 @@ view = memoryview(packet)
 view[0] = 72
 first = packet.storage[0]
 second = view[1]
+packet_is_buffer = packet is Buffer
+str_is_buffer = "hi" is Buffer
 "#,
         )
         .unwrap();
@@ -11883,6 +11889,14 @@ second = view[1]
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("first"), Some(Value::Int(72)));
         assert_eq!(interp.env.borrow().get("second"), Some(Value::Int(105)));
+        assert_eq!(
+            interp.env.borrow().get("packet_is_buffer"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            interp.env.borrow().get("str_is_buffer"),
+            Some(Value::Bool(false))
+        );
     }
 
     #[test]

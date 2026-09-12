@@ -1424,7 +1424,7 @@ impl CCodeGenerator {
         }
         self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
         self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0 || strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_LIST;");
+        self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_LIST || (value.type == LUCID_TYPE_PTR && value.ptr && lucid_object_buffer(value.ptr));");
         self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0 || strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;");
         self.emit_line("if (strcmp(capability, \"Set\") == 0) return value.type == LUCID_TYPE_SET;");
         self.emit_line("if (strcmp(capability, \"Eq\") == 0 || strcmp(capability, \"Ord\") == 0 || strcmp(capability, \"Hashable\") == 0) return value.type != LUCID_TYPE_NONE;");
@@ -9647,8 +9647,10 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "Buffer" => {
                                     if left_ty == "LucidVal" {
-                                        "lucid_dynamic_capability(lucid_wrap({l_str}), \"Buffer\")".into()
-                                    } else if matches!(left_ty.as_str(), "const char*" | "LucidList*") {
+                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Buffer\")")
+                                    } else if left_ty == "LucidList*" {
+                                        "((bool)1)".into()
+                                    } else if self.method_owner(left_ty.trim_end_matches('*'), "__buffer__").is_some() {
                                         "((bool)1)".into()
                                     } else {
                                         "((bool)0)".into()
@@ -9907,7 +9909,12 @@ static inline void lucid_print_val(LucidVal v) {
                                 "Buffer" | "Shape" => {
                                     if left_ty == "LucidVal" {
                                         format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))", type_name)
-                                    } else if matches!(left_ty.as_str(), "const char*" | "LucidList*") {
+                                    } else if type_name == "Buffer"
+                                        && (left_ty == "LucidList*"
+                                            || self.method_owner(left_ty.trim_end_matches('*'), "__buffer__").is_some())
+                                    {
+                                        "((bool)0)".into()
+                                    } else if type_name == "Shape" && left_ty == "LucidList*" {
                                         "((bool)0)".into()
                                     } else {
                                         "((bool)1)".into()
@@ -15894,6 +15901,9 @@ view = memoryview(identity(packet))
 view[0] = 72
 print(packet.storage[0])
 print(view[1])
+print(packet is Buffer)
+print(identity(packet) is Buffer)
+print("hi" is Buffer)
 "#;
         let module = parse(source).expect("buffer protocol source should parse");
         let output = std::env::temp_dir().join(format!(
@@ -15905,7 +15915,10 @@ print(view[1])
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "72\n105\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "72\n105\ntrue\ntrue\nfalse\n"
+        );
     }
 
     #[test]
