@@ -1708,6 +1708,8 @@ impl TypeChecker {
                 MutabilityView::ReadOnly,
             ),
         );
+        env.variables
+            .insert("pi".to_string(), (Type::Float, MutabilityView::ReadOnly));
         env.variables.insert(
             "freeze".to_string(),
             (
@@ -3505,6 +3507,17 @@ impl TypeChecker {
                         _ => None,
                     })
                     .unwrap_or_default();
+                let inherited_abstract = bases
+                    .iter()
+                    .find_map(|base| match base {
+                        TypeExpr::Named { name: parent, .. }
+                            if self.env.classes.contains_key(parent) =>
+                        {
+                            Some(self.class_abstract_member_names(parent))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
                 let final_inherited = bases
                     .iter()
                     .find_map(|base| match base {
@@ -3548,7 +3561,10 @@ impl TypeChecker {
                         }
                         _ => continue,
                     };
-                    if inherited.contains(member_name) && !explicitly_override {
+                    if inherited.contains(member_name)
+                        && !inherited_abstract.contains(member_name)
+                        && !explicitly_override
+                    {
                         return Err(TypeError {
                             message: format!(
                                 "member '{member_name}' overrides an inherited member; write 'override' explicitly"
@@ -11156,6 +11172,14 @@ class Child(Reusable, Base1, Base2):
         checker
             .check_module(&module)
             .expect("implemented abstract member should permit construction");
+
+        let module = parse(
+            "class Base:\n    def required(self) -> int\n\nclass Child(Base):\n    def required(self) -> int:\n        return 1\n\nvalue = Child()\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("implementing an abstract class member should not require override");
     }
 
     #[test]
@@ -11410,6 +11434,11 @@ dispatch def area(c: Circle) -> int:
         checker
             .check_module(&module)
             .expect("numeric class constants should be statically visible");
+        let module = parse("area: float = pi * 2.0\n").unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(&module)
+            .expect("prelude pi should be statically visible as a float");
         let module = parse("items = []\nitems.append()\n").unwrap();
         let mut checker = TypeChecker::new();
         let error = checker.check_module(&module).unwrap_err();

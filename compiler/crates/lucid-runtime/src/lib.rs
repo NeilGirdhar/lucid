@@ -2107,6 +2107,9 @@ impl Interpreter {
                 func: print_fn,
             },
         );
+        self.env
+            .borrow_mut()
+            .set("pi".to_string(), Value::Float(std::f64::consts::PI));
 
         // freeze(obj) -> !T
         let freeze_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
@@ -2907,6 +2910,12 @@ impl Interpreter {
                                     Value::BuiltinFunction { name: builtin, .. }
                                         if interp.builtin_names.contains(*name)
                                             && builtin == *name
+                                ) && !matches!(
+                                    (name.as_str(), value),
+                                    ("pi", Value::Float(value))
+                                        if interp.builtin_names.contains(*name)
+                                            && value.to_bits()
+                                                == std::f64::consts::PI.to_bits()
                                 )
                             })
                             .map(|(name, value)| (name.clone(), value.clone()))
@@ -11779,6 +11788,7 @@ rem = 17 % 5
     #[test]
     fn test_module_loading_and_math() {
         let src = r#"
+global_p = pi > 3.0
 import math
 from math import sqrt, pi
 
@@ -11792,6 +11802,10 @@ abs_val = math.abs(-42)
 
         assert_eq!(interp.env.borrow().get("sq").unwrap(), Value::Float(4.0));
         assert_eq!(interp.env.borrow().get("p").unwrap(), Value::Bool(true));
+        assert_eq!(
+            interp.env.borrow().get("global_p").unwrap(),
+            Value::Bool(true)
+        );
         assert_eq!(interp.env.borrow().get("abs_val").unwrap(), Value::Int(42));
     }
 
