@@ -1013,119 +1013,123 @@ fn collect_typed_body<'db>(
                     }
                 }
 
-                fn typed_match_noop_statement(statement: &lucid_syntax::Stmt) -> bool {
-                    fn pure_expr(expr: &lucid_syntax::Expr) -> bool {
-                        match expr {
-                            lucid_syntax::Expr::Literal { .. }
-                            | lucid_syntax::Expr::Ident { .. } => true,
-                            lucid_syntax::Expr::Unary { expr, .. } => pure_expr(expr),
-                            lucid_syntax::Expr::Binary { left, right, .. } => {
-                                pure_expr(left) && pure_expr(right)
-                            }
-                            lucid_syntax::Expr::IfExpr {
-                                condition,
-                                then_branch,
-                                else_branch,
-                                ..
-                            } => {
-                                pure_expr(condition)
-                                    && pure_expr(then_branch)
-                                    && pure_expr(else_branch)
-                            }
-                            _ => false,
+                fn typed_match_pure_expr(expr: &lucid_syntax::Expr) -> bool {
+                    match expr {
+                        lucid_syntax::Expr::Literal { .. } | lucid_syntax::Expr::Ident { .. } => {
+                            true
                         }
-                    }
-                    fn static_truth(expr: &lucid_syntax::Expr) -> Option<bool> {
-                        match expr {
-                            lucid_syntax::Expr::Literal {
-                                value: lucid_syntax::LiteralValue::Bool(value),
-                                ..
-                            } => Some(*value),
-                            lucid_syntax::Expr::Literal {
-                                value: lucid_syntax::LiteralValue::Int(value),
-                                ..
-                            } => Some(*value != 0),
-                            lucid_syntax::Expr::Unary {
-                                op: lucid_syntax::UnaryOp::Not,
-                                expr,
-                                ..
-                            } => static_truth(expr).map(|value| !value),
-                            lucid_syntax::Expr::Binary {
-                                op: lucid_syntax::BinaryOp::And,
-                                left,
-                                right,
-                                ..
-                            } => match static_truth(left) {
-                                Some(false) => Some(false),
-                                Some(true) => static_truth(right),
-                                None => None,
-                            },
-                            lucid_syntax::Expr::Binary {
-                                op: lucid_syntax::BinaryOp::Or,
-                                left,
-                                right,
-                                ..
-                            } => match static_truth(left) {
-                                Some(true) => Some(true),
-                                Some(false) => static_truth(right),
-                                None => None,
-                            },
-                            lucid_syntax::Expr::Binary {
-                                op, left, right, ..
-                            } => {
-                                let (
-                                    lucid_syntax::Expr::Literal {
-                                        value: lucid_syntax::LiteralValue::Bool(left),
-                                        ..
-                                    },
-                                    lucid_syntax::Expr::Literal {
-                                        value: lucid_syntax::LiteralValue::Bool(right),
-                                        ..
-                                    },
-                                ) = (left.as_ref(), right.as_ref())
-                                else {
-                                    return None;
-                                };
-                                match op {
-                                    lucid_syntax::BinaryOp::Eq
-                                    | lucid_syntax::BinaryOp::Identity
-                                    | lucid_syntax::BinaryOp::Is => Some(left == right),
-                                    lucid_syntax::BinaryOp::NotEq
-                                    | lucid_syntax::BinaryOp::NotIdentity
-                                    | lucid_syntax::BinaryOp::IsNot => Some(left != right),
-                                    _ => None,
-                                }
-                            }
-                            _ => None,
+                        lucid_syntax::Expr::Unary { expr, .. } => typed_match_pure_expr(expr),
+                        lucid_syntax::Expr::Binary { left, right, .. } => {
+                            typed_match_pure_expr(left) && typed_match_pure_expr(right)
                         }
+                        lucid_syntax::Expr::IfExpr {
+                            condition,
+                            then_branch,
+                            else_branch,
+                            ..
+                        } => {
+                            typed_match_pure_expr(condition)
+                                && typed_match_pure_expr(then_branch)
+                                && typed_match_pure_expr(else_branch)
+                        }
+                        _ => false,
                     }
-                    fn selected_static_branch<'a>(
-                        condition: &lucid_syntax::Expr,
-                        then_branch: &'a [lucid_syntax::Stmt],
-                        elif_branches: &'a [(lucid_syntax::Expr, Vec<lucid_syntax::Stmt>)],
-                        else_branch: Option<&'a Vec<lucid_syntax::Stmt>>,
-                    ) -> Option<Option<&'a [lucid_syntax::Stmt]>> {
-                        match static_truth(condition) {
-                            Some(true) => Some(Some(then_branch)),
-                            Some(false) => {
-                                for (condition, branch) in elif_branches {
-                                    match static_truth(condition) {
-                                        Some(true) => return Some(Some(branch.as_slice())),
-                                        Some(false) => continue,
-                                        None => return None,
-                                    }
-                                }
-                                Some(else_branch.map(Vec::as_slice))
-                            }
+                }
+                fn typed_match_static_truth(expr: &lucid_syntax::Expr) -> Option<bool> {
+                    match expr {
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bool(value),
+                            ..
+                        } => Some(*value),
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Int(value),
+                            ..
+                        } => Some(*value != 0),
+                        lucid_syntax::Expr::Unary {
+                            op: lucid_syntax::UnaryOp::Not,
+                            expr,
+                            ..
+                        } => typed_match_static_truth(expr).map(|value| !value),
+                        lucid_syntax::Expr::Binary {
+                            op: lucid_syntax::BinaryOp::And,
+                            left,
+                            right,
+                            ..
+                        } => match typed_match_static_truth(left) {
+                            Some(false) => Some(false),
+                            Some(true) => typed_match_static_truth(right),
                             None => None,
+                        },
+                        lucid_syntax::Expr::Binary {
+                            op: lucid_syntax::BinaryOp::Or,
+                            left,
+                            right,
+                            ..
+                        } => match typed_match_static_truth(left) {
+                            Some(true) => Some(true),
+                            Some(false) => typed_match_static_truth(right),
+                            None => None,
+                        },
+                        lucid_syntax::Expr::Binary {
+                            op, left, right, ..
+                        } => {
+                            let (
+                                lucid_syntax::Expr::Literal {
+                                    value: lucid_syntax::LiteralValue::Bool(left),
+                                    ..
+                                },
+                                lucid_syntax::Expr::Literal {
+                                    value: lucid_syntax::LiteralValue::Bool(right),
+                                    ..
+                                },
+                            ) = (left.as_ref(), right.as_ref())
+                            else {
+                                return None;
+                            };
+                            match op {
+                                lucid_syntax::BinaryOp::Eq
+                                | lucid_syntax::BinaryOp::Identity
+                                | lucid_syntax::BinaryOp::Is => Some(left == right),
+                                lucid_syntax::BinaryOp::NotEq
+                                | lucid_syntax::BinaryOp::NotIdentity
+                                | lucid_syntax::BinaryOp::IsNot => Some(left != right),
+                                _ => None,
+                            }
                         }
+                        _ => None,
                     }
+                }
+                fn typed_match_selected_static_branch<'a>(
+                    condition: &lucid_syntax::Expr,
+                    then_branch: &'a [lucid_syntax::Stmt],
+                    elif_branches: &'a [(lucid_syntax::Expr, Vec<lucid_syntax::Stmt>)],
+                    else_branch: Option<&'a Vec<lucid_syntax::Stmt>>,
+                ) -> Option<Option<&'a [lucid_syntax::Stmt]>> {
+                    match typed_match_static_truth(condition) {
+                        Some(true) => Some(Some(then_branch)),
+                        Some(false) => {
+                            for (condition, branch) in elif_branches {
+                                match typed_match_static_truth(condition) {
+                                    Some(true) => return Some(Some(branch.as_slice())),
+                                    Some(false) => continue,
+                                    None => return None,
+                                }
+                            }
+                            Some(else_branch.map(Vec::as_slice))
+                        }
+                        None => None,
+                    }
+                }
+                fn typed_match_noop_statement(statement: &lucid_syntax::Stmt) -> bool {
                     matches!(statement, lucid_syntax::Stmt::Pass(_))
-                        || matches!(statement, lucid_syntax::Stmt::Expr(expr) if pure_expr(expr))
+                        || matches!(
+                            statement,
+                            lucid_syntax::Stmt::Expr(expr) if typed_match_pure_expr(expr)
+                        )
                         || matches!(
                             statement,
                             lucid_syntax::Stmt::Assert { condition, .. }
-                                if static_truth(condition) == Some(true)
+                                if typed_match_static_truth(condition) == Some(true)
                         )
                         || matches!(
                             statement,
@@ -1133,7 +1137,7 @@ fn collect_typed_body<'db>(
                                 condition,
                                 if_broken: None,
                                 ..
-                            } if static_truth(condition) == Some(false)
+                            } if typed_match_static_truth(condition) == Some(false)
                         )
                         || matches!(
                             statement,
@@ -1150,7 +1154,7 @@ fn collect_typed_body<'db>(
                                 elif_branches,
                                 else_branch,
                                 ..
-                            } => match selected_static_branch(
+                            } => match typed_match_selected_static_branch(
                                 condition,
                                 then_branch,
                                 elif_branches,
@@ -1163,9 +1167,10 @@ fn collect_typed_body<'db>(
                             _ => false,
                         }
                 }
-                fn match_arm_result(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
-                    let mut meaningful = arm
-                        .body
+                fn match_statements_result(
+                    statements: &[lucid_syntax::Stmt],
+                ) -> Option<&lucid_syntax::Expr> {
+                    let mut meaningful = statements
                         .iter()
                         .filter(|statement| !typed_match_noop_statement(statement));
                     let first = meaningful.next()?;
@@ -1202,8 +1207,29 @@ fn collect_typed_body<'db>(
                                 ..
                             }),
                         ) if name == returned => Some(value),
+                        (
+                            lucid_syntax::Stmt::If {
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch,
+                                ..
+                            },
+                            None,
+                        ) => {
+                            let selected = typed_match_selected_static_branch(
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch.as_ref(),
+                            )??;
+                            match_statements_result(selected)
+                        }
                         _ => None,
                     }
+                }
+                fn match_arm_result(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
+                    match_statements_result(&arm.body)
                 }
                 if arms.len() >= 3
                     && arms.iter().all(|arm| arm.guard.is_none())
@@ -6757,6 +6783,17 @@ mod tests {
         }));
 
         let file = db.add_file(
+            "match-static-if-result-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if true:\n                return 3\n            else:\n                return 0\n        case _:\n            if false:\n                return 0\n            else:\n                fallback = 4\n                return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid static-if result match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
             "try-local-hir.lucid",
             "def choose(value: int):\n    try:\n        selected = value + 1\n        return selected\n    except str as error:\n        fallback = 0\n        return fallback\n",
         );
@@ -7401,6 +7438,26 @@ mod tests {
             typed_module(&db, file)
                 .as_ref()
                 .expect("multi-arm bool-expression no-op match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-static-if-result-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if true:\n                return 11\n            else:\n                return 0\n        case 2:\n            if false:\n                return 0\n            else:\n                return 22\n        case _:\n            if true:\n                fallback = 33\n                return fallback\n            else:\n                return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with static-if result should lower");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm static-if result match should type check")
                 .functions[0]
                 .body_expressions
                 .iter()
