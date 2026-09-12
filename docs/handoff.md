@@ -454,6 +454,10 @@ diverged:
   The supported two-arm shape now carries its subject, arm results, and
   literal discriminator as one typed-HIR node before CIR lowering, including
   the simple branch-local assignment-and-return form.
+  Constant integer/boolean subjects written with the required `as` alias now
+  fold to the selected unguarded literal or wildcard arm and lower that arm's
+  typed return expression directly, so parameter-dependent results in the
+  reachable arm do not require dynamic match CIR.
 * Canonical counted `while` and `for range` CIR loops now accept a trailing
   `pass` after the induction update, preserving the specified no-op statement
   without widening the loop lowering shape. They also accept an

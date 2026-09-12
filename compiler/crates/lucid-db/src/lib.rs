@@ -1606,7 +1606,14 @@ pub fn lower_function_body(
     // an explicit unsupported lowering until CIR carries pattern coverage.
     if !function.is_async
         && let [lucid_syntax::Stmt::Match { subject, arms, .. }] = source_function.body.as_slice()
-        && matches!(subject, lucid_syntax::Expr::Ident { .. })
+        && matches!(
+            subject,
+            lucid_syntax::Expr::Ident { .. }
+                | lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                    ..
+                }
+        )
     {
         if let Some(root) = function.body_expressions.iter().rev().find(|node| {
             matches!(node.kind.as_str(), "match" | "match-chain") && node.span == subject.span()
@@ -1685,6 +1692,49 @@ pub fn lower_function_body(
                 arm.body.as_slice(),
                 [lucid_syntax::Stmt::Return { value: None, .. }] | [lucid_syntax::Stmt::Pass(_)]
             )
+        }
+        let pattern_literal = |pattern: &lucid_syntax::Pattern| match pattern {
+            lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(value), _) => {
+                Some(lucid_cir::TypedLiteral::Int(*value))
+            }
+            lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bool(value), _) => {
+                Some(lucid_cir::TypedLiteral::Bool(*value))
+            }
+            _ => None,
+        };
+        if let Some(subject_literal) = primitive_literal(subject)
+            && let Some(selected_arm) = arms.iter().find(|arm| {
+                arm.guard.is_none()
+                    && (matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+                        || pattern_literal(&arm.pattern) == Some(subject_literal))
+            })
+            && let Some(value) = match_arm_value(selected_arm)
+        {
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            if let Some(root) = function
+                .body_expressions
+                .iter()
+                .rev()
+                .find(|node| node.span == value.span())
+                && let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                    &nodes,
+                    root.id,
+                    &function.parameter_names,
+                )
+            {
+                return Ok(Arc::new(lowered));
+            }
+            return Err(Arc::from("unsupported constant match expression"));
         }
         let arm_condition = |arm: &lucid_syntax::MatchArm| match &arm.pattern {
             lucid_syntax::Pattern::Literal(
@@ -5525,6 +5575,16 @@ mod tests {
             .expect("match-local values should lower through typed CIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "constant-subject-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case false:\n            return value * 10\n        case true:\n            selected = value + 10\n            return selected\n        case _:\n            return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant subject match should lower only the selected arm");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(17)));
 
         let file = db.add_file(
             "multi-match.lucid",
