@@ -6328,20 +6328,44 @@ impl TypeChecker {
                                     .cloned()
                                     .unwrap_or_default();
                                 let mut positional_index = 0usize;
+                                let mut saw_named = false;
+                                let mut seen_named = HashSet::new();
                                 for argument in args {
-                                    let index = argument
-                                        .name
-                                        .as_ref()
-                                        .and_then(|argument_name| {
-                                            parameter_names.iter().position(|parameter_name| {
-                                                parameter_name == argument_name
-                                            })
-                                        })
-                                        .unwrap_or_else(|| {
-                                            let index = positional_index;
-                                            positional_index += 1;
-                                            index
-                                        });
+                                    let index = if let Some(argument_name) = &argument.name {
+                                        saw_named = true;
+                                        let Some(index) = parameter_names
+                                            .iter()
+                                            .position(|parameter_name| parameter_name == argument_name)
+                                        else {
+                                            return Err(TypeError {
+                                                message: format!(
+                                                    "callable has no parameter named '{}'",
+                                                    argument_name
+                                                ),
+                                                span: argument.value.span(),
+                                            });
+                                        };
+                                        if !seen_named.insert(argument_name.clone()) {
+                                            return Err(TypeError {
+                                                message: format!(
+                                                    "argument '{}' passed more than once",
+                                                    argument_name
+                                                ),
+                                                span: argument.value.span(),
+                                            });
+                                        }
+                                        index
+                                    } else {
+                                        if saw_named {
+                                            return Err(TypeError {
+                                                message: "positional argument follows named argument".into(),
+                                                span: argument.value.span(),
+                                            });
+                                        }
+                                        let index = positional_index;
+                                        positional_index += 1;
+                                        index
+                                    };
                                     let Some(parameter) = params.get(index) else {
                                         continue;
                                     };
@@ -10635,5 +10659,22 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn named_calls_reject_duplicate_and_late_positional_arguments() {
+        let duplicate = parse(
+            "def f(value: int) -> int:\n    return value\nresult = f(value=1, value=2)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&duplicate).unwrap_err();
+        assert!(error.message.contains("passed more than once"));
+
+        let late = parse(
+            "def f(left: int, right: int) -> int:\n    return left + right\nresult = f(left=1, 2)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&late).unwrap_err();
+        assert!(error.message.contains("positional argument follows named"));
     }
 }
