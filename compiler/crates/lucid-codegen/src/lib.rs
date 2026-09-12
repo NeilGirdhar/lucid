@@ -9600,21 +9600,27 @@ static inline void lucid_print_val(LucidVal v) {
                                                 .to_string(),
                                         });
                                     }
+                                    let parameter_type =
+                                        self.map_type_expr(params[0].type_annotation.as_ref());
                                     let expr = match body.as_slice() {
                                         [
                                             Stmt::Return {
                                                 value: Some(expr), ..
                                             },
-                                        ] => expr.clone(),
+                                        ] => Some(expr.clone()),
                                         _ => {
-                                            return Err(CodegenError {
-                                                message: "native map() supports only an expression-bodied anonymous function".to_string(),
-                                            });
+                                            None
                                         }
                                     };
-                                    let parameter_type =
-                                        self.map_type_expr(params[0].type_annotation.as_ref());
-                                    (vec![parameter_type], MapBody::Expression(params[0].name.clone(), expr))
+                                    let map_body = if let Some(expr) = expr {
+                                        MapBody::Expression(params[0].name.clone(), expr)
+                                    } else {
+                                        MapBody::Block(
+                                            vec![(params[0].name.clone(), parameter_type.clone())],
+                                            body.clone(),
+                                        )
+                                    };
+                                    (vec![parameter_type], map_body)
                                 }
                                 _ => {
                                     return Err(CodegenError {
