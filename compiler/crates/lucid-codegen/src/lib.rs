@@ -6159,8 +6159,7 @@ static inline void lucid_print_val(LucidVal v) {
                 matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
             })
             || f.params.iter().any(|param| {
-                param.is_variadic_keyword
-                    || param.is_gather
+                param.is_gather
             })
         {
             return Ok(());
@@ -6209,6 +6208,10 @@ static inline void lucid_print_val(LucidVal v) {
             })
             .count();
         let variadic_index = f.params.iter().position(|param| param.is_variadic_positional);
+        let keyword_variadic = f.params.iter().any(|param| param.is_variadic_keyword);
+        if keyword_variadic {
+            self.emit_line("LucidDict* _closure_kwargs = kwargs ? kwargs : lucid_dict_new(0);");
+        }
         if let Some(index) = variadic_index {
             self.emit_line(&format!(
                 "if (!args || args->len < {required}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}"
@@ -6225,7 +6228,10 @@ static inline void lucid_print_val(LucidVal v) {
                 f.params.len()
             ));
         for (index, param) in f.params.iter().enumerate() {
-            if param.is_variadic_positional || param.default.is_some() {
+            if param.is_variadic_positional
+                || param.is_variadic_keyword
+                || param.default.is_some()
+            {
                 continue;
             }
             self.emit_line(&format!(
@@ -6243,6 +6249,10 @@ static inline void lucid_print_val(LucidVal v) {
             };
             if param.is_variadic_positional {
                 call_args.push("_closure_varargs".to_string());
+                continue;
+            }
+            if param.is_variadic_keyword {
+                call_args.push("_closure_kwargs".to_string());
                 continue;
             }
             let source = format!(
@@ -14753,6 +14763,24 @@ print(z is complex)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+    }
+
+    #[test]
+    fn native_erased_function_value_packs_keyword_variadic_arguments() {
+        let source =
+            "def count(**values: int) -> int:\n    return len(values)\nfs = [count]\nprint(fs[0](a=1, b=2))\n";
+        let module = parse(source).expect("keyword variadic closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_function_value_keyword_variadic_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("keyword variadic closure should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run keyword variadic closure");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "keyword variadic closure failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
     }
 
