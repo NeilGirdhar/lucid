@@ -561,10 +561,11 @@ diverged:
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from an integer literal or parameter, then updated before the
   induction update. The accumulator step can be a literal or the current
-  induction value, using `+=`, `-=`, `x = x + y`, or `x = x - y`. The source
-  and CLI `run-cir --function` paths now execute this shape through explicit
-  induction and accumulator Phis. Cranelift result-ABI coverage now executes
-  the same countdown-sum CFG natively.
+  induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
+  commuted additive spelling `x = y + x`. The source and CLI
+  `run-cir --function` paths now execute this shape through explicit induction
+  and accumulator Phis. Cranelift result-ABI coverage now executes the same
+  countdown-sum CFG natively.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable

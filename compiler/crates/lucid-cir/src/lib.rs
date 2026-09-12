@@ -3164,6 +3164,27 @@ impl Function {
                         accumulator_operand(right.as_ref(), induction_name)?,
                     ))
                 }
+                lucid_syntax::Stmt::Assignment {
+                    target:
+                        lucid_syntax::Expr::Ident {
+                            name: update_name, ..
+                        },
+                    value:
+                        lucid_syntax::Expr::Binary {
+                            op: lucid_syntax::BinaryOp::Add,
+                            left,
+                            right,
+                            ..
+                        },
+                    ..
+                } if update_name == target
+                    && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
+                {
+                    Some((
+                        lucid_syntax::BinaryOp::Add,
+                        accumulator_operand(left.as_ref(), induction_name)?,
+                    ))
+                }
                 _ => None,
             }
         }
@@ -8812,6 +8833,19 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("ordinary induction accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[4, 10]), Ok(Some(20)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total = n + total
+    n -= 1
+return total
+"#,
+        )
+        .expect("commuted induction accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("commuted induction accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
