@@ -463,6 +463,8 @@ diverged:
   Setup work before a selected constant-match void or fallthrough arm now
   lowers through the typed-local void path, while effectful discarded setup
   remains rejected.
+  The same selected-arm path now applies to a leading unconditional wildcard
+  arm, because later arms are unreachable once that wildcard matches.
 * Canonical counted `while` and `for range` CIR loops now accept a trailing
   `pass` after the induction update, preserving the specified no-op statement
   without widening the loop lowering shape. They also accept an

@@ -2396,26 +2396,10 @@ pub fn lower_function_body(
                 return Err(Arc::from("unsupported leading wildcard match expression"));
             }
             if match_arm_is_void(first_arm) {
-                let function = lucid_cir::Function {
-                    entry: lucid_cir::BlockId(0),
-                    blocks: vec![lucid_cir::Block {
-                        id: lucid_cir::BlockId(0),
-                        instructions: function
-                            .parameter_names
-                            .iter()
-                            .enumerate()
-                            .map(|(index, _)| lucid_cir::Instruction::Param {
-                                result: lucid_cir::ValueId(index as u32),
-                                index: index as u32,
-                            })
-                            .collect(),
-                        terminator: lucid_cir::Terminator::Return(None),
-                    }],
-                };
-                function
-                    .verify()
-                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
-                return Ok(Arc::new(function));
+                return lower_match_bindings_to_void(&[]);
+            }
+            if let Some(bindings) = match_arm_void_bindings(first_arm)? {
+                return lower_match_bindings_to_void(&bindings);
             }
         }
         if arms.len() != 2 {
@@ -5755,6 +5739,38 @@ mod tests {
             .expect("leading wildcard void match should preserve arm order");
         assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "leading-wildcard-setup-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case _:\n            temporary = value + 1\n            return\n        case 1:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("leading wildcard setup before void match should preserve selected setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "leading-wildcard-setup-fallthrough-match.lucid",
+            "def answer(value: int):\n    match value:\n        case _:\n            temporary = value + 1\n        case 1:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("leading wildcard setup-only match should preserve selected setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
 
         let file = db.add_file(
             "match-local-cir.lucid",
