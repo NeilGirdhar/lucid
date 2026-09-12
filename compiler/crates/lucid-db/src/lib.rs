@@ -2595,6 +2595,73 @@ pub fn lower_function_body(
                 },
             ],
         ) = selected_branch
+            && !inner_elifs.is_empty()
+            && static_truth(inner_condition).is_none()
+            && has_identifier(inner_condition)
+        {
+            let mut elif_values = Vec::new();
+            let mut unsupported_elif = false;
+            for (elif_condition, elif_branch) in inner_elifs {
+                if static_truth(elif_condition).is_some() || !has_identifier(elif_condition) {
+                    unsupported_elif = true;
+                    break;
+                }
+                let Some(elif_value) = single_value_return(elif_branch) else {
+                    unsupported_elif = true;
+                    break;
+                };
+                elif_values.push((elif_condition, elif_value));
+            }
+            if !unsupported_elif && let Some(then_value) = single_value_return(inner_then) {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let lowered = match inner_else.as_deref() {
+                    Some(else_branch) => {
+                        if let Some(else_value) = single_value_return(else_branch) {
+                            lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                                inner_condition,
+                                then_value,
+                                &elif_values,
+                                else_value,
+                                &function.parameter_names,
+                            )
+                        } else if branch_is_single_void(else_branch) {
+                            lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                                inner_condition,
+                                then_value,
+                                &elif_values,
+                                &function.parameter_names,
+                            )
+                        } else {
+                            Err(lucid_cir::LowerError::UnsupportedExpression)
+                        }
+                    }
+                    None => lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                        inner_condition,
+                        then_value,
+                        &elif_values,
+                        &function.parameter_names,
+                    ),
+                };
+                return lowered
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported selected nested dynamic elif branch"));
+            }
+        }
+        if let Some(
+            [
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+            ],
+        ) = selected_branch
             && inner_elifs.is_empty()
             && static_truth(inner_condition).is_none()
             && has_identifier(inner_condition)
@@ -6979,6 +7046,28 @@ mod tests {
             .expect("selected dynamic nested branch else return should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-elif-branch-else-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 10:\n            return 100\n        elif value > 0:\n            return 1\n        else:\n            return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested elif branch else return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "dynamic-nested-elif-branch-fallthrough.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            return 1\n        elif value < 0:\n            return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested elif branch fallthrough should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
 
         let file = db.add_file(
             "dynamic-nested-void-branch.lucid",
