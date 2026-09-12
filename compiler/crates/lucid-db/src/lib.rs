@@ -1297,6 +1297,77 @@ fn collect_typed_body<'db>(
                         });
                     }
                 }
+                if arms.len() >= 3
+                    && let Some(wildcard_index) = arms
+                        .iter()
+                        .position(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_)))
+                    && wildcard_index > 0
+                    && wildcard_index + 1 < arms.len()
+                    && arms[..=wildcard_index]
+                        .iter()
+                        .all(|arm| arm.guard.is_none())
+                    && arms[..wildcard_index]
+                        .iter()
+                        .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                    && arms[..=wildcard_index]
+                        .iter()
+                        .all(|arm| match_arm_result(arm).is_some())
+                {
+                    let detail = arms[..wildcard_index]
+                        .iter()
+                        .map(|arm| match &arm.pattern {
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Int(value),
+                                _,
+                            ) => Ok(format!("i{value}")),
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Bool(value),
+                                _,
+                            ) => Ok(format!("b{value}")),
+                            _ => Err(Arc::from("unsupported match literal pattern")),
+                        })
+                        .collect::<Result<Vec<_>, Arc<str>>>()?
+                        .join(",");
+                    let mut children = vec![subject_id];
+                    let mut result_ids = Vec::with_capacity(wildcard_index + 1);
+                    for arm in &arms[..=wildcard_index] {
+                        let Some(value) = match_arm_result(arm) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let Some(id) = nodes
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == value.span())
+                            .map(|node| node.id)
+                        else {
+                            result_ids.clear();
+                            break;
+                        };
+                        result_ids.push(id);
+                    }
+                    if result_ids.len() == wildcard_index + 1 {
+                        children.extend(result_ids);
+                        let id = u32::try_from(nodes.len())
+                            .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                        let Some(result) = match_arm_result(&arms[0]) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let ty = checker
+                            .type_of_expr(result)
+                            .map_err(|error| Arc::<str>::from(error.message))?
+                            .canonical();
+                        nodes.push(TypedExpr {
+                            id,
+                            type_id: TypeId::new(db, ty.canonical_string()),
+                            type_name: ty.canonical_string(),
+                            kind: "match-chain".into(),
+                            detail: Some(format!("literal-chain:{detail}")),
+                            children: Arc::from(children),
+                            literal: None,
+                            span: subject.span(),
+                        });
+                    }
+                }
                 let optional_value_arms =
                     if !arms.is_empty() && arms.iter().all(|arm| arm.guard.is_none()) {
                         if matches!(
@@ -7162,6 +7233,15 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("middle wildcard match should make later arms unreachable");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("middle wildcard match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(102)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));

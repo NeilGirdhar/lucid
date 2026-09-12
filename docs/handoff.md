@@ -466,6 +466,8 @@ diverged:
   the same typed-HIR/CIR seam and return `None` when no value arm matches. More
   complex patterns remain explicit lowering work rather than being silently
   interpreted by a compatibility fallback.
+  A wildcard in the middle of a value-returning literal chain now becomes the
+  typed fallback arm, so later unreachable arms are ignored before CIR lowering.
   Literal void matches now also have a typed-HIR node and lower to a CIR
   decision ladder whose selected and fall-through blocks return `None`.
   The supported two-arm shape now carries its subject, arm results, and
