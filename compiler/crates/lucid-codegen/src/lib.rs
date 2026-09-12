@@ -6335,6 +6335,13 @@ static inline void lucid_print_val(LucidVal v) {
         self.pending_anonymous_adapters
             .push((adapter.clone(), env_type.clone(), params.to_vec(), body.clone(), captures.to_vec()));
         self.emit_line(&format!("LucidVal {adapter}(void*, LucidList*, LucidDict*);"));
+        let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
+        let maker_params = captures
+            .iter()
+            .map(|capture| format!("LucidVal {capture}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.emit_line(&format!("void* {maker}({maker_params});"));
         (adapter, env_type)
     }
 
@@ -18210,6 +18217,22 @@ print(result[1])
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "12");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_capturing_anonymous_function_escapes_activation() {
+        let source = "def make(offset: int) -> Any:\n    return [def(x: int) -> int: x + offset][0]\nprint(make(5)(7))\n";
+        let module = parse(source).expect("escaping closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_escaping_closure_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("escaping closure should compile");
+        let run = Command::new(&output).output().expect("run escaping closure");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "escaping closure failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "12\n");
     }
 
     #[test]
