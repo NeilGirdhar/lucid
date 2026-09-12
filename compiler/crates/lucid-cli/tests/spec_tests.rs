@@ -289,6 +289,14 @@ fn test_class_inheritance_rejects_programmable_type_hooks() {
     }
 }
 
+#[test]
+fn test_class_inheritance_rejects_keyword_class_bases() {
+    let src = "class Meta:\n    pass\nclass Model(metaclass=Meta):\n    pass\n";
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("keyword class base"));
+}
+
 // ---------------------------------------------------------------------------
 // 10. Classes (docs/classes.rst)
 // ---------------------------------------------------------------------------

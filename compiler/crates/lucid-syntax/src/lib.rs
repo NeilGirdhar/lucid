@@ -241,6 +241,13 @@ contextmanager def locked(lock: Lock):
     }
 
     #[test]
+    fn test_parse_rejects_keyword_class_bases() {
+        let src = "class Meta:\n    pass\nclass Model(metaclass=Meta):\n    pass\n";
+        let error = parse(src).expect_err("keyword class bases must fail in parsing");
+        assert!(error.contains("keyword class base 'metaclass=' is not supported"));
+    }
+
+    #[test]
     fn test_parse_async_def_and_await() {
         let src = r#"
 async def load() -> int:

@@ -408,16 +408,19 @@ impl Parser {
         if self.match_tok(&TokenKind::LParen) {
             if !self.check(&TokenKind::RParen) {
                 loop {
-                    // Check for keyword base: metaclass=...
                     if matches!(self.peek_kind(), TokenKind::Ident(_))
                         && self
                             .peek_next()
                             .map(|t| t.kind == TokenKind::Eq)
                             .unwrap_or(false)
                     {
-                        let _kw = self.expect_ident()?;
-                        self.advance(); // consume '='
-                        let _val = self.parse_expr()?;
+                        let keyword = self.expect_ident()?;
+                        return Err(ParseError {
+                            message: format!(
+                                "keyword class base '{keyword}=' is not supported; Lucid has no metaclasses or programmable class headers"
+                            ),
+                            span: self.peek().span,
+                        });
                     } else {
                         bases.push(self.parse_type_expr()?);
                     }
