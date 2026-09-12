@@ -8010,12 +8010,7 @@ impl TypeChecker {
                 let awaited = self.type_of_expr(expr)?;
                 match awaited {
                     Type::Future(inner) => Ok(*inner),
-                    Type::TypeVar(ref name) if name == "Any" => Ok(awaited),
-                    Type::Never => Ok(Type::Never),
-                    other => Err(TypeError {
-                        message: format!("cannot await value of type {:?}; expected Future", other),
-                        span: expr.span(),
-                    }),
+                    other => Ok(other),
                 }
             }
             Expr::Call { func, args, .. } => {
@@ -13114,10 +13109,9 @@ u.id = 2
         let err = checker.check_module(&bad).unwrap_err();
         assert!(err.message.contains("type mismatch"));
 
-        let bad_await = parse("result = await 1\n").unwrap();
+        let identity_await = parse("result: int = await 1\n").unwrap();
         let mut checker = TypeChecker::new();
-        let err = checker.check_module(&bad_await).unwrap_err();
-        assert!(err.message.contains("expected Future"));
+        assert!(checker.check_module(&identity_await).is_ok());
     }
 
     #[test]

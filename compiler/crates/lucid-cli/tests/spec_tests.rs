@@ -710,6 +710,20 @@ fn test_skip_is_not_a_standalone_value() {
     }
 }
 
+#[test]
+fn test_await_identity_for_non_future_values() {
+    let src = r#"
+async def load() -> int:
+    return 40
+
+direct: int = await 2
+future: int = await load()
+res = direct + future
+"#;
+    let val = eval_ok(src);
+    assert_eq!(val, Value::Int(42));
+}
+
 // ---------------------------------------------------------------------------
 // 21. Standard Builtins & Method Integration
 // ---------------------------------------------------------------------------

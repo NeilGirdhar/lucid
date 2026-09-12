@@ -1048,8 +1048,8 @@ diverged:
   categories instead of accepting arbitrary concrete types.
   Division and exponentiation now reject non-numeric concrete operands rather
   than inferring a numeric result for invalid expressions.
-  `await` now requires a `Future` operand, with unresolved `Any` values left
-  for later checking.
+  `await` now unwraps `Future[T]` to `T` and preserves non-future operands as
+  identity values, matching the runtime ABI.
   The `?` operator now rejects concrete non-recoverable values and unions
   that contain no error variant, while deferring unresolved values.
   Concrete class instances used as `with` contexts must declare `__cm__`,
