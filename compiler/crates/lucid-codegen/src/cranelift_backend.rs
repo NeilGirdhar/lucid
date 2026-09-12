@@ -2393,6 +2393,26 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_local_constant_stop_alias_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+limit = 1 + 4
+for i in range(limit):
+    total += i
+return total
+"#,
+        )
+        .expect("range constant stop alias accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &[])
+            .expect("range constant stop alias accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile range constant stop alias loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 10);
+    }
+
+    #[test]
     fn result_abi_executes_range_accumulation_with_local_seed_alias_cfg() {
         let module = lucid_syntax::parse(
             r#"seeded = seed

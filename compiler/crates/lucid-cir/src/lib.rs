@@ -10864,6 +10864,19 @@ return total
 
         let module = lucid_syntax::parse(
             r#"total = 0
+limit = 1 + 4
+for i in range(limit):
+    total += i
+return total
+"#,
+        )
+        .expect("range constant stop alias accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &[])
+            .expect("range constant stop alias accumulation should lower");
+        assert_eq!(function.execute(), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
 begin = seed
 for i in range(begin, n):
     total += i
