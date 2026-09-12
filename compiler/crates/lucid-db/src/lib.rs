@@ -1742,6 +1742,86 @@ pub fn lower_function_body(
                 .map_err(|_| Arc::from("unsupported optional guarded match chain"));
             }
         }
+        if let Some(wildcard_index) = arms.iter().position(|arm| {
+            matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_)) && arm.guard.is_none()
+        }) && wildcard_index > 0
+            && arms[..wildcard_index]
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+        {
+            let wildcard_arm = &arms[wildcard_index];
+            if let Some(wildcard_value) = match_arm_value(wildcard_arm) {
+                let explicit_values = arms[..wildcard_index]
+                    .iter()
+                    .map(match_arm_value)
+                    .collect::<Option<Vec<_>>>();
+                if let Some(explicit_values) = explicit_values {
+                    let conditions = arms[..wildcard_index]
+                        .iter()
+                        .map(arm_condition)
+                        .collect::<Option<Vec<_>>>();
+                    if let Some(conditions) = conditions
+                        && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                        && let Some((first_value, elif_values)) = explicit_values.split_first()
+                    {
+                        let elif_pairs = elif_conditions
+                            .iter()
+                            .zip(elif_values.iter())
+                            .map(|(condition, value)| (condition, *value))
+                            .collect::<Vec<_>>();
+                        if elif_pairs.is_empty() {
+                            return lucid_cir::Function::from_parameterized_if_direct(
+                                first_condition,
+                                first_value,
+                                wildcard_value,
+                                &function.parameter_names,
+                            )
+                            .map(Arc::new)
+                            .map_err(|_| {
+                                Arc::from("unsupported middle wildcard match expression")
+                            });
+                        }
+                        return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                            first_condition,
+                            first_value,
+                            &elif_pairs,
+                            wildcard_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported middle wildcard match chain"));
+                    }
+                }
+            } else if match_arm_is_void(wildcard_arm)
+                && arms[..wildcard_index].iter().all(match_arm_is_void)
+            {
+                let conditions = arms[..wildcard_index]
+                    .iter()
+                    .map(arm_condition)
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                {
+                    if elif_conditions.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_void(
+                            first_condition,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| {
+                            Arc::from("unsupported middle wildcard void match expression")
+                        });
+                    }
+                    return lucid_cir::Function::from_parameterized_if_elif_void_chain(
+                        first_condition,
+                        &elif_conditions.iter().collect::<Vec<_>>(),
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported middle wildcard void match chain"));
+                }
+            }
+        }
         if arms.len() >= 3
             && let Some(parameter_index) = parameter_index
             && arms[..arms.len() - 1]
@@ -5435,6 +5515,28 @@ mod tests {
             .expect("leading wildcard local match should preserve arm order");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "middle-wildcard-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return value + 100\n        case 2:\n            return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("middle wildcard match should make later arms unreachable");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(102)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "middle-wildcard-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            return\n        case _:\n            pass\n        case 2:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("middle wildcard void match should make later arms unreachable");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(
             "leading-wildcard-void-match.lucid",
