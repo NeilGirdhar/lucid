@@ -1002,6 +1002,47 @@ impl Default for Interpreter {
 }
 
 impl Interpreter {
+    fn object_declares_method(value: &Value, method: &str) -> bool {
+        matches!(value, Value::Object { fields, .. } if fields.borrow().contains_key(method))
+    }
+
+    fn value_has_capability_or_method(
+        &self,
+        value: &Value,
+        capability: &str,
+        methods: &[&str],
+    ) -> bool {
+        match value {
+            Value::Object { class_name, .. } => {
+                self.class_has_capability(class_name, capability)
+                    || methods
+                        .iter()
+                        .any(|method| Self::object_declares_method(value, method))
+            }
+            _ => true,
+        }
+    }
+
+    fn require_comparison_capability(
+        &self,
+        left: &Value,
+        right: &Value,
+        capability: &str,
+        methods: &[&str],
+        message: &str,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        if !self.value_has_capability_or_method(left, capability, methods)
+            || !self.value_has_capability_or_method(right, capability, methods)
+        {
+            return Err(RuntimeError {
+                message: message.into(),
+                span,
+            });
+        }
+        Ok(())
+    }
+
     fn removed_member_message(name: &str) -> Option<&'static str> {
         match name {
             "__delitem__" => {
@@ -1525,6 +1566,19 @@ impl Interpreter {
         rval: Value,
         span: &Span,
     ) -> Result<Value, RuntimeError> {
+        if matches!(
+            op,
+            BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq
+        ) {
+            self.require_comparison_capability(
+                &lval,
+                &rval,
+                "Ord",
+                &["__lt__"],
+                "ordering requires Ord on both operands",
+                *span,
+            )?;
+        }
         match op {
             BinaryOp::Add => match (&lval, &rval) {
                 (Value::Complex(ar, ai), Value::Complex(br, bi)) => {
@@ -2243,58 +2297,86 @@ impl Interpreter {
                     span: *span,
                 }),
             },
-            BinaryOp::Eq => match (&lval, &rval) {
-                (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::Bool(a == b)),
-                (Value::BigInt(a), Value::Int(b)) | (Value::Int(b), Value::BigInt(a)) => {
-                    Ok(Value::Bool(*a == BigInt::from(*b)))
+            BinaryOp::Eq => {
+                self.require_comparison_capability(
+                    &lval,
+                    &rval,
+                    "Eq",
+                    &["__eq__"],
+                    "comparison requires Eq on both operands",
+                    *span,
+                )?;
+                match (&lval, &rval) {
+                    (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::Bool(a == b)),
+                    (Value::BigInt(a), Value::Int(b)) | (Value::Int(b), Value::BigInt(a)) => {
+                        Ok(Value::Bool(*a == BigInt::from(*b)))
+                    }
+                    (Value::Complex(ar, ai), Value::Complex(br, bi)) => {
+                        Ok(Value::Bool(ar == br && ai == bi))
+                    }
+                    (Value::Complex(ar, ai), Value::Int(b)) => {
+                        Ok(Value::Bool(*ar == *b as f64 && *ai == 0.0))
+                    }
+                    (Value::Complex(ar, ai), Value::Float(b)) => {
+                        Ok(Value::Bool(*ar == *b && *ai == 0.0))
+                    }
+                    (Value::Int(a), Value::Complex(br, bi)) => {
+                        Ok(Value::Bool(*a as f64 == *br && *bi == 0.0))
+                    }
+                    (Value::Float(a), Value::Complex(br, bi)) => {
+                        Ok(Value::Bool(*a == *br && *bi == 0.0))
+                    }
+                    (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) == *b)),
+                    (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a == (*b as f64))),
+                    (Value::BigInt(a), Value::Float(b)) => {
+                        Ok(Value::Bool(bigint_to_float(a) == *b))
+                    }
+                    (Value::Float(a), Value::BigInt(b)) => {
+                        Ok(Value::Bool(*a == bigint_to_float(b)))
+                    }
+                    _ => Ok(Value::Bool(lval == rval)),
                 }
-                (Value::Complex(ar, ai), Value::Complex(br, bi)) => {
-                    Ok(Value::Bool(ar == br && ai == bi))
+            }
+            BinaryOp::NotEq => {
+                self.require_comparison_capability(
+                    &lval,
+                    &rval,
+                    "Eq",
+                    &["__eq__"],
+                    "comparison requires Eq on both operands",
+                    *span,
+                )?;
+                match (&lval, &rval) {
+                    (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::Bool(a != b)),
+                    (Value::BigInt(a), Value::Int(b)) | (Value::Int(b), Value::BigInt(a)) => {
+                        Ok(Value::Bool(*a != BigInt::from(*b)))
+                    }
+                    (Value::Complex(ar, ai), Value::Complex(br, bi)) => {
+                        Ok(Value::Bool(ar != br || ai != bi))
+                    }
+                    (Value::Complex(ar, ai), Value::Int(b)) => {
+                        Ok(Value::Bool(*ar != *b as f64 || *ai != 0.0))
+                    }
+                    (Value::Complex(ar, ai), Value::Float(b)) => {
+                        Ok(Value::Bool(*ar != *b || *ai != 0.0))
+                    }
+                    (Value::Int(a), Value::Complex(br, bi)) => {
+                        Ok(Value::Bool(*a as f64 != *br || *bi != 0.0))
+                    }
+                    (Value::Float(a), Value::Complex(br, bi)) => {
+                        Ok(Value::Bool(*a != *br || *bi != 0.0))
+                    }
+                    (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) != *b)),
+                    (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a != (*b as f64))),
+                    (Value::BigInt(a), Value::Float(b)) => {
+                        Ok(Value::Bool(bigint_to_float(a) != *b))
+                    }
+                    (Value::Float(a), Value::BigInt(b)) => {
+                        Ok(Value::Bool(*a != bigint_to_float(b)))
+                    }
+                    _ => Ok(Value::Bool(lval != rval)),
                 }
-                (Value::Complex(ar, ai), Value::Int(b)) => {
-                    Ok(Value::Bool(*ar == *b as f64 && *ai == 0.0))
-                }
-                (Value::Complex(ar, ai), Value::Float(b)) => {
-                    Ok(Value::Bool(*ar == *b && *ai == 0.0))
-                }
-                (Value::Int(a), Value::Complex(br, bi)) => {
-                    Ok(Value::Bool(*a as f64 == *br && *bi == 0.0))
-                }
-                (Value::Float(a), Value::Complex(br, bi)) => {
-                    Ok(Value::Bool(*a == *br && *bi == 0.0))
-                }
-                (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) == *b)),
-                (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a == (*b as f64))),
-                (Value::BigInt(a), Value::Float(b)) => Ok(Value::Bool(bigint_to_float(a) == *b)),
-                (Value::Float(a), Value::BigInt(b)) => Ok(Value::Bool(*a == bigint_to_float(b))),
-                _ => Ok(Value::Bool(lval == rval)),
-            },
-            BinaryOp::NotEq => match (&lval, &rval) {
-                (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::Bool(a != b)),
-                (Value::BigInt(a), Value::Int(b)) | (Value::Int(b), Value::BigInt(a)) => {
-                    Ok(Value::Bool(*a != BigInt::from(*b)))
-                }
-                (Value::Complex(ar, ai), Value::Complex(br, bi)) => {
-                    Ok(Value::Bool(ar != br || ai != bi))
-                }
-                (Value::Complex(ar, ai), Value::Int(b)) => {
-                    Ok(Value::Bool(*ar != *b as f64 || *ai != 0.0))
-                }
-                (Value::Complex(ar, ai), Value::Float(b)) => {
-                    Ok(Value::Bool(*ar != *b || *ai != 0.0))
-                }
-                (Value::Int(a), Value::Complex(br, bi)) => {
-                    Ok(Value::Bool(*a as f64 != *br || *bi != 0.0))
-                }
-                (Value::Float(a), Value::Complex(br, bi)) => {
-                    Ok(Value::Bool(*a != *br || *bi != 0.0))
-                }
-                (Value::Int(a), Value::Float(b)) => Ok(Value::Bool((*a as f64) != *b)),
-                (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(*a != (*b as f64))),
-                (Value::BigInt(a), Value::Float(b)) => Ok(Value::Bool(bigint_to_float(a) != *b)),
-                (Value::Float(a), Value::BigInt(b)) => Ok(Value::Bool(*a != bigint_to_float(b))),
-                _ => Ok(Value::Bool(lval != rval)),
-            },
+            }
             BinaryOp::And => {
                 if !self.to_bool(&lval, *span)? {
                     Ok(lval)
@@ -3391,6 +3473,16 @@ impl Interpreter {
                                 vec![(None, args[0].clone())],
                                 Span::default(),
                             );
+                        }
+                        if !interp.value_has_capability_or_method(
+                            &args[0],
+                            "Hashable",
+                            &["__hash__"],
+                        ) {
+                            return Err(RuntimeError {
+                                message: "hash() requires Hashable".into(),
+                                span: Span::default(),
+                            });
                         }
                     }
                     let hash = hash_runtime_value(&args[0]).ok_or_else(|| RuntimeError {
@@ -13974,6 +14066,35 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
         assert_eq!(interp.env.borrow().get("nominal"), Some(Value::Bool(false)));
         assert_eq!(interp.env.borrow().get("declared"), Some(Value::Bool(true)));
         assert_eq!(interp.env.borrow().get("retro"), Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn runtime_rejects_operations_without_value_capabilities() {
+        for (source, expected) in [
+            (
+                "class Token without Eq:\n    value: int\na = Token(1)\nb = Token(1)\nresult = a == b\n",
+                "comparison requires Eq",
+            ),
+            (
+                "class Point(order=false):\n    x: int\np = Point(1)\nq = Point(2)\nless = p < q\n",
+                "ordering requires Ord",
+            ),
+            (
+                "class Token without Hashable:\n    value: int\nt = Token(1)\nresult = hash(t)\n",
+                "hash() requires Hashable",
+            ),
+        ] {
+            let module = parse(source).expect("value capability source should parse");
+            let mut interp = Interpreter::default();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("missing value capability must fail at runtime");
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

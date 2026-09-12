@@ -1013,6 +1013,23 @@ impl CCodeGenerator {
         generated
     }
 
+    fn class_has_capability_or_method(
+        &self,
+        class: &str,
+        capability: &str,
+        methods: &[&str],
+    ) -> bool {
+        self.class_has_capability(class, capability)
+            || methods
+                .iter()
+                .any(|method| self.method_owner(class, method).is_some())
+    }
+
+    fn known_class_from_native_type<'a>(&self, ty: &'a str) -> Option<&'a str> {
+        let class = ty.trim_end_matches('*');
+        self.known_classes.contains_key(class).then_some(class)
+    }
+
     fn class_has_trait(&self, class: &str, trait_name: &str) -> bool {
         let mut current = Some(class.to_string());
         let mut seen = HashSet::new();
@@ -10669,6 +10686,40 @@ static inline void lucid_print_val(LucidVal v) {
                 let l_ty = self.infer_expr_type(left, &HashMap::new());
                 let r_ty = self.infer_expr_type(right, &HashMap::new());
 
+                if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                    for class in [
+                        self.known_class_from_native_type(&l_ty),
+                        self.known_class_from_native_type(&r_ty),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        if !self.class_has_capability_or_method(class, "Eq", &["__eq__"]) {
+                            return Err(CodegenError {
+                                message: "comparison requires Eq on both operands".into(),
+                            });
+                        }
+                    }
+                }
+                if matches!(
+                    op,
+                    BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq
+                ) {
+                    for class in [
+                        self.known_class_from_native_type(&l_ty),
+                        self.known_class_from_native_type(&r_ty),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        if !self.class_has_capability_or_method(class, "Ord", &["__lt__"]) {
+                            return Err(CodegenError {
+                                message: "ordering requires Ord on both operands".into(),
+                            });
+                        }
+                    }
+                }
+
                 if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
                     && l_ty == "bool"
                     && r_ty == "bool"
@@ -12585,6 +12636,17 @@ static inline void lucid_print_val(LucidVal v) {
                             let class_name = value_type.trim_end_matches('*');
                             if let Some(owner) = self.method_owner(class_name, "__hash__") {
                                 return Ok(format!("{owner}___hash__(({owner}*)({value}))"));
+                            }
+                            if self.known_classes.contains_key(class_name)
+                                && !self.class_has_capability_or_method(
+                                    class_name,
+                                    "Hashable",
+                                    &["__hash__"],
+                                )
+                            {
+                                return Err(CodegenError {
+                                    message: "hash() requires Hashable".into(),
+                                });
                             }
                             return Ok(format!("lucid_hash(lucid_wrap({value}))"));
                         }
@@ -18345,6 +18407,39 @@ print(b.value)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "false\ntrue\n");
+    }
+
+    #[test]
+    fn native_rejects_operations_without_value_capabilities() {
+        for (source, expected) in [
+            (
+                "class Token without Eq:\n    value: int\na = Token(1)\nb = Token(1)\nresult = a == b\n",
+                "comparison requires Eq",
+            ),
+            (
+                "class Point(order=false):\n    x: int\np = Point(1)\nq = Point(2)\nless = p < q\n",
+                "ordering requires Ord",
+            ),
+            (
+                "class Token without Hashable:\n    value: int\nt = Token(1)\nresult = hash(t)\n",
+                "hash() requires Hashable",
+            ),
+        ] {
+            let module = parse(source).expect("value capability source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_codegen_value_capability_reject_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("missing value capability should fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]
