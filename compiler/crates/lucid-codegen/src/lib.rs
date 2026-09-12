@@ -3190,6 +3190,29 @@ static inline void lucid_list_remove(LucidList* l, LucidVal value) {
 }
 
 static inline LucidList* lucid_bytearray(LucidVal value) {
+    if (value.type == LUCID_TYPE_PTR && value.ptr) {
+        LucidObjectBuffer buffer = lucid_object_buffer(value.ptr);
+        if (buffer) return lucid_bytearray(buffer(value.ptr));
+    }
+    if (value.type == LUCID_TYPE_MEMORYVIEW && value.view) {
+        LucidList* out = lucid_list_new(value.view->len);
+        for (int64_t i = 0; i < value.view->len; ++i) {
+            LucidVal item = lucid_memoryview_get(value.view, i);
+            if (item.type != LUCID_TYPE_INT && item.type != LUCID_TYPE_BIGINT) {
+                fprintf(stderr, "bytearray() items must be integers in 0..255\n"); exit(1);
+            }
+            int64_t n = lucid_as_int(item);
+            if (item.type == LUCID_TYPE_BIGINT && item.bigint &&
+                (item.bigint[0] == '-' || lucid_bigint_cmp_mag(item.bigint, "255") > 0)) {
+                fprintf(stderr, "bytearray() items must be integers in 0..255\n"); exit(1);
+            }
+            if (n < 0 || n > 255) {
+                fprintf(stderr, "bytearray() items must be integers in 0..255\n"); exit(1);
+            }
+            lucid_list_append(out, lucid_wrap(lucid_int_val(n)));
+        }
+        return out;
+    }
     if (value.type != LUCID_TYPE_BYTES && value.type != LUCID_TYPE_STR && value.type != LUCID_TYPE_LIST) {
         fprintf(stderr, "bytearray() cannot convert value\n"); exit(1);
     }
@@ -3224,6 +3247,28 @@ static inline LucidList* lucid_bytearray(LucidVal value) {
 static inline LucidVal lucid_bytes(LucidVal value) {
     if (value.type == LUCID_TYPE_BYTES) return value;
     if (value.type == LUCID_TYPE_STR) return lucid_bytes_val(value.s ? value.s : "");
+    if (value.type == LUCID_TYPE_PTR && value.ptr) {
+        LucidObjectBuffer buffer = lucid_object_buffer(value.ptr);
+        if (buffer) return lucid_bytes(buffer(value.ptr));
+    }
+    if (value.type == LUCID_TYPE_MEMORYVIEW && value.view) {
+        LucidMemoryView* view = value.view;
+        unsigned char* out = (unsigned char*)malloc((size_t)view->len + 1);
+        for (int64_t i = 0; i < view->len; ++i) {
+            LucidVal item = lucid_memoryview_get(view, i);
+            if (item.type != LUCID_TYPE_INT && item.type != LUCID_TYPE_BIGINT) {
+                free(out); fprintf(stderr, "bytes() memoryview items must be integers in 0..255\n"); exit(1);
+            }
+            int64_t n = lucid_as_int(item);
+            if ((item.type == LUCID_TYPE_BIGINT && item.bigint &&
+                 (item.bigint[0] == '-' || lucid_bigint_cmp_mag(item.bigint, "255") > 0)) ||
+                n < 0 || n > 255) {
+                free(out); fprintf(stderr, "bytes() memoryview items must be integers in 0..255\n"); exit(1);
+            }
+            out[i] = (unsigned char)n;
+        }
+        out[view->len] = '\0'; return lucid_bytes_from_data(out, view->len);
+    }
     if (value.type != LUCID_TYPE_LIST || !value.list) {
         fprintf(stderr, "bytes() cannot convert value\n"); exit(1);
     }
@@ -15904,6 +15949,12 @@ print(view[1])
 print(packet is Buffer)
 print(identity(packet) is Buffer)
 print("hi" is Buffer)
+copied = bytes(identity(packet))
+mutable = bytearray(identity(packet))
+mutable[1] = 73
+print(copied[0])
+print(mutable[1])
+print(packet.storage[1])
 "#;
         let module = parse(source).expect("buffer protocol source should parse");
         let output = std::env::temp_dir().join(format!(
@@ -15917,7 +15968,7 @@ print("hi" is Buffer)
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "72\n105\ntrue\ntrue\nfalse\n"
+            "72\n105\ntrue\ntrue\nfalse\n72\n73\n105\n"
         );
     }
 

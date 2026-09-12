@@ -837,6 +837,34 @@ fn compare_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, RuntimeErr
     }
 }
 
+fn byte_from_value(item: &Value, context: &str) -> Result<u8, RuntimeError> {
+    match item {
+        Value::Int(n) if (0..=255).contains(n) => Ok(*n as u8),
+        Value::BigInt(n) if n >= &BigInt::from(0) && n <= &BigInt::from(255) => {
+            n.to_u8().ok_or_else(|| RuntimeError {
+                message: format!("{context} items must be integers in 0..255"),
+                span: Span::default(),
+            })
+        }
+        _ => Err(RuntimeError {
+            message: format!("{context} items must be integers in 0..255"),
+            span: Span::default(),
+        }),
+    }
+}
+
+fn memoryview_items(
+    data: &Rc<RefCell<Vec<Value>>>,
+    start: i64,
+    len: i64,
+    stride: i64,
+) -> Vec<Value> {
+    let values = data.borrow();
+    (0..len)
+        .filter_map(|index| values.get((start + index * stride) as usize).cloned())
+        .collect()
+}
+
 pub struct Interpreter {
     pub env: Rc<RefCell<Environment>>,
     pub classes: HashMap<String, ClassDef>,
@@ -3467,7 +3495,7 @@ impl Interpreter {
 
         // Immutable byte conversion. Mutable bytearray/memoryview values
         // still use integer-list storage, but Bytes has its own runtime tag.
-        let bytes_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+        let bytes_fn = Rc::new(|args: &[Value], interp: &mut Interpreter| {
             if args.len() != 1 {
                 return Err(RuntimeError {
                     message: "bytes() takes exactly one argument".into(),
@@ -3480,30 +3508,59 @@ impl Interpreter {
                 Value::List(items) => {
                     let mut out = Vec::with_capacity(items.borrow().len());
                     for item in items.borrow().iter() {
-                        let n = match item {
-                            Value::Int(n) if (0..=255).contains(n) => *n as u8,
-                            Value::BigInt(n)
-                                if n >= &BigInt::from(0) && n <= &BigInt::from(255) =>
-                            {
-                                let Some(byte) = n.to_u8() else {
-                                    return Err(RuntimeError {
-                                        message: "bytes() list items must be integers in 0..255"
-                                            .into(),
-                                        span: Span::default(),
-                                    });
-                                };
-                                byte
-                            }
-                            _ => {
-                                return Err(RuntimeError {
-                                    message: "bytes() list items must be integers in 0..255".into(),
-                                    span: Span::default(),
-                                })
-                            }
-                        };
-                        out.push(n);
+                        out.push(byte_from_value(item, "bytes() list")?);
                     }
                     Ok(Value::Bytes(out))
+                }
+                Value::MemoryView {
+                    data,
+                    start,
+                    len,
+                    stride,
+                    ..
+                } => {
+                    let items = memoryview_items(data, *start, *len, *stride);
+                    let mut out = Vec::with_capacity(items.len());
+                    for item in &items {
+                        out.push(byte_from_value(item, "bytes() memoryview")?);
+                    }
+                    Ok(Value::Bytes(out))
+                }
+                Value::Object { fields, .. } => {
+                    let method = fields.borrow().get("__buffer__").cloned().ok_or_else(|| {
+                        RuntimeError {
+                            message: "bytes() cannot convert object".into(),
+                            span: Span::default(),
+                        }
+                    })?;
+                    match interp.invoke_value(method, vec![(None, args[0].clone())], Span::default())? {
+                        Value::Bytes(bytes) => Ok(Value::Bytes(bytes)),
+                        Value::List(items) => {
+                            let mut out = Vec::with_capacity(items.borrow().len());
+                            for item in items.borrow().iter() {
+                                out.push(byte_from_value(item, "bytes() buffer")?);
+                            }
+                            Ok(Value::Bytes(out))
+                        }
+                        Value::MemoryView {
+                            data,
+                            start,
+                            len,
+                            stride,
+                            ..
+                        } => {
+                            let items = memoryview_items(&data, start, len, stride);
+                            let mut out = Vec::with_capacity(items.len());
+                            for item in &items {
+                                out.push(byte_from_value(item, "bytes() buffer")?);
+                            }
+                            Ok(Value::Bytes(out))
+                        }
+                        other => Err(RuntimeError {
+                            message: format!("__buffer__ returned {}", other.type_name()),
+                            span: Span::default(),
+                        }),
+                    }
                 }
                 other => Err(RuntimeError {
                     message: format!("bytes() cannot convert {}", other.type_name()),
@@ -3521,7 +3578,7 @@ impl Interpreter {
 
         // Binary conversion builtins. The prototype stores mutable buffers
         // as integer lists and memory views as aliases to that list.
-        let bytearray_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+        let bytearray_fn = Rc::new(|args: &[Value], interp: &mut Interpreter| {
             if args.len() != 1 {
                 return Err(RuntimeError {
                     message: "bytearray() takes exactly 1 argument".into(),
@@ -3534,29 +3591,56 @@ impl Interpreter {
                 Value::List(items) => {
                     let mut bytes = Vec::with_capacity(items.borrow().len());
                     for item in items.borrow().iter() {
-                        match item {
-                            Value::Int(n) if (0..=255).contains(n) => bytes.push(item.clone()),
-                            Value::BigInt(n)
-                                if n >= &BigInt::from(0) && n <= &BigInt::from(255) =>
-                            {
-                                let Some(byte) = n.to_i64() else {
-                                    return Err(RuntimeError {
-                                        message: "bytearray() items must be integers in 0..255"
-                                            .into(),
-                                        span: Span::default(),
-                                    });
-                                };
-                                bytes.push(Value::Int(byte));
-                            }
-                            _ => {
-                                return Err(RuntimeError {
-                                    message: "bytearray() items must be integers in 0..255".into(),
-                                    span: Span::default(),
-                                })
-                            }
-                        }
+                        bytes.push(Value::Int(byte_from_value(item, "bytearray()")? as i64));
                     }
                     bytes
+                }
+                Value::MemoryView {
+                    data,
+                    start,
+                    len,
+                    stride,
+                    ..
+                } => memoryview_items(data, *start, *len, *stride)
+                    .iter()
+                    .map(|item| byte_from_value(item, "bytearray()").map(|byte| Value::Int(byte as i64)))
+                    .collect::<Result<Vec<_>, _>>()?,
+                Value::Object { fields, .. } => {
+                    let method = fields.borrow().get("__buffer__").cloned().ok_or_else(|| {
+                        RuntimeError {
+                            message: "bytearray() cannot convert object".into(),
+                            span: Span::default(),
+                        }
+                    })?;
+                    match interp.invoke_value(method, vec![(None, args[0].clone())], Span::default())? {
+                        Value::Bytes(bytes) => bytes.iter().map(|b| Value::Int(*b as i64)).collect(),
+                        Value::List(items) => {
+                            let mut bytes = Vec::with_capacity(items.borrow().len());
+                            for item in items.borrow().iter() {
+                                bytes.push(Value::Int(byte_from_value(item, "bytearray() buffer")? as i64));
+                            }
+                            bytes
+                        }
+                        Value::MemoryView {
+                            data,
+                            start,
+                            len,
+                            stride,
+                            ..
+                        } => memoryview_items(&data, start, len, stride)
+                            .iter()
+                            .map(|item| {
+                                byte_from_value(item, "bytearray() buffer")
+                                    .map(|byte| Value::Int(byte as i64))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                        other => {
+                            return Err(RuntimeError {
+                                message: format!("__buffer__ returned {}", other.type_name()),
+                                span: Span::default(),
+                            })
+                        }
+                    }
                 }
                 other => {
                     return Err(RuntimeError {
@@ -11882,6 +11966,12 @@ first = packet.storage[0]
 second = view[1]
 packet_is_buffer = packet is Buffer
 str_is_buffer = "hi" is Buffer
+copied = bytes(packet)
+mutable = bytearray(packet)
+mutable[1] = 73
+copied_first = copied[0]
+mutable_second = mutable[1]
+storage_second = packet.storage[1]
 "#,
         )
         .unwrap();
@@ -11896,6 +11986,15 @@ str_is_buffer = "hi" is Buffer
         assert_eq!(
             interp.env.borrow().get("str_is_buffer"),
             Some(Value::Bool(false))
+        );
+        assert_eq!(interp.env.borrow().get("copied_first"), Some(Value::Int(72)));
+        assert_eq!(
+            interp.env.borrow().get("mutable_second"),
+            Some(Value::Int(73))
+        );
+        assert_eq!(
+            interp.env.borrow().get("storage_second"),
+            Some(Value::Int(105))
         );
     }
 
