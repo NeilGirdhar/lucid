@@ -4392,6 +4392,13 @@ impl Interpreter {
             "time".to_string(),
             Value::BuiltinFunction {
                 name: "time".to_string(),
+                func: time_now_fn.clone(),
+            },
+        );
+        self.env.borrow_mut().set(
+            "now".to_string(),
+            Value::BuiltinFunction {
+                name: "now".to_string(),
                 func: time_now_fn,
             },
         );
@@ -11794,6 +11801,7 @@ from math import sqrt, pi
 
 sq = sqrt(16)
 p = pi > 3.0
+timestamp = now() > 0.0
 abs_val = math.abs(-42)
 "#;
         let module = parse(src).unwrap();
@@ -11804,6 +11812,10 @@ abs_val = math.abs(-42)
         assert_eq!(interp.env.borrow().get("p").unwrap(), Value::Bool(true));
         assert_eq!(
             interp.env.borrow().get("global_p").unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            interp.env.borrow().get("timestamp").unwrap(),
             Value::Bool(true)
         );
         assert_eq!(interp.env.borrow().get("abs_val").unwrap(), Value::Int(42));

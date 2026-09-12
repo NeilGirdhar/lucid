@@ -2091,6 +2091,16 @@ impl TypeChecker {
                 MutabilityView::ReadOnly,
             ),
         );
+        env.variables.insert(
+            "now".to_string(),
+            (
+                Type::Function {
+                    params: vec![],
+                    return_type: Box::new(Type::Float),
+                },
+                MutabilityView::ReadOnly,
+            ),
+        );
         // The remaining standard-library surface is intentionally typed
         // through Any at this boundary.  Individual operations still perform
         // their runtime checks, while names remain visible to the checker as
@@ -2307,6 +2317,7 @@ impl TypeChecker {
             ("list", 0, Some(1)),
             ("set", 0, Some(1)),
             ("time", 0, Some(0)),
+            ("now", 0, Some(0)),
         ] {
             env.function_arity.insert(name.into(), (required, maximum));
         }
@@ -11608,6 +11619,14 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("Decimal should be available as a SupportsFloat numeric class");
+    }
+
+    #[test]
+    fn now_builtin_returns_float() {
+        let module = parse("updated_at: float = now()\n").unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("now() should be available as a timestamp builtin");
     }
 
     #[test]
