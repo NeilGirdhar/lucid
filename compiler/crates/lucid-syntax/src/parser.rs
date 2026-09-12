@@ -305,12 +305,28 @@ impl Parser {
                         span: self.peek().span,
                     });
                 }
+                if self.check(&TokenKind::LBracket) {
+                    return Err(ParseError {
+                        message:
+                            "indexed deletion is not supported; use an explicit removal method instead"
+                                .into(),
+                        span: self.peek().span,
+                    });
+                }
                 while self.match_tok(&TokenKind::Comma) {
                     names.push(self.expect_ident()?);
                     if self.check(&TokenKind::Dot) {
                         return Err(ParseError {
                             message: "fields are fixed, not deletable; use an explicit removal method instead"
                                 .into(),
+                            span: self.peek().span,
+                        });
+                    }
+                    if self.check(&TokenKind::LBracket) {
+                        return Err(ParseError {
+                            message:
+                                "indexed deletion is not supported; use an explicit removal method instead"
+                                    .into(),
                             span: self.peek().span,
                         });
                     }

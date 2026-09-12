@@ -336,6 +336,14 @@ contextmanager def locked(lock: Lock):
     }
 
     #[test]
+    fn test_parse_rejects_index_delete_with_removal_message() {
+        for source in ["del items[0]\n", "del first, items[0]\n"] {
+            let error = parse(source).expect_err("index delete must fail in parsing");
+            assert!(error.contains("indexed deletion is not supported"));
+        }
+    }
+
+    #[test]
     fn test_parse_rejects_keyword_class_bases() {
         let src = "class Meta:\n    pass\nclass Model(metaclass=Meta):\n    pass\n";
         let error = parse(src).expect_err("keyword class bases must fail in parsing");
