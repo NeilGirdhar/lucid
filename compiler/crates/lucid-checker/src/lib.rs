@@ -4818,54 +4818,21 @@ impl TypeChecker {
 
     pub fn check_statement(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         if let Stmt::Export(inner) = stmt {
-            let private_name = match inner.as_ref() {
-                Stmt::ClassDef { name, .. }
-                | Stmt::InterfaceDef { name, .. }
-                | Stmt::TraitDef { name, .. }
-                | Stmt::TypeAlias { name, .. }
-                | Stmt::Function(FunctionDef { name, .. }) => Some(name),
-                Stmt::VarDef {
-                    pattern: Pattern::Ident(name, _),
-                    ..
+            if let Some((name, span)) = Self::reserved_module_binding(inner) {
+                if name == "__all__" {
+                    return Err(TypeError {
+                        message:
+                            "__all__ is not supported; Lucid uses leading '_' for module privacy"
+                                .into(),
+                        span,
+                    });
                 }
-                | Stmt::Assignment {
-                    target: Expr::Ident { name, .. },
-                    ..
-                } => Some(name),
-                _ => None,
-            };
-            if private_name.is_some_and(|name| name == "__all__") {
-                let span = match inner.as_ref() {
-                    Stmt::ClassDef { span, .. }
-                    | Stmt::InterfaceDef { span, .. }
-                    | Stmt::TraitDef { span, .. }
-                    | Stmt::TypeAlias { span, .. }
-                    | Stmt::VarDef { span, .. }
-                    | Stmt::Assignment { span, .. } => *span,
-                    Stmt::Function(FunctionDef { span, .. }) => *span,
-                    _ => Span::default(),
-                };
-                return Err(TypeError {
-                    message: "__all__ is not supported; Lucid uses leading '_' for module privacy"
-                        .into(),
-                    span,
-                });
-            }
-            if let Some(name) = private_name.filter(|name| name.starts_with('_')) {
-                let span = match inner.as_ref() {
-                    Stmt::ClassDef { span, .. }
-                    | Stmt::InterfaceDef { span, .. }
-                    | Stmt::TraitDef { span, .. }
-                    | Stmt::TypeAlias { span, .. }
-                    | Stmt::VarDef { span, .. }
-                    | Stmt::Assignment { span, .. } => *span,
-                    Stmt::Function(FunctionDef { span, .. }) => *span,
-                    _ => Span::default(),
-                };
-                return Err(TypeError {
-                    message: format!("cannot export private name '{name}'"),
-                    span,
-                });
+                if name.starts_with('_') {
+                    return Err(TypeError {
+                        message: format!("cannot export private name '{name}'"),
+                        span,
+                    });
+                }
             }
             return self.check_statement(inner);
         }
@@ -16086,6 +16053,14 @@ def reject(value: not int) -> none:
             .check_module(&parse("export _private = 1\n").unwrap())
             .expect_err("private exports must fail static checking");
         assert!(error.message.contains("cannot export private name"));
+        assert!(error.span.end > error.span.start);
+
+        let mut checker = TypeChecker::new();
+        let error = checker
+            .check_module(&parse("export def _hidden() -> int:\n    return 1\n").unwrap())
+            .expect_err("private function exports must fail static checking");
+        assert!(error.message.contains("_hidden"));
+        assert_eq!(error.span.line, 1);
         assert!(error.span.end > error.span.start);
     }
 

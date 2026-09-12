@@ -1025,6 +1025,9 @@ diverged:
   promotion is diagnosed as `E0304` with the export statement span.
 * The checker enforces the same private-export rule for single-file static
   checking, not only project diagnostics.
+  Static private-export diagnostics now reuse the shared module-binding span
+  helper, so exported private functions and other declaration forms point at
+  the inner declaration span instead of carrying an ad-hoc fallback.
 * Static attribute typing now rejects private attributes on module bindings,
   matching interpreter and native module-access checks.
 * `set.remove` now reports a missing value instead of silently succeeding,
