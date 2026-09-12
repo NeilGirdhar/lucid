@@ -566,7 +566,7 @@ class Bag:
 #[test]
 fn test_calls_anonymous_closures() {
     let src = r#"
-f = def(x): x * 3
+f: (int) -> int = def(x): x * 3
 res = f(4)
 "#;
     let val = eval_ok(src);

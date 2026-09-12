@@ -4173,7 +4173,11 @@ impl TypeChecker {
                         }),
                     ) => Some((
                         name.clone(),
-                        self.anonymous_function_type(params, return_type.as_ref())?,
+                        if let Some(annotation) = type_annotation {
+                            self.resolve_type_expr(annotation)?
+                        } else {
+                            self.anonymous_function_type(params, return_type.as_ref())?
+                        },
                     )),
                     _ => None,
                 };
@@ -4185,7 +4189,28 @@ impl TypeChecker {
                 let inferred_val = match value {
                     Some(e) => {
                         Self::reject_bare_skip_value(e, "variable initializer")?;
-                        match self.type_of_expr(e) {
+                        let typed = if let (
+                            Some(annotation),
+                            Expr::AnonymousDef {
+                                params,
+                                return_type,
+                                body,
+                                span,
+                            },
+                        ) = (type_annotation.as_ref(), e)
+                        {
+                            let expected = self.resolve_type_expr(annotation)?;
+                            self.anonymous_function_type_against_expected(
+                                params,
+                                return_type.as_ref(),
+                                body,
+                                &expected,
+                                *span,
+                            )
+                        } else {
+                            self.type_of_expr(e)
+                        };
+                        match typed {
                             Ok(ty) => Some(ty),
                         Err(error) => {
                             if let Some((name, _)) = &provisional {
@@ -5490,7 +5515,15 @@ impl TypeChecker {
                     .as_ref()
                     .map(|te| self.resolve_type_expr(te))
                     .transpose()
-                    .map(|ty| ty.unwrap_or(Type::TypeVar("Any".into())))
+                    .and_then(|ty| {
+                        ty.ok_or_else(|| TypeError {
+                            message: format!(
+                                "anonymous function parameter '{}' needs an annotation or an expected function type",
+                                p.name
+                            ),
+                            span: p.span,
+                        })
+                    })
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
         let declared_return = return_type
@@ -5511,6 +5544,121 @@ impl TypeChecker {
             params,
             return_type: Box::new(return_type),
         })
+    }
+
+    fn anonymous_params_need_expected(params: &[Param]) -> bool {
+        params
+            .iter()
+            .any(|param| param.type_annotation.is_none() && !param.is_gather)
+    }
+
+    fn anonymous_function_type_against_expected(
+        &self,
+        params: &[Param],
+        return_type: Option<&TypeExpr>,
+        body: &[Stmt],
+        expected: &Type,
+        span: Span,
+    ) -> Result<Type, TypeError> {
+        let Type::Function {
+            params: expected_params,
+            return_type: expected_return,
+        } = expected
+        else {
+            return Err(TypeError {
+                message: "anonymous function needs an expected function type".into(),
+                span,
+            });
+        };
+        if params.len() != expected_params.len() {
+            return Err(TypeError {
+                message: format!(
+                    "anonymous function expected {} parameter(s), got {}",
+                    expected_params.len(),
+                    params.len()
+                ),
+                span,
+            });
+        }
+
+        let mut parameter_types = Vec::with_capacity(params.len());
+        for (param, expected_type) in params.iter().zip(expected_params.iter()) {
+            let parameter_type = param
+                .type_annotation
+                .as_ref()
+                .map(|annotation| self.resolve_type_expr(annotation))
+                .transpose()?
+                .unwrap_or_else(|| expected_type.clone());
+            if !parameter_type.is_subtype_of(expected_type, &self.env)
+                && !expected_type.is_subtype_of(&parameter_type, &self.env)
+            {
+                return Err(TypeError {
+                    message: format!(
+                        "anonymous function parameter '{}' has incompatible type",
+                        param.name
+                    ),
+                    span: param.span,
+                });
+            }
+            parameter_types.push(parameter_type);
+        }
+
+        let declared_return = return_type
+            .map(|annotation| self.resolve_type_expr(annotation))
+            .transpose()?;
+        let function_return = declared_return
+            .clone()
+            .unwrap_or_else(|| expected_return.as_ref().clone());
+        if !function_return.is_subtype_of(expected_return, &self.env)
+            && !expected_return.is_subtype_of(&function_return, &self.env)
+        {
+            return Err(TypeError {
+                message: "anonymous function return type is incompatible with expected function type"
+                    .into(),
+                span,
+            });
+        }
+
+        let mut closure_checker = self.clone();
+        closure_checker.env.current_return_type = Some(function_return.clone());
+        for (param, parameter_type) in params.iter().zip(parameter_types.iter()) {
+            closure_checker.env.variables.insert(
+                param.name.clone(),
+                (parameter_type.clone(), MutabilityView::Mutable),
+            );
+        }
+        for statement in body {
+            closure_checker.check_statement(statement)?;
+        }
+
+        Ok(Type::Function {
+            params: parameter_types,
+            return_type: Box::new(function_return),
+        })
+    }
+
+    fn argument_type_against_parameter(&self, argument: &Arg, parameter: &Type) -> Result<Type, TypeError> {
+        if let Expr::AnonymousDef {
+            params,
+            return_type,
+            body,
+            span,
+        } = &argument.value
+        {
+            if Self::anonymous_params_need_expected(params) {
+                self.anonymous_function_type_against_expected(
+                    params,
+                    return_type.as_ref(),
+                    body,
+                    parameter,
+                    *span,
+                )
+            } else {
+                self.type_of_expr(&argument.value)
+            }
+        } else {
+            self.type_of_expr(&argument.value)
+        }
     }
 
     fn exact_class_of_expr(&self, expr: &Expr) -> Option<String> {
@@ -6799,6 +6947,9 @@ impl TypeChecker {
                         },
                     ) = (generic_params, &ft)
                     {
+                        if generic_params.is_empty() {
+                            None
+                        } else {
                         let mut substitutions = HashMap::new();
                         let generic_names = generic_params
                             .iter()
@@ -6864,6 +7015,7 @@ impl TypeChecker {
                             }
                         }
                         Some(substitute_type(return_type, &substitutions))
+                        }
                     } else {
                         None
                     }
@@ -7066,7 +7218,8 @@ impl TypeChecker {
                                 {
                                     continue;
                                 }
-                                let argument_type = self.type_of_expr(&argument.value)?;
+                                let argument_type =
+                                    self.argument_type_against_parameter(argument, parameter)?;
                                 if !argument_type.is_subtype_of(parameter, &self.env) {
                                     return Err(TypeError {
                                         message: format!(
@@ -7203,7 +7356,8 @@ impl TypeChecker {
                                     {
                                         continue;
                                     }
-                                    let argument_type = self.type_of_expr(&argument.value)?;
+                                    let argument_type =
+                                        self.argument_type_against_parameter(argument, parameter)?;
                                     if !argument_type.is_subtype_of(parameter, &self.env) {
                                         return Err(TypeError {
                                             message: format!(
@@ -9590,6 +9744,29 @@ class Child(Base):
                 err.message
             );
         }
+    }
+
+    #[test]
+    fn anonymous_function_parameters_require_annotations_or_expected_type() {
+        let no_expected = parse("f = def(x): x * 3\n").unwrap();
+        let error = TypeChecker::new().check_module(&no_expected).unwrap_err();
+        assert!(error
+            .message
+            .contains("needs an annotation or an expected function type"));
+
+        let annotated_assignment = parse("f: (int) -> int = def(x): x * 3\nresult = f(4)\n")
+            .unwrap();
+        TypeChecker::new()
+            .check_module(&annotated_assignment)
+            .expect("annotation should supply anonymous parameter type");
+
+        let call_site = parse(
+            "def apply(f: (int) -> int) -> int:\n    return f(4)\nresult = apply(def(x): x * 3)\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&call_site)
+            .expect("call parameter should supply anonymous parameter type");
     }
 
     #[test]
