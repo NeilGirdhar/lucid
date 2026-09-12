@@ -2754,6 +2754,14 @@ impl TypeChecker {
             }
             "__setattr__" => "__setattr__ is not supported; use declared fields or setters",
             "__del__" => "__del__ is not supported; use context managers for cleanup",
+            "__mro_entries__" => "__mro_entries__ is not supported; class bases are explicit",
+            "__prepare__" => "__prepare__ is not supported; class bodies use normal scope",
+            "__instancecheck__" => {
+                "__instancecheck__ is not supported; type checks are not programmable"
+            }
+            "__subclasscheck__" => {
+                "__subclasscheck__ is not supported; type checks are not programmable"
+            }
             _ => return Ok(()),
         };
         Err(TypeError {
@@ -11156,6 +11164,35 @@ def reject(value: not int) -> none:
             let error = checker
                 .check_module(&parse(source).unwrap())
                 .expect_err("removed dynamic attribute hook must fail static checking");
+            assert!(error.message.contains(message));
+            assert!(error.span.end > error.span.start);
+        }
+    }
+
+    #[test]
+    fn test_removed_inheritance_hooks_are_rejected_statically() {
+        for (source, message) in [
+            (
+                "class Hook:\n    def __mro_entries__(self) -> int:\n        return 1\n",
+                "__mro_entries__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __prepare__(self) -> int:\n        return 1\n",
+                "__prepare__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __instancecheck__(self) -> bool:\n        return true\n",
+                "__instancecheck__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __subclasscheck__(self) -> bool:\n        return true\n",
+                "__subclasscheck__ is not supported",
+            ),
+        ] {
+            let mut checker = TypeChecker::new();
+            let error = checker
+                .check_module(&parse(source).unwrap())
+                .expect_err("removed inheritance hook must fail static checking");
             assert!(error.message.contains(message));
             assert!(error.span.end > error.span.start);
         }

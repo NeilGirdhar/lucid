@@ -275,6 +275,20 @@ class Derived(Base1, Base2):
     assert!(chk.unwrap_err().contains("multiple class parents"));
 }
 
+#[test]
+fn test_class_inheritance_rejects_programmable_type_hooks() {
+    for source in [
+        "class Hook:\n    def __mro_entries__(self) -> int:\n        return 1\n",
+        "class Hook:\n    def __prepare__(self) -> int:\n        return 1\n",
+        "class Hook:\n    def __instancecheck__(self) -> bool:\n        return true\n",
+        "class Hook:\n    def __subclasscheck__(self) -> bool:\n        return true\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("not supported"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 10. Classes (docs/classes.rst)
 // ---------------------------------------------------------------------------
