@@ -1462,10 +1462,16 @@ pub fn lower_function_body(
         ));
     }
     let branch_is_single_void = |branch: &[lucid_syntax::Stmt]| {
-        matches!(
-            branch,
-            [lucid_syntax::Stmt::Return { value: None, .. }] | [lucid_syntax::Stmt::Pass(_)]
-        )
+        let Some((last, prefix)) = branch.split_last() else {
+            return false;
+        };
+        prefix
+            .iter()
+            .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
+            && matches!(
+                last,
+                lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)
+            )
     };
     // Route the canonical parameter-backed induction loop through CIR before
     // considering the older linear/function-body adapters. This emits a real
@@ -2539,34 +2545,43 @@ pub fn lower_function_body(
         }
     }
     fn single_value_return(branch: &[lucid_syntax::Stmt]) -> Option<&lucid_syntax::Expr> {
-        match branch {
-            [
+        let mut meaningful = branch
+            .iter()
+            .filter(|statement| !matches!(statement, lucid_syntax::Stmt::Pass(_)));
+        let first = meaningful.next()?;
+        let second = meaningful.next();
+        if meaningful.next().is_some() {
+            return None;
+        }
+        match (first, second) {
+            (
                 lucid_syntax::Stmt::Return {
                     value: Some(value), ..
                 },
-            ] => Some(value),
-            [
+                None,
+            ) => Some(value),
+            (
                 lucid_syntax::Stmt::Assignment {
                     target: lucid_syntax::Expr::Ident { name: assigned, .. },
                     value,
                     ..
                 },
-                lucid_syntax::Stmt::Return {
+                Some(lucid_syntax::Stmt::Return {
                     value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
                     ..
-                },
-            ]
-            | [
+                }),
+            )
+            | (
                 lucid_syntax::Stmt::VarDef {
                     pattern: lucid_syntax::Pattern::Ident(assigned, _),
                     value: Some(value),
                     ..
                 },
-                lucid_syntax::Stmt::Return {
+                Some(lucid_syntax::Stmt::Return {
                     value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
                     ..
-                },
-            ] if assigned == returned => Some(value),
+                }),
+            ) if assigned == returned => Some(value),
             _ => None,
         }
     }
@@ -7151,9 +7166,9 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
 
         let file = db.add_file(
-	            "dynamic-nested-branch-local-return.lucid",
-	            "def answer(value: int):\n    if true:\n        if value > 0:\n            selected = value + 1\n            return selected\n        else:\n            fallback = -value\n            return fallback\n    else:\n        return 0\n",
-	        );
+                "dynamic-nested-branch-local-return.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 0:\n            selected = value + 1\n            return selected\n        else:\n            fallback = -value\n            return fallback\n    else:\n        return 0\n",
+            );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("selected dynamic nested branch local returns should lower through CIR");
@@ -7161,9 +7176,19 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
 
         let file = db.add_file(
-	            "dynamic-nested-elif-branch-else-return.lucid",
-	            "def answer(value: int):\n    if true:\n        if value > 10:\n            return 100\n        elif value > 0:\n            return 1\n        else:\n            return -1\n    else:\n        return 0\n",
-	        );
+            "dynamic-nested-branch-pass-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            pass\n            selected = value + 1\n            return selected\n        else:\n            pass\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested pass-padded local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-elif-branch-else-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 10:\n            return 100\n        elif value > 0:\n            return 1\n        else:\n            return -1\n    else:\n        return 0\n",
+        );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("selected dynamic nested elif branch else return should lower through CIR");
@@ -7194,9 +7219,9 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-1]), Ok(Some(2)));
 
         let file = db.add_file(
-	            "dynamic-nested-elif-local-return.lucid",
-	            "def answer(value: int):\n    if true:\n        if value > 10:\n            selected: int = 100\n            return selected\n        elif value > 0:\n            selected = value\n            return selected\n        else:\n            selected = -value\n            return selected\n    else:\n        return 0\n",
-	        );
+                "dynamic-nested-elif-local-return.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 10:\n            selected: int = 100\n            return selected\n        elif value > 0:\n            selected = value\n            return selected\n        else:\n            selected = -value\n            return selected\n    else:\n        return 0\n",
+            );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("selected dynamic nested elif local returns should lower through CIR");
@@ -7205,9 +7230,9 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
 
         let file = db.add_file(
-	            "dynamic-nested-void-branch.lucid",
-	            "def answer(value: int):\n    if true:\n        if value > 0:\n            return\n        else:\n            pass\n    else:\n        return value\n",
-	        );
+                "dynamic-nested-void-branch.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 0:\n            return\n        else:\n            pass\n    else:\n        return value\n",
+            );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("selected dynamic nested void branch should lower through CIR");
@@ -7215,9 +7240,19 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-41]), Ok(None));
 
         let file = db.add_file(
-                "dynamic-nested-void-elif-branch.lucid",
-                "def answer(value: int):\n    if true:\n        if value > 10:\n            return\n        elif value > 0:\n            pass\n        else:\n            return\n    else:\n        return value\n",
-            );
+            "dynamic-nested-pass-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            pass\n            return\n        else:\n            pass\n            pass\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested pass-padded void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-void-elif-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 10:\n            return\n        elif value > 0:\n            pass\n        else:\n            return\n    else:\n        return value\n",
+        );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("selected dynamic nested void elif branch should lower through CIR");
