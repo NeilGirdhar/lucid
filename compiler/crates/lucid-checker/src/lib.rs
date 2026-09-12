@@ -3728,6 +3728,41 @@ impl TypeChecker {
         ))
     }
 
+    fn member_type_for_view_inner(&self, inner: &Type, attr: &str) -> Option<Type> {
+        match inner {
+            Type::Class { name, .. } => self
+                .class_getter_type(name, attr)
+                .or_else(|| self.class_field_type(name, attr))
+                .or_else(|| self.class_method_type(name, attr)),
+            Type::Interface { name, .. } => self
+                .interface_getter_type(name, attr)
+                .or_else(|| self.interface_field_type(name, attr))
+                .or_else(|| self.interface_method_type(name, attr)),
+            Type::Trait { name, .. } => self
+                .trait_getter_type(name, attr)
+                .or_else(|| self.trait_field_type(name, attr))
+                .or_else(|| self.trait_method_type(name, attr)),
+            Type::Record { fields, .. } => fields
+                .iter()
+                .find(|(name, _)| name.as_deref() == Some(attr))
+                .map(|(_, field_type)| field_type.clone()),
+            Type::TypeVar(name) if name == "Self" => self
+                .env
+                .current_class
+                .as_deref()
+                .and_then(|class_name| self.member_type_for_view_inner(
+                    self.env.classes.get(class_name)?,
+                    attr,
+                )),
+            Type::TypeVar(name) => self
+                .env
+                .classes
+                .get(name)
+                .and_then(|class_type| self.member_type_for_view_inner(class_type, attr)),
+            _ => None,
+        }
+    }
+
     pub fn check_statement(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         if let Stmt::Export(inner) = stmt {
             let private_name = match inner.as_ref() {
@@ -8392,49 +8427,8 @@ impl TypeChecker {
                         }
                     }
                     Type::View { ref inner, .. } => {
-                        match **inner {
-                            Type::Class { ref name, .. } => {
-                                if let Some(getter_type) = self.class_getter_type(name, attr) {
-                                    return Ok(getter_type);
-                                }
-                                if let Some(field_type) = self.class_field_type(name, attr) {
-                                    return Ok(field_type);
-                                }
-                                if let Some(method_type) = self.class_method_type(name, attr) {
-                                    return Ok(method_type);
-                                }
-                            }
-                            Type::Interface { ref name, .. } => {
-                                if let Some(getter_type) = self.interface_getter_type(name, attr) {
-                                    return Ok(getter_type);
-                                }
-                                if let Some(field_type) = self.interface_field_type(name, attr) {
-                                    return Ok(field_type);
-                                }
-                                if let Some(method_type) = self.interface_method_type(name, attr) {
-                                    return Ok(method_type);
-                                }
-                            }
-                            Type::Trait { ref name, .. } => {
-                                if let Some(getter_type) = self.trait_getter_type(name, attr) {
-                                    return Ok(getter_type);
-                                }
-                                if let Some(field_type) = self.trait_field_type(name, attr) {
-                                    return Ok(field_type);
-                                }
-                                if let Some(method_type) = self.trait_method_type(name, attr) {
-                                    return Ok(method_type);
-                                }
-                            }
-                            Type::Record { ref fields, .. } => {
-                                if let Some((_, field_type)) = fields
-                                    .iter()
-                                    .find(|(name, _)| name.as_deref() == Some(attr))
-                                {
-                                    return Ok(field_type.clone());
-                                }
-                            }
-                            _ => {}
+                        if let Some(member_type) = self.member_type_for_view_inner(inner, attr) {
+                            return Ok(member_type);
                         }
                         Err(TypeError {
                             message: "view has no member".into(),
@@ -9435,6 +9429,19 @@ impl TypeChecker {
                         }
                         if other.starts_with("__shape_") {
                             return Ok(Type::TypeVar(other.to_string()));
+                        }
+                        if other == "Self" {
+                            if !resolved_args.is_empty() {
+                                return Err(TypeError {
+                                    message: "Self expects no type arguments".into(),
+                                    span: texpr.span(),
+                                });
+                            }
+                            if let Some(class_name) = self.env.current_class.as_deref() {
+                                if let Some(class_type) = self.env.classes.get(class_name) {
+                                    return Ok(class_type.clone());
+                                }
+                            }
                         }
                         if let Some(alias) = self.env.type_aliases.get(other) {
                             let params = self
@@ -12435,6 +12442,37 @@ def reject(value: not int) -> none:
                 .expect_err("invalid replace call should fail");
             assert!(error.message.contains(message), "{}", error.message);
         }
+    }
+
+    #[test]
+    fn test_read_only_self_exposes_members_without_mutation() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Record:\n    fields: dict[str, object]\n\n    def get(self: ~Self, name: str) -> object | none:\n        return self.fields.get(name)\n\n    def set(self, name: str, value: object):\n        self.fields[name] = value\n",
+                )
+                .unwrap(),
+            )
+            .expect("read-only Self should expose fields and safe member calls");
+
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Counter:\n    value: int\n\n    def get(self: ~Self) -> int:\n        return self.value\n\n    def increment(self):\n        self.value += 1\n",
+                )
+                .unwrap(),
+            )
+            .expect("read-only Self should expose stored fields");
+
+        let error = TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Counter:\n    value: int\n\n    def reset(self: ~Self):\n        self.value = 0\n",
+                )
+                .unwrap(),
+            )
+            .expect_err("read-only Self must reject field writes");
+        assert!(error.message.contains("read-only"));
     }
 
     #[test]
