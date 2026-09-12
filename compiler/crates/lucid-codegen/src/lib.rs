@@ -8901,6 +8901,11 @@ static inline void lucid_print_val(LucidVal v) {
                             ));
                             return Ok(());
                         }
+                        if self.infer_expr_type(index, &HashMap::new()) == "bool" {
+                            return Err(CodegenError {
+                                message: "sequence index must be int, got bool".to_string(),
+                            });
+                        }
                         // Check for 2D index assignment: a[i][j] = val
                         if let Expr::Index {
                             value: inner_arr,
@@ -8908,6 +8913,11 @@ static inline void lucid_print_val(LucidVal v) {
                             ..
                         } = &**arr_expr
                         {
+                            if self.infer_expr_type(inner_idx, &HashMap::new()) == "bool" {
+                                return Err(CodegenError {
+                                    message: "sequence index must be int, got bool".to_string(),
+                                });
+                            }
                             let inner_code = self.emit_expr(inner_arr)?;
                             let inner_idx_code = self.emit_expr(inner_idx)?;
                             self.emit_line(&format!("lucid_list_set(lucid_as_list(lucid_get_index(lucid_wrap({inner_code}), lucid_int_val({inner_idx_code}))), lucid_int_val({idx_code}), lucid_wrap({val_code}));"));
@@ -9085,12 +9095,22 @@ static inline void lucid_print_val(LucidVal v) {
                             ));
                             return Ok(());
                         }
+                        if self.infer_expr_type(index, &HashMap::new()) == "bool" {
+                            return Err(CodegenError {
+                                message: "sequence index must be int, got bool".to_string(),
+                            });
+                        }
                         if let Expr::Index {
                             value: inner_arr,
                             index: inner_idx,
                             ..
                         } = &**arr_expr
                         {
+                            if self.infer_expr_type(inner_idx, &HashMap::new()) == "bool" {
+                                return Err(CodegenError {
+                                    message: "sequence index must be int, got bool".to_string(),
+                                });
+                            }
                             let inner_code = self.emit_expr(inner_arr)?;
                             let inner_idx_code = self.emit_expr(inner_idx)?;
                             self.emit_line(&format!("{{ LucidList* _sub = lucid_as_list(lucid_get_index(lucid_wrap({inner_code}), lucid_int_val({inner_idx_code}))); int64_t _i = lucid_int_val({idx_code}); LucidVal _cur = lucid_list_get(_sub, _i); lucid_list_set(_sub, _i, lucid_float(lucid_as_float(_cur) {op_str} lucid_as_float(lucid_wrap({val_code})))); }}"));
@@ -14988,6 +15008,11 @@ static inline void lucid_print_val(LucidVal v) {
                     return Ok(format!(
                         "lucid_get_index_value(lucid_wrap({v_code}), lucid_wrap({idx_code}))"
                     ));
+                }
+                if self.infer_expr_type(index, &HashMap::new()) == "bool" {
+                    return Err(CodegenError {
+                        message: "sequence index must be int, got bool".to_string(),
+                    });
                 }
                 Ok(format!(
                     "lucid_get_index(lucid_wrap({v_code}), lucid_int_val({idx_code}))"
@@ -22959,6 +22984,29 @@ print(result[1])
                 .expect_err("bool bitwise operators must fail native codegen");
             let _ = fs::remove_file(&output);
             assert!(error.message.contains(expected), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn native_bool_sequence_indexes_are_rejected() {
+        for source in [
+            "items = [10, 20]\nprint(items[true])\n",
+            "items = [10, 20]\nitems[false] = 3\n",
+            "items = [10, 20]\nitems[true] += 3\n",
+        ] {
+            let module = parse(source).expect("bool index source should parse");
+            let output = std::env::temp_dir()
+                .join(format!("lucid_native_bool_index_{}", std::process::id()));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("bool sequence indexes must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(
+                error
+                    .message
+                    .contains("sequence index must be int, got bool"),
+                "{source}: {error}"
+            );
         }
     }
 
