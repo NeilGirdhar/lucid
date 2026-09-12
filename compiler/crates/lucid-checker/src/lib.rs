@@ -1391,6 +1391,32 @@ impl TypeChecker {
             fields: HashMap::new(),
             is_sealed: false,
         };
+        env.classes.insert("list".into(), list_any.clone());
+        env.classes.insert("dict".into(), dict_any.clone());
+        env.classes.insert(
+            "set".into(),
+            Type::Class {
+                name: "set".into(),
+                type_args: vec![any.clone()],
+                parent: None,
+                traits: Vec::new(),
+                interfaces: Vec::new(),
+                fields: HashMap::new(),
+                is_sealed: false,
+            },
+        );
+        env.classes.insert(
+            "range".into(),
+            Type::Class {
+                name: "range".into(),
+                type_args: Vec::new(),
+                parent: None,
+                traits: Vec::new(),
+                interfaces: Vec::new(),
+                fields: HashMap::new(),
+                is_sealed: true,
+            },
+        );
         // Built-in collection methods participate in the same closed-member
         // lookup as user-defined class methods.  Keeping these signatures in
         // the checker prevents expression statements such as `items.append`
@@ -9696,17 +9722,27 @@ impl TypeChecker {
                             return Ok(Type::TypeVar(other.to_string()));
                         }
                         if other == "Self" {
-                            if !resolved_args.is_empty() {
-                                return Err(TypeError {
-                                    message: "Self expects no type arguments".into(),
-                                    span: texpr.span(),
-                                });
-                            }
                             if let Some(class_name) = self.env.current_class.as_deref() {
                                 if let Some(class_type) = self.env.classes.get(class_name) {
-                                    return Ok(class_type.clone());
+                                    let mut class_type = class_type.clone();
+                                    if let Type::Class {
+                                        ref mut type_args, ..
+                                    } = class_type
+                                    {
+                                        *type_args = resolved_args;
+                                    }
+                                    return Ok(class_type);
                                 }
                             }
+                            return Ok(Type::Class {
+                                name: "Self".into(),
+                                type_args: resolved_args,
+                                parent: None,
+                                traits: Vec::new(),
+                                interfaces: Vec::new(),
+                                fields: HashMap::new(),
+                                is_sealed: false,
+                            });
                         }
                         if let Some(alias) = self.env.type_aliases.get(other) {
                             let params = self
@@ -10649,6 +10685,17 @@ class Child(Base):
         let module = parse("trait NeedsMethod:\n    def needed(self) -> int\n\nclass Empty(NeedsMethod):\n    ...\n").unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("required member 'needed'"));
+    }
+
+    #[test]
+    fn higher_kinded_self_can_be_subscripted_in_traits() {
+        let module = parse(
+            "trait Functor:\n    classmethod map[A, B](cls, tree: Self[A], f: (A) -> B) -> Self[B]\n\nimplement Functor for list:\n    classmethod map[A, B](cls, tree: Self[A], f: (A) -> B) -> Self[B]:\n        return [f(x) for x in tree]\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("higher-kinded Self should support type arguments");
     }
 
     #[test]
