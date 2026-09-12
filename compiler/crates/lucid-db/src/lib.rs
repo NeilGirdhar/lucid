@@ -1639,6 +1639,12 @@ pub fn lower_function_body(
                 _ => None,
             }
         }
+        fn match_arm_is_void(arm: &lucid_syntax::MatchArm) -> bool {
+            matches!(
+                arm.body.as_slice(),
+                [lucid_syntax::Stmt::Return { value: None, .. }] | [lucid_syntax::Stmt::Pass(_)]
+            )
+        }
         if arms.len() >= 3
             && let Some(parameter_index) = parameter_index
             && arms[..arms.len() - 1]
@@ -1797,6 +1803,65 @@ pub fn lower_function_body(
                     )
                     .map(Arc::new)
                     .map_err(|_| Arc::from("unsupported optional match chain"));
+                }
+            }
+        }
+        if !arms.is_empty() {
+            let explicit_end = if matches!(
+                arms.last().map(|arm| &arm.pattern),
+                Some(lucid_syntax::Pattern::Wildcard(_))
+            ) {
+                arms.len() - 1
+            } else {
+                arms.len()
+            };
+            if explicit_end > 0
+                && arms[..explicit_end]
+                    .iter()
+                    .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                && arms.iter().all(match_arm_is_void)
+            {
+                let conditions = arms[..explicit_end]
+                    .iter()
+                    .map(|arm| {
+                        let lucid_syntax::Pattern::Literal(literal, span) = &arm.pattern else {
+                            return None;
+                        };
+                        match literal {
+                            lucid_syntax::LiteralValue::Int(_)
+                            | lucid_syntax::LiteralValue::Bool(_) => {
+                                Some(lucid_syntax::Expr::Binary {
+                                    op: lucid_syntax::BinaryOp::Eq,
+                                    left: Box::new(subject.clone()),
+                                    right: Box::new(lucid_syntax::Expr::Literal {
+                                        value: literal.clone(),
+                                        span: *span,
+                                    }),
+                                    span: *span,
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                {
+                    if elif_conditions.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_void(
+                            first_condition,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported void match expression"));
+                    }
+                    return lucid_cir::Function::from_parameterized_if_elif_void_chain(
+                        first_condition,
+                        &elif_conditions.iter().collect::<Vec<_>>(),
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported void match chain"));
                 }
             }
         }
@@ -5129,6 +5194,27 @@ mod tests {
             .expect("multi-arm optional match should lower through CIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "void-match-expression.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("single-arm void match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "void-match-chain-expression.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            return\n        case 2:\n            return\n        case _:\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("multi-arm void match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file("void.lucid", "def answer():\n    return\n");
