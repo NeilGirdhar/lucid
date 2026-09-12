@@ -1729,42 +1729,54 @@ pub fn lower_function_body(
             _ => None,
         };
         fn match_arm_value(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
-            match arm.body.as_slice() {
-                [
+            let mut meaningful = arm
+                .body
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement));
+            let first = meaningful.next()?;
+            let second = meaningful.next();
+            if meaningful.next().is_some() {
+                return None;
+            }
+            match (first, second) {
+                (
                     lucid_syntax::Stmt::Return {
                         value: Some(value), ..
                     },
-                ] => Some(value),
-                [
+                    None,
+                ) => Some(value),
+                (
                     lucid_syntax::Stmt::Assignment {
                         target: lucid_syntax::Expr::Ident { name, .. },
                         value,
                         ..
                     },
-                    lucid_syntax::Stmt::Return {
+                    Some(lucid_syntax::Stmt::Return {
                         value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
                         ..
-                    },
-                ] if name == returned => Some(value),
-                [
+                    }),
+                )
+                | (
                     lucid_syntax::Stmt::VarDef {
                         pattern: lucid_syntax::Pattern::Ident(name, _),
                         value: Some(value),
                         ..
                     },
-                    lucid_syntax::Stmt::Return {
+                    Some(lucid_syntax::Stmt::Return {
                         value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
                         ..
-                    },
-                ] if name == returned => Some(value),
+                    }),
+                ) if name == returned => Some(value),
                 _ => None,
             }
         }
         fn match_arm_is_void(arm: &lucid_syntax::MatchArm) -> bool {
-            matches!(
-                arm.body.as_slice(),
-                [lucid_syntax::Stmt::Return { value: None, .. }] | [lucid_syntax::Stmt::Pass(_)]
-            )
+            let Some((last, prefix)) = arm.body.split_last() else {
+                return true;
+            };
+            prefix.iter().all(branch_noop_statement)
+                && matches!(last, lucid_syntax::Stmt::Return { value: None, .. })
+                || arm.body.iter().all(branch_noop_statement)
         }
         fn match_arm_void_bindings(
             arm: &lucid_syntax::MatchArm,
@@ -6615,6 +6627,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
 
         let file = db.add_file(
+            "match-noop-local-return.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true)\n            selected = 11\n            return selected\n        case _:\n            if false:\n                return 0\n            fallback = value + 100\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match local returns should ignore no-op setup");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
             "middle-wildcard-match.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return value + 100\n        case 2:\n            return 22\n",
         );
@@ -6634,6 +6656,16 @@ mod tests {
             .expect("middle wildcard void match should make later arms unreachable");
         assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "match-noop-void.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            while false:\n                return value\n            return\n        case _:\n            for item in []:\n                return value\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("match void arms should ignore no-op setup");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(

@@ -532,6 +532,9 @@ diverged:
   treating them as unsupported extra statements. They also reuse static branch
   selection for nested no-op conditionals, so dead `if false` arms remain
   unlowered.
+  The same no-op recognizer now feeds primitive match value and void arm
+  extraction, so match arms can contain harmless setup without leaving CIR
+  lowering.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.
