@@ -9301,10 +9301,10 @@ impl TypeChecker {
                     .filter(|e| !matches!(e, Expr::Skip(_)))
                     .map(|e| self.type_of_expr(e))
                     .collect::<Result<Vec<_>, TypeError>>()?;
-                if let Some(unhashable) = elem_types.iter().find(|element_type| {
-                    matches!(element_type, Type::Class { name, .. }
-                        if matches!(name.as_str(), "list" | "set" | "dict"))
-                }) {
+                if let Some(unhashable) = elem_types
+                    .iter()
+                    .find(|element_type| !type_is_hashable_key(element_type, &self.env))
+                {
                     return Err(TypeError {
                         message: format!("set element of type {:?} is not hashable", unhashable),
                         span: expr.span(),
@@ -9339,10 +9339,10 @@ impl TypeChecker {
                     .iter()
                     .map(|(_, value)| self.type_of_expr(value))
                     .collect::<Result<Vec<_>, TypeError>>()?;
-                if let Some(unhashable) = key_types.iter().find(|key_type| {
-                    matches!(key_type, Type::Class { name, .. }
-                        if matches!(name.as_str(), "list" | "set" | "dict"))
-                }) {
+                if let Some(unhashable) = key_types
+                    .iter()
+                    .find(|key_type| !type_is_hashable_key(key_type, &self.env))
+                {
                     return Err(TypeError {
                         message: format!("dictionary key of type {:?} is not hashable", unhashable),
                         span: expr.span(),
@@ -10854,6 +10854,32 @@ impl TypeChecker {
                                     }
                                 }
                             }
+                            if matches!(other, "set" | "frozenset") {
+                                if let Some(element_type) = resolved_args.first() {
+                                    if !type_is_hashable_key(element_type, &self.env) {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "set element type {:?} is not hashable",
+                                                element_type
+                                            ),
+                                            span: texpr.span(),
+                                        });
+                                    }
+                                }
+                            }
+                            if matches!(other, "dict" | "frozendict") {
+                                if let Some(key_type) = resolved_args.first() {
+                                    if !type_is_hashable_key(key_type, &self.env) {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "dictionary key type {:?} is not hashable",
+                                                key_type
+                                            ),
+                                            span: texpr.span(),
+                                        });
+                                    }
+                                }
+                            }
                             let mut c_clone = c.clone();
                             if let Type::Class {
                                 ref mut type_args, ..
@@ -11274,6 +11300,69 @@ fn collect_local_binding_names(statements: &[Stmt], names: &mut HashSet<String>)
             _ => {}
         }
     }
+}
+
+fn type_is_hashable_key(ty: &Type, env: &TypeEnvironment) -> bool {
+    match ty {
+        Type::Int
+        | Type::LiteralInt(_)
+        | Type::Bool
+        | Type::LiteralBool(_)
+        | Type::Float
+        | Type::LiteralFloat(_)
+        | Type::Str
+        | Type::LiteralStr(_)
+        | Type::None
+        | Type::Never => true,
+        Type::TypeVar(_) => true,
+        Type::Union(parts) => parts.iter().all(|part| type_is_hashable_key(part, env)),
+        Type::Intersection(parts) => parts.iter().any(|part| type_is_hashable_key(part, env)),
+        Type::View {
+            mutability: MutabilityView::Immutable,
+            inner,
+        } => type_has_hashable_capability(inner, env),
+        Type::Class {
+            name, type_args, ..
+        } if name == "frozenset" => type_args
+            .first()
+            .map_or(true, |element| type_is_hashable_key(element, env)),
+        Type::Class {
+            name, type_args, ..
+        } if name == "frozendict" => type_args
+            .first()
+            .map_or(true, |key| type_is_hashable_key(key, env)),
+        Type::Class { name, .. } => matches!(
+            name.as_str(),
+            "str"
+                | "int"
+                | "float"
+                | "bool"
+                | "none"
+                | "range"
+                | "Bytes"
+                | "type"
+                | "__class__"
+                | "complex"
+                | "Decimal"
+                | "DataType"
+                | "Float32"
+                | "Float64"
+                | "Int32"
+                | "Int64"
+        ),
+        _ => false,
+    }
+}
+
+fn type_has_hashable_capability(ty: &Type, env: &TypeEnvironment) -> bool {
+    ty.is_subtype_of(
+        &Type::Trait {
+            name: "Hashable".into(),
+            type_args: Vec::new(),
+            methods: HashSet::new(),
+        },
+        env,
+    ) || matches!(ty, Type::Class { name, .. } if env.class_members.get(name).is_some_and(|members| members.contains("__hash__")))
 }
 
 fn exact_class_name_from_type(ty: &Type) -> Option<String> {
@@ -14378,6 +14467,32 @@ def reject(value: not int) -> none:
                 .unwrap(),
             )
             .expect("immutable dict literals should type as frozendict");
+    }
+
+    #[test]
+    fn mutable_user_classes_are_not_dictionary_key_types() {
+        let error = TypeChecker::new()
+            .check_module(
+                &parse("class Model:\n    value: int\ncache: dict[Model, float] = {:}\n").unwrap(),
+            )
+            .expect_err("mutable user classes should not be valid dictionary key types");
+        assert!(error.message.contains("dictionary key type"));
+
+        TypeChecker::new()
+            .check_module(
+                &parse("class Model:\n    value: int\ncache: dict[!Model, float] = {:}\n").unwrap(),
+            )
+            .expect("immutable views of hashable user classes should be valid dictionary keys");
+
+        let error = TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Array without Hashable:\n    value: int\nindex: dict[!Array, float] = {:}\n",
+                )
+                .unwrap(),
+            )
+            .expect_err("immutable views still require the underlying class to be hashable");
+        assert!(error.message.contains("dictionary key type"));
     }
 
     #[test]
