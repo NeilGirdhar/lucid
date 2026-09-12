@@ -758,6 +758,29 @@ impl Type {
                 // Built-in containers satisfy the capability traits directly;
                 // these relationships are semantic and do not require
                 // synthetic user declarations in the environment.
+                if target_trait == "Mapping" {
+                    return matches!(c_name.as_str(), "dict" | "frozendict")
+                        && match (self, target) {
+                            (
+                                Type::Class {
+                                    type_args: source_args,
+                                    ..
+                                },
+                                Type::Trait {
+                                    type_args: target_args,
+                                    ..
+                                },
+                            ) => {
+                                target_args.is_empty()
+                                    || source_args.is_empty()
+                                    || (source_args.len() == 2
+                                        && target_args.len() == 2
+                                        && source_args[0] == target_args[0]
+                                        && source_args[1].is_subtype_of(&target_args[1], env))
+                            }
+                            _ => false,
+                        };
+                }
                 let builtin_traits: &[&str] = match c_name.as_str() {
                     "str" => &["Sized", "Container"],
                     "list" => &[
@@ -785,8 +808,15 @@ impl Type {
                         "Set",
                         "Hashable",
                     ],
-                    "dict" => &["Sized", "Container", "Collection", "Iterable"],
-                    "frozendict" => &["Sized", "Container", "Collection", "Iterable", "Hashable"],
+                    "dict" => &["Sized", "Container", "Collection", "Iterable", "Mapping"],
+                    "frozendict" => &[
+                        "Sized",
+                        "Container",
+                        "Collection",
+                        "Iterable",
+                        "Mapping",
+                        "Hashable",
+                    ],
                     "Bytes" => &["Sized", "Container", "Buffer"],
                     "ByteArray" | "MemoryView" => &["Sized", "Container", "Buffer"],
                     _ => &[],
@@ -1267,6 +1297,7 @@ impl TypeChecker {
             "Set",
             "Container",
             "Collection",
+            "Mapping",
             "Sequence",
             "Buffer",
             "Shape",
@@ -1292,6 +1323,7 @@ impl TypeChecker {
                 ],
                 "Container" => &["__contains__"],
                 "Collection" => &["__iter__", "__len__", "__contains__"],
+                "Mapping" => &["__getitem__", "__len__", "__contains__"],
                 "Sequence" => &["__iter__", "__len__", "__contains__", "__getitem__"],
                 "Buffer" => &["__buffer__"],
                 "Shape" => &[],
@@ -9488,6 +9520,27 @@ impl TypeChecker {
                                 .cloned()
                                 .unwrap_or(Type::TypeVar("Any".to_string())))
                         }
+                        Type::Trait {
+                            ref name,
+                            ref type_args,
+                            ..
+                        } if name == "Mapping" => {
+                            if let Some(key_type) = type_args.first() {
+                                if !index_t.is_subtype_of(key_type, &self.env) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "mapping key has type {:?}, expected {:?}",
+                                            index_t, key_type
+                                        ),
+                                        span: index.span(),
+                                    });
+                                }
+                            }
+                            Ok(type_args
+                                .get(1)
+                                .cloned()
+                                .unwrap_or(Type::TypeVar("Any".to_string())))
+                        }
                         Type::Class { ref name, .. }
                             if matches!(name.as_str(), "Bytes" | "ByteArray" | "MemoryView") =>
                         {
@@ -9533,6 +9586,25 @@ impl TypeChecker {
                                 require_int()?;
                                 Ok(type_args
                                     .first()
+                                    .cloned()
+                                    .unwrap_or(Type::TypeVar("Any".to_string())))
+                            }
+                            Type::Trait {
+                                name, type_args, ..
+                            } if name == "Mapping" => {
+                                if let Some(key_type) = type_args.first() {
+                                    if !index_t.is_subtype_of(key_type, &self.env) {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "mapping key has type {:?}, expected {:?}",
+                                                index_t, key_type
+                                            ),
+                                            span: index.span(),
+                                        });
+                                    }
+                                }
+                                Ok(type_args
+                                    .get(1)
                                     .cloned()
                                     .unwrap_or(Type::TypeVar("Any".to_string())))
                             }
@@ -11331,6 +11403,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("ordinary integer list literals should not be inferred as shape types");
+    }
+
+    #[test]
+    fn dict_values_satisfy_mapping_view_annotations() {
+        let module = parse(
+            "from collections.abc import Mapping\nunderlying = {\"a\": 1}\nview: Mapping[str, int] = underlying\nvalue: int = view[\"a\"]\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("dict[str, V] should satisfy Mapping[str, V]");
     }
 
     #[test]
