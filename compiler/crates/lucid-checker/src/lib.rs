@@ -11489,7 +11489,7 @@ class Child(Base):
 
     #[test]
     fn test_parameter_destructuring_binds_nested_names() {
-        let module = parse("class Pair:\n    left: int\n    right: int\ndef total(Pair(a, b): Pair) -> int:\n    return a + b\n").unwrap();
+        let module = parse("class Pair:\n    left: int\n    right: int\ndef total(Pair(a, b): Pair) -> int:\n    return a + b\n\ndef distance(Pair(x1, y1): Pair, Pair(x2, y2): Pair) -> int:\n    return x1 + y1 + x2 + y2\n").unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_ok(), "{result:?}");

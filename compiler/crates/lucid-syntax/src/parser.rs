@@ -3496,10 +3496,7 @@ impl Parser {
                     .unwrap_or(false)
             {
                 let pat = self.parse_pattern()?;
-                let n = match &pat {
-                    Pattern::ClassDestructure { class_name, .. } => class_name.clone(),
-                    _ => "_pat".to_string(),
-                };
+                let n = format!("_pat{}", params.len());
                 (n, Some(pat))
             } else {
                 let n = self.expect_ident()?;
