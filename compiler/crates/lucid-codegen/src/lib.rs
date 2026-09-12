@@ -265,6 +265,12 @@ impl Default for CCodeGenerator {
 }
 
 impl CCodeGenerator {
+    fn has_runtime_decorators(f: &FunctionDef) -> bool {
+        f.decorators.iter().any(
+            |decorator| !matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"),
+        )
+    }
+
     fn dispatch_type_distance(&self, actual: &str, expected: &str) -> Option<usize> {
         if expected == "object" || expected == "LucidVal" {
             return Some(usize::MAX / 4);
@@ -973,8 +979,10 @@ impl CCodeGenerator {
                 let is_contextmanager = f.decorators.iter().any(|decorator| {
                     matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
                 });
-                let ret_ty = if f.is_async || is_contextmanager {
-                    self.async_fns.insert(f.name.clone());
+                let ret_ty = if f.is_async || is_contextmanager || Self::has_runtime_decorators(f) {
+                    if f.is_async || is_contextmanager {
+                        self.async_fns.insert(f.name.clone());
+                    }
                     "LucidVal".to_string()
                 } else {
                     self.map_type_expr(f.return_type.as_ref())
@@ -1268,6 +1276,7 @@ impl CCodeGenerator {
         self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr, LucidVal fallback, bool has_default) {");
         self.indent += 1;
         self.emit_line("if (value.type == LUCID_TYPE_COMPLEX) { if (strcmp(attr, \"real\") == 0) return lucid_float(value.real); if (strcmp(attr, \"imag\") == 0) return lucid_float(value.imag); }");
+        self.emit_line("if (value.type == LUCID_TYPE_FUNCTION) { if (strcmp(attr, \"__name__\") == 0 || strcmp(attr, \"__path__\") == 0) return lucid_str(lucid_function_name(value)); if (strcmp(attr, \"__doc__\") == 0) return lucid_none(); if (has_default) return fallback; fprintf(stderr, \"function has no requested attribute\\n\"); exit(1); }");
         self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) { if (has_default) return fallback; fprintf(stderr, \"attribute access requires an object\\n\"); exit(1); }");
         self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
         self.emit_line("if (!class_name) { if (has_default) return fallback; fprintf(stderr, \"unknown object in attribute access\\n\"); exit(1); }");
@@ -1305,6 +1314,7 @@ impl CCodeGenerator {
         self.emit_line("static bool lucid_dynamic_has_attr(LucidVal value, const char* attr) {");
         self.indent += 1;
         self.emit_line("if (value.type == LUCID_TYPE_COMPLEX) return strcmp(attr, \"real\") == 0 || strcmp(attr, \"imag\") == 0;");
+        self.emit_line("if (value.type == LUCID_TYPE_FUNCTION) return strcmp(attr, \"__name__\") == 0 || strcmp(attr, \"__path__\") == 0 || strcmp(attr, \"__doc__\") == 0;");
         self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) return false;");
         self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
         self.emit_line("if (!class_name) return false;");
@@ -1441,6 +1451,15 @@ impl CCodeGenerator {
         let mut top_vars = HashMap::new();
         for stmt in &top_level_stmts {
             self.collect_vars_from_stmt(stmt, &mut top_vars);
+        }
+        for stmt in &module.statements {
+            if let Stmt::Function(function) = Self::unwrap_export(stmt) {
+                if Self::has_runtime_decorators(function) {
+                    top_vars
+                        .entry(function.name.clone())
+                        .or_insert_with(|| "LucidVal".to_string());
+                }
+            }
         }
         self.global_vars = top_vars.clone();
         self.anonymous_global_names.clear();
@@ -1810,6 +1829,11 @@ impl CCodeGenerator {
                 }
             }
         }
+        for stmt in &module.statements {
+            if let Stmt::Function(function) = Self::unwrap_export(stmt) {
+                self.emit_decorated_function_binding(function)?;
+            }
+        }
 
         for stmt in top_level_stmts {
             self.emit_stmt(stmt)?;
@@ -2121,6 +2145,7 @@ struct LucidClosure {
     LucidClosureCall call;
     LucidClosureDrop drop_env;
     void* env;
+    const char* name;
 };
 typedef struct {
     LucidVal base;
@@ -2180,10 +2205,26 @@ static inline LucidVal lucid_closure(LucidClosureCall call, void* env, LucidClos
     closure->call = call;
     closure->drop_env = drop_env;
     closure->env = env;
+    closure->name = NULL;
     LucidVal value = {0};
     value.type = LUCID_TYPE_FUNCTION;
     value.ptr = (void*)closure;
     return value;
+}
+static inline LucidVal lucid_closure_named(LucidClosureCall call, void* env, LucidClosureDrop drop_env, const char* name) {
+    LucidVal value = lucid_closure(call, env, drop_env);
+    ((LucidClosure*)value.ptr)->name = name;
+    return value;
+}
+static inline void lucid_function_set_name(LucidVal* value, const char* name) {
+    if (value && value->type == LUCID_TYPE_FUNCTION && value->ptr) ((LucidClosure*)value->ptr)->name = name;
+}
+static inline const char* lucid_function_name(LucidVal value) {
+    if (value.type == LUCID_TYPE_FUNCTION && value.ptr) {
+        LucidClosure* closure = (LucidClosure*)value.ptr;
+        return closure->name ? closure->name : "<def>";
+    }
+    return "<def>";
 }
 static inline bool lucid_is_callable(LucidVal value) {
     return value.type == LUCID_TYPE_FUNCTION && value.ptr != NULL &&
@@ -6896,6 +6937,39 @@ static inline void lucid_print_val(LucidVal v) {
         Ok(())
     }
 
+    fn emit_decorated_function_binding(&mut self, f: &FunctionDef) -> Result<(), CodegenError> {
+        if !Self::has_runtime_decorators(f) {
+            return Ok(());
+        }
+        let escaped_name = c_escape_string(&f.name);
+        self.emit_line(&format!(
+            "lucid_var_{} = lucid_closure_named({}, NULL, NULL, \"{}\");",
+            f.name,
+            Self::closure_adapter_name(f),
+            escaped_name
+        ));
+        self.emit_line(&format!("lucid_alive_{} = true;", f.name));
+        for decorator in f.decorators.iter().rev() {
+            if matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager") {
+                continue;
+            }
+            let decorator_code = self.emit_expr(decorator)?;
+            let args = self.new_temp();
+            let result = self.new_temp();
+            self.emit_line(&format!("LucidList* {args} = lucid_list_new(1);"));
+            self.emit_line(&format!("lucid_list_append({args}, lucid_var_{});", f.name));
+            self.emit_line(&format!(
+                "LucidVal {result} = lucid_call(lucid_wrap({decorator_code}), {args});"
+            ));
+            self.emit_line(&format!(
+                "lucid_function_set_name(&{result}, \"{}\");",
+                escaped_name
+            ));
+            self.emit_line(&format!("lucid_var_{} = {result};", f.name));
+        }
+        Ok(())
+    }
+
     fn closure_adapter_name(f: &FunctionDef) -> String {
         format!("lucid_closure_call_{}", Self::mangle_component(&f.name))
     }
@@ -6923,8 +6997,9 @@ static inline void lucid_print_val(LucidVal v) {
             self.emit_line(&format!("lucid_list_append({bound}, {value});"));
         }
         Ok(format!(
-            "lucid_partial(lucid_closure({}, NULL, NULL), {bound})",
-            Self::closure_adapter_name_for_name(target)
+            "lucid_partial(lucid_closure_named({}, NULL, NULL, \"{}\"), {bound})",
+            Self::closure_adapter_name_for_name(target),
+            c_escape_string(target)
         ))
     }
 
@@ -8160,8 +8235,9 @@ static inline void lucid_print_val(LucidVal v) {
                             let adapter_target = resolved.clone();
                             self.function_aliases.insert(name.clone(), resolved);
                             self.emit_line(&format!(
-                                "lucid_var_{name} = lucid_closure({}, NULL, NULL);",
-                                Self::closure_adapter_name_for_name(&adapter_target)
+                                "lucid_var_{name} = lucid_closure_named({}, NULL, NULL, \"{}\");",
+                                Self::closure_adapter_name_for_name(&adapter_target),
+                                c_escape_string(&adapter_target)
                             ));
                             return Ok(());
                         }
@@ -8319,8 +8395,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 let adapter_target = resolved.clone();
                                 self.function_aliases.insert(name.clone(), resolved);
                                 self.emit_line(&format!(
-                                    "lucid_var_{name} = lucid_closure({}, NULL, NULL);",
-                                    Self::closure_adapter_name_for_name(&adapter_target)
+                                    "lucid_var_{name} = lucid_closure_named({}, NULL, NULL, \"{}\");",
+                                    Self::closure_adapter_name_for_name(&adapter_target),
+                                    c_escape_string(&adapter_target)
                                 ));
                                 return Ok(());
                             }
@@ -9647,8 +9724,9 @@ static inline void lucid_print_val(LucidVal v) {
                         && !self.global_vars.contains_key(name) =>
                     {
                         Ok(format!(
-                            "lucid_closure({}, NULL, NULL)",
-                            Self::closure_adapter_name_for_name(name)
+                            "lucid_closure_named({}, NULL, NULL, \"{}\")",
+                            Self::closure_adapter_name_for_name(name),
+                            c_escape_string(name)
                         ))
                     }
                     _ => Ok(format!("lucid_var_{name}")),
@@ -15353,7 +15431,7 @@ print(" ".join(capitalized))
 
     #[test]
     fn native_function_values_expose_identity_metadata() {
-        let source = "def answer(value: int) -> int:\n    return value + 1\nalias = answer\nformatter = str.hex\nprint(answer.__name__)\nprint(alias.__name__)\nprint(len.__name__)\nprint(str.hex.__name__)\nprint(formatter.__name__)\nprint(str.hex(31))\nprint(answer.__doc__)\n";
+        let source = "def answer(value: int) -> int:\n    return value + 1\nalias = answer\nformatter = str.hex\nitems = [answer]\nprint(answer.__name__)\nprint(alias.__name__)\nprint(items[0].__name__)\nprint(len.__name__)\nprint(str.hex.__name__)\nprint(formatter.__name__)\nprint(str.hex(31))\nprint(answer.__doc__)\n";
         let module = parse(source).expect("function metadata source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_function_metadata_{}",
@@ -15365,7 +15443,26 @@ print(" ".join(capitalized))
             .expect("run native binary");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
-            "answer\nanswer\nlen\nstr.hex\nstr.hex\n0x1f\nnone"
+            "answer\nanswer\nanswer\nlen\nstr.hex\nstr.hex\n0x1f\nnone"
+        );
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_decorators_rebind_and_preserve_replaced_function_metadata() {
+        let source = "def wrap(f):\n    return def() -> int: 2\n@wrap\ndef original() -> int:\n    return 1\nplain = wrap(original)\nprint(original())\nprint(original.__name__)\nprint(original.__path__)\nprint(plain.__name__)\n";
+        let module = parse(source).expect("decorator metadata source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_decorator_metadata_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("decorator metadata should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout).trim(),
+            "2\noriginal\noriginal\n<def>"
         );
         let _ = std::fs::remove_file(output);
     }
