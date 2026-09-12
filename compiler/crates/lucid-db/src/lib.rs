@@ -6208,14 +6208,32 @@ fn import_path(file_path: &str, import: &str) -> String {
 
 fn statement_span(statement: &lucid_syntax::Stmt) -> lucid_syntax::Span {
     match statement {
-        lucid_syntax::Stmt::Import { span, .. } | lucid_syntax::Stmt::FromImport { span, .. } => {
-            *span
-        }
         lucid_syntax::Stmt::Export(inner) => statement_span(inner),
-        lucid_syntax::Stmt::Assignment { span, .. } | lucid_syntax::Stmt::VarDef { span, .. } => {
-            *span
-        }
-        _ => lucid_syntax::Span::default(),
+        lucid_syntax::Stmt::ClassDef { span, .. }
+        | lucid_syntax::Stmt::InterfaceDef { span, .. }
+        | lucid_syntax::Stmt::TraitDef { span, .. }
+        | lucid_syntax::Stmt::ImplementDef { span, .. }
+        | lucid_syntax::Stmt::TypeAlias { span, .. }
+        | lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef { span, .. })
+        | lucid_syntax::Stmt::VarDef { span, .. }
+        | lucid_syntax::Stmt::With { span, .. }
+        | lucid_syntax::Stmt::Assignment { span, .. }
+        | lucid_syntax::Stmt::AugAssign { span, .. }
+        | lucid_syntax::Stmt::If { span, .. }
+        | lucid_syntax::Stmt::For { span, .. }
+        | lucid_syntax::Stmt::While { span, .. }
+        | lucid_syntax::Stmt::Match { span, .. }
+        | lucid_syntax::Stmt::Try { span, .. }
+        | lucid_syntax::Stmt::Return { span, .. }
+        | lucid_syntax::Stmt::Raise { span, .. }
+        | lucid_syntax::Stmt::Yield { span, .. }
+        | lucid_syntax::Stmt::Assert { span, .. }
+        | lucid_syntax::Stmt::Delete { span, .. }
+        | lucid_syntax::Stmt::Pass(span)
+        | lucid_syntax::Stmt::Import { span, .. }
+        | lucid_syntax::Stmt::FromImport { span, .. } => *span,
+        lucid_syntax::Stmt::Break(span) | lucid_syntax::Stmt::Continue(span) => *span,
+        lucid_syntax::Stmt::Expr(expr) => expr.span(),
     }
 }
 
@@ -6798,6 +6816,41 @@ mod tests {
             "x"
         );
         assert_eq!(*source_position(&db, file, offset), (1, 2));
+    }
+
+    #[test]
+    fn statement_span_covers_structural_statements() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "spans.lucid",
+            "def answer(value: int):\n    if value > 0:\n        value += 1\n        return value\n",
+        );
+        let module = parse_ast(&db, file)
+            .as_ref()
+            .expect("source should parse for statement span coverage");
+        let function_span = statement_span(&module.statements[0]);
+        assert_eq!(span_text(&db, file, function_span).as_ref(), "answer");
+        let lucid_syntax::Stmt::Function(function) = &module.statements[0] else {
+            panic!("expected function statement");
+        };
+        let lucid_syntax::Stmt::If {
+            then_branch,
+            span: if_span,
+            ..
+        } = &function.body[0]
+        else {
+            panic!("expected if statement");
+        };
+        assert_eq!(statement_span(&function.body[0]), *if_span);
+        assert_eq!(span_text(&db, file, *if_span).as_ref(), "if");
+        assert_eq!(
+            span_text(&db, file, statement_span(&then_branch[0])).as_ref(),
+            "value"
+        );
+        assert_eq!(
+            span_text(&db, file, statement_span(&then_branch[1])).as_ref(),
+            "return"
+        );
     }
 
     #[test]

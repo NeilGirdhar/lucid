@@ -1782,6 +1782,10 @@ gaps are architectural rather than isolated syntax features:
    out-of-range lines to end-of-file.
    A tracked `source_line` query provides newline-normalized line text for
    diagnostic and editor rendering.
+   Statement-span extraction now covers every AST statement form that carries
+   a parser span, including functions, structural control flow, returns, and
+   augmented assignments, instead of falling back to a default span outside
+   imports and simple bindings.
    Dedicated round-trip coverage now verifies Unicode line/column, byte
    offset, and span extraction agree.
    Malformed reversed spans now safely produce an empty slice rather than
