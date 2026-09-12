@@ -1370,14 +1370,18 @@ fn collect_typed_body<'db>(
                 }
                 let optional_value_arms =
                     if !arms.is_empty() && arms.iter().all(|arm| arm.guard.is_none()) {
-                        if matches!(
-                            arms.last().map(|arm| &arm.pattern),
-                            Some(lucid_syntax::Pattern::Wildcard(_))
-                        ) && arms
-                            .last()
-                            .is_some_and(|arm| arm.body.iter().all(typed_match_noop_statement))
-                        {
-                            Some(&arms[..arms.len() - 1])
+                        if let Some(wildcard_index) = arms.iter().position(|arm| {
+                            matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+                        }) {
+                            if arms[wildcard_index]
+                                .body
+                                .iter()
+                                .all(typed_match_noop_statement)
+                            {
+                                Some(&arms[..wildcard_index])
+                            } else {
+                                None
+                            }
                         } else if arms
                             .iter()
                             .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
@@ -7809,6 +7813,26 @@ mod tests {
         );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "middle-pass-fallback-match-chain-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = value + 10\n            return selected\n        case _:\n            pass\n        case 2:\n            return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("middle pass fallback match should lower through optional CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("middle pass fallback match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(
