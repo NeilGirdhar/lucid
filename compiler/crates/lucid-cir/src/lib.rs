@@ -6294,6 +6294,99 @@ impl Function {
         Ok(function)
     }
 
+    /// Lower a guard ladder whose first branch returns a value while every
+    /// `elif` branch and the final fall-through return no value.
+    pub fn from_parameterized_if_elif_voids_optional(
+        condition: &lucid_syntax::Expr,
+        then_expr: &lucid_syntax::Expr,
+        elif_conditions: &[&lucid_syntax::Expr],
+        parameter_names: &[String],
+    ) -> Result<Self, LowerError> {
+        if elif_conditions.is_empty() {
+            return Err(LowerError::UnsupportedExpression);
+        }
+        let mut entry_instructions = parameter_names
+            .iter()
+            .enumerate()
+            .map(|(index, _)| Instruction::Param {
+                result: ValueId(index as u32),
+                index: index as u32,
+            })
+            .collect::<Vec<_>>();
+        let mut next = parameter_names.len() as u32;
+        let condition_value = Self::lower_parameter_expr(
+            condition,
+            parameter_names,
+            &mut entry_instructions,
+            &mut next,
+        )?;
+        let mut then_instructions = Vec::new();
+        let then_value = Self::lower_parameter_expr(
+            then_expr,
+            parameter_names,
+            &mut then_instructions,
+            &mut next,
+        )?;
+        let mut blocks = vec![
+            Block {
+                id: BlockId(0),
+                instructions: entry_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: BlockId(1),
+                    else_block: BlockId(2),
+                },
+            },
+            Block {
+                id: BlockId(1),
+                instructions: then_instructions,
+                terminator: Terminator::Return(Some(then_value)),
+            },
+        ];
+        let mut condition_block = 2_u32;
+        for (index, elif_condition) in elif_conditions.iter().enumerate() {
+            let then_block = condition_block + 1;
+            let false_block = condition_block + 2;
+            let mut condition_instructions = Vec::new();
+            let condition_value = Self::lower_parameter_expr(
+                elif_condition,
+                parameter_names,
+                &mut condition_instructions,
+                &mut next,
+            )?;
+            blocks.push(Block {
+                id: BlockId(condition_block),
+                instructions: condition_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: BlockId(then_block),
+                    else_block: BlockId(false_block),
+                },
+            });
+            blocks.push(Block {
+                id: BlockId(then_block),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(None),
+            });
+            if index == elif_conditions.len() - 1 {
+                blocks.push(Block {
+                    id: BlockId(false_block),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                });
+            }
+            condition_block = false_block;
+        }
+        let function = Self {
+            entry: BlockId(0),
+            blocks,
+        };
+        function
+            .verify()
+            .map_err(|_| LowerError::UnsupportedExpression)?;
+        Ok(function)
+    }
+
     /// Lower a conditional with a value-returning then arm and a void
     /// fall-through else arm. The helper first builds the ordinary diamond,
     /// then removes the synthetic else value and merge block.
