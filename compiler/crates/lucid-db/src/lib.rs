@@ -7653,6 +7653,18 @@ mod tests {
     }
 
     #[test]
+    fn typed_module_accepts_continue_in_while_function_body() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "while-continue.lucid",
+            "def drain(n: int):\n    while n > 0:\n        n -= 1\n        continue\n",
+        );
+        typed_module(&db, file)
+            .as_ref()
+            .expect("continue should type-check inside a while loop");
+    }
+
+    #[test]
     fn typed_hir_retains_constant_loop_body_expressions() {
         let mut db = CompilerDatabase::default();
         let file = db.add_file(

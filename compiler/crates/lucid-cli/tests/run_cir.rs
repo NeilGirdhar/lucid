@@ -904,6 +904,37 @@ fn run_cir_executes_void_local_bound_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_void_counted_while_with_continue() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_void_continue_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    while n > 0:\n        n -= 1\n        continue\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir void counted while with continue failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn run_cir_executes_parameter_counted_while_accumulator() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_while_accumulator_{}.lucid",
