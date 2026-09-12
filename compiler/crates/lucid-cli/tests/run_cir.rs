@@ -1741,6 +1741,37 @@ fn run_cir_executes_descending_range_accumulator_with_local_bound_alias() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_local_step_literal_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_step_literal_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down(n: int):\n    total = 0\n    stride = -1\n    for i in range(n, 0, stride):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range step literal-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
 fn run_cir_executes_conditional_return_expression() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_conditional_expr_{}.lucid",

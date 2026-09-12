@@ -2559,6 +2559,26 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_local_step_literal_alias_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stride = -1
+for i in range(n, 0, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("range step literal alias accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range step literal alias accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile range step literal alias loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[4]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 10);
+    }
+
+    #[test]
     fn result_abi_executes_while_induction_accumulation_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0

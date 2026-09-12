@@ -4347,6 +4347,25 @@ impl Function {
                 },
             }
         }
+        fn int_literal_operand(
+            expr: &lucid_syntax::Expr,
+            bound_aliases: &[&lucid_syntax::Stmt],
+            depth: usize,
+        ) -> Option<i64> {
+            if depth > bound_aliases.len() {
+                return None;
+            }
+            match Function::int_literal_expr(expr) {
+                Some(value) => Some(value),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } => {
+                        bound_alias_value(name, bound_aliases)
+                            .and_then(|value| int_literal_operand(value, bound_aliases, depth + 1))
+                    }
+                    _ => None,
+                },
+            }
+        }
         #[derive(Clone)]
         enum RangeAccumulatorOperand {
             Materialized(Instruction),
@@ -4416,15 +4435,15 @@ impl Function {
             value: lucid_syntax::LiteralValue::Int(0),
             span: func.span(),
         };
-        let (start_expr, stop_expr, step) = match args.as_slice() {
-            [stop] => (&zero, &stop.value, 1),
-            [start, stop] => (&start.value, &stop.value, 1),
-            [start, stop, step] => {
-                let step = Self::int_literal_expr(&step.value)?;
+        let (start_expr, stop_expr, step_expr, step) = match args.as_slice() {
+            [stop] => (&zero, &stop.value, None, 1),
+            [start, stop] => (&start.value, &stop.value, None, 1),
+            [start, stop, step_arg] => {
+                let step = int_literal_operand(&step_arg.value, &bound_aliases, 0)?;
                 if step == 0 {
                     return None;
                 }
-                (&start.value, &stop.value, step)
+                (&start.value, &stop.value, Some(&step_arg.value), step)
             }
             _ => return None,
         };
@@ -4432,6 +4451,9 @@ impl Function {
             let (alias_name, _) = initialized_ident(statement)?;
             if !expr_uses_bound_alias(start_expr, alias_name, &bound_aliases, 0)?
                 && !expr_uses_bound_alias(stop_expr, alias_name, &bound_aliases, 0)?
+                && !step_expr.is_some_and(|expr| {
+                    expr_uses_bound_alias(expr, alias_name, &bound_aliases, 0).unwrap_or(false)
+                })
                 && !expr_uses_bound_alias(initial_expr, alias_name, &bound_aliases, 0)?
                 && !expr_uses_bound_alias(accumulator_operand_expr, alias_name, &bound_aliases, 0)?
             {
@@ -10522,6 +10544,19 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("descending range alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stride = -1
+for i in range(n, 0, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("range step literal alias accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range step literal alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
             r#"total = 0

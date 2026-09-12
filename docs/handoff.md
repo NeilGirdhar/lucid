@@ -574,7 +574,9 @@ diverged:
   `begin = seed; for i in range(begin, n)`,
   `begin = seed; stop = limit; for i in range(begin, stop)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
-  CIR/native path. The returned accumulator name now identifies the
+  CIR/native path. Three-argument ranges may also spell a statically known
+  literal step through a local alias, as in `stride = -1; range(n, 0, stride)`.
+  The returned accumulator name now identifies the
   accumulator initializer, so setup aliases may feed either range bounds or
   `total = ...`, and those local aliases may appear before or after the
   accumulator initializer. The setup resolver can also follow a bounded local
