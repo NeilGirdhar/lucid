@@ -2725,19 +2725,110 @@ impl Function {
         module: &lucid_syntax::Module,
         parameter_names: &[String],
     ) -> Option<Result<Self, LowerError>> {
-        let (initial, while_statement, return_name) = match module.statements.as_slice() {
-            [while_statement, lucid_syntax::Stmt::Return {
-                value: Some(lucid_syntax::Expr::Ident { name, .. }),
-                ..
-            }] => (None, while_statement, Some(name)),
-            [while_statement] => (None, while_statement, None),
-            [initial, while_statement, lucid_syntax::Stmt::Return {
-                value: Some(lucid_syntax::Expr::Ident { name, .. }),
-                ..
-            }] => (Some(initial), while_statement, Some(name)),
-            [initial, while_statement] => (Some(initial), while_statement, None),
-            _ => return None,
-        };
+        fn initialized_ident(
+            statement: &lucid_syntax::Stmt,
+        ) -> Option<(&String, &lucid_syntax::Expr)> {
+            match statement {
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(value),
+                    ..
+                } => Some((name, value)),
+                _ => None,
+            }
+        }
+        fn initializer_instruction(
+            statement: &lucid_syntax::Stmt,
+            target: &str,
+            result: ValueId,
+            parameter_names: &[String],
+        ) -> Option<Instruction> {
+            let (target_name, value) = initialized_ident(statement)?;
+            if target_name != target {
+                return None;
+            }
+            match value {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(value),
+                    ..
+                } => Some(Instruction::ConstInt {
+                    result,
+                    value: *value,
+                }),
+                lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
+                    result,
+                    index: parameter_names
+                        .iter()
+                        .position(|parameter| parameter == name)? as u32,
+                }),
+                _ => None,
+            }
+        }
+        let (initial, bound_initial, while_statement, return_name) =
+            match module.statements.as_slice() {
+                [while_statement, lucid_syntax::Stmt::Return {
+                    value: Some(lucid_syntax::Expr::Ident { name, .. }),
+                    ..
+                }] => (None, None, while_statement, Some(name)),
+                [while_statement] => (None, None, while_statement, None),
+                [initial, while_statement, lucid_syntax::Stmt::Return {
+                    value: Some(lucid_syntax::Expr::Ident { name, .. }),
+                    ..
+                }] => (Some(initial), None, while_statement, Some(name)),
+                [initial, while_statement] => (Some(initial), None, while_statement, None),
+                [first_statement, second_statement, while_statement, lucid_syntax::Stmt::Return {
+                    value: Some(lucid_syntax::Expr::Ident { name, .. }),
+                    ..
+                }] => {
+                    let lucid_syntax::Stmt::While { condition, .. } = while_statement else {
+                        return None;
+                    };
+                    let lucid_syntax::Expr::Binary { left, right, .. } = condition else {
+                        return None;
+                    };
+                    let lucid_syntax::Expr::Ident {
+                        name: induction_name,
+                        ..
+                    } = left.as_ref()
+                    else {
+                        return None;
+                    };
+                    let lucid_syntax::Expr::Ident {
+                        name: bound_name, ..
+                    } = right.as_ref()
+                    else {
+                        return None;
+                    };
+                    if induction_name == bound_name {
+                        return None;
+                    }
+                    let (first_name, _) = initialized_ident(first_statement)?;
+                    let (second_name, _) = initialized_ident(second_statement)?;
+                    if first_name == induction_name && second_name == bound_name {
+                        (
+                            Some(first_statement),
+                            Some(second_statement),
+                            while_statement,
+                            Some(name),
+                        )
+                    } else if first_name == bound_name && second_name == induction_name {
+                        (
+                            Some(second_statement),
+                            Some(first_statement),
+                            while_statement,
+                            Some(name),
+                        )
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            };
         let lucid_syntax::Stmt::While {
             condition,
             body,
@@ -2859,66 +2950,22 @@ impl Function {
                     .iter()
                     .position(|parameter| parameter == name)? as u32,
             },
-            Some(lucid_syntax::Stmt::Assignment {
-                target:
-                    lucid_syntax::Expr::Ident {
-                        name: target_name, ..
-                    },
-                value,
-                ..
-            }) if target_name == name => match value {
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                } => Instruction::ConstInt {
-                    result: ValueId(0),
-                    value: *value,
-                },
-                lucid_syntax::Expr::Ident {
-                    name: source_name, ..
-                } => Instruction::Param {
-                    result: ValueId(0),
-                    index: parameter_names
-                        .iter()
-                        .position(|parameter| parameter == source_name)?
-                        as u32,
-                },
-                _ => return None,
-            },
-            Some(lucid_syntax::Stmt::VarDef {
-                pattern: lucid_syntax::Pattern::Ident(target_name, _),
-                value: Some(value),
-                ..
-            }) if target_name == name => match value {
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                } => Instruction::ConstInt {
-                    result: ValueId(0),
-                    value: *value,
-                },
-                lucid_syntax::Expr::Ident {
-                    name: source_name, ..
-                } => Instruction::Param {
-                    result: ValueId(0),
-                    index: parameter_names
-                        .iter()
-                        .position(|parameter| parameter == source_name)?
-                        as u32,
-                },
-                _ => return None,
-            },
-            Some(_) => return None,
+            Some(statement) => {
+                initializer_instruction(statement, name, ValueId(0), parameter_names)?
+            }
         };
-        let bound_instruction = match right.as_ref() {
-            lucid_syntax::Expr::Literal {
-                value: lucid_syntax::LiteralValue::Int(value),
-                ..
-            } => Some(Instruction::ConstInt {
+        let bound_instruction = match (right.as_ref(), bound_initial) {
+            (
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(value),
+                    ..
+                },
+                None,
+            ) => Some(Instruction::ConstInt {
                 result: ValueId(2),
                 value: *value,
             }),
-            lucid_syntax::Expr::Ident { .. } => None,
+            (lucid_syntax::Expr::Ident { .. }, _) => None,
             _ => return None,
         };
         let mut entry_instructions = vec![initial_instruction];
@@ -2930,13 +2977,22 @@ impl Function {
             lucid_syntax::Expr::Ident {
                 name: bound_name, ..
             } if bound_name != name => {
-                entry_instructions.push(Instruction::Param {
-                    result: ValueId(2),
-                    index: parameter_names
-                        .iter()
-                        .position(|parameter| parameter == bound_name)?
-                        as u32,
-                });
+                if let Some(statement) = bound_initial {
+                    entry_instructions.push(initializer_instruction(
+                        statement,
+                        bound_name,
+                        ValueId(2),
+                        parameter_names,
+                    )?);
+                } else {
+                    entry_instructions.push(Instruction::Param {
+                        result: ValueId(2),
+                        index: parameter_names
+                            .iter()
+                            .position(|parameter| parameter == bound_name)?
+                            as u32,
+                    });
+                }
             }
             _ => return None,
         }
@@ -9012,6 +9068,20 @@ return n
                 .expect("parameter-bound counted loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(2)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
+            r#"value = n
+stop = limit
+while value > stop:
+    value -= 1
+return value
+"#,
+        )
+        .expect("local-bound counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("local-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(2)));
 
         let module = lucid_syntax::parse(
             r#"while n > 0:

@@ -2329,6 +2329,29 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_local_bound_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"value = n
+stop = limit
+while value > stop:
+    value -= 1
+return value
+"#,
+        )
+        .expect("local-bound counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into()],
+        )
+        .expect("local-bound counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile local-bound counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 2);
+    }
+
+    #[test]
     fn result_abi_executes_local_induction_while_accumulation_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0

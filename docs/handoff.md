@@ -576,7 +576,9 @@ diverged:
   returned accumulator name identifies which initializer is loop-carried as the
   result. The comparison bound may also be a local initialized from a literal
   or parameter before the loop, so the entry block can seed induction,
-  accumulator, and bound values before entering the shared header.
+  accumulator, and bound values before entering the shared header. The same
+  local-bound entry seeding is supported for plain counted `while` loops that
+  return the induction variable.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable
@@ -859,7 +861,9 @@ diverged:
   accumulator loops when it is an integer literal or parameter copy, regardless
   of whether that initializer appears before or after the accumulator
   initializer. A local bound initializer is accepted as the third pre-loop
-  initializer when the loop condition compares against that local.
+  initializer when the loop condition compares against that local. Plain
+  counted loops also accept paired local induction and local bound
+  initializers, including `value = n; stop = limit; while value > stop`.
   The induction recognizer also accepts `!=` conditions and lowers them to
   the same checked back-edge shape.
   It rejects empty or multi-statement bodies without indexing assumptions and
