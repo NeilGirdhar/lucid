@@ -275,8 +275,9 @@ diverged:
   `unreachable`, `todo`, or `panic` assumptions before their test modules.
   Former internal assumptions in runtime `range`/`getattr`/`pow`, native
   anonymous-closure and boolean-operator lowering, checker overload and
-  contextual literal validation, and database function-body lowering now
-  return existing typed diagnostics instead.
+  contextual literal validation, database function-body lowering, and parser
+  index-expression assembly now return existing typed diagnostics or explicit
+  AST forms instead.
 * `run-cir --function` now invokes non-result integer and void CIR entry
   points through checked parameterized adapters, so argument-count or ABI
   mismatches become CLI execution errors instead of assertion-backed unsafe

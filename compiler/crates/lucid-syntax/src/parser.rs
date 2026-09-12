@@ -2188,8 +2188,8 @@ impl Parser {
                 }
                 let end = self.expect(&TokenKind::RBracket)?.span;
                 let span = expr.span().merge(end);
-                let index = if indices.len() == 1 {
-                    indices.pop().unwrap()
+                let index = if let [index] = indices.as_slice() {
+                    index.clone()
                 } else {
                     Expr::Record {
                         fields: indices.into_iter().map(|e| (None, e)).collect(),

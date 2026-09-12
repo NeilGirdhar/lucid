@@ -300,6 +300,29 @@ contextmanager def locked(lock: Lock):
     }
 
     #[test]
+    fn test_parse_single_and_multi_index_without_internal_unwrap() {
+        let module = parse("value = xs[i]\npair = grid[row, col]\n").unwrap();
+        let Stmt::Assignment { value, .. } = &module.statements[0] else {
+            panic!("expected assignment");
+        };
+        let Expr::Index { index, .. } = value else {
+            panic!("expected single index expression");
+        };
+        assert!(matches!(index.as_ref(), Expr::Ident { name, .. } if name == "i"));
+
+        let Stmt::Assignment { value, .. } = &module.statements[1] else {
+            panic!("expected assignment");
+        };
+        let Expr::Index { index, .. } = value else {
+            panic!("expected multi-index expression");
+        };
+        let Expr::Record { fields, .. } = index.as_ref() else {
+            panic!("expected multi-index tuple record");
+        };
+        assert_eq!(fields.len(), 2);
+    }
+
+    #[test]
     fn test_parse_rejects_classmethod_decorator_keyword() {
         let src = "class Factory:\n    @classmethod\n    def make(cls) -> int:\n        return 1\n";
         let error = parse(src).expect_err("classmethod decorator must fail in parsing");
