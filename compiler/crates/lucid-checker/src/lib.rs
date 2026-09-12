@@ -3495,8 +3495,7 @@ impl TypeChecker {
                     .iter()
                     .find_map(|base| match base {
                         TypeExpr::Named { name: parent, .. }
-                            if self.env.classes.contains_key(parent)
-                                || self.env.class_members.contains_key(parent) =>
+                            if self.env.classes.contains_key(parent) =>
                         {
                             Some(self.inherited_member_names(parent))
                         }
@@ -3507,8 +3506,7 @@ impl TypeChecker {
                     .iter()
                     .find_map(|base| match base {
                         TypeExpr::Named { name: parent, .. }
-                            if self.env.classes.contains_key(parent)
-                                || self.env.class_members.contains_key(parent) =>
+                            if self.env.classes.contains_key(parent) =>
                         {
                             Some(self.inherited_final_method_names(parent))
                         }
@@ -11152,6 +11150,17 @@ class Child(Reusable, Base1, Base2):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("overrides an inherited member"));
+    }
+
+    #[test]
+    fn trait_obligation_implementations_do_not_require_override() {
+        let module = parse(
+            "trait Scorable[K]:\n    def score(self, item: K) -> float\n\nclass InferenceModel[K](Scorable[K]):\n    def score(self, item: K) -> float:\n        return 1.0\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("implementing a trait obligation should not require override");
     }
 
     #[test]
