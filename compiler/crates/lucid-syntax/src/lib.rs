@@ -241,6 +241,12 @@ contextmanager def locked(lock: Lock):
     }
 
     #[test]
+    fn test_parse_rejects_field_delete_with_fixed_shape_message() {
+        let error = parse("del obj.field\n").expect_err("field delete must fail in parsing");
+        assert!(error.contains("fields are fixed, not deletable"));
+    }
+
+    #[test]
     fn test_parse_rejects_keyword_class_bases() {
         let src = "class Meta:\n    pass\nclass Model(metaclass=Meta):\n    pass\n";
         let error = parse(src).expect_err("keyword class bases must fail in parsing");

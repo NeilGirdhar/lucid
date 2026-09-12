@@ -295,8 +295,22 @@ impl Parser {
             TokenKind::Del => {
                 self.advance();
                 let mut names = vec![self.expect_ident()?];
+                if self.check(&TokenKind::Dot) {
+                    return Err(ParseError {
+                        message: "fields are fixed, not deletable; use an explicit removal method instead"
+                            .into(),
+                        span: self.peek().span,
+                    });
+                }
                 while self.match_tok(&TokenKind::Comma) {
                     names.push(self.expect_ident()?);
+                    if self.check(&TokenKind::Dot) {
+                        return Err(ParseError {
+                            message: "fields are fixed, not deletable; use an explicit removal method instead"
+                                .into(),
+                            span: self.peek().span,
+                        });
+                    }
                 }
                 self.consume_stmt_end()?;
                 Ok(Stmt::Delete { names, span: start })
