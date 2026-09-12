@@ -5736,7 +5736,19 @@ impl TypeChecker {
                 }
             }
             Expr::Call { func, args, .. } => {
+                if matches!(&**func, Expr::Type(_)) {
+                    return Err(TypeError {
+                        message: "type() is not supported; use class[X] for type annotations and `is` for instance checks".into(),
+                        span: func.span(),
+                    });
+                }
                 if let Expr::Ident { name, .. } = &**func {
+                    if name == "type" {
+                        return Err(TypeError {
+                            message: "type() is not supported; use class[X] for type annotations and `is` for instance checks".into(),
+                            span: func.span(),
+                        });
+                    }
                     if name == "round" && args.len() == 2 {
                         let digits = self.type_of_expr(&args[1].value)?;
                         if !digits.is_subtype_of(&Type::Int, &self.env) {

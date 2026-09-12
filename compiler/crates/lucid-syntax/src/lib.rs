@@ -235,6 +235,12 @@ contextmanager def locked(lock: Lock):
     }
 
     #[test]
+    fn test_parse_rejects_removed_type_builtin_call() {
+        let error = parse("value = type(1)\n").expect_err("type() must fail in parsing");
+        assert!(error.contains("type() is not supported"));
+    }
+
+    #[test]
     fn test_parse_async_def_and_await() {
         let src = r#"
 async def load() -> int:

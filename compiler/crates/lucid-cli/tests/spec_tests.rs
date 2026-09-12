@@ -583,6 +583,13 @@ fn test_modules_reject_dunder_all() {
     assert!(chk.unwrap_err().contains("__all__ is not supported"));
 }
 
+#[test]
+fn test_removed_type_builtin_call_is_rejected() {
+    let (chk, _evl) = run_lucid("value = type(1)\n");
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("type() is not supported"));
+}
+
 // ---------------------------------------------------------------------------
 // 20. Keyword reference (docs/keywords.rst)
 // ---------------------------------------------------------------------------

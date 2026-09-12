@@ -2382,6 +2382,16 @@ impl Parser {
                 })
             }
             TokenKind::Type => {
+                if self
+                    .peek_next()
+                    .map(|token| token.kind == TokenKind::LParen)
+                    .unwrap_or(false)
+                {
+                    return Err(ParseError {
+                        message: "type() is not supported; use class[X] for type annotations and `is` for instance checks".into(),
+                        span: tok.span,
+                    });
+                }
                 let next_is_type_expr = matches!(
                     self.peek_next().map(|t| &t.kind),
                     Some(TokenKind::Ident(_))
