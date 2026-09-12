@@ -219,6 +219,8 @@ pub struct CCodeGenerator {
     pending_anonymous_adapters:
         Vec<(String, String, Vec<Param>, Expr, Vec<String>, Option<String>)>,
     active_capture_names: HashSet<String>,
+    anonymous_global_names: HashSet<String>,
+    anonymous_capture_types: HashMap<String, Vec<(String, String)>>,
     /// Source-level names bound to named functions.  Native functions have
     /// concrete C signatures, so preserving this alias lets `g = f; g(x)`
     /// use the same checked entry point without inventing an untyped C value.
@@ -334,6 +336,8 @@ impl CCodeGenerator {
             anonymous_block_bindings: HashMap::new(),
             pending_anonymous_adapters: Vec::new(),
             active_capture_names: HashSet::new(),
+            anonymous_global_names: HashSet::new(),
+            anonymous_capture_types: HashMap::new(),
             function_aliases: HashMap::new(),
             partial_bindings: HashMap::new(),
             module_aliases: HashMap::new(),
@@ -1166,6 +1170,24 @@ impl CCodeGenerator {
             self.collect_vars_from_stmt(stmt, &mut top_vars);
         }
         self.global_vars = top_vars.clone();
+        self.anonymous_global_names.clear();
+        for stmt in &top_level_stmts {
+            match stmt {
+                Stmt::VarDef {
+                    pattern: Pattern::Ident(name, _),
+                    value: Some(Expr::AnonymousDef { .. }),
+                    ..
+                }
+                | Stmt::Assignment {
+                    target: Expr::Ident { name, .. },
+                    value: Expr::AnonymousDef { .. },
+                    ..
+                } => {
+                    self.anonymous_global_names.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
 
         // Emit global variable declarations at file scope
         for (name, ty) in &top_vars {
@@ -6343,15 +6365,34 @@ static inline void lucid_print_val(LucidVal v) {
                 captures.to_vec(),
                 recursive_name,
             ));
+        let capture_types = captures
+            .iter()
+            .map(|capture| {
+                (
+                    capture.clone(),
+                    self.var_types
+                        .get(capture)
+                        .or_else(|| self.global_vars.get(capture))
+                        .cloned()
+                        .unwrap_or_else(|| "LucidVal".into()),
+                )
+            })
+            .collect();
+        self.anonymous_capture_types.insert(adapter.clone(), capture_types);
         self.emit_line(&format!("LucidVal {adapter}(void*, LucidList*, LucidDict*);"));
         let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
         let maker_params = captures
             .iter()
+            .filter(|capture| !self.capture_is_live_global(capture))
             .map(|capture| format!("LucidVal {capture}"))
             .collect::<Vec<_>>()
             .join(", ");
         self.emit_line(&format!("void* {maker}({maker_params});"));
         (adapter, env_type)
+    }
+
+    fn capture_is_live_global(&self, name: &str) -> bool {
+        self.global_vars.contains_key(name) && self.anonymous_global_names.contains(name)
     }
 
     fn emit_recursive_anonymous_binding(
@@ -6373,10 +6414,10 @@ static inline void lucid_print_val(LucidVal v) {
             .collect::<HashSet<_>>();
         let mut captures = HashSet::new();
         self.collect_anonymous_captures(body_expr, &parameter_names, &mut captures);
-        if !captures.contains(name) {
+        if captures.is_empty() {
             return Ok(false);
         }
-        captures.remove(name);
+        let recursive = captures.remove(name);
         let mut captures = captures.into_iter().collect::<Vec<_>>();
         captures.sort();
         for capture in &captures {
@@ -6392,20 +6433,25 @@ static inline void lucid_print_val(LucidVal v) {
             params,
             body_expr,
             &captures,
-            Some(name.to_string()),
+            recursive.then(|| name.to_string()),
         );
         let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
         let env = if captures.is_empty() {
             "NULL".to_string()
         } else {
+            let env_args = captures
+                .iter()
+                .filter(|capture| !self.capture_is_live_global(capture))
+                .map(|capture| format!("lucid_wrap(lucid_var_{capture})"))
+                .collect::<Vec<_>>();
+            if env_args.is_empty() {
+                "NULL".to_string()
+            } else {
             format!(
                 "{maker}({})",
-                captures
-                    .iter()
-                    .map(|capture| format!("lucid_wrap(lucid_var_{capture})"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                env_args.join(", ")
             )
+            }
         };
         self.emit_line(&format!(
             "lucid_var_{name} = lucid_closure({adapter}, {env}, NULL);"
@@ -6558,15 +6604,26 @@ static inline void lucid_print_val(LucidVal v) {
     fn emit_pending_anonymous_adapters(&mut self) -> Result<(), CodegenError> {
         let pending = std::mem::take(&mut self.pending_anonymous_adapters);
         for (adapter, env_type, params, body, captures, recursive_name) in pending {
+            let capture_types = self
+                .anonymous_capture_types
+                .remove(&adapter)
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+            let env_captures = captures
+                .iter()
+                .filter(|capture| !self.capture_is_live_global(capture))
+                .cloned()
+                .collect::<Vec<_>>();
             self.emit_line(&format!("typedef struct {env_type} {{"));
             self.indent += 1;
-            for capture in &captures {
+            for capture in &env_captures {
                 self.emit_line(&format!("LucidVal {capture};"));
             }
             self.indent -= 1;
             self.emit_line(&format!("}} {env_type};"));
             let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
-            let maker_params = captures
+            let maker_params = env_captures
                 .iter()
                 .map(|capture| format!("LucidVal {capture}"))
                 .collect::<Vec<_>>()
@@ -6575,7 +6632,7 @@ static inline void lucid_print_val(LucidVal v) {
             self.indent += 1;
             self.emit_line(&format!("{env_type}* env = ({env_type}*)malloc(sizeof({env_type}));"));
             self.emit_line(&format!("if (!env) {{ fprintf(stderr, \"out of memory allocating closure environment\\n\"); exit(1); }}"));
-            for capture in &captures {
+            for capture in &env_captures {
                 self.emit_line(&format!("env->{capture} = {capture};"));
             }
             self.emit_line("return env;");
@@ -6593,8 +6650,31 @@ static inline void lucid_print_val(LucidVal v) {
             self.var_types.clear();
             self.active_capture_names = captures.iter().cloned().collect();
             for capture in &captures {
-                self.var_types.insert(capture.clone(), "LucidVal".into());
-                self.emit_line(&format!("LucidVal lucid_var_{capture} = env->{capture};"));
+                self.var_types.insert(
+                    capture.clone(),
+                    self.global_vars
+                        .get(capture)
+                        .cloned()
+                        .unwrap_or_else(|| "LucidVal".into()),
+                );
+                if !self.capture_is_live_global(capture) {
+                    let ty = capture_types
+                        .get(capture)
+                        .map(String::as_str)
+                        .unwrap_or("LucidVal");
+                    let value = match ty {
+                        "int64_t" => format!("lucid_as_int(env->{capture})"),
+                        "double" => format!("lucid_as_float(env->{capture})"),
+                        "bool" => format!("lucid_as_bool(env->{capture})"),
+                        "const char*" => format!("lucid_as_str(env->{capture})"),
+                        "LucidList*" => format!("lucid_as_list(env->{capture})"),
+                        "LucidDict*" => format!("lucid_as_dict(env->{capture})"),
+                        "LucidSet*" => format!("lucid_as_set(env->{capture})"),
+                        "LucidVal" => format!("env->{capture}"),
+                        other => format!("({other})lucid_as_ptr(env->{capture})"),
+                    };
+                    self.emit_line(&format!("{ty} lucid_var_{capture} = {value};"));
+                }
             }
             if let Some(name) = &recursive_name {
                 self.var_types.insert(name.clone(), "LucidVal".into());
@@ -8202,7 +8282,16 @@ static inline void lucid_print_val(LucidVal v) {
                 let env = if captures.is_empty() {
                     "NULL".to_string()
                 } else {
-                    format!("{maker}({})", captures.iter().map(|capture| format!("lucid_wrap(lucid_var_{capture})")).collect::<Vec<_>>().join(", "))
+                    let env_args = captures
+                        .iter()
+                        .filter(|capture| !self.capture_is_live_global(capture))
+                        .map(|capture| format!("lucid_wrap(lucid_var_{capture})"))
+                        .collect::<Vec<_>>();
+                    if env_args.is_empty() {
+                        "NULL".to_string()
+                    } else {
+                        format!("{maker}({})", env_args.join(", "))
+                    }
                 };
                 Ok(format!("lucid_closure({adapter}, {env}, NULL)"))
             }
@@ -13077,6 +13166,15 @@ static inline void lucid_print_val(LucidVal v) {
             } => {
                 let th = self.emit_expr(then_branch)?;
                 let el = self.emit_expr(else_branch)?;
+                let tagged = self.expr_is_val(then_branch)
+                    || self.expr_is_val(else_branch)
+                    || self.infer_expr_type(then_branch, &HashMap::new()) == "LucidVal"
+                    || self.infer_expr_type(else_branch, &HashMap::new()) == "LucidVal";
+                let (th, el) = if tagged {
+                    (format!("lucid_wrap({th})"), format!("lucid_wrap({el})"))
+                } else {
+                    (th, el)
+                };
                 Ok(format!(
                     "(({}) ? ({th}) : ({el}))",
                     self.emit_condition(condition)?
@@ -18397,6 +18495,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "recursive anonymous failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "120\n");
+    }
+
+    #[test]
+    fn native_mutually_recursive_anonymous_functions_are_callable() {
+        let source = "even = def(n: int) -> bool: true if n == 0 else odd(n - 1)\nodd = def(n: int) -> bool: false if n == 0 else even(n - 1)\nprint(even(6))\nprint(odd(6))\n";
+        let module = parse(source).expect("mutual recursive source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_mutual_recursive_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("mutual recursion should compile");
+        let run = Command::new(&output).output().expect("run mutual recursion");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "mutual recursion failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
     }
 
     #[test]
