@@ -1693,6 +1693,109 @@ pub fn lower_function_body(
                 [lucid_syntax::Stmt::Return { value: None, .. }] | [lucid_syntax::Stmt::Pass(_)]
             )
         }
+        fn match_arm_void_bindings(
+            arm: &lucid_syntax::MatchArm,
+        ) -> Result<Option<Vec<(String, lucid_syntax::Span)>>, Arc<str>> {
+            let statements = arm.body.as_slice();
+            let setup = match statements.split_last() {
+                Some((lucid_syntax::Stmt::Return { value: None, .. }, prefix))
+                | Some((lucid_syntax::Stmt::Pass(_), prefix)) => prefix,
+                Some((_, _)) => statements,
+                None => return Ok(Some(Vec::new())),
+            };
+            let mut bindings = Vec::new();
+            for statement in setup {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let (name, value) = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name, value),
+                    lucid_syntax::Stmt::Expr(_) => {
+                        return Err(Arc::from(
+                            "effectful discarded expression is not supported by typed CIR lowering",
+                        ));
+                    }
+                    _ => return Ok(None),
+                };
+                bindings.push((name.clone(), value.span()));
+            }
+            Ok(Some(bindings))
+        }
+        let lower_match_bindings_to_void =
+            |bindings: &[(String, lucid_syntax::Span)]| -> Result<Arc<lucid_cir::Function>, Arc<str>> {
+                if bindings.is_empty() {
+                    let function = lucid_cir::Function {
+                        entry: lucid_cir::BlockId(0),
+                        blocks: vec![lucid_cir::Block {
+                            id: lucid_cir::BlockId(0),
+                            instructions: function
+                                .parameter_names
+                                .iter()
+                                .enumerate()
+                                .map(|(index, _)| lucid_cir::Instruction::Param {
+                                    result: lucid_cir::ValueId(index as u32),
+                                    index: index as u32,
+                                })
+                                .collect(),
+                            terminator: lucid_cir::Terminator::Return(None),
+                        }],
+                    };
+                    function
+                        .verify()
+                        .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+                    return Ok(Arc::new(function));
+                }
+                let nodes = function
+                    .body_expressions
+                    .iter()
+                    .map(|node| lucid_cir::TypedExprNode {
+                        id: node.id,
+                        kind: node.kind.clone(),
+                        detail: node.detail.clone(),
+                        children: node.children.to_vec(),
+                        literal: node.literal,
+                    })
+                    .collect::<Vec<_>>();
+                let local_bindings = bindings
+                    .iter()
+                    .map(|(name, span)| {
+                        function
+                            .body_expressions
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == *span)
+                            .map(|node| (name.clone(), node.id))
+                            .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let root_id = local_bindings
+                    .last()
+                    .map(|(_, id)| *id)
+                    .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
+                let mut lowered = lucid_cir::Function::from_typed_function_body_with_locals(
+                    &nodes,
+                    root_id,
+                    &function.parameter_names,
+                    &local_bindings,
+                )
+                .map_err(|_| Arc::<str>::from("unsupported constant match expression"))?;
+                if let Some(block) = lowered.blocks.last_mut() {
+                    block.terminator = lucid_cir::Terminator::Return(None);
+                }
+                lowered
+                    .verify()
+                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+                Ok(Arc::new(lowered))
+            };
         let pattern_literal = |pattern: &lucid_syntax::Pattern| match pattern {
             lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(value), _) => {
                 Some(lucid_cir::TypedLiteral::Int(*value))
@@ -1749,26 +1852,10 @@ pub fn lower_function_body(
                 return Err(Arc::from("unsupported constant match expression"));
             }
             if match_arm_is_void(selected_arm) {
-                let function = lucid_cir::Function {
-                    entry: lucid_cir::BlockId(0),
-                    blocks: vec![lucid_cir::Block {
-                        id: lucid_cir::BlockId(0),
-                        instructions: function
-                            .parameter_names
-                            .iter()
-                            .enumerate()
-                            .map(|(index, _)| lucid_cir::Instruction::Param {
-                                result: lucid_cir::ValueId(index as u32),
-                                index: index as u32,
-                            })
-                            .collect(),
-                        terminator: lucid_cir::Terminator::Return(None),
-                    }],
-                };
-                function
-                    .verify()
-                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
-                return Ok(Arc::new(function));
+                return lower_match_bindings_to_void(&[]);
+            }
+            if let Some(bindings) = match_arm_void_bindings(selected_arm)? {
+                return lower_match_bindings_to_void(&bindings);
             }
             return Err(Arc::from("unsupported constant match expression"));
         }
@@ -5706,6 +5793,47 @@ mod tests {
             .as_ref()
             .expect("constant subject pass match should lower only the selected arm");
         assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-subject-setup-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject setup before void match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-setup-fallthrough-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            temporary = value + 1\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject setup-only match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-effectful-fallthrough-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            str(value)\n        case _:\n            return value\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("effectful selected match setup must not be erased");
+        assert!(error.contains("effectful discarded expression"));
 
         let file = db.add_file(
             "constant-subject-dead-invalid-match.lucid",
