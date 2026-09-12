@@ -5014,12 +5014,24 @@ impl TypeChecker {
                                 })
                             ) if expected == actual
                         );
-                        if !anonymous_expected_function
-                            && !exact_integer_literal
-                            && !exact_float_literal
-                            && !exact_string_literal
-                            && !iv.is_subtype_of(&resolved, &self.env)
-                        {
+                        let direct_match = anonymous_expected_function
+                            || exact_integer_literal
+                            || exact_float_literal
+                            || exact_string_literal
+                            || iv.is_subtype_of(&resolved, &self.env);
+                        let contextual_literal_ok = if !direct_match
+                            && value.as_ref().is_some_and(|expr| {
+                                matches!(expr, Expr::List { .. } | Expr::Dict { .. })
+                            }) {
+                            self.literal_expr_conforms_to_expected(
+                                value.as_ref().expect("checked above"),
+                                &resolved,
+                                0,
+                            )?
+                        } else {
+                            false
+                        };
+                        if !direct_match && !contextual_literal_ok {
                             return Err(TypeError {
                                 message: format!(
                                     "type mismatch in variable definition: declared {:?}, got {:?}",
@@ -6624,6 +6636,101 @@ impl TypeChecker {
         }
 
         Ok(expected.clone())
+    }
+
+    fn expand_type_alias_placeholder(&self, ty: &Type) -> Option<Type> {
+        let Type::Class {
+            name, type_args, ..
+        } = ty
+        else {
+            return None;
+        };
+        let alias = self.env.type_aliases.get(name)?;
+        let params = self
+            .env
+            .type_alias_params
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        if params.len() != type_args.len() {
+            return None;
+        }
+        let substitutions = params
+            .into_iter()
+            .zip(type_args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        Some(substitute_type(alias, &substitutions))
+    }
+
+    fn literal_expr_conforms_to_expected(
+        &self,
+        expr: &Expr,
+        expected: &Type,
+        depth: usize,
+    ) -> Result<bool, TypeError> {
+        if depth > 64 {
+            return Ok(false);
+        }
+        if let Type::Union(parts) = expected {
+            for part in parts {
+                if self.literal_expr_conforms_to_expected(expr, part, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
+        if let Some(expanded) = self.expand_type_alias_placeholder(expected) {
+            return self.literal_expr_conforms_to_expected(expr, &expanded, depth + 1);
+        }
+        match (expr, expected) {
+            (
+                Expr::List { elements, .. },
+                Type::Class {
+                    name, type_args, ..
+                },
+            ) if name == "list" => {
+                let Some(element_type) = type_args.first() else {
+                    return Ok(true);
+                };
+                for element in elements
+                    .iter()
+                    .filter(|element| !matches!(element, Expr::Skip(_)))
+                {
+                    if !self.literal_expr_conforms_to_expected(element, element_type, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            (
+                Expr::Dict { entries, .. },
+                Type::Class {
+                    name, type_args, ..
+                },
+            ) if matches!(name.as_str(), "dict" | "frozendict") => {
+                let key_type = type_args
+                    .first()
+                    .cloned()
+                    .unwrap_or(Type::TypeVar("Any".into()));
+                let value_type = type_args
+                    .get(1)
+                    .cloned()
+                    .unwrap_or(Type::TypeVar("Any".into()));
+                for (key, value) in entries {
+                    if matches!(key, Expr::Skip(_)) || matches!(value, Expr::Skip(_)) {
+                        continue;
+                    }
+                    if !self.literal_expr_conforms_to_expected(key, &key_type, depth + 1)? {
+                        return Ok(false);
+                    }
+                    if !self.literal_expr_conforms_to_expected(value, &value_type, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => Ok(self.type_of_expr(expr)?.is_subtype_of(expected, &self.env)),
+        }
     }
 
     fn argument_type_against_parameter(
@@ -11414,6 +11521,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("dict[str, V] should satisfy Mapping[str, V]");
+    }
+
+    #[test]
+    fn recursive_alias_annotations_contextually_check_nested_literals() {
+        let module = parse(
+            "type PyTree[L] = L | list[PyTree[L]] | dict[str, PyTree[L]]\n\nleaves: PyTree[int] = [1, {\"a\": 2, \"b\": [3, 4]}, 5]\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("nested literals should contextually satisfy recursive alias annotations");
     }
 
     #[test]
