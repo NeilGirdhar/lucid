@@ -523,7 +523,9 @@ diverged:
   nested dynamic value-returning `if` now lowers through the ordinary dynamic
   CIR branch path, including optional no-`else` fall-through, void-only
   branches, value-returning and void `elif` ladders, and a
-  void-then/value-else optional form.
+  void-then/value-else optional form. Nested selected dynamic ladders now skip
+  statically false `elif` arms and stop at a statically true `elif`, matching the
+  top-level ladder lowering rules.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.
