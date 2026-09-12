@@ -938,6 +938,13 @@ impl Default for Interpreter {
 }
 
 impl Interpreter {
+    fn pattern_identifier_binds(name: &str) -> bool {
+        !matches!(
+            name,
+            "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
+        ) && !name.chars().next().is_some_and(char::is_uppercase)
+    }
+
     pub fn new() -> Self {
         let env = Rc::new(RefCell::new(Environment::new()));
         let mut interp = Self {
@@ -974,7 +981,9 @@ impl Interpreter {
 
     fn mark_final_pattern(&mut self, pattern: &Pattern) {
         match pattern {
-            Pattern::Ident(name, _) => self.env.borrow_mut().mark_final(name.clone()),
+            Pattern::Ident(name, _) if Self::pattern_identifier_binds(name) => {
+                self.env.borrow_mut().mark_final(name.clone());
+            }
             Pattern::Tuple(items, _) => {
                 for item in items {
                     self.mark_final_pattern(item);
@@ -986,7 +995,10 @@ impl Interpreter {
                 }
             }
             Pattern::Star(item, _) => self.mark_final_pattern(item),
-            Pattern::Literal(_, _) | Pattern::Wildcard(_) | Pattern::Type(_, _) => {}
+            Pattern::Ident(_, _)
+            | Pattern::Literal(_, _)
+            | Pattern::Wildcard(_)
+            | Pattern::Type(_, _) => {}
         }
     }
 
@@ -9643,7 +9655,7 @@ impl Interpreter {
         span: Span,
     ) -> Result<(), RuntimeError> {
         match pattern {
-            Pattern::Ident(name, _) => {
+            Pattern::Ident(name, _) if Self::pattern_identifier_binds(name) => {
                 self.env.borrow_mut().set(name.clone(), value);
                 Ok(())
             }
@@ -9775,7 +9787,10 @@ impl Interpreter {
                 }
                 Ok(())
             }
-            _ => Ok(()),
+            Pattern::Ident(_, _)
+            | Pattern::Literal(_, _)
+            | Pattern::Wildcard(_)
+            | Pattern::Type(_, _) => Ok(()),
         }
     }
 
@@ -9788,12 +9803,7 @@ impl Interpreter {
         match pattern {
             // In a match, an otherwise-unqualified identifier is a binding;
             // builtin type names and class names are narrowing patterns.
-            Pattern::Ident(name, _)
-                if !matches!(
-                    name.as_str(),
-                    "int" | "float" | "bool" | "str" | "none" | "None"
-                ) && !self.classes.contains_key(name) =>
-            {
+            Pattern::Ident(name, _) if Self::pattern_identifier_binds(name) => {
                 self.env.borrow_mut().set(name.clone(), value);
                 Ok(())
             }
@@ -9857,7 +9867,10 @@ impl Interpreter {
                 Ok(())
             }
             Pattern::Star(nested, _) => self.bind_match_pattern(nested, value, span),
-            _ => Ok(()),
+            Pattern::Ident(_, _)
+            | Pattern::Literal(_, _)
+            | Pattern::Wildcard(_)
+            | Pattern::Type(_, _) => Ok(()),
         }
     }
 
@@ -9877,13 +9890,7 @@ impl Interpreter {
                 {
                     true
                 }
-                _ if !matches!(
-                    name.as_str(),
-                    "int" | "float" | "bool" | "str" | "none" | "None"
-                ) && !self.classes.contains_key(name) =>
-                {
-                    true
-                }
+                _ if Self::pattern_identifier_binds(name) => true,
                 _ => false,
             },
             Pattern::Literal(lit, _) => match (lit, value) {
@@ -10061,6 +10068,15 @@ impl Interpreter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_pattern_binding_skips_type_like_identifiers() {
+        assert!(!Interpreter::pattern_identifier_binds("Pair"));
+        assert!(!Interpreter::pattern_identifier_binds("int"));
+        assert!(!Interpreter::pattern_identifier_binds("complex"));
+        assert!(!Interpreter::pattern_identifier_binds("_"));
+        assert!(Interpreter::pattern_identifier_binds("value"));
+    }
 
     #[test]
     fn runtime_reexports_shared_native_abi() {

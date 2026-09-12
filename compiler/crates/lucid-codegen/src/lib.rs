@@ -269,7 +269,7 @@ impl CCodeGenerator {
     fn pattern_identifier_binds(name: &str) -> bool {
         !matches!(
             name,
-            "_" | "int" | "float" | "bool" | "str" | "none" | "None"
+            "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
         ) && !name.chars().next().is_some_and(char::is_uppercase)
     }
 
@@ -15212,6 +15212,7 @@ mod tests {
     fn native_pattern_binding_skips_type_like_identifiers() {
         assert!(!CCodeGenerator::pattern_identifier_binds("Pair"));
         assert!(!CCodeGenerator::pattern_identifier_binds("int"));
+        assert!(!CCodeGenerator::pattern_identifier_binds("complex"));
         assert!(!CCodeGenerator::pattern_identifier_binds("_"));
         assert!(CCodeGenerator::pattern_identifier_binds("value"));
     }

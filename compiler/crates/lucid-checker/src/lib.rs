@@ -6764,7 +6764,7 @@ impl TypeChecker {
             Pattern::Ident(name, _)
                 if !matches!(
                     name.as_str(),
-                    "_" | "int" | "float" | "bool" | "str" | "none" | "None"
+                    "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
                 ) && self.named_pattern_type(name).is_none() =>
             {
                 self.env.variables.insert(
@@ -11941,7 +11941,7 @@ fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
         Pattern::Ident(name, _)
             if !matches!(
                 name.as_str(),
-                "_" | "int" | "float" | "bool" | "str" | "none" | "None"
+                "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
             ) && !looks_like_class_name(name) =>
         {
             names.insert(name.clone());
@@ -12391,6 +12391,7 @@ mod tests {
                     Pattern::Ident("Cat".into(), Span::default()),
                     Pattern::Ident("value".into(), Span::default()),
                     Pattern::Ident("int".into(), Span::default()),
+                    Pattern::Ident("complex".into(), Span::default()),
                 ],
                 Span::default(),
             ),
@@ -12399,6 +12400,7 @@ mod tests {
 
         assert!(!names.contains("Cat"));
         assert!(!names.contains("int"));
+        assert!(!names.contains("complex"));
         assert!(names.contains("value"));
     }
 

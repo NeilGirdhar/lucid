@@ -1178,11 +1178,12 @@ diverged:
   Named and explicit type patterns are checked against the subject type as
   well, while union subjects accept a pattern that can match any variant.
   The local-binding pre-scan now follows the same rule: uppercase
-  identifier patterns are treated as type/class patterns, not new local
-  bindings, so predeclared locals stay aligned with match checking.
-  Native codegen uses the same binding predicate for pattern-local variables,
-  so uppercase class/type patterns no longer synthesize bogus `lucid_var_*`
-  locals in generated C.
+  identifier patterns and builtin type names such as `complex` are treated as
+  type/class patterns, not new local bindings, so predeclared locals stay
+  aligned with match checking.
+  Runtime and native codegen use the same binding predicate for pattern-local
+  variables, so type/class patterns no longer synthesize bogus runtime
+  bindings or `lucid_var_*` locals in generated C.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
@@ -1704,7 +1705,7 @@ diverged:
   `with` bodies now receive the same scoped replay, including context-target
   pattern bindings and sequential locals.
   Typed-HIR graph collection now treats type-like identifier patterns the
-  same way the checker does: uppercase names and primitive type names do not
+  same way the checker does: uppercase names and builtin type names do not
   seed new gradual locals in `with`, `for`, or `match` scopes.
 * CIR now exposes an owned typed-HIR input seam for primitive initializer
   graphs. The database records each initializer's expression root and literal
