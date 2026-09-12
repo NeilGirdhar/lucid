@@ -5508,9 +5508,17 @@ static inline void lucid_print_val(LucidVal v) {
                         })
                         .collect::<Vec<_>>()
                         .join(" || "),
-                    _ => "true".to_string(),
+                    _ => {
+                        return Err(CodegenError {
+                            message: format!("unsupported type pattern '{}'", name),
+                        });
+                    }
                 },
-                _ => "true".to_string(),
+                _ => {
+                    return Err(CodegenError {
+                        message: "unsupported non-name type pattern".to_string(),
+                    });
+                }
             },
         })
     }
@@ -15638,6 +15646,20 @@ print(" ".join(capitalized))
             .expect("run native binary");
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "1\n1\n1\n0");
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_match_rejects_unsupported_type_pattern() {
+        let source = "value = 3\nmatch value:\n    case Unknown[int]:\n        print(1)\n    case _:\n        print(0)\n";
+        let module = parse(source).expect("unsupported type match pattern source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_unsupported_type_match_pattern_{}",
+            std::process::id()
+        ));
+        let error =
+            compile_to_native(&module, &output, 0).expect_err("unsupported type pattern must fail");
+        assert!(error.message.contains("unsupported type pattern 'Unknown'"));
         let _ = std::fs::remove_file(output);
     }
 

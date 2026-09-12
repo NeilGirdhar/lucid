@@ -1195,6 +1195,8 @@ diverged:
   through as native match-all arms for non-container subjects. `range` remains
   outside that set until native `range(...)` expressions stop lowering
   directly to lists in expression contexts.
+  Native lowering now rejects unsupported explicit type patterns instead of
+  compiling them as unconditional matches.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
