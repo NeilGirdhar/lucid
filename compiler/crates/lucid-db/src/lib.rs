@@ -1720,32 +1720,55 @@ pub fn lower_function_body(
             }
             selected
         });
-        if let Some(selected_arm) = constant_selected_arm
-            && let Some(value) = match_arm_value(selected_arm)
-        {
-            let nodes = function
-                .body_expressions
-                .iter()
-                .map(|node| lucid_cir::TypedExprNode {
-                    id: node.id,
-                    kind: node.kind.clone(),
-                    detail: node.detail.clone(),
-                    children: node.children.to_vec(),
-                    literal: node.literal,
-                })
-                .collect::<Vec<_>>();
-            if let Some(root) = function
-                .body_expressions
-                .iter()
-                .rev()
-                .find(|node| node.span == value.span())
-                && let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
-                    &nodes,
-                    root.id,
-                    &function.parameter_names,
-                )
-            {
-                return Ok(Arc::new(lowered));
+        if let Some(selected_arm) = constant_selected_arm {
+            if let Some(value) = match_arm_value(selected_arm) {
+                let nodes = function
+                    .body_expressions
+                    .iter()
+                    .map(|node| lucid_cir::TypedExprNode {
+                        id: node.id,
+                        kind: node.kind.clone(),
+                        detail: node.detail.clone(),
+                        children: node.children.to_vec(),
+                        literal: node.literal,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(root) = function
+                    .body_expressions
+                    .iter()
+                    .rev()
+                    .find(|node| node.span == value.span())
+                    && let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                        &nodes,
+                        root.id,
+                        &function.parameter_names,
+                    )
+                {
+                    return Ok(Arc::new(lowered));
+                }
+                return Err(Arc::from("unsupported constant match expression"));
+            }
+            if match_arm_is_void(selected_arm) {
+                let function = lucid_cir::Function {
+                    entry: lucid_cir::BlockId(0),
+                    blocks: vec![lucid_cir::Block {
+                        id: lucid_cir::BlockId(0),
+                        instructions: function
+                            .parameter_names
+                            .iter()
+                            .enumerate()
+                            .map(|(index, _)| lucid_cir::Instruction::Param {
+                                result: lucid_cir::ValueId(index as u32),
+                                index: index as u32,
+                            })
+                            .collect(),
+                        terminator: lucid_cir::Terminator::Return(None),
+                    }],
+                };
+                function
+                    .verify()
+                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+                return Ok(Arc::new(function));
             }
             return Err(Arc::from("unsupported constant match expression"));
         }
@@ -5665,6 +5688,33 @@ mod tests {
             .expect("constant subject match should lower only the selected arm");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(17)));
+
+        let file = db.add_file(
+            "constant-subject-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject void match should lower only the selected arm");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-subject-pass-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            pass\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject pass match should lower only the selected arm");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-subject-dead-invalid-match.lucid",
+            "def answer():\n    match true as flag:\n        case true:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject match must not evaluate dead fallback arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
 
         let file = db.add_file(
             "guarded-constant-subject-match.lucid",
