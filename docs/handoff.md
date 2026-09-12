@@ -529,7 +529,9 @@ diverged:
   the simple local SSA form `name = expr; return name`. These nested value and
   void arm recognizers now ignore `pass`, `assert(true)`, statically false
   `while` loops, and statically empty `for` loops as true no-ops instead of
-  treating them as unsupported extra statements.
+  treating them as unsupported extra statements. They also reuse static branch
+  selection for nested no-op conditionals, so dead `if false` arms remain
+  unlowered.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.
