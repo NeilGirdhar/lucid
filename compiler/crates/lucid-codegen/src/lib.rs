@@ -216,7 +216,8 @@ pub struct CCodeGenerator {
     /// escaping activation; keeping them separate from expression bindings
     /// makes the limitation explicit and avoids silently dropping statements.
     anonymous_block_bindings: HashMap<String, (Vec<(String, String)>, Vec<Stmt>)>,
-    pending_anonymous_adapters: Vec<(String, Vec<Param>, Expr)>,
+    pending_anonymous_adapters: Vec<(String, String, Vec<Param>, Expr, Vec<String>)>,
+    active_capture_names: HashSet<String>,
     /// Source-level names bound to named functions.  Native functions have
     /// concrete C signatures, so preserving this alias lets `g = f; g(x)`
     /// use the same checked entry point without inventing an untyped C value.
@@ -331,6 +332,7 @@ impl CCodeGenerator {
             anonymous_bindings: HashMap::new(),
             anonymous_block_bindings: HashMap::new(),
             pending_anonymous_adapters: Vec::new(),
+            active_capture_names: HashSet::new(),
             function_aliases: HashMap::new(),
             partial_bindings: HashMap::new(),
             module_aliases: HashMap::new(),
@@ -6235,15 +6237,105 @@ static inline void lucid_print_val(LucidVal v) {
         }
     }
 
-    fn register_anonymous_adapter(&mut self, params: &[Param], body: &Expr) -> String {
+    fn collect_anonymous_captures(
+        &self,
+        expr: &Expr,
+        params: &HashSet<String>,
+        captures: &mut HashSet<String>,
+    ) {
+        const BUILTINS: &[&str] = &[
+            "abs", "all", "any", "bool", "bytes", "chr", "dict", "float", "int",
+            "len", "list", "max", "min", "ord", "pow", "print", "range", "repr",
+            "round", "set", "str", "sum", "type", "none", "None", "true", "false",
+        ];
+        match expr {
+            Expr::Ident { name, .. } => {
+                if !params.contains(name)
+                    && !BUILTINS.contains(&name.as_str())
+                    && !self.known_fn_params.contains_key(name)
+                {
+                    captures.insert(name.clone());
+                }
+            }
+            Expr::Binary { left, right, .. } => {
+                self.collect_anonymous_captures(left, params, captures);
+                self.collect_anonymous_captures(right, params, captures);
+            }
+            Expr::Unary { expr, .. }
+            | Expr::Propagate { expr, .. }
+            | Expr::Await { expr, .. }
+            | Expr::Freeze { expr, .. }
+            | Expr::Trust { expr, .. } => self.collect_anonymous_captures(expr, params, captures),
+            Expr::Call { func, args, .. } => {
+                self.collect_anonymous_captures(func, params, captures);
+                for arg in args {
+                    self.collect_anonymous_captures(&arg.value, params, captures);
+                }
+            }
+            Expr::Construct { args, .. } => {
+                for arg in args {
+                    self.collect_anonymous_captures(&arg.value, params, captures);
+                }
+            }
+            Expr::Attribute { value, .. } => self.collect_anonymous_captures(value, params, captures),
+            Expr::Index { value, index, .. } => {
+                self.collect_anonymous_captures(value, params, captures);
+                self.collect_anonymous_captures(index, params, captures);
+            }
+            Expr::IfExpr { condition, then_branch, else_branch, .. } => {
+                self.collect_anonymous_captures(condition, params, captures);
+                self.collect_anonymous_captures(then_branch, params, captures);
+                self.collect_anonymous_captures(else_branch, params, captures);
+            }
+            Expr::List { elements, .. } | Expr::Set { elements, .. } => {
+                for element in elements {
+                    self.collect_anonymous_captures(element, params, captures);
+                }
+            }
+            Expr::Dict { entries, .. } => {
+                for (key, value) in entries {
+                    self.collect_anonymous_captures(key, params, captures);
+                    self.collect_anonymous_captures(value, params, captures);
+                }
+            }
+            Expr::Record { fields, .. } => {
+                for (_, value) in fields {
+                    self.collect_anonymous_captures(value, params, captures);
+                }
+            }
+            Expr::ListComp { element, iter, .. } | Expr::SetComp { element, iter, .. } => {
+                self.collect_anonymous_captures(element, params, captures);
+                self.collect_anonymous_captures(iter, params, captures);
+            }
+            Expr::DictComp { key, value, iter, .. } => {
+                self.collect_anonymous_captures(key, params, captures);
+                self.collect_anonymous_captures(value, params, captures);
+                self.collect_anonymous_captures(iter, params, captures);
+            }
+            Expr::Slice { start, stop, step, .. } => {
+                for bound in [start, stop, step].into_iter().flatten() {
+                    self.collect_anonymous_captures(bound, params, captures);
+                }
+            }
+            Expr::Literal { .. } | Expr::Type(_) | Expr::Skip(_) | Expr::AnonymousDef { .. } => {}
+        }
+    }
+
+    fn register_anonymous_adapter(
+        &mut self,
+        params: &[Param],
+        body: &Expr,
+        captures: &[String],
+    ) -> (String, String) {
         let adapter = format!(
             "lucid_closure_call_anon_{}",
             self.pending_anonymous_adapters.len() + 1
         );
+        let env_type = format!("LucidAnonEnv_{}", self.pending_anonymous_adapters.len() + 1);
         self.pending_anonymous_adapters
-            .push((adapter.clone(), params.to_vec(), body.clone()));
+            .push((adapter.clone(), env_type.clone(), params.to_vec(), body.clone(), captures.to_vec()));
         self.emit_line(&format!("LucidVal {adapter}(void*, LucidList*, LucidDict*);"));
-        adapter
+        (adapter, env_type)
     }
 
     /// Emit erased adapters for fixed-arity top-level functions.  The normal
@@ -6390,17 +6482,45 @@ static inline void lucid_print_val(LucidVal v) {
 
     fn emit_pending_anonymous_adapters(&mut self) -> Result<(), CodegenError> {
         let pending = std::mem::take(&mut self.pending_anonymous_adapters);
-        for (adapter, params, body) in pending {
+        for (adapter, env_type, params, body, captures) in pending {
+            self.emit_line(&format!("typedef struct {env_type} {{"));
+            self.indent += 1;
+            for capture in &captures {
+                self.emit_line(&format!("LucidVal {capture};"));
+            }
+            self.indent -= 1;
+            self.emit_line(&format!("}} {env_type};"));
+            let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
+            let maker_params = captures
+                .iter()
+                .map(|capture| format!("LucidVal {capture}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.emit_line(&format!("void* {maker}({maker_params}) {{"));
+            self.indent += 1;
+            self.emit_line(&format!("{env_type}* env = ({env_type}*)malloc(sizeof({env_type}));"));
+            self.emit_line(&format!("if (!env) {{ fprintf(stderr, \"out of memory allocating closure environment\\n\"); exit(1); }}"));
+            for capture in &captures {
+                self.emit_line(&format!("env->{capture} = {capture};"));
+            }
+            self.emit_line("return env;");
+            self.indent -= 1;
+            self.emit_line("}");
             self.emit_line(&format!(
                 "LucidVal {adapter}(void* _env, LucidList* args, LucidDict* kwargs) {{"
             ));
             self.indent += 1;
-            self.emit_line("(void)_env; (void)kwargs;");
+            self.emit_line(&format!("{env_type}* env = ({env_type}*)_env; (void)kwargs;"));
             self.emit_line(&format!(
                 "if (!args || args->len != {}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}",
                 params.len()
             ));
             self.var_types.clear();
+            self.active_capture_names = captures.iter().cloned().collect();
+            for capture in &captures {
+                self.var_types.insert(capture.clone(), "LucidVal".into());
+                self.emit_line(&format!("LucidVal lucid_var_{capture} = env->{capture};"));
+            }
             for (index, param) in params.iter().enumerate() {
                 let ty = self.map_type_expr(param.type_annotation.as_ref());
                 let value = match ty.as_str() {
@@ -6423,6 +6543,7 @@ static inline void lucid_print_val(LucidVal v) {
             self.emit_line("}");
         }
         self.var_types.clear();
+        self.active_capture_names.clear();
         Ok(())
     }
 
@@ -7975,13 +8096,27 @@ static inline void lucid_print_val(LucidVal v) {
                     .iter()
                     .map(|param| param.name.clone())
                     .collect::<HashSet<_>>();
-                if self.anonymous_has_unbound_name(body_expr, &parameter_names) {
-                    return Err(CodegenError {
-                        message: "native escaping anonymous closures require captured environments".into(),
-                    });
+                let mut captures = HashSet::new();
+                self.collect_anonymous_captures(body_expr, &parameter_names, &mut captures);
+                let mut captures = captures.into_iter().collect::<Vec<_>>();
+                captures.sort();
+                for capture in &captures {
+                    if !self.var_types.contains_key(capture)
+                        && !self.global_vars.contains_key(capture)
+                    {
+                        return Err(CodegenError {
+                            message: format!("unknown anonymous closure capture '{capture}'"),
+                        });
+                    }
                 }
-                let adapter = self.register_anonymous_adapter(params, body_expr);
-                Ok(format!("lucid_closure({adapter}, NULL, NULL)"))
+                let (adapter, _) = self.register_anonymous_adapter(params, body_expr, &captures);
+                let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
+                let env = if captures.is_empty() {
+                    "NULL".to_string()
+                } else {
+                    format!("{maker}({})", captures.iter().map(|capture| format!("lucid_wrap(lucid_var_{capture})")).collect::<Vec<_>>().join(", "))
+                };
+                Ok(format!("lucid_closure({adapter}, {env}, NULL)"))
             }
             Expr::Ident { name, .. } => {
                 if self
@@ -18014,6 +18149,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous list failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+    }
+
+    #[test]
+    fn native_stores_capturing_anonymous_function_in_list() {
+        let source = "offset = 5\nfs = [def(x: int) -> int: x + offset]\nprint(fs[0](7))\n";
+        let module = parse(source).expect("capturing anonymous list source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_capturing_anonymous_function_list_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("capturing anonymous list should compile");
+        let run = Command::new(&output).output().expect("run capturing anonymous list");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "capturing anonymous list failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "12\n");
     }
 
     #[test]
