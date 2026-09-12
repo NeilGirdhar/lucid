@@ -502,6 +502,9 @@ diverged:
   local.
   The same dead-leading-arm lowering now applies to initialized locals, where
   pass-only dynamic arms preserve the initialized value.
+  A dead leading arm followed by one dynamic pass-only `elif` and a value
+  fallback now lowers by inverting the dynamic condition and using the optional
+  value/void CIR path.
   Single-statement static branches whose selected arm is `pass`, including
   selected `elif` and `else` arms, now lower to verified void CIR; dynamic
   `elif` guards still block this fold.

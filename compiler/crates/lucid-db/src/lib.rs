@@ -2783,6 +2783,44 @@ pub fn lower_function_body(
     if let [
         lucid_syntax::Stmt::If {
             condition,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition) == Some(false)
+        && let [(elif_condition, elif_branch)] = elif_branches.as_slice()
+        && static_truth(elif_condition).is_none()
+        && has_identifier(elif_condition)
+        && branch_is_single_void(elif_branch)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(else_value),
+                ..
+            },
+        ] = else_branch.as_slice()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let inverted = lucid_syntax::Expr::Unary {
+            op: lucid_syntax::UnaryOp::Not,
+            expr: Box::new(elif_condition.clone()),
+            span: elif_condition.span(),
+        };
+        return lucid_cir::Function::from_parameterized_if_optional(
+            &inverted,
+            else_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported false-leading mixed elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
             then_branch,
             else_branch: Some(else_branch),
             elif_branches,
@@ -6666,10 +6704,11 @@ mod tests {
             "dynamic-elif-pass-branch.lucid",
             "def answer(value: int):\n    if false:\n        return value\n    elif value > 0:\n        pass\n    else:\n        return 0\n",
         );
-        let error = lower_function_body(&db, file, "answer".into())
+        let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
-            .expect_err("dynamic elif pass branch must not be folded to void");
-        assert!(error.contains("constant function branch"));
+            .expect("dead leading mixed elif pass branch should lower through optional CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(0)));
 
         let file = db.add_file(
             "constant-unary-branch.lucid",
