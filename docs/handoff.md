@@ -1789,6 +1789,8 @@ gaps are architectural rather than isolated syntax features:
    augmented assignments, instead of falling back to a default span outside
    imports and simple bindings. The resolved declaration index now reuses
    that same helper, so declaration spans stay aligned with statement spans.
+   Synthetic CIR literals created for range and conditional lowering now inherit
+   nearby source spans instead of carrying default placeholder spans.
    Dedicated round-trip coverage now verifies Unicode line/column, byte
    offset, and span extraction agree.
    Malformed reversed spans now safely produce an empty slice rather than

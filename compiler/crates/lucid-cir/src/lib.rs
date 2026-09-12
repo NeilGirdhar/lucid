@@ -3105,7 +3105,7 @@ impl Function {
         let accumulator_update = accumulator_update?;
         let zero = lucid_syntax::Expr::Literal {
             value: lucid_syntax::LiteralValue::Int(0),
-            span: lucid_syntax::Span::default(),
+            span: func.span(),
         };
         let (start_expr, stop_expr, step) = match args.as_slice() {
             [stop] => (&zero, &stop.value, 1),
@@ -5741,11 +5741,11 @@ impl Function {
                 condition,
                 &lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Int(0),
-                    span: lucid_syntax::Span::default(),
+                    span: condition.span(),
                 },
                 &lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Int(0),
-                    span: lucid_syntax::Span::default(),
+                    span: condition.span(),
                 },
                 parameter_names,
             )?;
@@ -6103,7 +6103,7 @@ impl Function {
     ) -> Result<Self, LowerError> {
         let zero = lucid_syntax::Expr::Literal {
             value: lucid_syntax::LiteralValue::Int(0),
-            span: lucid_syntax::Span::default(),
+            span: condition.span(),
         };
         let mut function =
             Self::from_parameterized_if(condition, then_expr, &zero, parameter_names)?;
