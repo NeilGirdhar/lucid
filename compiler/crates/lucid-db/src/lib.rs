@@ -3733,6 +3733,50 @@ pub fn lower_function_body(
             condition,
             then_branch,
             elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(fallback_value),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && branch_is_single_void(then_branch)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(elif_condition, branch)| {
+                single_value_return(branch).map(|value| (elif_condition, value))
+            })
+            .collect::<Option<Vec<_>>>()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_void_elif_chain_direct(
+            condition,
+            &elif_values,
+            fallback_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported mixed guard elif return"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
             else_branch,
             ..
         },
@@ -10274,6 +10318,17 @@ mod tests {
             .as_ref()
             .expect("guard elif return should lower through CIR");
         assert_eq!(function.execute_with_args(&[1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "void-guard-elif-return.lucid",
+            "def choose(first: bool, second: bool):\n    if first:\n        return\n    elif second:\n        return 22\n    return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("void guard with value elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(None));
         assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(33)));
     }
