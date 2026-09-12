@@ -7637,6 +7637,26 @@ return total
                 .execute(),
             Ok(Some(8))
         );
+        let module = lucid_syntax::parse(
+            "value = 8\nfor item in []:\n    value = 1\nif_broken:\n    value = 2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("empty literal loop if_broken should not run")
+                .execute(),
+            Ok(Some(8))
+        );
+        let module = lucid_syntax::parse(
+            "value = 7\nwhile false:\n    value = 1\nif_broken:\n    value = 2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("statically false while if_broken should not run")
+                .execute(),
+            Ok(Some(7))
+        );
         let module =
             lucid_syntax::parse("for item in range(0, 1, -1):\n    pass\nvalue = 9\n").unwrap();
         assert_eq!(

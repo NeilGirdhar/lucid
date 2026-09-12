@@ -6430,6 +6430,24 @@ mod tests {
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(45)));
 
         let file = db.add_file(
+            "empty-loop-if-broken.lucid",
+            "def answer(value: int):\n    for item in []:\n        value = 1\n    if_broken:\n        value = 2\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("empty loop if_broken should not run in function lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "false-while-if-broken.lucid",
+            "def answer(value: int):\n    while false:\n        value = 1\n    if_broken:\n        value = 2\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("statically false while if_broken should not run in function lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
             "true-assert-before-return.lucid",
             "def answer(value: int):\n    assert(true)\n    return value + 1\n",
         );
