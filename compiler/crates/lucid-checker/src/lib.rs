@@ -6608,6 +6608,16 @@ impl TypeChecker {
                         } else if matches!(op, BinaryOp::Add) && lt == Type::Str && rt == Type::Str
                         {
                             Ok(Type::Str)
+                        } else if matches!(op, BinaryOp::Mul)
+                            && matches!(&lt, Type::Class { name, .. } if name == "list")
+                            && rt.is_subtype_of(&Type::Int, &self.env)
+                        {
+                            Ok(lt)
+                        } else if matches!(op, BinaryOp::Mul)
+                            && lt.is_subtype_of(&Type::Int, &self.env)
+                            && matches!(&rt, Type::Class { name, .. } if name == "list")
+                        {
+                            Ok(rt)
                         } else if !is_numeric(&lt) || !is_numeric(&rt) {
                             Err(TypeError {
                                 message: format!(
@@ -10858,6 +10868,21 @@ class Child(Base):
         let module = parse("formatted = \"%s\" % \"value\"\n").unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("unsupported operands for %"));
+    }
+
+    #[test]
+    fn list_repetition_preserves_element_type() {
+        let module = parse(
+            "items: list[str] = [\"x\"] * 3\nmore: list[str] = 2 * [\"y\"]\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("list repetition should preserve the list element type");
+
+        let module = parse("items = [\"x\"] * \"bad\"\n").unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("unsupported operands"));
     }
 
     #[test]
