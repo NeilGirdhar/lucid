@@ -10200,6 +10200,23 @@ static inline void lucid_print_val(LucidVal v) {
                 let l_ty = self.infer_expr_type(left, &HashMap::new());
                 let r_ty = self.infer_expr_type(right, &HashMap::new());
 
+                if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
+                    && l_ty == "bool"
+                    && r_ty == "bool"
+                {
+                    let symbol = match op {
+                        BinaryOp::BitAnd => "&",
+                        BinaryOp::BitOr => "|",
+                        BinaryOp::BitXor => "^",
+                        _ => unreachable!(),
+                    };
+                    return Err(CodegenError {
+                        message: format!(
+                            "bool operands do not support {symbol}; use boolean operators for logic"
+                        ),
+                    });
+                }
+
                 if self.expr_is_dynamic_value(left) && self.expr_is_dynamic_value(right) {
                     if let Some((operator, helper)) = match op {
                         BinaryOp::Add => Some(("+", "lucid_dynamic_add")),
@@ -22925,6 +22942,24 @@ print(result[1])
             .expect_err("string percent formatting must fail native codegen");
         let _ = fs::remove_file(&output);
         assert!(error.message.contains("not a string operator"));
+    }
+
+    #[test]
+    fn native_bool_bitwise_operators_are_rejected() {
+        for (source, expected) in [
+            ("print(true & false)\n", "do not support &"),
+            ("print(true | false)\n", "do not support |"),
+            ("print(true ^ false)\n", "do not support ^"),
+        ] {
+            let module = parse(source).expect("bool bitwise source should parse");
+            let output = std::env::temp_dir()
+                .join(format!("lucid_native_bool_bitwise_{}", std::process::id()));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("bool bitwise operators must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
+        }
     }
 
     #[test]

@@ -1848,7 +1848,10 @@ impl Interpreter {
             },
             BinaryOp::BitAnd => match (&lval, &rval) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a & b)),
-                (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a && *b)),
+                (Value::Bool(_), Value::Bool(_)) => Err(RuntimeError {
+                    message: "bool operands do not support &; use 'and' for logic".to_string(),
+                    span: *span,
+                }),
                 (Value::Set(a), Value::Set(b)) => Ok(Value::Set(Rc::new(RefCell::new(
                     a.borrow()
                         .iter()
@@ -1863,7 +1866,10 @@ impl Interpreter {
             },
             BinaryOp::BitOr => match (&lval, &rval) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a | b)),
-                (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
+                (Value::Bool(_), Value::Bool(_)) => Err(RuntimeError {
+                    message: "bool operands do not support |; use 'or' for logic".to_string(),
+                    span: *span,
+                }),
                 (Value::Set(a), Value::Set(b)) => {
                     let mut values = a.borrow().clone();
                     for item in b.borrow().iter() {
@@ -1880,7 +1886,11 @@ impl Interpreter {
             },
             BinaryOp::BitXor => match (&lval, &rval) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a ^ b)),
-                (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a ^ *b)),
+                (Value::Bool(_), Value::Bool(_)) => Err(RuntimeError {
+                    message: "bool operands do not support ^; compare booleans explicitly"
+                        .to_string(),
+                    span: *span,
+                }),
                 (Value::Set(a), Value::Set(b)) => {
                     let left = a.borrow();
                     let right = b.borrow();
@@ -11429,6 +11439,22 @@ s = sum(r)
         );
         assert_eq!(interp.env.borrow().get("a"), Some(Value::Int(-3)));
         assert_eq!(interp.env.borrow().get("b"), Some(Value::Int(1)));
+    }
+
+    #[test]
+    fn bool_bitwise_operators_are_not_logical_operators() {
+        for (source, expected) in [
+            ("value = true & false\n", "do not support &"),
+            ("value = true | false\n", "do not support |"),
+            ("value = true ^ false\n", "do not support ^"),
+        ] {
+            let module = parse(source).unwrap();
+            let mut interp = Interpreter::new();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("bool bitwise operators must fail at runtime");
+            assert!(error.message.contains(expected), "{source}: {error:?}");
+        }
     }
 
     #[test]
