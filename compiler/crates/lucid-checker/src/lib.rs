@@ -6274,7 +6274,11 @@ impl TypeChecker {
                         Ok(Type::Bool)
                     }
                     BinaryOp::In | BinaryOp::NotIn => {
-                        let supported = match &rt {
+                        let membership_target = match &rt {
+                            Type::View { inner, .. } => inner.as_ref(),
+                            other => other,
+                        };
+                        let supported = match membership_target {
                             Type::Class {
                                 name, type_args, ..
                             } if name == "list" || name == "set" => {
@@ -11997,9 +12001,9 @@ def reject(value: not int) -> none:
 
         checker
             .check_module(
-                &parse("text = \"abc\"\nfor ch in text.chars:\n    ch.upper()\nfirst: str = text.chars[0]\npart = text.chars[1:]\n").unwrap(),
+                &parse("text = \"abc\"\nfor ch in text.chars:\n    ch.upper()\nfirst: str = text.chars[0]\npart = text.chars[1:]\nhas_b = \"b\" in text.chars\nmissing_pair = \"bc\" in text.chars\n").unwrap(),
             )
-            .expect("str.chars should be iterable and yield str values");
+            .expect("str.chars should be iterable, indexable, and support membership");
         let error = TypeChecker::new()
             .check_module(&parse("text = \"abc\"\ntext.chars.append(\"x\")\n").unwrap())
             .unwrap_err();

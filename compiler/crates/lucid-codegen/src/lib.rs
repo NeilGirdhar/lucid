@@ -20717,7 +20717,7 @@ print(result[1])
 
     #[test]
     fn native_string_chars_property_is_unicode_aware() {
-        let source = "print(\"aé😀\".chars)\nprint(len(\"aé😀\".chars))\n";
+        let source = "print(\"aé😀\".chars)\nprint(len(\"aé😀\".chars))\nprint(\"é\" in \"aé😀\".chars)\nprint(\"aé\" in \"aé😀\".chars)\n";
         let module = parse(source).expect("string chars source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_string_chars_test_{}",
@@ -20728,7 +20728,10 @@ print(result[1])
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "[list len=3]\n3\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "[list len=3]\n3\ntrue\nfalse\n"
+        );
     }
 
     #[test]
