@@ -3693,6 +3693,24 @@ mod tests {
     }
 
     #[test]
+    fn typed_module_exposes_inferred_function_return_signature() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "inferred-return.lucid",
+            "def answer():\n    value = 40 + 2\n    return value\n",
+        );
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        let function = &typed.functions[0];
+        assert_eq!(function.symbol.name(&db), "answer");
+        assert_eq!(function.return_type.canonical(&db), "int");
+
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("inferred-return function should lower");
+        assert_eq!(lowered.execute(), Ok(Some(42)));
+    }
+
+    #[test]
     fn typed_hir_retains_constant_loop_body_expressions() {
         let mut db = CompilerDatabase::default();
         let file = db.add_file(
