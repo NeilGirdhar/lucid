@@ -13095,7 +13095,7 @@ with first():
     fn test_set_and_dict_conversion_builtins() {
         let src = r#"
 a = set([1, 2, 1])
-b = set("aba")
+b = set("aba".chars)
 c = dict([["x", 4], ["y", 5]])
 empty_s = set()
 empty_d = dict()
