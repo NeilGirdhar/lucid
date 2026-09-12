@@ -240,6 +240,22 @@ b = true
     assert!(evl.is_ok());
 }
 
+#[test]
+fn test_bool_does_not_satisfy_numeric_capabilities() {
+    let src = r#"
+trait SupportsIndex:
+    def __index__(self: ~Self) -> int
+
+def repeat(count: SupportsIndex) -> none:
+    pass
+
+repeat(true)
+"#;
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("incompatible type"));
+}
+
 // ---------------------------------------------------------------------------
 // 7. Modern type specification overview (docs/type-specification.rst)
 // ---------------------------------------------------------------------------

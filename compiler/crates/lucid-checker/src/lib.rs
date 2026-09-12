@@ -542,7 +542,6 @@ impl Type {
                     "SupportsAbs",
                     "SupportsRound",
                 ],
-                Type::Bool => &["SupportsInt", "SupportsIndex"],
                 Type::Str => &["Sized", "Container"],
                 _ => &[],
             };
@@ -13037,6 +13036,13 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("numeric builtins should satisfy their declared capability traits");
+
+        let bool_index = parse(
+            "trait SupportsIndex:\n    def __index__(self: ~Self) -> int\n\ndef repeat(count: SupportsIndex) -> none:\n    pass\n\nrepeat(true)\n",
+        )
+        .unwrap();
+        let err = TypeChecker::new().check_module(&bool_index).unwrap_err();
+        assert!(err.message.contains("incompatible type"));
 
         let module = parse("trait NeedsMethod:\n    def needed(self) -> int\n\nclass Empty(NeedsMethod):\n    ...\n").unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
