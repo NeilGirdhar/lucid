@@ -269,7 +269,16 @@ impl CCodeGenerator {
     fn pattern_identifier_binds(name: &str) -> bool {
         !matches!(
             name,
-            "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
+            "_" | "int"
+                | "float"
+                | "bool"
+                | "str"
+                | "complex"
+                | "bytes"
+                | "Bytes"
+                | "MemoryView"
+                | "none"
+                | "None"
         ) && !name.chars().next().is_some_and(char::is_uppercase)
     }
 
@@ -15214,6 +15223,8 @@ mod tests {
         assert!(!CCodeGenerator::pattern_identifier_binds("Pair"));
         assert!(!CCodeGenerator::pattern_identifier_binds("int"));
         assert!(!CCodeGenerator::pattern_identifier_binds("complex"));
+        assert!(!CCodeGenerator::pattern_identifier_binds("bytes"));
+        assert!(!CCodeGenerator::pattern_identifier_binds("MemoryView"));
         assert!(!CCodeGenerator::pattern_identifier_binds("_"));
         assert!(CCodeGenerator::pattern_identifier_binds("value"));
     }
@@ -15563,6 +15574,23 @@ print(" ".join(capitalized))
             .expect("run native binary");
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "1\n0");
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_match_buffer_patterns_test_buffer_values() {
+        let source = "data = b\"ab\"\nmatch data:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\nview = memoryview(data)\nmatch view:\n    case MemoryView:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\n";
+        let module = parse(source).expect("buffer match pattern source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_buffer_match_pattern_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("buffer match pattern should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert!(result.status.success(), "native program failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "1\n1\n0");
         let _ = std::fs::remove_file(output);
     }
 

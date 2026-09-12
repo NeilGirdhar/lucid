@@ -607,7 +607,16 @@ fn collect_typed_exprs<'db>(
 fn pattern_identifier_binds(name: &str) -> bool {
     !matches!(
         name,
-        "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
+        "_" | "int"
+            | "float"
+            | "bool"
+            | "str"
+            | "complex"
+            | "bytes"
+            | "Bytes"
+            | "MemoryView"
+            | "none"
+            | "None"
     ) && !name.chars().next().is_some_and(char::is_uppercase)
 }
 
@@ -6843,6 +6852,8 @@ mod tests {
         assert!(!pattern_identifier_binds("Cat"));
         assert!(!pattern_identifier_binds("int"));
         assert!(!pattern_identifier_binds("complex"));
+        assert!(!pattern_identifier_binds("bytes"));
+        assert!(!pattern_identifier_binds("MemoryView"));
         assert!(!pattern_identifier_binds("_"));
         assert!(pattern_identifier_binds("value"));
     }

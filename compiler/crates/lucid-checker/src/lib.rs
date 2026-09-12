@@ -6699,6 +6699,24 @@ impl TypeChecker {
             "float" => Some(Type::Float),
             "bool" => Some(Type::Bool),
             "str" => Some(Type::Str),
+            "bytes" | "Bytes" => Some(Type::Class {
+                name: "Bytes".into(),
+                type_args: Vec::new(),
+                parent: None,
+                traits: Vec::new(),
+                interfaces: vec!["Buffer".into(), "Sized".into(), "Container".into()],
+                fields: HashMap::new(),
+                is_sealed: true,
+            }),
+            "MemoryView" => Some(Type::Class {
+                name: "MemoryView".into(),
+                type_args: Vec::new(),
+                parent: None,
+                traits: Vec::new(),
+                interfaces: vec!["Buffer".into(), "Sized".into(), "Container".into()],
+                fields: HashMap::new(),
+                is_sealed: true,
+            }),
             "none" | "None" => Some(Type::None),
             _ if name
                 .chars()
@@ -6764,7 +6782,16 @@ impl TypeChecker {
             Pattern::Ident(name, _)
                 if !matches!(
                     name.as_str(),
-                    "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
+                    "_" | "int"
+                        | "float"
+                        | "bool"
+                        | "str"
+                        | "complex"
+                        | "bytes"
+                        | "Bytes"
+                        | "MemoryView"
+                        | "none"
+                        | "None"
                 ) && self.named_pattern_type(name).is_none() =>
             {
                 self.env.variables.insert(
@@ -11941,7 +11968,16 @@ fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
         Pattern::Ident(name, _)
             if !matches!(
                 name.as_str(),
-                "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
+                "_" | "int"
+                    | "float"
+                    | "bool"
+                    | "str"
+                    | "complex"
+                    | "bytes"
+                    | "Bytes"
+                    | "MemoryView"
+                    | "none"
+                    | "None"
             ) && !looks_like_class_name(name) =>
         {
             names.insert(name.clone());
@@ -12392,6 +12428,8 @@ mod tests {
                     Pattern::Ident("value".into(), Span::default()),
                     Pattern::Ident("int".into(), Span::default()),
                     Pattern::Ident("complex".into(), Span::default()),
+                    Pattern::Ident("bytes".into(), Span::default()),
+                    Pattern::Ident("MemoryView".into(), Span::default()),
                 ],
                 Span::default(),
             ),
@@ -12401,6 +12439,8 @@ mod tests {
         assert!(!names.contains("Cat"));
         assert!(!names.contains("int"));
         assert!(!names.contains("complex"));
+        assert!(!names.contains("bytes"));
+        assert!(!names.contains("MemoryView"));
         assert!(names.contains("value"));
     }
 

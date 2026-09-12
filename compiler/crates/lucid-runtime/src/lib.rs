@@ -941,7 +941,16 @@ impl Interpreter {
     fn pattern_identifier_binds(name: &str) -> bool {
         !matches!(
             name,
-            "_" | "int" | "float" | "bool" | "str" | "complex" | "none" | "None"
+            "_" | "int"
+                | "float"
+                | "bool"
+                | "str"
+                | "complex"
+                | "bytes"
+                | "Bytes"
+                | "MemoryView"
+                | "none"
+                | "None"
         ) && !name.chars().next().is_some_and(char::is_uppercase)
     }
 
@@ -9884,6 +9893,8 @@ impl Interpreter {
                 Value::Complex(_, _) if name == "complex" => true,
                 Value::Bool(_) if name == "bool" => true,
                 Value::Str(_) if name == "str" => true,
+                Value::Bytes(_) if matches!(name.as_str(), "bytes" | "Bytes") => true,
+                Value::MemoryView { .. } if name == "MemoryView" => true,
                 Value::None if name == "none" => true,
                 Value::Object { class_name, .. }
                     if class_name == name || self.is_subclass(class_name, name) =>
@@ -10074,6 +10085,8 @@ mod tests {
         assert!(!Interpreter::pattern_identifier_binds("Pair"));
         assert!(!Interpreter::pattern_identifier_binds("int"));
         assert!(!Interpreter::pattern_identifier_binds("complex"));
+        assert!(!Interpreter::pattern_identifier_binds("bytes"));
+        assert!(!Interpreter::pattern_identifier_binds("MemoryView"));
         assert!(!Interpreter::pattern_identifier_binds("_"));
         assert!(Interpreter::pattern_identifier_binds("value"));
     }
@@ -10585,6 +10598,39 @@ match value:
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(5)));
+    }
+
+    #[test]
+    fn test_match_bytes_and_memoryview_patterns() {
+        let src = r#"
+data = b"ab"
+match data:
+    case bytes:
+        bytes_result = 1
+    case _:
+        bytes_result = 0
+
+view = memoryview(data)
+match view:
+    case MemoryView:
+        view_result = 1
+    case _:
+        view_result = 0
+
+other = 3
+match other:
+    case bytes:
+        other_result = 1
+    case _:
+        other_result = 0
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        let env = interp.env.borrow();
+        assert_eq!(env.get("bytes_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("view_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("other_result"), Some(Value::Int(0)));
     }
 
     #[test]
