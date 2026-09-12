@@ -322,6 +322,29 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn test_parse_dict_shape_type_as_record() {
+        let module = parse("type Movie = {\"name\": str, \"year\": int}\n").unwrap();
+        let Stmt::TypeAlias {
+            value: TypeAliasValue::Direct(TypeExpr::Record { fields, .. }),
+            ..
+        } = &module.statements[0]
+        else {
+            panic!("expected record type alias");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name.as_deref(), Some("name"));
+        assert!(matches!(
+            fields[0].type_expr,
+            TypeExpr::Named { ref name, .. } if name == "str"
+        ));
+        assert_eq!(fields[1].name.as_deref(), Some("year"));
+        assert!(matches!(
+            fields[1].type_expr,
+            TypeExpr::Named { ref name, .. } if name == "int"
+        ));
+    }
+
+    #[test]
     fn test_parse_shape_slice_bounds() {
         let module = parse("type Tail = S[:-2]\n").unwrap();
         let Stmt::TypeAlias {

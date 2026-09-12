@@ -3175,26 +3175,28 @@ impl Parser {
                 }
             }
             let end = self.expect(&TokenKind::RBrace)?.span;
-            let (k_types, v_types): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
-            let k_union = if k_types.is_empty() {
-                TypeExpr::Wildcard(tok.span)
-            } else {
-                TypeExpr::Union {
-                    types: k_types,
-                    span: tok.span,
-                }
-            };
-            let v_union = if v_types.is_empty() {
-                TypeExpr::Wildcard(tok.span)
-            } else {
-                TypeExpr::Union {
-                    types: v_types,
-                    span: tok.span,
-                }
-            };
-            return Ok(TypeExpr::Named {
-                name: "dict".to_string(),
-                args: vec![k_union, v_union],
+            let fields = entries
+                .into_iter()
+                .map(|(key, type_expr)| {
+                    let name = match key {
+                        TypeExpr::Literal {
+                            value: LiteralValue::Str(name),
+                            ..
+                        } => Some(name),
+                        _ => None,
+                    };
+                    RecordFieldType {
+                        name,
+                        type_expr,
+                        is_positional_only: false,
+                        is_keyword_only: false,
+                        is_variadic_positional: false,
+                        is_variadic_keyword: false,
+                    }
+                })
+                .collect();
+            return Ok(TypeExpr::Record {
+                fields,
                 span: tok.span.merge(end),
             });
         }

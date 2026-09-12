@@ -4207,6 +4207,16 @@ impl TypeChecker {
                                 &expected,
                                 *span,
                             )
+                        } else if let (
+                            Some(annotation),
+                            Expr::Dict {
+                                entries,
+                                span: dict_span,
+                            },
+                        ) = (type_annotation.as_ref(), e)
+                        {
+                            let expected = self.resolve_type_expr(annotation)?;
+                            self.dict_literal_type_against_record(entries, &expected, *dict_span)
                         } else {
                             self.type_of_expr(e)
                         };
@@ -4613,16 +4623,6 @@ impl TypeChecker {
                         ..
                     } => {
                         let object_type = self.type_of_expr(object)?;
-                        let index_type = self.type_of_expr(index)?;
-                        if !index_type.is_subtype_of(&Type::Int, &self.env) {
-                            return Err(TypeError {
-                                message: format!(
-                                    "sequence index must be int, got {:?}",
-                                    index_type
-                                ),
-                                span: index.span(),
-                            });
-                        }
                         let sequence_type = match object_type {
                             Type::View { mutability, inner } => {
                                 if matches!(
@@ -4641,9 +4641,83 @@ impl TypeChecker {
                             other => other,
                         };
                         match sequence_type {
+                            Type::Record(fields) => {
+                                let field_type = match &**index {
+                                    Expr::Literal {
+                                        value: LiteralValue::Int(position),
+                                        ..
+                                    } => {
+                                        let position = if *position < 0 {
+                                            fields
+                                                .len()
+                                                .checked_sub(position.unsigned_abs() as usize)
+                                        } else {
+                                            usize::try_from(*position).ok()
+                                        };
+                                        position
+                                            .and_then(|position| fields.get(position))
+                                            .map(|(_, ty)| ty.clone())
+                                            .ok_or_else(|| TypeError {
+                                                message: "record index is out of bounds".into(),
+                                                span: index.span(),
+                                            })?
+                                    }
+                                    Expr::Literal {
+                                        value: LiteralValue::Str(field),
+                                        ..
+                                    } => fields
+                                        .iter()
+                                        .find(|(name, _)| name.as_deref() == Some(field))
+                                        .map(|(_, ty)| ty.clone())
+                                        .ok_or_else(|| TypeError {
+                                            message: format!("record has no field '{field}'"),
+                                            span: index.span(),
+                                        })?,
+                                    _ => {
+                                        let index_type = self.type_of_expr(index)?;
+                                        if index_type.is_subtype_of(&Type::Int, &self.env)
+                                            || index_type.is_subtype_of(&Type::Str, &self.env)
+                                        {
+                                            Type::make_union(
+                                                fields
+                                                    .iter()
+                                                    .map(|(_, ty)| ty.clone())
+                                                    .collect(),
+                                            )
+                                        } else {
+                                            return Err(TypeError {
+                                                message: format!(
+                                                    "record index must be int or str, got {:?}",
+                                                    index_type
+                                                ),
+                                                span: index.span(),
+                                            });
+                                        }
+                                    }
+                                };
+                                if !val_type.is_subtype_of(&field_type, &self.env) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "cannot assign {:?} into record field of {:?}",
+                                            val_type, field_type
+                                        ),
+                                        span: *span,
+                                    });
+                                }
+                            }
                             Type::Class {
                                 name, type_args, ..
                             } if name == "list" => {
+                                let index_type = self.type_of_expr(index)?;
+                                if !index_type.is_subtype_of(&Type::Int, &self.env) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "sequence index must be int, got {:?}",
+                                            index_type
+                                        ),
+                                        span: index.span(),
+                                    });
+                                }
                                 if let Some(element) = type_args.first() {
                                     if !val_type.is_subtype_of(element, &self.env) {
                                         return Err(TypeError {
@@ -4659,6 +4733,16 @@ impl TypeChecker {
                             Type::Class { name, .. }
                                 if matches!(name.as_str(), "ByteArray" | "MemoryView") =>
                             {
+                                let index_type = self.type_of_expr(index)?;
+                                if !index_type.is_subtype_of(&Type::Int, &self.env) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "sequence index must be int, got {:?}",
+                                            index_type
+                                        ),
+                                        span: index.span(),
+                                    });
+                                }
                                 if !val_type.is_subtype_of(&Type::Int, &self.env) {
                                     return Err(TypeError {
                                         message: format!(
@@ -5635,6 +5719,81 @@ impl TypeChecker {
             params: parameter_types,
             return_type: Box::new(function_return),
         })
+    }
+
+    fn dict_literal_type_against_record(
+        &self,
+        entries: &[(Expr, Expr)],
+        expected: &Type,
+        span: Span,
+    ) -> Result<Type, TypeError> {
+        let Type::Record(fields) = expected else {
+            return self.type_of_expr(&Expr::Dict {
+                entries: entries.to_vec(),
+                span,
+            });
+        };
+        let mut expected_fields = HashMap::new();
+        for (position, (name, ty)) in fields.iter().enumerate() {
+            if let Some(name) = name {
+                expected_fields.insert(name.clone(), ty);
+            } else {
+                expected_fields.insert(position.to_string(), ty);
+            }
+        }
+
+        let mut seen = HashSet::new();
+        for (key, value) in entries {
+            let field_name = match key {
+                Expr::Literal {
+                    value: LiteralValue::Str(name),
+                    ..
+                } => name.clone(),
+                Expr::Literal {
+                    value: LiteralValue::Int(position),
+                    ..
+                } => position.to_string(),
+                _ => {
+                    return Err(TypeError {
+                        message: "record literal keys must be literal field names".into(),
+                        span: key.span(),
+                    });
+                }
+            };
+            let Some(field_type) = expected_fields.get(&field_name) else {
+                return Err(TypeError {
+                    message: format!("record has no field '{field_name}'"),
+                    span: key.span(),
+                });
+            };
+            if !seen.insert(field_name.clone()) {
+                return Err(TypeError {
+                    message: format!("duplicate record field '{field_name}'"),
+                    span: key.span(),
+                });
+            }
+            let value_type = self.type_of_expr(value)?;
+            if !value_type.is_subtype_of(field_type, &self.env) {
+                return Err(TypeError {
+                    message: format!(
+                        "record field '{}' expects {:?}, got {:?}",
+                        field_name, field_type, value_type
+                    ),
+                    span: value.span(),
+                });
+            }
+        }
+
+        for field_name in expected_fields.keys() {
+            if !seen.contains(field_name) {
+                return Err(TypeError {
+                    message: format!("record field '{field_name}' is missing"),
+                    span,
+                });
+            }
+        }
+
+        Ok(expected.clone())
     }
 
     fn argument_type_against_parameter(&self, argument: &Arg, parameter: &Type) -> Result<Type, TypeError> {
@@ -10780,6 +10939,50 @@ def reject(value: not int) -> none:
             aggregate_checker.env.variables.get("mapping_x"),
             Some((Type::Int, _))
         ));
+        let typed_dict_record = parse(
+            "type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths of Glory\", \"year\": 1957}\nmovie[\"year\"] = 1958\nname: str = movie[\"name\"]\nyear: int = movie[\"year\"]\n",
+        )
+        .unwrap();
+        let mut typed_dict_record_checker = TypeChecker::new();
+        typed_dict_record_checker
+            .check_module(&typed_dict_record)
+            .unwrap();
+        assert!(matches!(
+            typed_dict_record_checker.env.variables.get("movie"),
+            Some((Type::Record(fields), _)) if fields.len() == 2
+        ));
+        let bad_record_value =
+            parse("type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": 1957, \"year\": 1957}\n")
+                .unwrap();
+        let mut bad_record_value_checker = TypeChecker::new();
+        let error = bad_record_value_checker
+            .check_module(&bad_record_value)
+            .unwrap_err();
+        assert!(error.message.contains("record field 'name' expects"));
+        let missing_record_field =
+            parse("type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths\"}\n")
+                .unwrap();
+        let mut missing_record_field_checker = TypeChecker::new();
+        let error = missing_record_field_checker
+            .check_module(&missing_record_field)
+            .unwrap_err();
+        assert!(error.message.contains("record field 'year' is missing"));
+        let extra_record_field =
+            parse("type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths\", \"year\": 1957, \"director\": \"Kubrick\"}\n")
+                .unwrap();
+        let mut extra_record_field_checker = TypeChecker::new();
+        let error = extra_record_field_checker
+            .check_module(&extra_record_field)
+            .unwrap_err();
+        assert!(error.message.contains("record has no field 'director'"));
+        let bad_record_index_assignment =
+            parse("type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths\", \"year\": 1957}\nmovie[\"name\"] = 1957\n")
+                .unwrap();
+        let mut bad_record_index_assignment_checker = TypeChecker::new();
+        let error = bad_record_index_assignment_checker
+            .check_module(&bad_record_index_assignment)
+            .unwrap_err();
+        assert!(error.message.contains("record field of Str"));
         let structural =
             parse("type Point = (x: int, y: str)\np: Point = (x=1, y=\"ok\")\n").unwrap();
         let mut structural_checker = TypeChecker::new();
