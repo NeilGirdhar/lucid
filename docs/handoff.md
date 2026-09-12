@@ -609,8 +609,9 @@ diverged:
   induction, signed literal, parameter, local setup-alias, unary `+`/`-`, or
   binary `+`, `-`, or `*` operands with `+=`, `-=`, `x = x + y`, `x = x - y`,
   and the commuted additive spelling `x = y + x`, including
-  `inc = step; total += inc` and `total += -step`. An unused pre-loop alias is
-  still rejected instead of being treated as loop setup.
+  `inc = step; total += inc`, `total += -step`, and `total += step + 1`. An
+  unused pre-loop alias is still rejected instead of being treated as loop
+  setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from a checked constant integer expression or parameter, then
   updated before the induction update. Plain counted loops and accumulator

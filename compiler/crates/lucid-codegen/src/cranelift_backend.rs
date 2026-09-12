@@ -2804,6 +2804,28 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_arithmetic_accumulator_step_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total += step + 1
+return total
+"#,
+        )
+        .expect("arithmetic accumulator-step range accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into()],
+        )
+        .expect("arithmetic accumulator-step range accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile arithmetic accumulator-step range CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 20);
+    }
+
+    #[test]
     fn result_abi_executes_void_range_with_local_aliases_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit

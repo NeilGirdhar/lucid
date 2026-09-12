@@ -11960,6 +11960,33 @@ return total
         let module = lucid_syntax::parse(
             r#"total = 0
 for i in range(n):
+    total += step + 1
+return total
+"#,
+        )
+        .expect("range accumulator dynamic arithmetic step fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("range accumulator dynamic arithmetic step should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(20)));
+
+        let module = lucid_syntax::parse(
+            r#"inc = step + 1
+total = 0
+for i in range(n):
+    total += inc
+return total
+"#,
+        )
+        .expect("range accumulator local arithmetic step alias fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("range accumulator local arithmetic step alias should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(20)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
     total = i + total
 return total
 "#,
