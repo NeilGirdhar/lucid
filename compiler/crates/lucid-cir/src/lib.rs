@@ -3729,7 +3729,7 @@ impl Function {
         let (
             acc_name,
             initial_expr,
-            bound_alias,
+            bound_aliases,
             index_name,
             func,
             args,
@@ -3762,7 +3762,7 @@ impl Function {
                 (
                     acc_name,
                     initial_expr,
-                    None,
+                    Vec::new(),
                     index_name,
                     func,
                     args,
@@ -3800,7 +3800,52 @@ impl Function {
                 (
                     acc_name,
                     initial_expr,
-                    Some(alias_statement),
+                    vec![alias_statement],
+                    index_name,
+                    func,
+                    args,
+                    body,
+                    if_broken,
+                    return_name,
+                )
+            }
+            [acc_statement, first_alias_statement, second_alias_statement, for_statement, return_statement] =>
+            {
+                let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
+                let (first_alias_name, _) = initialized_ident(first_alias_statement)?;
+                let (second_alias_name, _) = initialized_ident(second_alias_statement)?;
+                let lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Ident(index_name, _),
+                    iterable: lucid_syntax::Expr::Call { func, args, .. },
+                    body,
+                    if_broken,
+                    ..
+                } = for_statement
+                else {
+                    return None;
+                };
+                let lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: return_name, ..
+                        }),
+                    ..
+                } = return_statement
+                else {
+                    return None;
+                };
+                if first_alias_name == acc_name
+                    || first_alias_name == index_name
+                    || second_alias_name == acc_name
+                    || second_alias_name == index_name
+                    || first_alias_name == second_alias_name
+                {
+                    return None;
+                }
+                (
+                    acc_name,
+                    initial_expr,
+                    vec![first_alias_statement, second_alias_statement],
                     index_name,
                     func,
                     args,
@@ -3895,7 +3940,7 @@ impl Function {
             _ => return None,
         };
         let operand = |expr: &lucid_syntax::Expr, result: ValueId| -> Option<Instruction> {
-            if let Some(statement) = bound_alias {
+            for statement in &bound_aliases {
                 let (alias_name, value) = initialized_ident(statement)?;
                 if matches!(expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name) {
                     return match int_literal(value) {
@@ -3927,7 +3972,7 @@ impl Function {
                 },
             }
         };
-        if let Some(statement) = bound_alias {
+        for statement in &bound_aliases {
             let (alias_name, _) = initialized_ident(statement)?;
             if !matches!(start_expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name)
                 && !matches!(stop_expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name)
@@ -9479,6 +9524,21 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("range start alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+begin = seed
+stop = limit
+for i in range(begin, stop):
+    total += i
+return total
+"#,
+        )
+        .expect("range two-alias accumulation fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["seed".into(), "limit".into()])
+                .expect("range two-alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[2, 6]), Ok(Some(14)));
 
         let module = lucid_syntax::parse(
             r#"total = 0

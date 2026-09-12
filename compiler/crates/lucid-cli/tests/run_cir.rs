@@ -904,6 +904,37 @@ fn run_cir_executes_range_accumulator_with_local_start_alias() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_two_local_bound_aliases() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_two_aliases_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_between(seed: int, limit: int):\n    total = 0\n    begin = seed\n    stop = limit\n    for i in range(begin, stop):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_between",
+            "--args",
+            "2,6",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range two-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "14");
+}
+
+#[test]
 fn run_cir_executes_descending_range_accumulator_with_local_bound_alias() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_descending_range_alias_{}.lucid",

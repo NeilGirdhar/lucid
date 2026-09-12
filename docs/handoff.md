@@ -562,11 +562,12 @@ diverged:
   while `continue` remains accepted only as a single final tail statement,
   matching the public checker boundary. The repeated-`pass` counted-`while`
   form also has Cranelift result-ABI coverage.
-  Range accumulator loops now also accept one pre-loop local alias for a
-  literal or parameter-backed range bound, whether that alias is used as the
+  Range accumulator loops now also accept one or two pre-loop local aliases for
+  literal or parameter-backed range bounds, whether an alias is used as the
   start or stop operand in one-, two-, or three-argument ranges with a literal
   step. This keeps `limit = n; for i in range(limit)`,
-  `begin = seed; for i in range(begin, n)`, and
+  `begin = seed; for i in range(begin, n)`,
+  `begin = seed; stop = limit; for i in range(begin, stop)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
   CIR/native path. An unused pre-loop alias is still rejected instead of being
   treated as loop setup.
