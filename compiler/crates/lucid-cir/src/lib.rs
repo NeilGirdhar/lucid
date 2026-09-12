@@ -3846,79 +3846,6 @@ impl Function {
         }) {
             return None;
         }
-        #[derive(Clone, Copy)]
-        enum RangeAccumulatorOperand {
-            Literal(i64),
-            Induction,
-        }
-        let accumulator_operand = |expr: &lucid_syntax::Expr| -> Option<RangeAccumulatorOperand> {
-            match expr {
-                lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
-                    Some(RangeAccumulatorOperand::Induction)
-                }
-                _ => Self::int_literal_expr(expr).map(RangeAccumulatorOperand::Literal),
-            }
-        };
-        let accumulator_update = match &body[0] {
-            lucid_syntax::Stmt::AugAssign {
-                target:
-                    lucid_syntax::Expr::Ident {
-                        name: update_name, ..
-                    },
-                op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
-                value,
-                ..
-            } if update_name == acc_name => Some((update_op.clone(), accumulator_operand(value)?)),
-            lucid_syntax::Stmt::Assignment {
-                target:
-                    lucid_syntax::Expr::Ident {
-                        name: update_name, ..
-                    },
-                value:
-                    lucid_syntax::Expr::Binary {
-                        op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
-                        left,
-                        right,
-                        ..
-                    },
-                ..
-            } => {
-                let ordinary_update =
-                    matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
-                        .then(|| accumulator_operand(right.as_ref()))
-                        .flatten();
-                let commuted_add = *update_op == lucid_syntax::BinaryOp::Add
-                    && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name);
-                let commuted_update = commuted_add
-                    .then(|| accumulator_operand(left.as_ref()))
-                    .flatten();
-                if update_name == acc_name {
-                    ordinary_update
-                        .or(commuted_update)
-                        .map(|operand| (update_op.clone(), operand))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        let (accumulator_update, accumulator_operand) = accumulator_update?;
-        let zero = lucid_syntax::Expr::Literal {
-            value: lucid_syntax::LiteralValue::Int(0),
-            span: func.span(),
-        };
-        let (start_expr, stop_expr, step) = match args.as_slice() {
-            [stop] => (&zero, &stop.value, 1),
-            [start, stop] => (&start.value, &stop.value, 1),
-            [start, stop, step] => {
-                let step = Self::int_literal_expr(&step.value)?;
-                if step == 0 {
-                    return None;
-                }
-                (&start.value, &stop.value, step)
-            }
-            _ => return None,
-        };
         fn bound_alias_value<'a>(
             name: &str,
             bound_aliases: &[&'a lucid_syntax::Stmt],
@@ -3981,11 +3908,93 @@ impl Function {
                 },
             }
         }
+        #[derive(Clone)]
+        enum RangeAccumulatorOperand {
+            Materialized(Instruction),
+            Induction,
+        }
+        let accumulator_operand = |expr: &lucid_syntax::Expr| -> Option<RangeAccumulatorOperand> {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
+                    Some(RangeAccumulatorOperand::Induction)
+                }
+                _ => operand(expr, ValueId(9), &bound_aliases, parameter_names, 0)
+                    .map(RangeAccumulatorOperand::Materialized),
+            }
+        };
+        let accumulator_update = match &body[0] {
+            lucid_syntax::Stmt::AugAssign {
+                target:
+                    lucid_syntax::Expr::Ident {
+                        name: update_name, ..
+                    },
+                op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
+                value,
+                ..
+            } if update_name == acc_name => {
+                Some((update_op.clone(), accumulator_operand(value)?, value))
+            }
+            lucid_syntax::Stmt::Assignment {
+                target:
+                    lucid_syntax::Expr::Ident {
+                        name: update_name, ..
+                    },
+                value:
+                    lucid_syntax::Expr::Binary {
+                        op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
+                        left,
+                        right,
+                        ..
+                    },
+                ..
+            } => {
+                let ordinary_update = matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
+                    .then(|| {
+                        accumulator_operand(right.as_ref())
+                            .map(|operand| (operand, right.as_ref()))
+                    })
+                    .flatten();
+                let commuted_add = *update_op == lucid_syntax::BinaryOp::Add
+                    && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name);
+                let commuted_update = commuted_add
+                    .then(|| {
+                        accumulator_operand(left.as_ref()).map(|operand| (operand, left.as_ref()))
+                    })
+                    .flatten();
+                if update_name == acc_name {
+                    ordinary_update
+                        .or(commuted_update)
+                        .map(|(operand, operand_expr)| (update_op.clone(), operand, operand_expr))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let (accumulator_update, accumulator_operand, accumulator_operand_expr) =
+            accumulator_update?;
+        let zero = lucid_syntax::Expr::Literal {
+            value: lucid_syntax::LiteralValue::Int(0),
+            span: func.span(),
+        };
+        let (start_expr, stop_expr, step) = match args.as_slice() {
+            [stop] => (&zero, &stop.value, 1),
+            [start, stop] => (&start.value, &stop.value, 1),
+            [start, stop, step] => {
+                let step = Self::int_literal_expr(&step.value)?;
+                if step == 0 {
+                    return None;
+                }
+                (&start.value, &stop.value, step)
+            }
+            _ => return None,
+        };
         for statement in &bound_aliases {
             let (alias_name, _) = initialized_ident(statement)?;
             if !expr_uses_bound_alias(start_expr, alias_name, &bound_aliases, 0)?
                 && !expr_uses_bound_alias(stop_expr, alias_name, &bound_aliases, 0)?
                 && !expr_uses_bound_alias(initial_expr, alias_name, &bound_aliases, 0)?
+                && !expr_uses_bound_alias(accumulator_operand_expr, alias_name, &bound_aliases, 0)?
             {
                 return None;
             }
@@ -3996,7 +4005,7 @@ impl Function {
         let accumulator_instruction =
             operand(initial_expr, ValueId(2), &bound_aliases, parameter_names, 0)?;
         let accumulator_operand_value = match accumulator_operand {
-            RangeAccumulatorOperand::Literal(_) => ValueId(9),
+            RangeAccumulatorOperand::Materialized(_) => ValueId(9),
             RangeAccumulatorOperand::Induction => ValueId(3),
         };
         let accumulator_update_instruction = match accumulator_update {
@@ -4013,11 +4022,8 @@ impl Function {
             _ => return None,
         };
         let mut body_instructions = Vec::new();
-        if let RangeAccumulatorOperand::Literal(value) = accumulator_operand {
-            body_instructions.push(Instruction::ConstInt {
-                result: ValueId(9),
-                value,
-            });
+        if let RangeAccumulatorOperand::Materialized(instruction) = accumulator_operand {
+            body_instructions.push(instruction);
         }
         body_instructions.push(accumulator_update_instruction);
         body_instructions.push(Instruction::ConstInt {
@@ -9631,6 +9637,33 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("range accumulator seed alias should lower");
         assert_eq!(function.execute_with_args(&[5, 7]), Ok(Some(17)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total += step
+return total
+"#,
+        )
+        .expect("range accumulator parameter step fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("range accumulator parameter step should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(15)));
+
+        let module = lucid_syntax::parse(
+            r#"inc = step
+total = 0
+for i in range(n):
+    total += inc
+return total
+"#,
+        )
+        .expect("range accumulator local step alias fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("range accumulator local step alias should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(15)));
 
         let module = lucid_syntax::parse(
             r#"total = 0

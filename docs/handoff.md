@@ -577,9 +577,10 @@ diverged:
   `start = seed; middle = start; begin = middle; for i in range(begin, n)`,
   while still rejecting unused or cyclic setup aliases; both rejection paths
   now have dedicated lowerer coverage. Range accumulator updates accept
-  induction or signed literal operands with `+=`, `-=`, `x = x + y`,
-  `x = x - y`, and the commuted additive spelling `x = y + x`. An unused
-  pre-loop alias is still rejected instead of being treated as loop setup.
+  induction, signed literal, parameter, or local setup-alias operands with
+  `+=`, `-=`, `x = x + y`, `x = x - y`, and the commuted additive spelling
+  `x = y + x`, including `inc = step; total += inc`. An unused pre-loop alias
+  is still rejected instead of being treated as loop setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from a signed integer literal or parameter, then updated before
   the induction update. Plain counted loops and accumulator loops use the same

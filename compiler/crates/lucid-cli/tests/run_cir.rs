@@ -1090,6 +1090,37 @@ fn run_cir_executes_signed_literal_step_range_accumulator() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_local_step_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_step_alias_range_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_by_step(n: int, step: int):\n    inc = step\n    total = 0\n    for i in range(n):\n        total += inc\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_by_step",
+            "--args",
+            "5,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local step-alias range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "15");
+}
+
+#[test]
 fn run_cir_executes_range_accumulator_with_local_start_alias() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_range_start_alias_{}.lucid",
