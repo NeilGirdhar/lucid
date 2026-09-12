@@ -8474,69 +8474,72 @@ impl TypeChecker {
                     }
                 }
                 let generic_return = if let Expr::Ident { name, .. } = &**func {
-                    let generic_params = self.env.function_type_params.get(name);
-                    if let (
-                        Some(generic_params),
-                        Type::Function {
-                            params,
-                            return_type,
-                        },
-                    ) = (generic_params, &ft)
-                    {
-                        if generic_params.is_empty() {
-                            None
-                        } else {
-                            let mut substitutions = HashMap::new();
-                            let generic_names = generic_params
-                                .iter()
-                                .map(|generic| generic.name.clone())
-                                .collect::<HashSet<_>>();
-                            let parameter_names = self.env.function_param_names.get(name);
-                            let mut positional_index = 0usize;
-                            for argument in args {
-                                let index = argument
-                                    .name
-                                    .as_ref()
-                                    .and_then(|argument_name| {
-                                        parameter_names.and_then(|names| {
-                                            names.iter().position(|parameter_name| {
-                                                parameter_name == argument_name
+                    if self.env.overloaded_functions.contains(name) {
+                        None
+                    } else {
+                        let generic_params = self.env.function_type_params.get(name);
+                        if let (
+                            Some(generic_params),
+                            Type::Function {
+                                params,
+                                return_type,
+                            },
+                        ) = (generic_params, &ft)
+                        {
+                            if generic_params.is_empty() {
+                                None
+                            } else {
+                                let mut substitutions = HashMap::new();
+                                let generic_names = generic_params
+                                    .iter()
+                                    .map(|generic| generic.name.clone())
+                                    .collect::<HashSet<_>>();
+                                let parameter_names = self.env.function_param_names.get(name);
+                                let mut positional_index = 0usize;
+                                for argument in args {
+                                    let index = argument
+                                        .name
+                                        .as_ref()
+                                        .and_then(|argument_name| {
+                                            parameter_names.and_then(|names| {
+                                                names.iter().position(|parameter_name| {
+                                                    parameter_name == argument_name
+                                                })
                                             })
                                         })
-                                    })
-                                    .unwrap_or_else(|| {
-                                        let index = positional_index;
-                                        positional_index += 1;
-                                        index
-                                    });
-                                let Some(parameter) = params.get(index) else {
-                                    continue;
-                                };
-                                let argument_type = self.type_of_expr(&argument.value)?;
-                                if !infer_type_arguments(
-                                    parameter,
-                                    &argument_type,
-                                    &generic_names,
-                                    &mut substitutions,
-                                ) {
-                                    return Err(TypeError {
+                                        .unwrap_or_else(|| {
+                                            let index = positional_index;
+                                            positional_index += 1;
+                                            index
+                                        });
+                                    let Some(parameter) = params.get(index) else {
+                                        continue;
+                                    };
+                                    let argument_type = self.type_of_expr(&argument.value)?;
+                                    if !infer_type_arguments(
+                                        parameter,
+                                        &argument_type,
+                                        &generic_names,
+                                        &mut substitutions,
+                                    ) {
+                                        return Err(TypeError {
                                     message: format!(
                                         "arguments to generic function '{}' infer conflicting type arguments",
                                         name
                                     ),
                                     span: argument.value.span(),
                                 });
+                                    }
                                 }
-                            }
-                            for generic in generic_params {
-                                if let Some(argument_type) = substitutions.get(&generic.name) {
-                                    if let Some(bound) = generic
-                                        .bound
-                                        .as_ref()
-                                        .and_then(|bound| self.resolve_type_expr(bound).ok())
-                                    {
-                                        if !argument_type.is_subtype_of(&bound, &self.env) {
-                                            return Err(TypeError {
+                                for generic in generic_params {
+                                    if let Some(argument_type) = substitutions.get(&generic.name) {
+                                        if let Some(bound) = generic
+                                            .bound
+                                            .as_ref()
+                                            .and_then(|bound| self.resolve_type_expr(bound).ok())
+                                        {
+                                            if !argument_type.is_subtype_of(&bound, &self.env) {
+                                                return Err(TypeError {
                                             message: format!(
                                                 "type argument for '{}' does not satisfy bound on '{}'",
                                                 name, generic.name
@@ -8546,14 +8549,15 @@ impl TypeChecker {
                                                 .map(|argument| argument.value.span())
                                                 .unwrap_or_default(),
                                         });
+                                            }
                                         }
                                     }
                                 }
+                                Some(substitute_type(return_type, &substitutions))
                             }
-                            Some(substitute_type(return_type, &substitutions))
+                        } else {
+                            None
                         }
-                    } else {
-                        None
                     }
                 } else {
                     None
@@ -13106,6 +13110,13 @@ def reject(value: not int) -> none:
         ordinary_overload_checker
             .check_module(&ordinary_overload)
             .unwrap();
+        let recursive_generic_dispatch = parse(
+            "def dispatch tree_map[A, B](tree: list[A], f: (A) -> B) -> list[B]:\n    return [tree_map(item, f) for item in tree]\n\ndef dispatch tree_map[X, A, B](tree: dict[X, A], f: (A) -> B) -> dict[X, B]:\n    return {k: tree_map(v, f) for k, v in tree.items()}\n\ndef dispatch tree_map[A, B](tree: A, f: (A) -> B) -> B:\n    return f(tree)\n\n\ndef dispatch tree_reduce[A, B](tree: list[A], f: (B, A) -> B, init: B) -> B:\n    acc = init\n    for item in tree:\n        acc = tree_reduce(item, f, acc)\n    return acc\n\ndef dispatch tree_reduce[X, A, B](tree: dict[X, A], f: (B, A) -> B, init: B) -> B:\n    acc = init\n    for v in tree.values():\n        acc = tree_reduce(v, f, acc)\n    return acc\n\ndef dispatch tree_reduce[A, B](tree: A, f: (B, A) -> B, init: B) -> B:\n    return f(init, tree)\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&recursive_generic_dispatch)
+            .expect("recursive generic dispatch should use overload resolution, not single-signature inference");
         let duplicate_function =
             parse("def duplicate() -> int:\n    return 1\ndef duplicate() -> int:\n    return 2\n")
                 .unwrap();
