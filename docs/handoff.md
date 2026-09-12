@@ -1821,6 +1821,8 @@ diverged:
   A single dynamic `elif` with an `else` can now use the same post-chain
   continuation path when all three arms assign the same local, and the
   function-lowering fallback exposes that shape through `run-cir --function`.
+  The same single-`elif` continuation path also supports a missing `else`
+  when an incoming local supplies the fall-through value.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,

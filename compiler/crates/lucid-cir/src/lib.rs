@@ -4628,7 +4628,7 @@ impl Function {
             then_branch: &'a [lucid_syntax::Stmt],
             elif_condition: &'a lucid_syntax::Expr,
             elif_branch: &'a [lucid_syntax::Stmt],
-            else_branch: &'a [lucid_syntax::Stmt],
+            else_branch: Option<&'a [lucid_syntax::Stmt]>,
             suffix: &'a [lucid_syntax::Stmt],
         }
         struct BranchLowering {
@@ -4869,7 +4869,7 @@ impl Function {
                 state.next,
             )?;
             let else_lowering = lower_branch(
-                ladder.else_branch,
+                ladder.else_branch.unwrap_or(&[]),
                 &base_bindings,
                 &base_instructions,
                 fallthrough_value,
@@ -4972,9 +4972,7 @@ impl Function {
                 continue;
             }
             let prefix = &module.statements[..index];
-            if let ([(elif_condition, elif_branch)], Some(else_branch)) =
-                (elif_branches.as_slice(), else_branch.as_deref())
-            {
+            if let [(elif_condition, elif_branch)] = elif_branches.as_slice() {
                 if constant_truth(elif_condition).is_none() {
                     return lower_dynamic_if_one_elif(
                         prefix,
@@ -4983,7 +4981,7 @@ impl Function {
                             then_branch,
                             elif_condition,
                             elif_branch,
-                            else_branch,
+                            else_branch: else_branch.as_deref(),
                             suffix: &module.statements[index + 1..],
                         },
                         &mut LinearLoweringState {
@@ -10270,6 +10268,16 @@ return total
         let function =
             Function::from_module_linear_with_params(&module, &["first".into(), "second".into()])
                 .expect("dynamic elif continuation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(31)));
+        let module = lucid_syntax::parse(
+            "value = 30\nif first:\n    value = 10\nelif second:\n    value = 20\nvalue = value + 1\n",
+        )
+        .unwrap();
+        let function =
+            Function::from_module_linear_with_params(&module, &["first".into(), "second".into()])
+                .expect("dynamic elif continuation should preserve initialized fallback");
         assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(21)));
         assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(31)));
