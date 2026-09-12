@@ -2993,6 +2993,107 @@ impl Function {
                     _ => return None,
                 }
             }
+            [first_statement, second_statement, third_statement, while_statement] => {
+                let lucid_syntax::Stmt::While { condition, .. } = while_statement else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Binary { left, right, .. } = condition else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Ident {
+                    name: induction_name,
+                    ..
+                } = left.as_ref()
+                else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Ident {
+                    name: bound_name, ..
+                } = right.as_ref()
+                else {
+                    return None;
+                };
+                if induction_name == bound_name {
+                    return None;
+                }
+                let initializers = [
+                    initialized_ident(first_statement)?,
+                    initialized_ident(second_statement)?,
+                    initialized_ident(third_statement)?,
+                ];
+                let induction_index = initializers
+                    .iter()
+                    .position(|(name, _)| *name == induction_name)?;
+                let bound_index = initializers
+                    .iter()
+                    .position(|(name, _)| *name == bound_name)?;
+                if induction_index == bound_index {
+                    return None;
+                }
+                let step_index = [0usize, 1, 2]
+                    .into_iter()
+                    .find(|index| *index != induction_index && *index != bound_index)?;
+                let initializer_statements = [first_statement, second_statement, third_statement];
+                (
+                    Some(initializer_statements[induction_index]),
+                    Some(initializer_statements[bound_index]),
+                    Some(initializer_statements[step_index]),
+                    while_statement,
+                    None,
+                )
+            }
+            [first_statement, second_statement, third_statement, while_statement, lucid_syntax::Stmt::Return {
+                value: Some(lucid_syntax::Expr::Ident { name, .. }),
+                ..
+            }] => {
+                let lucid_syntax::Stmt::While { condition, .. } = while_statement else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Binary { left, right, .. } = condition else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Ident {
+                    name: induction_name,
+                    ..
+                } = left.as_ref()
+                else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Ident {
+                    name: bound_name, ..
+                } = right.as_ref()
+                else {
+                    return None;
+                };
+                if induction_name == bound_name {
+                    return None;
+                }
+                let initializers = [
+                    initialized_ident(first_statement)?,
+                    initialized_ident(second_statement)?,
+                    initialized_ident(third_statement)?,
+                ];
+                let induction_index = initializers
+                    .iter()
+                    .position(|(name, _)| *name == induction_name)?;
+                let bound_index = initializers
+                    .iter()
+                    .position(|(name, _)| *name == bound_name)?;
+                if induction_index == bound_index {
+                    return None;
+                }
+                let step_index = [0usize, 1, 2]
+                    .into_iter()
+                    .find(|index| *index != induction_index && *index != bound_index)?;
+                let initializer_statements = [first_statement, second_statement, third_statement];
+                (
+                    Some(initializer_statements[induction_index]),
+                    Some(initializer_statements[bound_index]),
+                    Some(initializer_statements[step_index]),
+                    while_statement,
+                    Some(name),
+                )
+            }
             _ => return None,
         };
         let lucid_syntax::Stmt::While {
@@ -9710,6 +9811,23 @@ return value
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(2)));
 
         let module = lucid_syntax::parse(
+            r#"value = n
+stop = limit
+tick = step
+while value > stop:
+    value -= tick
+return value
+"#,
+        )
+        .expect("local-bound local-step counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local-bound local-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
             r#"while n > 0:
     n -= 1
 "#,
@@ -9731,6 +9849,22 @@ while value > stop:
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("void local-bound counted loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(None));
+
+        let module = lucid_syntax::parse(
+            r#"value = n
+stop = limit
+tick = step
+while value > stop:
+    value -= tick
+"#,
+        )
+        .expect("void local-bound local-step counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("void local-bound local-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(None));
 
         let module = lucid_syntax::parse(
             r#"value = n

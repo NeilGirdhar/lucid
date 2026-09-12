@@ -780,6 +780,37 @@ fn run_cir_executes_local_bound_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_local_bound_local_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_bound_local_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def clamp_down(n: int, limit: int, step: int):\n    value = n\n    stop = limit\n    tick = step\n    while value > stop:\n        value -= tick\n    return value\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "clamp_down",
+            "--args",
+            "10,2,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-bound local-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
 fn run_cir_executes_void_local_bound_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_void_local_bound_while_{}.lucid",

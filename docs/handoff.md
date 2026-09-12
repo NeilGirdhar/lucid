@@ -595,8 +595,8 @@ diverged:
   commuted spelling `n = -1 + n`, and the induction step may be a positional
   parameter or a pre-loop local alias of a literal or parameter instead of only
   a signed literal, as in `tick = step; while n > 0: n -= tick`. Plain counted
-  loops can seed a local induction variable and a local step alias together, in
-  either setup order, before lowering the same Phi-backed CFG. The accumulator
+  loops can seed local induction, bound, and step-alias values together, in any
+  setup order, before lowering the same Phi-backed CFG. The accumulator
   step can be a signed literal, positional parameter, pre-loop local alias, or the
   current induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
   commuted additive spelling `x = y + x`; the same local alias slot can also
