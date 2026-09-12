@@ -6084,8 +6084,7 @@ static inline void lucid_print_val(LucidVal v) {
                 matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
             })
             || f.params.iter().any(|param| {
-                param.is_variadic_positional
-                    || param.is_variadic_keyword
+                param.is_variadic_keyword
                     || param.is_gather
             })
         {
@@ -6111,13 +6110,34 @@ static inline void lucid_print_val(LucidVal v) {
                     && !param.is_gather
             })
             .count();
-        self.emit_line(&format!(
-            "if (!args || args->len < {required} || args->len > {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
-            f.params.len()
-        ));
+        let variadic_index = f.params.iter().position(|param| param.is_variadic_positional);
+        if let Some(index) = variadic_index {
+            self.emit_line(&format!(
+                "if (!args || args->len < {required}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}"
+            ));
+            self.emit_line(&format!(
+                "LucidList* _closure_varargs = lucid_list_new(args->len - {index});"
+            ));
+            self.emit_line(&format!(
+                "for (int64_t _closure_i = {index}; _closure_i < args->len; ++_closure_i) lucid_list_append(_closure_varargs, args->items[_closure_i]);"
+            ));
+        } else {
+            self.emit_line(&format!(
+                "if (!args || args->len < {required} || args->len > {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
+                f.params.len()
+            ));
+        }
         let mut call_args = Vec::new();
         for (index, param) in f.params.iter().enumerate() {
-            let ty = self.map_type_expr(param.type_annotation.as_ref());
+            let ty = if param.is_variadic_positional {
+                "LucidList*".to_string()
+            } else {
+                self.map_type_expr(param.type_annotation.as_ref())
+            };
+            if param.is_variadic_positional {
+                call_args.push("_closure_varargs".to_string());
+                continue;
+            }
             let supplied = match ty.as_str() {
                 "int64_t" => format!("lucid_as_int(args->items[{index}])"),
                 "double" => format!("lucid_as_float(args->items[{index}])"),
@@ -14529,6 +14549,23 @@ print(z is complex)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "13\n");
+    }
+
+    #[test]
+    fn native_erased_function_value_packs_positional_variadic_arguments() {
+        let source =
+            "def count(*values: int) -> int:\n    return len(values)\nfs = [count]\nprint(fs[0](1, 2, 3))\n";
+        let module = parse(source).expect("variadic closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_function_value_variadic_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("variadic closure should compile");
+        let run = Command::new(&output).output().expect("run variadic closure");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "variadic closure failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
     }
 
     #[test]
