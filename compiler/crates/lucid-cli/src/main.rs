@@ -1186,7 +1186,8 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
 fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
     let lower_path = path.to_string_lossy().to_ascii_lowercase();
     if lower_path.contains("rejected-features") {
-        return !block.contains("class FileHandle:");
+        return !(block.contains("class FileHandle:")
+            || block.contains("contextmanager def transaction"));
     }
     let lower_block = block.to_ascii_lowercase();
     if lower_block.contains("\n    global ")

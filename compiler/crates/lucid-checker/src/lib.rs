@@ -9233,6 +9233,16 @@ impl TypeChecker {
                         }
                     }
                     Type::Class { .. } => {
+                        if let Type::Class {
+                            name, type_args, ..
+                        } = &ft
+                        {
+                            if name == "__class__" {
+                                if let Some(class_type) = type_args.first() {
+                                    return Ok(class_type.clone());
+                                }
+                            }
+                        }
                         if let Some(name) = called_name {
                             if let Some(class_type) = self.env.classes.get(name) {
                                 return Ok(class_type.clone());
@@ -9658,6 +9668,9 @@ impl TypeChecker {
                                         field_type,
                                     ));
                                 }
+                                if !self.env.classes.contains_key(class_name) {
+                                    return Ok(Type::TypeVar("Any".into()));
+                                }
                                 return Err(TypeError {
                                     message: format!(
                                         "class object '{class_name}' has no member '{attr}'"
@@ -9692,6 +9705,9 @@ impl TypeChecker {
                                 params: vec![Type::Int],
                                 return_type: Box::new(Type::Str),
                             });
+                        }
+                        if !self.env.classes.contains_key(name) {
+                            return Ok(Type::TypeVar("Any".into()));
                         }
                         if name == "SourceLocation" && attr == "caller" {
                             return Ok(Type::Function {
@@ -9970,6 +9986,39 @@ impl TypeChecker {
             }
             Expr::Index { value, index, .. } => {
                 let val_t = self.type_of_expr(value)?;
+                if let Type::Class {
+                    name, type_args, ..
+                } = &val_t
+                {
+                    if name == "__class__" {
+                        if let Some(Type::Class {
+                            name: class_name, ..
+                        }) = type_args.first()
+                        {
+                            let type_expr_args = match &**index {
+                                Expr::Record { fields, .. } => fields
+                                    .iter()
+                                    .map(|(name, expr)| {
+                                        if name.is_some() {
+                                            None
+                                        } else {
+                                            expr_to_type_expr(expr)
+                                        }
+                                    })
+                                    .collect::<Option<Vec<_>>>(),
+                                other => expr_to_type_expr(other).map(|arg| vec![arg]),
+                            };
+                            if let Some(args) = type_expr_args {
+                                let specialized = self.resolve_type_expr(&TypeExpr::Named {
+                                    name: class_name.clone(),
+                                    args,
+                                    span: index.span(),
+                                })?;
+                                return Ok(class_object_type(specialized));
+                            }
+                        }
+                    }
+                }
                 if matches!(**index, Expr::Slice { .. }) {
                     if let Expr::Slice {
                         start, stop, step, ..
@@ -11534,6 +11583,42 @@ fn looks_like_class_name(name: &str) -> bool {
     name.chars().next().is_some_and(char::is_uppercase)
 }
 
+fn expr_to_type_expr(expr: &Expr) -> Option<TypeExpr> {
+    match expr {
+        Expr::Ident { name, span } => Some(TypeExpr::Named {
+            name: name.clone(),
+            args: Vec::new(),
+            span: *span,
+        }),
+        Expr::Type(type_expr) => Some(type_expr.clone()),
+        Expr::Record { fields, span } => {
+            let mut args = Vec::with_capacity(fields.len());
+            for (name, field_expr) in fields {
+                if name.is_some() {
+                    return None;
+                }
+                args.push(expr_to_type_expr(field_expr)?);
+            }
+            Some(TypeExpr::Record {
+                fields: args
+                    .into_iter()
+                    .map(|type_expr| RecordFieldType {
+                        name: None,
+                        type_expr,
+                        is_positional_only: false,
+                        is_keyword_only: false,
+                        is_variadic_positional: false,
+                        is_variadic_keyword: false,
+                    })
+                    .collect(),
+                is_open: false,
+                span: *span,
+            })
+        }
+        _ => None,
+    }
+}
+
 fn exact_class_name_from_type(ty: &Type) -> Option<String> {
     match ty {
         Type::Exact(inner) => match inner.as_ref() {
@@ -12525,6 +12610,32 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("class object identifiers should remain callable as constructors");
+
+        let module =
+            parse("class Box[T]:\n    value: T\nboxed: Box[str] = Box[str](\"x\")\n").unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("generic class object specialization should remain constructible");
+    }
+
+    #[test]
+    fn external_class_placeholders_have_open_members() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "contextmanager def locked(lock: Lock):\n    lock.acquire()\n    yield lock\n    lock.release()\n",
+                )
+                .unwrap(),
+            )
+            .expect("external class placeholders should allow unknown member calls");
+
+        let error = TypeChecker::new()
+            .check_module(
+                &parse("class Closed:\n    value: int\nitem = Closed(1)\nresult = item.missing\n")
+                    .unwrap(),
+            )
+            .expect_err("declared classes must remain closed to unknown members");
+        assert!(error.message.contains("has no member 'missing'"));
     }
 
     #[test]
