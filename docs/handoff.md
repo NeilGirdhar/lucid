@@ -491,6 +491,8 @@ diverged:
   instead of carrying dead guard control flow.
   If every guarded arm is statically false, the match now lowers directly to
   the no-match path (`Return(None)`), so no dead guarded branch remains in CIR.
+  Statically false guarded arms before later literal arms are also dropped while
+  building guarded value and void match ladders.
   Statically true literal and wildcard guards are also folded away before
   guarded-match lowering, so they do not emit redundant boolean conjunctions.
   Setup work before a selected constant-match void or fallthrough arm now

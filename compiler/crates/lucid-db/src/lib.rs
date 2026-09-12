@@ -2564,6 +2564,9 @@ pub fn lower_function_body(
                     return Err(Arc::from("unsupported guarded match arm"));
                 };
                 if let Some(condition) = arm_condition(arm) {
+                    if static_truth(&condition) == Some(false) {
+                        continue;
+                    }
                     conditions.push(condition);
                     values.push(value);
                 } else {
@@ -2941,6 +2944,9 @@ pub fn lower_function_body(
             let mut conditions = Vec::new();
             for arm in arms {
                 if let Some(condition) = arm_condition(arm) {
+                    if static_truth(&condition) == Some(false) {
+                        continue;
+                    }
                     conditions.push(condition);
                 } else {
                     break;
@@ -7254,6 +7260,28 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
 
         let file = db.add_file(
+            "static-false-guarded-before-literal-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if false:\n            return 11\n        case 2:\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statically false guarded arm before literal should be skipped");
+        assert!(
+            !function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        lucid_cir::Instruction::ConstInt { value: 11, .. }
+                    )
+                })
+            }),
+            "dead guarded arm result should not appear in CIR"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
             "static-true-guarded-literal-match.lucid",
             "def choose(value: int):\n    match value:\n        case 1 if true:\n            return 11\n        case _:\n            return value + 100\n",
         );
@@ -7310,6 +7338,28 @@ mod tests {
             "statically false guarded void arm should be skipped before lowering"
         );
         assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "static-false-guarded-before-void-literal-match.lucid",
+            "def answer(value: int):\n    match value:\n        case 1 if false:\n            return\n        case 2:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("statically false guarded void arm before literal should be skipped");
+        assert!(
+            !function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        lucid_cir::Instruction::ConstBool { value: false, .. }
+                    )
+                })
+            }),
+            "dead guarded void condition should not appear in CIR"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(
