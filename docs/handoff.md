@@ -1799,6 +1799,9 @@ diverged:
   instead of forcing a missing-assignment error.
 * The same diamond accepts one statically selected `elif` arm, preserving
   branch selection without lowering an incomplete conditional chain.
+  Final dynamic diamonds now use the same static-`elif` selection for their
+  false side, including no-`else` fall-through to the incoming value when all
+  `elif` guards are statically false.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,

@@ -4729,17 +4729,43 @@ impl Function {
             ..
         }) = module.statements.last()
         {
-            if elif_branches.is_empty() && constant_truth(condition).is_none() {
-                let prefix = &module.statements[..module.statements.len() - 1];
-                return lower_dynamic_if(
-                    prefix,
-                    condition,
-                    then_branch,
-                    else_branch.as_deref(),
-                    &mut bindings,
-                    &mut instructions,
-                    &mut next,
-                );
+            if constant_truth(condition).is_none() {
+                let selected_else = if elif_branches.is_empty() {
+                    Some(else_branch.as_deref())
+                } else {
+                    let mut selected = None;
+                    let mut statically_known = true;
+                    for (elif_condition, branch) in elif_branches {
+                        match constant_truth(elif_condition) {
+                            Some(true) => {
+                                selected = Some(Some(branch.as_slice()));
+                                break;
+                            }
+                            Some(false) => continue,
+                            None => {
+                                statically_known = false;
+                                break;
+                            }
+                        }
+                    }
+                    if statically_known {
+                        Some(selected.unwrap_or(else_branch.as_deref()))
+                    } else {
+                        None
+                    }
+                };
+                if let Some(selected_else) = selected_else {
+                    let prefix = &module.statements[..module.statements.len() - 1];
+                    return lower_dynamic_if(
+                        prefix,
+                        condition,
+                        then_branch,
+                        selected_else,
+                        &mut bindings,
+                        &mut instructions,
+                        &mut next,
+                    );
+                }
             }
         }
         if let Some(lucid_syntax::Stmt::Return { value, .. }) = module.statements.last() {
@@ -9781,6 +9807,38 @@ return total
         );
         let module = lucid_syntax::parse(
             "flag = false\nvalue = 1\nif flag:\n    value = 2\nelse:\n    pass\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(1))
+        );
+        let module = lucid_syntax::parse(
+            "flag = false\nif flag:\n    value = 1\nelif true:\n    value = 2\nelse:\n    value = 3\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(2))
+        );
+        let module = lucid_syntax::parse(
+            "flag = false\nif flag:\n    value = 1\nelif false:\n    value = 2\nelse:\n    value = 3\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(3))
+        );
+        let module = lucid_syntax::parse(
+            "flag = false\nvalue = 4\nif flag:\n    value = 1\nelif false:\n    value = 2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(4))
+        );
+        let module = lucid_syntax::parse(
+            "flag = true\nif flag:\n    value = 1\nelif true:\n    value = 2\nelse:\n    value = 3\n",
         )
         .unwrap();
         assert_eq!(
