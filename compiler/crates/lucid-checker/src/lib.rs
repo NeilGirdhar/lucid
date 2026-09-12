@@ -2788,6 +2788,9 @@ impl TypeChecker {
                 "staticmethod" => {
                     "staticmethod is not supported; use a module-level function instead"
                 }
+                "classmethod" => {
+                    "classmethod is not supported as a decorator; use the classmethod member modifier instead"
+                }
                 "property" => "property is not supported; use getter or setter syntax instead",
                 _ => continue,
             };

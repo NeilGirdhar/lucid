@@ -228,6 +228,13 @@ contextmanager def locked(lock: Lock):
     }
 
     #[test]
+    fn test_parse_rejects_classmethod_decorator_keyword() {
+        let src = "class Factory:\n    @classmethod\n    def make(cls) -> int:\n        return 1\n";
+        let error = parse(src).expect_err("classmethod decorator must fail in parsing");
+        assert!(error.contains("classmethod is not supported as a decorator"));
+    }
+
+    #[test]
     fn test_parse_async_def_and_await() {
         let src = r#"
 async def load() -> int:

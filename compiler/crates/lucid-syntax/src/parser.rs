@@ -144,7 +144,7 @@ impl Parser {
         // Decorators for functions/classes
         let mut decorators = Vec::new();
         while self.match_tok(&TokenKind::At) {
-            let dec = self.parse_expr()?;
+            let dec = self.parse_decorator_expr()?;
             self.consume_stmt_end()?;
             decorators.push(dec);
             self.skip_newlines();
@@ -478,7 +478,7 @@ impl Parser {
 
         let mut decorators = Vec::new();
         while self.match_tok(&TokenKind::At) {
-            let dec = self.parse_expr()?;
+            let dec = self.parse_decorator_expr()?;
             self.consume_stmt_end()?;
             decorators.push(dec);
             self.skip_newlines();
@@ -1183,6 +1183,17 @@ impl Parser {
         }
         let func = self.parse_raw_function(is_dispatch, decorators)?;
         Ok(Stmt::Function(func))
+    }
+
+    fn parse_decorator_expr(&mut self) -> Result<Expr, ParseError> {
+        if self.check(&TokenKind::ClassMethod) {
+            return Err(ParseError {
+                message: "classmethod is not supported as a decorator; use the classmethod member modifier instead".into(),
+                span: self.peek().span,
+            });
+        }
+
+        self.parse_expr()
     }
 
     fn parse_raw_function(

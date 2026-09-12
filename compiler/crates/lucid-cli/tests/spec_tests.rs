@@ -332,6 +332,7 @@ fn test_classes_reject_removed_python_decorators() {
     for source in [
         "class Tools:\n    @staticmethod\n    def answer() -> int:\n        return 42\n",
         "class Circle:\n    @property\n    def area(self) -> int:\n        return 1\n",
+        "class Factory:\n    @classmethod\n    def make(cls) -> int:\n        return 1\n",
     ] {
         let (chk, _evl) = run_lucid(source);
         assert!(chk.is_err());
