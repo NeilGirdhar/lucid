@@ -291,13 +291,19 @@ impl CompiledFunction {
                     args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15],
                 )
             },
-            _ => panic!("call_with_args currently supports at most sixteen arguments"),
+            _ => {
+                debug_assert!(
+                    args.len() <= 16,
+                    "call_with_args currently supports at most sixteen arguments"
+                );
+                0
+            }
         }
     }
 
     /// Checked wrapper for [`Self::call_with_args`].  FFI callers can use this
     /// API to turn an invalid signature or argument vector into a recoverable
-    /// ABI error instead of triggering the assertion in the unsafe adapter.
+    /// ABI error before reaching the unsafe adapter.
     ///
     /// # Safety
     ///
@@ -956,7 +962,12 @@ impl CompiledFunction {
                     args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15],
                 )
             },
-            _ => panic!("call_void_with_args currently supports at most sixteen arguments"),
+            _ => {
+                debug_assert!(
+                    args.len() <= 16,
+                    "call_void_with_args currently supports at most sixteen arguments"
+                );
+            }
         }
     }
 

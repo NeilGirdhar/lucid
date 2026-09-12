@@ -475,6 +475,10 @@ diverged:
   Checked legacy native adapters now expose recoverable wrappers for ordinary
   value and void calls, separating argument-count errors from incompatible
   return-ABI requests without invoking assertion-based unsafe entry points.
+  The legacy Cranelift positional-call dispatchers no longer carry production
+  `panic!` arms for arities above their supported sixteen-argument boundary;
+  checked callers receive `InvalidOperation` before reaching those unsafe
+  adapters.
 * Typed-CIR function lowering now accepts pure local bindings before a bare
   `return` or final `pass`, preserving initializer instructions while emitting
   a verified void terminator; this shape no longer needs the AST linear
