@@ -2023,6 +2023,9 @@ impl TypeChecker {
                 let mut class_vars = HashMap::new();
                 let mut field_order = Vec::new();
                 for member in body {
+                    if let Some((member_name, member_span)) = Self::member_name_and_span(member) {
+                        Self::reject_removed_indexing_member(member_name, member_span)?;
+                    }
                     match member {
                         ClassMember::Field(f) => {
                             field_order.push(f.name.clone());
@@ -2210,6 +2213,11 @@ impl TypeChecker {
                         .collect(),
                 );
                 for member in body {
+                    if let Some((member_name, member_span)) =
+                        Self::interface_member_name_and_span(member)
+                    {
+                        Self::reject_removed_indexing_member(member_name, member_span)?;
+                    }
                     match member {
                         InterfaceMember::MethodSig {
                             name: member_name,
@@ -2358,6 +2366,11 @@ impl TypeChecker {
                     }
                 }
                 for member in body {
+                    if let Some((member_name, member_span)) =
+                        Self::trait_member_name_and_span(member)
+                    {
+                        Self::reject_removed_indexing_member(member_name, member_span)?;
+                    }
                     match member {
                         TraitMember::Method(method) | TraitMember::ClassMethod(method)
                             if method.body.is_empty() =>
@@ -2728,6 +2741,58 @@ impl TypeChecker {
             }
         }
         Some(return_types)
+    }
+
+    fn reject_removed_indexing_member(name: &str, span: Span) -> Result<(), TypeError> {
+        if name == "__delitem__" {
+            return Err(TypeError {
+                message:
+                    "__delitem__ is not supported; use an explicit removal method instead".into(),
+                span,
+            });
+        }
+        Ok(())
+    }
+
+    fn member_name_and_span(member: &ClassMember) -> Option<(&str, Span)> {
+        match member {
+            ClassMember::Field(field) | ClassMember::ClassVar(field) => {
+                Some((field.name.as_str(), field.span))
+            }
+            ClassMember::Method(function) | ClassMember::ClassMethod(function) => {
+                Some((function.name.as_str(), function.span))
+            }
+            ClassMember::Factory(factory) => Some((factory.name.as_str(), factory.span)),
+            ClassMember::Getter(getter) => Some((getter.name.as_str(), getter.span)),
+            ClassMember::Setter(setter) => Some((setter.name.as_str(), setter.span)),
+            ClassMember::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
+            ClassMember::Pass(_) | ClassMember::Ellipsis(_) => None,
+        }
+    }
+
+    fn interface_member_name_and_span(member: &InterfaceMember) -> Option<(&str, Span)> {
+        match member {
+            InterfaceMember::MethodSig { name, span, .. }
+            | InterfaceMember::GetterSig { name, span, .. }
+            | InterfaceMember::SetterSig { name, span, .. }
+            | InterfaceMember::ClassMethodSig { name, span, .. }
+            | InterfaceMember::FactorySig { name, span, .. }
+            | InterfaceMember::FieldSig { name, span, .. }
+            | InterfaceMember::AssociatedTypeSig { name, span, .. } => Some((name.as_str(), *span)),
+            InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => None,
+        }
+    }
+
+    fn trait_member_name_and_span(member: &TraitMember) -> Option<(&str, Span)> {
+        match member {
+            TraitMember::Method(function) | TraitMember::ClassMethod(function) => {
+                Some((function.name.as_str(), function.span))
+            }
+            TraitMember::Getter(getter) => Some((getter.name.as_str(), getter.span)),
+            TraitMember::Setter(setter) => Some((setter.name.as_str(), setter.span)),
+            TraitMember::Field(field) => Some((field.name.as_str(), field.span)),
+            TraitMember::Pass(_) | TraitMember::Ellipsis(_) => None,
+        }
     }
 
     fn verify_structure(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
@@ -11031,6 +11096,22 @@ def reject(value: not int) -> none:
                 .check_module(&parse(source).unwrap())
                 .expect_err("__all__ binding must fail static checking");
             assert!(error.message.contains("__all__ is not supported"));
+            assert!(error.span.end > error.span.start);
+        }
+    }
+
+    #[test]
+    fn test_delitem_member_is_rejected_statically() {
+        for source in [
+            "class Bag:\n    def __delitem__(self, index: int):\n        pass\n",
+            "interface Removable:\n    def __delitem__(self, index: int) -> none\n",
+            "trait Removable:\n    def __delitem__(self, index: int):\n        pass\n",
+        ] {
+            let mut checker = TypeChecker::new();
+            let error = checker
+                .check_module(&parse(source).unwrap())
+                .expect_err("__delitem__ member must fail static checking");
+            assert!(error.message.contains("__delitem__ is not supported"));
             assert!(error.span.end > error.span.start);
         }
     }

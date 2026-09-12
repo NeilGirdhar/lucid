@@ -436,6 +436,18 @@ item = arr[2]
     assert_eq!(val, Value::Int(30));
 }
 
+#[test]
+fn test_indexing_rejects_delitem_dunder() {
+    let src = r#"
+class Bag:
+    def __delitem__(self, index: int):
+        pass
+"#;
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("__delitem__ is not supported"));
+}
+
 // ---------------------------------------------------------------------------
 // 15. Calls (docs/calls.rst)
 // ---------------------------------------------------------------------------
