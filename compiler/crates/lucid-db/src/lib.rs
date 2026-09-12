@@ -10957,6 +10957,24 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
         let file = db.add_file(
+            "counted-while-dead-if-broken.lucid",
+            "def countdown(n: int):\n    while n > 0:\n        n -= 1\n    if_broken:\n        n = 100\n    return n\n",
+        );
+        let function = lower_function_body(&db, file, "countdown".into())
+            .as_ref()
+            .expect("counted while should ignore unreachable if_broken");
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "range-accumulate-dead-if-broken.lucid",
+            "def sum_to(n: int):\n    total = 0\n    for i in range(n):\n        total += i\n    if_broken:\n        total = 100\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "sum_to".into())
+            .as_ref()
+            .expect("range accumulation should ignore unreachable if_broken");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let file = db.add_file(
             "void-counted-while.lucid",
             "def drain(n: int):\n    while n > 0:\n        n -= 1\n",
         );

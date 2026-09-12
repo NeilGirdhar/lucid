@@ -2786,12 +2786,11 @@ impl Function {
         {
             return None;
         }
-        if if_broken
-            .as_ref()
-            .is_some_and(|body| !matches!(body.as_slice(), [lucid_syntax::Stmt::Pass(_)]))
-        {
-            return None;
-        }
+        // This canonical loop shape contains no `break`; reaching the end of
+        // the body always takes the back edge and an exhausted condition exits
+        // normally.  Lucid's `if_broken` suite therefore cannot run here, so
+        // it is safe to leave even effectful suites unlowered.
+        let _ = if_broken;
         let (update_op, step) = match &body[0] {
             lucid_syntax::Stmt::AugAssign {
                 target:
@@ -3061,12 +3060,9 @@ impl Function {
         {
             return None;
         }
-        if if_broken
-            .as_ref()
-            .is_some_and(|body| !matches!(body.as_slice(), [lucid_syntax::Stmt::Pass(_)]))
-        {
-            return None;
-        }
+        // The accepted range-accumulation shape has no `break`, so the
+        // `if_broken` suite is unreachable and must not restrict lowering.
+        let _ = if_broken;
         if args.iter().any(|arg| {
             arg.name.is_some() || arg.is_spread || arg.is_dict_spread || arg.is_gather_spread
         }) {
