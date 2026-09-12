@@ -12334,6 +12334,10 @@ static inline void lucid_print_val(LucidVal v) {
                         && args[0].is_spread
                         && !args[0].is_dict_spread
                         && !args[0].is_gather_spread
+                        && !self
+                            .known_fn_defaults
+                            .get(&resolved_name)
+                            .is_some_and(|defaults| defaults.iter().any(Option::is_some))
                     {
                         if !matches!(&args[0].value, Expr::List { .. }) {
                             if let Some(param_types) =
@@ -12549,6 +12553,153 @@ static inline void lucid_print_val(LucidVal v) {
                                 };
                                 return Ok(format!("{fn_name}({})", rendered.join(", ")));
                             }
+                        }
+                    }
+                    if args.iter().any(|arg| {
+                        arg.is_spread
+                            && !arg.is_dict_spread
+                            && !arg.is_gather_spread
+                            && !matches!(arg.value, Expr::List { .. })
+                    }) {
+                        if let Some(param_names) =
+                            self.known_fn_param_names.get(&resolved_name).cloned()
+                        {
+                            let param_types = self
+                                .known_fn_params
+                                .get(&resolved_name)
+                                .cloned()
+                                .unwrap_or_default();
+                            let defaults = self
+                                .known_fn_defaults
+                                .get(&resolved_name)
+                                .cloned()
+                                .unwrap_or_default();
+                            let keyword_names = args
+                                .iter()
+                                .filter_map(|arg| arg.name.clone())
+                                .collect::<HashSet<_>>();
+                            let convert_value_arg = |rendered: String, index: usize| {
+                                if param_types.get(index).map(String::as_str)
+                                    == Some("LucidVal")
+                                {
+                                    format!("lucid_wrap({rendered})")
+                                } else {
+                                    rendered
+                                }
+                            };
+                            let convert_list_item = |item: String, index: usize| {
+                                match param_types
+                                    .get(index)
+                                    .map(String::as_str)
+                                    .unwrap_or("LucidVal")
+                                {
+                                    "int64_t" => format!("lucid_as_int({item})"),
+                                    "double" => format!("lucid_as_float({item})"),
+                                    "bool" => format!("lucid_as_bool({item})"),
+                                    "const char*" => format!("lucid_as_str({item})"),
+                                    "LucidList*" => format!("lucid_as_list({item})"),
+                                    "LucidDict*" => format!("lucid_as_dict({item})"),
+                                    "LucidSet*" => format!("lucid_as_set({item})"),
+                                    "LucidVal" => item,
+                                    other => format!("({other})lucid_as_ptr({item})"),
+                                }
+                            };
+                            let mut prelude = Vec::new();
+                            let mut slots: Vec<Option<String>> = vec![None; param_names.len()];
+                            let mut positional = 0usize;
+                            let mut extras = Vec::new();
+                            for arg in
+                                args.iter().filter(|arg| !matches!(arg.value, Expr::Skip(_)))
+                            {
+                                if let Some(arg_name) = &arg.name {
+                                    if let Some(index) =
+                                        param_names.iter().position(|name| name == arg_name)
+                                    {
+                                        let rendered = self.emit_expr(&arg.value)?;
+                                        slots[index] = Some(convert_value_arg(rendered, index));
+                                    } else {
+                                        extras.push(self.emit_expr(&arg.value)?);
+                                    }
+                                    continue;
+                                }
+                                if arg.is_spread
+                                    && !arg.is_dict_spread
+                                    && !arg.is_gather_spread
+                                    && !matches!(arg.value, Expr::List { .. })
+                                {
+                                    let rendered = self.emit_expr(&arg.value)?;
+                                    let list = self.new_temp();
+                                    prelude.push(format!(
+                                        "LucidList* {list} = lucid_as_list(lucid_wrap({rendered}));"
+                                    ));
+                                    let static_len = match &arg.value {
+                                        Expr::ListComp {
+                                            iter, condition, ..
+                                        } if condition.is_none() => match &**iter {
+                                            Expr::List { elements, .. } => Some(elements.len()),
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    };
+                                    let mut spread_index = 0usize;
+                                    while positional < slots.len()
+                                        && !keyword_names.contains(&param_names[positional])
+                                        && static_len
+                                            .map(|len| spread_index < len)
+                                            .unwrap_or(true)
+                                    {
+                                        let item =
+                                            format!("lucid_list_get({list}, {spread_index}LL)");
+                                        slots[positional] =
+                                            Some(convert_list_item(item, positional));
+                                        positional += 1;
+                                        spread_index += 1;
+                                    }
+                                    continue;
+                                }
+                                if arg.is_spread || arg.is_dict_spread || arg.is_gather_spread {
+                                    return Err(CodegenError {
+                                        message: "native backend requires spread arguments to be statically materialized".into(),
+                                    });
+                                }
+                                let rendered = self.emit_expr(&arg.value)?;
+                                if positional < slots.len() {
+                                    slots[positional] =
+                                        Some(convert_value_arg(rendered, positional));
+                                    positional += 1;
+                                } else {
+                                    extras.push(rendered);
+                                }
+                            }
+                            let mut rendered = Vec::with_capacity(slots.len() + extras.len());
+                            for (index, slot) in slots.into_iter().enumerate() {
+                                if let Some(value) = slot {
+                                    rendered.push(value);
+                                } else if let Some(Some(default)) = defaults.get(index) {
+                                    let default = self.emit_expr(default)?;
+                                    rendered.push(convert_value_arg(default, index));
+                                } else {
+                                    return Err(CodegenError {
+                                        message: format!(
+                                            "missing required argument '{}'",
+                                            param_names[index]
+                                        ),
+                                    });
+                                }
+                            }
+                            rendered.extend(extras);
+                            let fn_name = self
+                                .dispatch_fns
+                                .get(&resolved_name)
+                                .and_then(|candidates| {
+                                    candidates.first().map(|(_, emitted)| emitted.clone())
+                                })
+                                .unwrap_or_else(|| format!("lucid_fn_{resolved_name}"));
+                            return Ok(format!(
+                                "({{ {} {fn_name}({}); }})",
+                                prelude.join(" "),
+                                rendered.join(", ")
+                            ));
                         }
                     }
                     let mut expanded_args = Vec::new();
@@ -20572,8 +20723,7 @@ print(result[1])
 
     #[test]
     fn native_generator_call_shorthand_expands_values() {
-        let source =
-            "def add(a: int, b: int) -> int:\n    return a + b\nprint(add(x for x in [2, 3]))\n";
+        let source = "def add(a: int, b: int) -> int:\n    return a + b\ndef combine(a: int, b: int, c: int, start: int = 0) -> int:\n    return start + a * 100 + b * 10 + c\nprint(add(x for x in [2, 3]))\nprint(combine(x for x in [1, 2, 3], start=1000))\nprint(combine(x for x in [1, 2, 3]))\n";
         let module = parse(source).expect("generator call source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_generator_call_test_{}",
@@ -20586,7 +20736,7 @@ print(result[1])
             .expect("compiled generator call program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n1123\n123\n");
     }
 
     #[test]
