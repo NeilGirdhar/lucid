@@ -4622,6 +4622,8 @@ static inline LucidVal lucid_slice_value(LucidVal value, int64_t start, int64_t 
         return lucid_bytes_slice_value(value, start, stop, step);
     if (value.type == LUCID_TYPE_MEMORYVIEW)
         return lucid_memoryview_slice_value(value, start, stop, step);
+    if (value.type == LUCID_TYPE_RANGE)
+        return lucid_list_val(lucid_list_slice(lucid_range_to_list(value.range->start, value.range->stop, value.range->step), start, stop, step));
     if (value.type == LUCID_TYPE_LIST)
         return lucid_list_val(lucid_list_slice(value.list, start, stop, step));
     fprintf(stderr, "slicing not supported\n");
@@ -14787,6 +14789,11 @@ static inline void lucid_print_val(LucidVal v) {
                             "lucid_str_slice({v_code}, {st}, {sp}, {step_code})"
                         ));
                     }
+                    if self.infer_expr_type(value, &HashMap::new()) == "LucidRange*" {
+                        return Ok(format!(
+                            "lucid_list_slice(lucid_range_to_list({v_code}->start, {v_code}->stop, {v_code}->step), {st}, {sp}, {step_code})"
+                        ));
+                    }
                     if self.infer_expr_type(value, &HashMap::new()) == "LucidVal" {
                         return Ok(format!(
                             "lucid_slice_value(lucid_wrap({v_code}), {st}, {sp}, {step_code})"
@@ -19040,6 +19047,24 @@ else:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n1\n");
+    }
+
+    #[test]
+    fn native_range_slicing_materializes_sequence_slice() {
+        let source = "a = range(0, 6)[1:5:2]\nprint(a[0])\nprint(a[1])\nb = range(5, 0, -1)[::-2]\nprint(b[0])\nprint(b[2])\n";
+        let module = parse(source).expect("range slicing should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_range_slicing_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("range slicing should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled range slicing program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n3\n1\n5\n");
     }
 
     #[test]

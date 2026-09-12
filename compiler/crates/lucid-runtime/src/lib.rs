@@ -8428,6 +8428,41 @@ impl Interpreter {
                             }
                             return Ok(Value::List(Rc::new(RefCell::new(res))));
                         }
+                        Value::Range { start, stop, step } => {
+                            let items = materialize_range(start, stop, step);
+                            let len = items.len() as i64;
+                            let mut cur = start_val
+                                .map(|s| if s < 0 { (len + s).max(0) } else { s.min(len) })
+                                .unwrap_or(if step_val > 0 { 0 } else { len - 1 });
+                            let end = stop_val
+                                .map(|s| if s < 0 { (len + s).max(0) } else { s.min(len) })
+                                .unwrap_or(if step_val > 0 { len } else { -1 });
+                            let mut res = Vec::new();
+                            if step_val > 0 {
+                                while cur < end && cur < len {
+                                    res.push(items[cur as usize].clone());
+                                    let Some(next) = cur.checked_add(step_val) else {
+                                        return Err(RuntimeError {
+                                            message: "slice step overflow".into(),
+                                            span: slice_span,
+                                        });
+                                    };
+                                    cur = next;
+                                }
+                            } else {
+                                while cur > end && cur >= 0 {
+                                    res.push(items[cur as usize].clone());
+                                    let Some(next) = cur.checked_add(step_val) else {
+                                        return Err(RuntimeError {
+                                            message: "slice step overflow".into(),
+                                            span: slice_span,
+                                        });
+                                    };
+                                    cur = next;
+                                }
+                            }
+                            return Ok(Value::List(Rc::new(RefCell::new(res))));
+                        }
                         Value::MemoryView {
                             data,
                             start,
@@ -11310,6 +11345,28 @@ s = sum(r)
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("a"), Some(Value::Int(3)));
         assert_eq!(interp.env.borrow().get("b"), Some(Value::Int(1)));
+    }
+
+    #[test]
+    fn range_slicing_materializes_sequence_slice() {
+        let module = parse("a = range(0, 6)[1:5:2]\nb = range(5, 0, -1)[::-2]\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(
+            interp.env.borrow().get("a"),
+            Some(Value::List(Rc::new(RefCell::new(vec![
+                Value::Int(1),
+                Value::Int(3)
+            ]))))
+        );
+        assert_eq!(
+            interp.env.borrow().get("b"),
+            Some(Value::List(Rc::new(RefCell::new(vec![
+                Value::Int(1),
+                Value::Int(3),
+                Value::Int(5)
+            ]))))
+        );
     }
 
     #[test]

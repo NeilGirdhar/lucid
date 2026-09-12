@@ -1199,7 +1199,8 @@ diverged:
   truthiness, so empty ranges are false even before value erasure. Interpreter
   and native indexing now treat ranges as sequences: positive and negative
   indices return the corresponding arithmetic range element with normal
-  bounds checks.
+  bounds checks, and range slices materialize the selected sequence as a list
+  in both backends.
   Native class-like identifier patterns that are not known classes now fail
   codegen instead of compiling as unconditional matches; lowercase binding
   patterns remain the match-all binding form.
