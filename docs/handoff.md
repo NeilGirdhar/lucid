@@ -615,7 +615,8 @@ diverged:
   returned accumulator name identifies which initializer is loop-carried as the
   result. The comparison bound may also be a local initialized from a literal
   or parameter before the loop, so the entry block can seed induction,
-  accumulator, and bound values before entering the shared header. The same
+  accumulator, bound, and update-alias values before entering the shared header.
+  The same
   local-bound entry seeding is supported for plain counted `while` loops that
   return the induction variable or fall through with no explicit return. Void
   loop CFGs now compile through the Cranelift result ABI while preserving the
