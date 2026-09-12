@@ -541,8 +541,8 @@ diverged:
   conditionals without evaluating dead arms, including selected setup before
   void or fall-through completion.
   The typed-HIR match node collector now recognizes the same simple no-op setup
-  for primitive two-arm and literal-chain match results, keeping those shapes on
-  the typed graph path.
+  for primitive two-arm and literal-chain match results, including `assert(true)`,
+  keeping those shapes on the typed graph path.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.

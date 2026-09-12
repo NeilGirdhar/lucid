@@ -1037,6 +1037,16 @@ fn collect_typed_body<'db>(
                     }
                     matches!(statement, lucid_syntax::Stmt::Pass(_))
                         || matches!(statement, lucid_syntax::Stmt::Expr(expr) if pure_expr(expr))
+                        || matches!(
+                            statement,
+                            lucid_syntax::Stmt::Assert {
+                                condition: lucid_syntax::Expr::Literal {
+                                    value: lucid_syntax::LiteralValue::Bool(true),
+                                    ..
+                                },
+                                ..
+                            }
+                        )
                 }
                 fn match_arm_result(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
                     let mut meaningful = arm
@@ -6566,6 +6576,17 @@ mod tests {
         }));
 
         let file = db.add_file(
+            "match-assert-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true)\n            return 3\n        case _:\n            assert(true)\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid assert match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
             "try-local-hir.lucid",
             "def choose(value: int):\n    try:\n        selected = value + 1\n        return selected\n    except str as error:\n        fallback = 0\n        return fallback\n",
         );
@@ -7088,6 +7109,26 @@ mod tests {
             typed_module(&db, file)
                 .as_ref()
                 .expect("multi-arm no-op match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-assert-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true)\n            return 11\n        case 2:\n            assert(true)\n            return 22\n        case _:\n            assert(true)\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with assert setup should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm assert match should type check")
                 .functions[0]
                 .body_expressions
                 .iter()
