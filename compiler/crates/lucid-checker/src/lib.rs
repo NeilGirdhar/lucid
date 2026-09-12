@@ -2563,11 +2563,6 @@ impl TypeChecker {
                 if func.is_dispatch {
                     self.env.dispatch_functions.insert(func.name.clone());
                 }
-                let ret = if let Some(ref r) = func.return_type {
-                    self.resolve_type_expr(r)?
-                } else {
-                    Type::None
-                };
                 let mut param_types = Vec::new();
                 for p in &func.params {
                     let pt = if let Some(ref t) = p.type_annotation {
@@ -2577,6 +2572,12 @@ impl TypeChecker {
                     };
                     param_types.push(pt);
                 }
+                let ret = if let Some(ref r) = func.return_type {
+                    self.resolve_type_expr(r)?
+                } else {
+                    self.infer_unannotated_function_return(func, &param_types)
+                        .unwrap_or(Type::None)
+                };
                 let fn_return = if func.is_async {
                     Type::Future(Box::new(ret.clone()))
                 } else {
@@ -2654,6 +2655,79 @@ impl TypeChecker {
             }
             _ => Ok(()),
         }
+    }
+
+    fn infer_unannotated_function_return(
+        &self,
+        func: &FunctionDef,
+        param_types: &[Type],
+    ) -> Option<Type> {
+        let mut checker = self.clone();
+        checker.env.current_return_type = Some(Type::TypeVar("Any".into()));
+        for (param, parameter_type) in func.params.iter().zip(param_types.iter()) {
+            checker.env.variables.insert(
+                param.name.clone(),
+                (parameter_type.clone(), MutabilityView::Mutable),
+            );
+            if let Some(pattern) = &param.pattern {
+                checker.bind_match_pattern_types(pattern, parameter_type);
+            }
+        }
+        let return_types = checker.infer_return_types_in_statements(&func.body)?;
+        if return_types.is_empty() {
+            None
+        } else {
+            Some(Type::make_union(return_types))
+        }
+    }
+
+    fn infer_return_types_in_statements(&mut self, statements: &[Stmt]) -> Option<Vec<Type>> {
+        let mut return_types = Vec::new();
+        for statement in statements {
+            match statement {
+                Stmt::Return {
+                    value: Some(value), ..
+                } => return_types.push(self.type_of_expr(value).ok()?),
+                Stmt::Return { value: None, .. } => return_types.push(Type::None),
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch,
+                    ..
+                } => {
+                    if !self.type_of_expr(condition).ok()?.is_subtype_of(&Type::Bool, &self.env) {
+                        return None;
+                    }
+                    let mut branch_checker = self.clone();
+                    return_types
+                        .extend(branch_checker.infer_return_types_in_statements(then_branch)?);
+                    for (elif_condition, branch) in elif_branches {
+                        if !self
+                            .type_of_expr(elif_condition)
+                            .ok()?
+                            .is_subtype_of(&Type::Bool, &self.env)
+                        {
+                            return None;
+                        }
+                        let mut branch_checker = self.clone();
+                        return_types
+                            .extend(branch_checker.infer_return_types_in_statements(branch)?);
+                    }
+                    if let Some(else_branch) = else_branch {
+                        let mut branch_checker = self.clone();
+                        return_types
+                            .extend(branch_checker.infer_return_types_in_statements(else_branch)?);
+                    }
+                }
+                _ => {
+                    if self.check_statement(statement).is_err() {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(return_types)
     }
 
     fn verify_structure(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
@@ -6859,6 +6933,13 @@ impl TypeChecker {
                             }
                         }
 
+                        if err_types.is_empty() && ok_types.len() > 1 {
+                            let mut alternatives = ok_types.into_iter();
+                            let ok_type = alternatives.next().unwrap_or(Type::Never);
+                            ok_types = vec![ok_type];
+                            err_types = alternatives.collect();
+                        }
+
                         if err_types.is_empty() {
                             return Err(TypeError {
                                 message: "cannot use '?' on a type with no recoverable error"
@@ -11002,6 +11083,40 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         TypeChecker::new().check_module(&annotated).unwrap();
+    }
+
+    #[test]
+    fn unannotated_functions_infer_straight_line_return_type() {
+        let module = parse(
+            "def make():\n    fact = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\n    return fact\nrun = make()\nresult = run(5)\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module).unwrap();
+        assert!(matches!(
+            checker.env.variables.get("result"),
+            Some((Type::Int, _))
+        ));
+
+        let value = parse("def value():\n    temp = 40 + 2\n    return temp\nresult = value()\n")
+            .unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check_module(&value).unwrap();
+        assert!(matches!(
+            checker.env.variables.get("result"),
+            Some((Type::Int, _))
+        ));
+
+        let recoverable = parse(
+            "def step_one(x: int):\n    if x > 0:\n        return x * 2\n    return \"error\"\ndef pipeline(x: int):\n    value = step_one(x)?\n    return value + 10\nresult = pipeline(5)\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check_module(&recoverable).unwrap();
+        assert!(matches!(
+            checker.env.variables.get("result"),
+            Some((Type::Int, _))
+        ));
     }
 
     #[test]
