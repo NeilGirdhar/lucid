@@ -699,10 +699,13 @@ impl Function {
                         local_bindings,
                     );
                 }
-                if matches!(node.kind.as_str(), "match-chain" | "optional-match-chain")
-                    && node.children.len() >= 3
+                if matches!(
+                    node.kind.as_str(),
+                    "match-chain" | "optional-match-chain" | "void-match-chain"
+                ) && node.children.len() >= 1
                 {
                     let optional_chain = node.kind == "optional-match-chain";
+                    let void_chain = node.kind == "void-match-chain";
                     let Some(detail) = node.detail.as_deref() else {
                         return Err(LowerError::UnsupportedExpression);
                     };
@@ -725,7 +728,11 @@ impl Function {
                     let Some(patterns) = patterns else {
                         return Err(LowerError::UnsupportedExpression);
                     };
-                    let expected_children = patterns.len() + if optional_chain { 1 } else { 2 };
+                    let expected_children = if void_chain {
+                        1
+                    } else {
+                        patterns.len() + if optional_chain { 1 } else { 2 }
+                    };
                     if expected_children != node.children.len() {
                         return Err(LowerError::UnsupportedExpression);
                     }
@@ -1043,6 +1050,65 @@ impl Function {
                             parameter_names,
                             local_bindings,
                         )?)?);
+                    }
+                    if void_chain {
+                        let mut next_value_offset = 0;
+                        let mut blocks = Vec::with_capacity(patterns.len() * 2 + 1);
+                        for (index, (instructions, condition_value)) in
+                            conditions.into_iter().enumerate()
+                        {
+                            let condition_block = BlockId(
+                                u32::try_from(index * 2)
+                                    .map_err(|_| LowerError::UnsupportedExpression)?,
+                            );
+                            let result_block = BlockId(
+                                u32::try_from(index * 2 + 1)
+                                    .map_err(|_| LowerError::UnsupportedExpression)?,
+                            );
+                            let else_block = if index + 1 == patterns.len() {
+                                BlockId(
+                                    u32::try_from(patterns.len() * 2)
+                                        .map_err(|_| LowerError::UnsupportedExpression)?,
+                                )
+                            } else {
+                                BlockId(
+                                    u32::try_from((index + 1) * 2)
+                                        .map_err(|_| LowerError::UnsupportedExpression)?,
+                                )
+                            };
+                            let (instructions, condition_value) =
+                                remap_block(instructions, condition_value, &mut next_value_offset);
+                            blocks.push(Block {
+                                id: condition_block,
+                                instructions,
+                                terminator: Terminator::Branch {
+                                    condition: condition_value,
+                                    then_block: result_block,
+                                    else_block,
+                                },
+                            });
+                            blocks.push(Block {
+                                id: result_block,
+                                instructions: Vec::new(),
+                                terminator: Terminator::Return(None),
+                            });
+                        }
+                        blocks.push(Block {
+                            id: BlockId(
+                                u32::try_from(patterns.len() * 2)
+                                    .map_err(|_| LowerError::UnsupportedExpression)?,
+                            ),
+                            instructions: Vec::new(),
+                            terminator: Terminator::Return(None),
+                        });
+                        let function = Self {
+                            entry: BlockId(0),
+                            blocks,
+                        };
+                        function
+                            .verify()
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        return Ok(function);
                     }
                     let mut results = Vec::with_capacity(node.children.len() - 1);
                     for result in &node.children[1..] {
@@ -7872,6 +7938,31 @@ return total
             .expect("typed optional match-chain should lower nonliteral arm results");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+    }
+
+    #[test]
+    fn lowers_typed_void_match_chain() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "void-match-chain".into(),
+                detail: Some("literal-chain:i1,i2".into()),
+                children: vec![0],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 1, &["value".into()])
+            .expect("typed void match-chain should lower");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
     }
 

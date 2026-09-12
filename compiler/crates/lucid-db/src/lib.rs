@@ -1380,6 +1380,63 @@ fn collect_typed_body<'db>(
                         });
                     }
                 }
+                let void_arms = if arms.len() >= 2 && arms.iter().all(|arm| arm.guard.is_none()) {
+                    if matches!(
+                        arms.last().map(|arm| &arm.pattern),
+                        Some(lucid_syntax::Pattern::Wildcard(_))
+                    ) && arms
+                        .last()
+                        .is_some_and(|arm| arm.body.iter().all(typed_match_noop_statement))
+                    {
+                        Some(&arms[..arms.len() - 1])
+                    } else {
+                        Some(arms.as_slice())
+                    }
+                } else {
+                    None
+                };
+                if let Some(void_arms) = void_arms.filter(|void_arms| {
+                    !void_arms.is_empty()
+                        && void_arms
+                            .iter()
+                            .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                        && void_arms.iter().all(|arm| {
+                            let Some((last, prefix)) = arm.body.split_last() else {
+                                return false;
+                            };
+                            prefix.iter().all(typed_match_noop_statement)
+                                && matches!(last, lucid_syntax::Stmt::Return { value: None, .. })
+                                || arm.body.iter().all(typed_match_noop_statement)
+                        })
+                }) {
+                    let detail = void_arms
+                        .iter()
+                        .map(|arm| match &arm.pattern {
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Int(value),
+                                _,
+                            ) => Ok(format!("i{value}")),
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Bool(value),
+                                _,
+                            ) => Ok(format!("b{value}")),
+                            _ => Err(Arc::from("unsupported match literal pattern")),
+                        })
+                        .collect::<Result<Vec<_>, Arc<str>>>()?
+                        .join(",");
+                    let id = u32::try_from(nodes.len())
+                        .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                    nodes.push(TypedExpr {
+                        id,
+                        type_id: TypeId::new(db, "none"),
+                        type_name: "none".into(),
+                        kind: "void-match-chain".into(),
+                        detail: Some(format!("literal-chain:{detail}")),
+                        children: Arc::from([subject_id]),
+                        literal: None,
+                        span: subject.span(),
+                    });
+                }
             }
             Stmt::Try {
                 body,
@@ -1953,7 +2010,7 @@ pub fn lower_function_body(
         if let Some(root) = function.body_expressions.iter().rev().find(|node| {
             matches!(
                 node.kind.as_str(),
-                "match" | "match-chain" | "optional-match-chain"
+                "match" | "match-chain" | "optional-match-chain" | "void-match-chain"
             ) && node.span == subject.span()
         }) {
             let nodes = function
@@ -7659,6 +7716,15 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("multi-arm void match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm void match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "void-match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[2]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
