@@ -85,6 +85,28 @@ fn test_identity_checks_reject_dead_exact_class_tests() {
 }
 
 #[test]
+fn test_conditions_accept_bool_protocol_not_len_fallback() {
+    let truthy = r#"
+class Flag:
+    value: bool
+    factory __init__(cls, value: bool):
+        return construct(value)
+    def __bool__(self) -> bool:
+        return self.value
+
+if Flag(true):
+    pass
+"#;
+    let (chk, _evl) = run_lucid(truthy);
+    assert!(chk.is_ok(), "__bool__ should satisfy condition: {:?}", chk.err());
+
+    let len_only = "class SizedOnly:\n    def __len__(self) -> int:\n        return 1\nif SizedOnly():\n    pass\n";
+    let (chk, _evl) = run_lucid(len_only);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("condition must be bool"));
+}
+
+#[test]
 fn test_principles_recoverable_errors_with_question_mark() {
     let src = r#"
 def step_one(x: int):

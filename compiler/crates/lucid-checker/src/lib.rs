@@ -1078,6 +1078,7 @@ impl TypeChecker {
             "Sequence",
             "Buffer",
             "Shape",
+            "Truthy",
         ] {
             let method_names: &[&str] = match name {
                 "Eq" => &["__eq__"],
@@ -1102,6 +1103,7 @@ impl TypeChecker {
                 "Sequence" => &["__iter__", "__len__", "__contains__", "__getitem__"],
                 "Buffer" => &["__buffer__"],
                 "Shape" => &[],
+                "Truthy" => &["__bool__"],
                 _ => &[],
             };
             let trait_type = Type::Trait {
@@ -2700,7 +2702,7 @@ impl TypeChecker {
                     else_branch,
                     ..
                 } => {
-                    if !self.type_of_expr(condition).ok()?.is_subtype_of(&Type::Bool, &self.env) {
+                    if !self.is_truthy_type(&self.type_of_expr(condition).ok()?) {
                         return None;
                     }
                     let mut branch_checker = self.clone();
@@ -3329,6 +3331,31 @@ impl TypeChecker {
                 || self.env.class_members.get(name).is_some_and(|members| members.contains("__buffer__")))
     }
 
+    fn is_truthy_type(&self, value: &Type) -> bool {
+        let base = match value {
+            Type::View { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        if base.is_subtype_of(&Type::Bool, &self.env)
+            || matches!(base, Type::TypeVar(name) if name == "Any")
+            || base.is_subtype_of(
+                &Type::Trait {
+                    name: "Truthy".into(),
+                    type_args: Vec::new(),
+                    methods: HashSet::new(),
+                },
+                &self.env,
+            )
+        {
+            return true;
+        }
+        matches!(base, Type::Class { name, .. }
+            if matches!(
+                self.class_method_type(name, "__bool__"),
+                Some(Type::Function { return_type, .. }) if return_type.is_subtype_of(&Type::Bool, &self.env)
+            ))
+    }
+
     fn is_byte_conversion_input(&self, value: &Type) -> bool {
         let base = match value {
             Type::View { inner, .. } => inner.as_ref(),
@@ -3940,7 +3967,7 @@ impl TypeChecker {
             } => {
                 Self::reject_bare_skip_value(condition, "assert condition")?;
                 let condition_type = self.type_of_expr(condition)?;
-                if !condition_type.is_subtype_of(&Type::Bool, &self.env) {
+                if !self.is_truthy_type(&condition_type) {
                     return Err(TypeError {
                         message: format!("assert condition must be bool, got {:?}", condition_type),
                         span: *span,
@@ -4507,7 +4534,7 @@ impl TypeChecker {
                 for arm in arms {
                     if let Some(guard) = &arm.guard {
                         let guard_type = self.type_of_expr(guard)?;
-                        if !guard_type.is_subtype_of(&Type::Bool, &self.env) {
+                        if !self.is_truthy_type(&guard_type) {
                             return Err(TypeError {
                                 message: format!("match guard must be bool, got {:?}", guard_type),
                                 span: guard.span(),
@@ -4568,7 +4595,7 @@ impl TypeChecker {
             } => {
                 Self::reject_bare_skip_value(condition, "if condition")?;
                 let cond_type = self.type_of_expr(condition)?;
-                if !cond_type.is_subtype_of(&Type::Bool, &self.env) {
+                if !self.is_truthy_type(&cond_type) {
                     return Err(TypeError {
                         message: format!("if condition must be bool, got {:?}", cond_type),
                         span: condition.span(),
@@ -4580,7 +4607,7 @@ impl TypeChecker {
                 for (c, b) in elif_branches {
                     Self::reject_bare_skip_value(c, "elif condition")?;
                     let elif_type = self.type_of_expr(c)?;
-                    if !elif_type.is_subtype_of(&Type::Bool, &self.env) {
+                    if !self.is_truthy_type(&elif_type) {
                         return Err(TypeError {
                             message: format!("elif condition must be bool, got {:?}", elif_type),
                             span: c.span(),
@@ -4652,7 +4679,7 @@ impl TypeChecker {
             } => {
                 Self::reject_bare_skip_value(condition, "while condition")?;
                 let condition_type = self.type_of_expr(condition)?;
-                if !condition_type.is_subtype_of(&Type::Bool, &self.env) {
+                if !self.is_truthy_type(&condition_type) {
                     return Err(TypeError {
                         message: format!("while condition must be bool, got {:?}", condition_type),
                         span: condition.span(),
@@ -7708,7 +7735,7 @@ impl TypeChecker {
                 }
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
-                    if !condition_type.is_subtype_of(&Type::Bool, &sub.env) {
+                    if !sub.is_truthy_type(&condition_type) {
                         return Err(TypeError {
                             message: format!(
                                 "list comprehension condition must be bool, got {:?}",
@@ -7752,7 +7779,7 @@ impl TypeChecker {
                 }
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
-                    if !condition_type.is_subtype_of(&Type::Bool, &sub.env) {
+                    if !sub.is_truthy_type(&condition_type) {
                         return Err(TypeError {
                             message: format!(
                                 "set comprehension condition must be bool, got {:?}",
@@ -7797,7 +7824,7 @@ impl TypeChecker {
                 }
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
-                    if !condition_type.is_subtype_of(&Type::Bool, &sub.env) {
+                    if !sub.is_truthy_type(&condition_type) {
                         return Err(TypeError {
                             message: format!(
                                 "dict comprehension condition must be bool, got {:?}",
@@ -9267,6 +9294,17 @@ class Child(Base):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("condition must be bool"));
+
+        let len_only = parse("class SizedOnly:\n    def __len__(self) -> int:\n        return 1\nif SizedOnly():\n    pass\n").unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&len_only).unwrap_err();
+        assert!(err.message.contains("condition must be bool"));
+
+        let truthy = parse("class Flag:\n    value: bool\n    factory __init__(cls, value: bool):\n        return construct(value)\n    def __bool__(self) -> bool:\n        return self.value\nif Flag(true):\n    pass\nwhile Flag(false):\n    pass\nitems = [x for x in [1] if Flag(true)]\n").unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(&truthy)
+            .expect("__bool__ should satisfy condition positions");
 
         let module = parse("value: int = 1\nvalue += \"bad\"\n").unwrap();
         let mut checker = TypeChecker::new();
