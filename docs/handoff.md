@@ -558,6 +558,10 @@ diverged:
   because the accepted loop shape has no `break` path. Range accumulators
   support both additive and subtractive induction updates with checked CIR
   arithmetic.
+  Linear constant-loop unrolling now also checks reachability before rejecting
+  body-local `return`: empty list/range loops and literal-pattern loops with no
+  matching element ignore the unreachable body while preserving iterable
+  expression evaluation.
 * Pure discarded expressions before value and bare returns now pass through
   CIR lowering; effectful expressions remain rejected instead of being dropped.
   Their rejection now carries a dedicated diagnostic explaining that an

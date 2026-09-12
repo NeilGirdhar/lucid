@@ -4285,6 +4285,9 @@ impl Function {
                     body,
                     ..
                 } => {
+                    if elements.is_empty() {
+                        return Ok(());
+                    }
                     if contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
@@ -4303,6 +4306,9 @@ impl Function {
                     body,
                     ..
                 } => {
+                    if elements.is_empty() {
+                        return Ok(());
+                    }
                     if contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
@@ -4321,7 +4327,10 @@ impl Function {
                     body,
                     ..
                 } => {
-                    if contains_return(body) {
+                    let has_match = elements
+                        .iter()
+                        .any(|element| literal_int(element) == Some(*expected));
+                    if has_match && contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for element in elements {
@@ -4341,7 +4350,10 @@ impl Function {
                     body,
                     ..
                 } => {
-                    if contains_return(body) {
+                    let has_match = elements
+                        .iter()
+                        .any(|element| literal_bool(element) == Some(*expected));
+                    if has_match && contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for element in elements {
@@ -4358,6 +4370,9 @@ impl Function {
                     body,
                     ..
                 } => {
+                    if entries.is_empty() {
+                        return Ok(());
+                    }
                     if contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
@@ -4375,6 +4390,9 @@ impl Function {
                     body,
                     ..
                 } => {
+                    if entries.is_empty() {
+                        return Ok(());
+                    }
                     if contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
@@ -4392,7 +4410,10 @@ impl Function {
                     body,
                     ..
                 } => {
-                    if contains_return(body) {
+                    let has_match = entries
+                        .iter()
+                        .any(|(element, _)| literal_int(element) == Some(*expected));
+                    if has_match && contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for (element, _) in entries {
@@ -4410,7 +4431,10 @@ impl Function {
                     body,
                     ..
                 } => {
-                    if contains_return(body) {
+                    let has_match = entries
+                        .iter()
+                        .any(|(element, _)| literal_bool(element) == Some(*expected));
+                    if has_match && contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for (element, _) in entries {
@@ -4427,10 +4451,14 @@ impl Function {
                     body,
                     ..
                 } if const_range_values(iterable).is_some() => {
+                    let values = const_range_values(iterable).unwrap_or_default();
+                    if values.is_empty() {
+                        return Ok(());
+                    }
                     if contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
-                    for element in const_range_values(iterable).unwrap_or_default() {
+                    for element in values {
                         let value = ValueId(*next);
                         *next += 1;
                         instructions.push(Instruction::ConstInt {
@@ -4448,10 +4476,14 @@ impl Function {
                     body,
                     ..
                 } if const_range_values(iterable).is_some() => {
+                    let values = const_range_values(iterable).unwrap_or_default();
+                    if values.is_empty() {
+                        return Ok(());
+                    }
                     if contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
-                    for _ in const_range_values(iterable).unwrap_or_default() {
+                    for _ in values {
                         visit_all(body, bindings, instructions, next, last)?;
                     }
                     Ok(())
@@ -4463,10 +4495,12 @@ impl Function {
                     body,
                     ..
                 } if const_range_values(iterable).is_some() => {
-                    if contains_return(body) {
+                    let values = const_range_values(iterable).unwrap_or_default();
+                    let has_match = values.iter().any(|element| element == expected);
+                    if has_match && contains_return(body) {
                         return Err(LowerError::UnsupportedExpression);
                     }
-                    for element in const_range_values(iterable).unwrap_or_default() {
+                    for element in values {
                         if element == *expected {
                             visit_all(body, bindings, instructions, next, last)?;
                         }
@@ -8827,6 +8861,13 @@ return total
                 .execute(),
             Ok(Some(8))
         );
+        let module = lucid_syntax::parse("for item in []:\n    return 1\nvalue = 9\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("empty literal loops should ignore unreachable returns")
+                .execute(),
+            Ok(Some(9))
+        );
         let module = lucid_syntax::parse(
             "value = 8\nfor item in []:\n    value = 1\nif_broken:\n    value = 2\n",
         )
@@ -8854,6 +8895,14 @@ return total
                 .expect("empty range loops should fold in linear lowering")
                 .execute(),
             Ok(Some(9))
+        );
+        let module =
+            lucid_syntax::parse("for item in range(0):\n    return 1\nvalue = 11\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("empty range loops should ignore unreachable returns")
+                .execute(),
+            Ok(Some(11))
         );
         let module = lucid_syntax::parse("for item in range(-1):\n    pass\nvalue = 10\n").unwrap();
         assert_eq!(
@@ -8922,6 +8971,14 @@ return total
                 .execute(),
             Ok(Some(2))
         );
+        let module =
+            lucid_syntax::parse("for 4 in [1, 2, 3]:\n    return 1\nvalue = 12\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("literal loop patterns should ignore unreachable returns")
+                .execute(),
+            Ok(Some(12))
+        );
         let module = lucid_syntax::parse(
             "value = 0\nfor true in [false, true, true]:\n    value = value + 1\n",
         )
@@ -8931,6 +8988,14 @@ return total
                 .expect("boolean literal loop patterns should filter elements")
                 .execute(),
             Ok(Some(2))
+        );
+        let module =
+            lucid_syntax::parse("for true in [false]:\n    return 1\nvalue = 13\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("boolean literal loop patterns should ignore unreachable returns")
+                .execute(),
+            Ok(Some(13))
         );
         let module =
             lucid_syntax::parse("value = 0\nfor item in range(1, 4):\n    value = value + item\n")
