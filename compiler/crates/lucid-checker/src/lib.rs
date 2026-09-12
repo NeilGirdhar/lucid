@@ -6631,7 +6631,7 @@ impl TypeChecker {
                                 Type::Float if name == "float" => false,
                                 Type::Bool if name == "bool" => false,
                                 Type::Str if name == "str" => false,
-                                Type::None if name == "none" => false,
+                                Type::None if matches!(name.as_str(), "none" | "None") => false,
                                 _ => true,
                             });
                         }
@@ -12776,6 +12776,13 @@ def render(s: Shape) -> int:
         .unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&aliased).is_ok());
+
+        let uppercase_none = parse(
+            "type MaybeInt = int | none\ndef render(s: MaybeInt) -> int:\n    match s:\n        case int:\n            return s\n        case None:\n            return 0\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&uppercase_none).is_ok());
 
         let literal_ints = parse(
             "type Choice = 1 | 2\ndef render(s: Choice) -> int:\n    match s:\n        case 1:\n            exact: 1 = s\n            return exact\n        case 2:\n            exact: 2 = s\n            return exact\n",

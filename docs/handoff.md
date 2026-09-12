@@ -1204,6 +1204,9 @@ diverged:
   Union exception handlers now work in both interpreter and native execution:
   `except int | str` matches either listed raised value kind instead of being
   rejected natively or treated as a catch-all by the interpreter.
+  Match exhaustiveness now treats uppercase `case None` as covering the
+  `none` variant, matching the checker, interpreter, and native pattern
+  condition paths.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
