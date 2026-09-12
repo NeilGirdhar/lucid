@@ -1676,6 +1676,48 @@ impl TypeChecker {
                 },
             );
         }
+        let exception_message_fields = [("message".to_string(), Type::Str)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        for (name, parent) in [
+            ("Exception", None),
+            ("AssertionError", Some("Exception")),
+            ("IndexError", Some("Exception")),
+            ("NameError", Some("Exception")),
+            ("RuntimeError", Some("Exception")),
+            ("TypeError", Some("Exception")),
+            ("ValueError", Some("Exception")),
+            ("ZeroDivisionError", Some("Exception")),
+        ] {
+            env.classes.insert(
+                name.into(),
+                Type::Class {
+                    name: name.into(),
+                    type_args: Vec::new(),
+                    parent: parent.map(str::to_string),
+                    traits: vec!["Eq".into()],
+                    interfaces: Vec::new(),
+                    fields: if parent.is_none() {
+                        exception_message_fields.clone()
+                    } else {
+                        HashMap::new()
+                    },
+                    is_sealed: false,
+                },
+            );
+            env.class_members
+                .entry(name.into())
+                .or_default()
+                .insert("message".into());
+            env.class_implemented_members
+                .entry(name.into())
+                .or_default()
+                .insert("message".into());
+        }
+        env.class_constructor_arity.insert("Exception".into(), 1);
+        env.class_constructor_required.insert("Exception".into(), 0);
+        env.class_field_order
+            .insert("Exception".into(), vec!["message".into()]);
         let cell_t = Type::TypeVar("T".to_string());
         env.classes.insert(
             "Cell".into(),
@@ -11508,6 +11550,17 @@ class Child(Base):
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn builtin_exception_classes_are_available() {
+        let module = parse(
+            "err: Exception = ValueError(\"bad\")\nindex = IndexError()\nraise RuntimeError(\"broken\")\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("standard exception classes should be available as builtins");
     }
 
     #[test]
