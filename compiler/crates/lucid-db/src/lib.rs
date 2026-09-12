@@ -1515,6 +1515,31 @@ pub fn lower_function_body(
             return Ok(Arc::new(lowered));
         }
     }
+    // Straight-line augmented assignment is already supported by the shared
+    // linear CIR builder. Route it there before the typed-local adapter, whose
+    // local binding map records initializer expressions but not read-modify-
+    // write updates yet.
+    if !function.is_async
+        && !function.is_dispatch
+        && matches!(
+            source_function.body.last(),
+            Some(lucid_syntax::Stmt::Return { .. })
+        )
+        && source_function
+            .body
+            .iter()
+            .any(|statement| matches!(statement, lucid_syntax::Stmt::AugAssign { .. }))
+    {
+        let module = lucid_syntax::Module {
+            statements: source_function.body.clone(),
+            span: source_function.span,
+        };
+        if let Ok(lowered) =
+            lucid_cir::Function::from_module_linear_with_params(&module, &function.parameter_names)
+        {
+            return Ok(Arc::new(lowered));
+        }
+    }
     // Constant literal loops can use the same verified linear CIR statement
     // lowerer as module initializers. This keeps ordered unrolling and local
     // rebinding semantics identical without inventing a second function-loop
@@ -6563,6 +6588,19 @@ mod tests {
             .as_ref()
             .expect("pure discarded expression before bare return should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(None));
+    }
+
+    #[test]
+    fn database_lowers_straight_line_augmented_assignment_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "straight-line-augassign.lucid",
+            "def answer(value: int):\n    total = value\n    total += 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("straight-line augmented assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
     }
 
     #[test]
