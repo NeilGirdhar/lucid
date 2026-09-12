@@ -3116,8 +3116,7 @@ impl Function {
                         return_name,
                     )
                 }
-                [acc_statement, induction_statement, while_statement, return_statement] => {
-                    let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
+                [first_statement, second_statement, while_statement, return_statement] => {
                     let lucid_syntax::Stmt::While {
                         condition,
                         body,
@@ -3135,6 +3134,16 @@ impl Function {
                         ..
                     } = return_statement
                     else {
+                        return None;
+                    };
+                    let (first_name, first_expr) = initialized_ident(first_statement)?;
+                    let (second_name, second_expr) = initialized_ident(second_statement)?;
+                    let (acc_name, initial_expr, induction_statement) = if first_name == return_name
+                    {
+                        (first_name, first_expr, second_statement)
+                    } else if second_name == return_name {
+                        (second_name, second_expr, first_statement)
+                    } else {
                         return None;
                     };
                     (
@@ -9008,6 +9017,20 @@ return total
         .expect("local-induction while accumulator fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("local-induction while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"value = n
+total = 0
+while value > 0:
+    total += value
+    value -= 1
+return total
+"#,
+        )
+        .expect("reordered local-induction accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("reordered local-induction accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(

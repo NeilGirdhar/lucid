@@ -571,7 +571,10 @@ diverged:
   coverage for the accumulator form. Accumulator loops may also copy a literal
   or parameter into a local induction variable before the loop, so
   `total = 0; value = n; while value > 0: ...; return total` uses the same
-  Phi-backed CFG instead of falling back at the multi-statement boundary.
+  Phi-backed CFG instead of falling back at the multi-statement boundary. The
+  accumulator and local induction initializers may appear in either order; the
+  returned accumulator name identifies which initializer is loop-carried as the
+  result.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable
@@ -851,7 +854,9 @@ diverged:
   the same verified CFG. The loop condition bound may be an integer literal or
   a distinct positional parameter, so `while n > limit` no longer falls out of
   this CFG path. A preceding local induction initializer is also accepted for
-  accumulator loops when it is an integer literal or parameter copy.
+  accumulator loops when it is an integer literal or parameter copy, regardless
+  of whether that initializer appears before or after the accumulator
+  initializer.
   The induction recognizer also accepts `!=` conditions and lowers them to
   the same checked back-edge shape.
   It rejects empty or multi-statement bodies without indexing assumptions and
