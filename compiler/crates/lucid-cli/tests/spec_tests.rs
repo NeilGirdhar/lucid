@@ -656,12 +656,20 @@ fn test_keywords_lexer_and_parser_support() {
     let src = r#"
 let final_val = 100
 final fixed = 200
-skip_item = skip
 f = def: fixed
 "#;
     let (chk, evl) = run_lucid(src);
     assert!(chk.is_ok());
     assert!(evl.is_ok());
+}
+
+#[test]
+fn test_skip_is_not_a_standalone_value() {
+    for source in ["value = skip\n", "def f():\n    return skip\n"] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("skip cannot be used"));
+    }
 }
 
 // ---------------------------------------------------------------------------

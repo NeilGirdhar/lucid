@@ -2797,6 +2797,16 @@ impl TypeChecker {
         Ok(())
     }
 
+    fn reject_bare_skip_value(expr: &Expr, context: &str) -> Result<(), TypeError> {
+        if let Expr::Skip(span) = expr {
+            return Err(TypeError {
+                message: format!("skip cannot be used as a {context}; it only elides call arguments and collection entries"),
+                span: *span,
+            });
+        }
+        Ok(())
+    }
+
     fn member_name_and_span(member: &ClassMember) -> Option<(&str, Span)> {
         match member {
             ClassMember::Field(field) | ClassMember::ClassVar(field) => {
@@ -3877,6 +3887,7 @@ impl TypeChecker {
             }
             Stmt::Return { value, span } => {
                 let val_type = if let Some(ref e) = value {
+                    Self::reject_bare_skip_value(e, "return value")?;
                     self.type_of_expr(e)?
                 } else {
                     Type::None
@@ -3903,6 +3914,7 @@ impl TypeChecker {
                 // Exceptions represent broken invariants and remain
                 // unchecked in function signatures, but their expression
                 // still belongs to the checked expression language.
+                Self::reject_bare_skip_value(exception, "raised value")?;
                 self.type_of_expr(exception)?;
                 Ok(())
             }
@@ -3911,6 +3923,7 @@ impl TypeChecker {
                 message,
                 span,
             } => {
+                Self::reject_bare_skip_value(condition, "assert condition")?;
                 let condition_type = self.type_of_expr(condition)?;
                 if !condition_type.is_subtype_of(&Type::Bool, &self.env) {
                     return Err(TypeError {
@@ -3919,6 +3932,7 @@ impl TypeChecker {
                     });
                 }
                 if let Some(message) = message {
+                    Self::reject_bare_skip_value(message, "assert message")?;
                     let message_type = self.type_of_expr(message)?;
                     let lazy_message = matches!(
                         &message_type,
@@ -3945,6 +3959,7 @@ impl TypeChecker {
                         span: value.span(),
                     });
                 }
+                Self::reject_bare_skip_value(value, "yield value")?;
                 let _ = self.type_of_expr(value)?;
                 Ok(())
             }
@@ -3991,8 +4006,10 @@ impl TypeChecker {
                         .insert(name.clone(), (ty.clone(), MutabilityView::Mutable))
                 });
                 let inferred_val = match value {
-                    Some(e) => match self.type_of_expr(e) {
-                        Ok(ty) => Some(ty),
+                    Some(e) => {
+                        Self::reject_bare_skip_value(e, "variable initializer")?;
+                        match self.type_of_expr(e) {
+                            Ok(ty) => Some(ty),
                         Err(error) => {
                             if let Some((name, _)) = &provisional {
                                 if let Some(Some(previous)) = previous.clone() {
@@ -4003,7 +4020,8 @@ impl TypeChecker {
                             }
                             return Err(error);
                         }
-                    },
+                        }
+                    }
                     None => None,
                 };
                 if let Some((name, _)) = &provisional {
@@ -4100,6 +4118,7 @@ impl TypeChecker {
                 value,
                 span,
             } => {
+                Self::reject_bare_skip_value(value, "assignment value")?;
                 let provisional = match target {
                     Expr::Ident { name, .. } => match value {
                         Expr::AnonymousDef {
@@ -4510,6 +4529,7 @@ impl TypeChecker {
                 else_branch,
                 ..
             } => {
+                Self::reject_bare_skip_value(condition, "if condition")?;
                 let cond_type = self.type_of_expr(condition)?;
                 if !cond_type.is_subtype_of(&Type::Bool, &self.env) {
                     return Err(TypeError {
@@ -4521,6 +4541,7 @@ impl TypeChecker {
                     self.check_statement(s)?;
                 }
                 for (c, b) in elif_branches {
+                    Self::reject_bare_skip_value(c, "elif condition")?;
                     let elif_type = self.type_of_expr(c)?;
                     if !elif_type.is_subtype_of(&Type::Bool, &self.env) {
                         return Err(TypeError {
@@ -4590,6 +4611,7 @@ impl TypeChecker {
                 if_broken,
                 ..
             } => {
+                Self::reject_bare_skip_value(condition, "while condition")?;
                 let condition_type = self.type_of_expr(condition)?;
                 if !condition_type.is_subtype_of(&Type::Bool, &self.env) {
                     return Err(TypeError {
@@ -4845,6 +4867,7 @@ impl TypeChecker {
                 // expression can expose invalid operators, calls, and
                 // attribute accesses just like an expression used in an
                 // assignment.
+                Self::reject_bare_skip_value(expr, "expression statement")?;
                 self.type_of_expr(expr)?;
                 Ok(())
             }
@@ -11244,6 +11267,31 @@ def reject(value: not int) -> none:
             assert!(error.message.contains("is not a bare builtin"));
             assert!(error.span.end > error.span.start);
         }
+    }
+
+    #[test]
+    fn test_bare_skip_is_rejected_as_value() {
+        for (source, message) in [
+            ("value = skip\n", "assignment value"),
+            ("def f():\n    return skip\n", "return value"),
+            ("skip\n", "expression statement"),
+            ("if skip:\n    pass\n", "if condition"),
+            ("while skip:\n    pass\n", "while condition"),
+        ] {
+            let error = TypeChecker::new()
+                .check_module(&parse(source).unwrap())
+                .expect_err("bare skip must fail outside elision contexts");
+            assert!(error.message.contains(message), "{}", error.message);
+        }
+
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "def f(value: int = 1) -> int:\n    return value\nx = f(skip)\nitems = [1, skip, 2]\nmapping = {\"a\": 1, \"b\": skip}\n",
+                )
+                .unwrap(),
+            )
+            .expect("skip should remain valid in call and collection elision contexts");
     }
 
     #[test]
