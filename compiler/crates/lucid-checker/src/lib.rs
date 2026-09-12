@@ -1182,6 +1182,7 @@ pub struct TypeEnvironment {
     /// Final instance/class methods, keyed by declaring class name.
     pub final_methods: HashMap<String, HashSet<String>>,
     pub final_classes: HashSet<String>,
+    pub external_classes: HashSet<String>,
     pub class_members: HashMap<String, HashSet<String>>,
     pub class_implemented_members: HashMap<String, HashSet<String>>,
     pub class_abstract_members: HashMap<String, HashSet<String>>,
@@ -2447,6 +2448,7 @@ impl TypeChecker {
             .classes
             .entry(name.to_string())
             .or_insert_with(|| external_class_placeholder_type(name));
+        self.env.external_classes.insert(name.to_string());
         self.env
             .class_constructor_arity
             .entry(name.to_string())
@@ -4662,6 +4664,12 @@ impl TypeChecker {
                 .or_else(|| {
                     self.class_method_type(name, attr)
                         .map(|ty| self.instantiate_class_member_type(name, type_args, ty))
+                })
+                .or_else(|| {
+                    self.env
+                        .external_classes
+                        .contains(name)
+                        .then(|| Type::TypeVar("Any".into()))
                 }),
             Type::Interface { name, .. } => self
                 .interface_getter_type(name, attr)
@@ -4874,10 +4882,7 @@ impl TypeChecker {
                     }
                 };
                 if !self.env.classes.contains_key(target_name) {
-                    return Err(TypeError {
-                        message: format!("cannot implement for unknown class '{target_name}'"),
-                        span: *span,
-                    });
+                    self.ensure_external_class_placeholder(target_name);
                 }
                 let interface_name = match interface {
                     TypeExpr::Named { name, .. } => name,
@@ -7437,7 +7442,7 @@ impl TypeChecker {
                 },
                 LiteralValue::None => Type::None,
                 LiteralValue::Sentinel(s) => Type::TypeVar(s.clone()),
-                LiteralValue::Ellipsis => Type::None,
+                LiteralValue::Ellipsis => Type::TypeVar("Any".into()),
             }),
             Expr::Ident { name, span } => {
                 if name == "_" {
@@ -11844,6 +11849,32 @@ fn expr_to_type_expr(expr: &Expr) -> Option<TypeExpr> {
                 span: *span,
             })
         }
+        Expr::Dict { entries, span } => {
+            let mut fields = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let name = match key {
+                    Expr::Literal {
+                        value: LiteralValue::Str(name),
+                        ..
+                    } => Some(name.clone()),
+                    Expr::Ident { name, .. } if name == "_" => None,
+                    _ => return None,
+                };
+                fields.push(RecordFieldType {
+                    name,
+                    type_expr: expr_to_type_expr(value)?,
+                    is_positional_only: false,
+                    is_keyword_only: false,
+                    is_variadic_positional: false,
+                    is_variadic_keyword: false,
+                });
+            }
+            Some(TypeExpr::Record {
+                fields,
+                is_open: false,
+                span: *span,
+            })
+        }
         _ => None,
     }
 }
@@ -15088,6 +15119,18 @@ def reject(value: not int) -> none:
     }
 
     #[test]
+    fn implement_can_target_external_class_placeholder() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "trait Sized:\n    def __len__(self: ~Self) -> int\n\nimplement Sized for ThirdPartyBuffer:\n    def __len__(self: ~Self) -> int:\n        return self.byte_count\n",
+                )
+                .unwrap(),
+            )
+            .expect("implement blocks should be able to target external classes");
+    }
+
+    #[test]
     fn forward_class_references_keep_default_value_semantics() {
         TypeChecker::new()
             .check_module(&parse("cache: dict[!ExternalModel[str], float] = {:}\n").unwrap())
@@ -15807,6 +15850,20 @@ def reject(value: not int) -> none:
             "def combine(left: int, /, right: int) -> int:\n    return left + right\nresult = combine(1, right=2)\n",
         )
         .unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn ellipsis_expression_satisfies_declared_placeholder_type() {
+        let module = parse("trait Consumer[K]:\n    def put(self, value: K) -> none\n\nclass Dog: ...\n\ndog_feeder: Consumer[Dog] = ...\n").unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn class_object_index_accepts_dict_shaped_type_arguments() {
+        let module =
+            parse("shape = Parameters[(c: int, /, a: int), int, {\"b\": int, _: int, ...}]\n")
+                .unwrap();
         assert!(TypeChecker::new().check_module(&module).is_ok());
     }
 

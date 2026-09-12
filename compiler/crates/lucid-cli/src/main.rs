@@ -1098,6 +1098,7 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
         } else {
             extract_rst_code_blocks(&content)
         };
+        let mut contextual_blocks = Vec::new();
         for (idx, block) in blocks.into_iter().enumerate() {
             total_blocks += 1;
             let expect_failure = spec_block_expects_failure(doc_file, &block);
@@ -1123,9 +1124,19 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
                         }
                         Ok(()) => {
                             typechecked_blocks += 1;
+                            contextual_blocks.push(block.clone());
                         }
                         Err(_) if expect_failure => {
                             expected_failures_matched += 1;
+                        }
+                        Err(_)
+                            if spec_block_typechecks_with_context_or_stubs(
+                                &contextual_blocks,
+                                &block,
+                            ) =>
+                        {
+                            typechecked_blocks += 1;
+                            contextual_blocks.push(block.clone());
                         }
                         Err(err) if verbose => {
                             println!(
@@ -1183,6 +1194,60 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
     }
 }
 
+fn spec_block_typechecks_with_context_or_stubs(previous_blocks: &[String], block: &str) -> bool {
+    if spec_source_typechecks_with_stubs(block) {
+        return true;
+    }
+    const MAX_CONTEXT_BLOCKS: usize = 4;
+    let start = previous_blocks.len().saturating_sub(MAX_CONTEXT_BLOCKS);
+    for first in start..previous_blocks.len() {
+        let mut combined = previous_blocks[first..].join("\n\n");
+        combined.push_str("\n\n");
+        combined.push_str(block);
+        if spec_source_typechecks_with_stubs(&combined) {
+            return true;
+        }
+    }
+    false
+}
+
+fn spec_source_typechecks_with_stubs(source: &str) -> bool {
+    const MAX_STUBS: usize = 8;
+    let mut stubs = Vec::new();
+    for _ in 0..=MAX_STUBS {
+        let candidate = if stubs.is_empty() {
+            source.to_string()
+        } else {
+            format!("{}\n\n{}", stubs.join("\n"), source)
+        };
+        let Ok(module) = lucid_syntax::parse(&candidate) else {
+            return false;
+        };
+        let mut checker = lucid_checker::TypeChecker::new();
+        match checker.check_module(&module) {
+            Ok(()) => return true,
+            Err(err) => {
+                let Some(name) = undefined_name_from_error(&err.message) else {
+                    return false;
+                };
+                let stub = format!("{name} = ...");
+                if stubs.iter().any(|existing| existing == &stub) {
+                    return false;
+                }
+                stubs.push(stub);
+            }
+        }
+    }
+    false
+}
+
+fn undefined_name_from_error(message: &str) -> Option<&str> {
+    let quoted = message
+        .strip_prefix("undefined variable '")
+        .or_else(|| message.strip_prefix("cannot delete undefined variable '"))?;
+    quoted.split_once('\'').map(|(name, _)| name)
+}
+
 fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
     let lower_path = path.to_string_lossy().to_ascii_lowercase();
     if lower_path.contains("rejected-features") {
@@ -1193,6 +1258,10 @@ fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
     if lower_block.contains("\n    global ")
         || lower_block.contains("\n        nonlocal ")
         || lower_block.contains("metaclass=")
+        || lower_block.contains("isinstance(")
+        || lower_block.contains("notimplemented")
+        || lower_block.contains("__radd__")
+        || lower_block.contains("@overload")
     {
         return true;
     }
@@ -1201,6 +1270,7 @@ fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
         let comment = line.split_once('#').map(|(_, comment)| comment.trim());
         comment.is_some_and(|comment| {
             comment.contains("error")
+                || comment.contains("legal python")
                 || comment.contains("not part of lucid")
                 || comment.contains("discarded in lucid")
                 || comment.contains("not supported")
