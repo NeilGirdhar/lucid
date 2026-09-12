@@ -442,6 +442,8 @@ diverged:
 * Dynamic statement-level conditionals with one direct return per arm now
   enter the shared typed-CIR diamond builder before the AST compatibility
   adapter, preserving the same branch and merge semantics for both backends.
+  A statically false leading `if` arm no longer blocks direct-return dynamic
+  `elif` ladders, including optional no-`else` fall-through.
   The typed API also supports a value-returning branch with a void fall-through
   and verifies both outcomes before backend lowering.
   Statement conditionals with a `pass` or bare-`return` fall-through now use

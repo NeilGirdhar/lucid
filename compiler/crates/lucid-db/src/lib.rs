@@ -2701,6 +2701,88 @@ pub fn lower_function_body(
     if let [
         lucid_syntax::Stmt::If {
             condition,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition) == Some(false)
+        && !elif_branches.is_empty()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(condition, branch)| match branch.as_slice() {
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] => Some((condition, value)),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        && let Some(((first_condition, first_value), tail_values)) = elif_values.split_first()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let lowered = match else_branch.as_deref() {
+            Some(
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(else_value),
+                        ..
+                    },
+                ],
+            ) => {
+                if tail_values.is_empty() {
+                    lucid_cir::Function::from_parameterized_if_direct(
+                        first_condition,
+                        first_value,
+                        else_value,
+                        &function.parameter_names,
+                    )
+                } else {
+                    lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                        first_condition,
+                        first_value,
+                        tail_values,
+                        else_value,
+                        &function.parameter_names,
+                    )
+                }
+            }
+            None => {
+                if tail_values.is_empty() {
+                    lucid_cir::Function::from_parameterized_if_optional(
+                        first_condition,
+                        first_value,
+                        &function.parameter_names,
+                    )
+                } else {
+                    lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                        first_condition,
+                        first_value,
+                        tail_values,
+                        &function.parameter_names,
+                    )
+                }
+            }
+            _ => Err(lucid_cir::LowerError::UnsupportedExpression),
+        };
+        return lowered
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported false-leading return elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
             then_branch,
             else_branch: Some(else_branch),
             elif_branches,
@@ -6809,6 +6891,37 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-dead-leading-dynamic-elif.lucid",
+            "def choose(value: int):\n    if false:\n        return 0\n    elif value > 0:\n        return 1\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dead leading branch before dynamic elif returns should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-dead-leading-multiple-dynamic-elif.lucid",
+            "def choose(value: int):\n    if false:\n        return 0\n    elif value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dead leading branch before dynamic elif return chain should lower");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-dead-leading-optional-dynamic-elif.lucid",
+            "def choose(value: int):\n    if false:\n        return 0\n    elif value > 0:\n        return 1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dead leading branch before optional dynamic elif return should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
 
         let file = db.add_file(
             "parameterized-false-elif-fallthrough.lucid",
