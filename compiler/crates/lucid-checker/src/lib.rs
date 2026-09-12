@@ -2327,20 +2327,46 @@ impl TypeChecker {
                 self.env.class_members.insert(name.clone(), member_names);
                 self.env.class_vars.insert(name.clone(), class_vars);
                 self.env.class_field_order.insert(name.clone(), field_order);
-                self.env.class_constructor_arity.insert(
-                    name.clone(),
-                    body.iter()
-                        .filter(|member| matches!(member, ClassMember::Field(_)))
-                        .count(),
+                let init_factory = body.iter().find_map(|member| match member {
+                    ClassMember::Factory(factory) if factory.name == "__init__" => Some(factory),
+                    _ => None,
+                });
+                let constructor_arity = init_factory.map_or_else(
+                    || {
+                        body.iter()
+                            .filter(|member| matches!(member, ClassMember::Field(_)))
+                            .count()
+                    },
+                    |factory| {
+                        factory
+                            .params
+                            .iter()
+                            .filter(|param| param.name != "cls")
+                            .count()
+                    },
                 );
-                self.env.class_constructor_required.insert(
-                    name.clone(),
-                    body.iter()
-                        .filter(|member| {
-                            matches!(member, ClassMember::Field(field) if field.default.is_none())
-                        })
-                        .count(),
+                let constructor_required = init_factory.map_or_else(
+                    || {
+                        body.iter()
+                            .filter(|member| {
+                                matches!(member, ClassMember::Field(field) if field.default.is_none())
+                            })
+                            .count()
+                    },
+                    |factory| {
+                        factory
+                            .params
+                            .iter()
+                            .filter(|param| param.name != "cls" && param.default.is_none())
+                            .count()
+                    },
                 );
+                self.env
+                    .class_constructor_arity
+                    .insert(name.clone(), constructor_arity);
+                self.env
+                    .class_constructor_required
+                    .insert(name.clone(), constructor_required);
                 for member in body {
                     if let ClassMember::Method(method) | ClassMember::ClassMethod(method) = member
                     {
@@ -12710,7 +12736,7 @@ def reject(value: not int) -> none:
         TypeChecker::new()
             .check_module(
                 &parse(
-                    "def log(message: str, where: SourceLocation = SourceLocation.caller()) -> none:\n    print(message)\nclass Traceback:\n    location: SourceLocation\n    factory __init__(cls):\n        return construct(SourceLocation.caller())\nclass Field:\n    name: VarName\n    factory __init__(cls):\n        return construct(VarName.from_assignment())\n",
+                    "def log(message: str, where: SourceLocation = SourceLocation.caller()) -> none:\n    print(message)\nclass Traceback:\n    location: SourceLocation\n    factory __init__(cls):\n        return construct(SourceLocation.caller())\ntrace = Traceback()\nclass Field:\n    name: VarName\n    factory __init__(cls):\n        return construct(VarName.from_assignment())\n",
                 )
                 .unwrap(),
             )
