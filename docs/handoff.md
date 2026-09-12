@@ -277,6 +277,10 @@ diverged:
   anonymous-closure and boolean-operator lowering, checker overload and
   contextual literal validation, and database function-body lowering now
   return existing typed diagnostics instead.
+* `run-cir --function` now invokes non-result integer and void CIR entry
+  points through checked parameterized adapters, so argument-count or ABI
+  mismatches become CLI execution errors instead of assertion-backed unsafe
+  calls.
 * Truthiness now agrees across the interpreter and native backend for empty
   lists, dictionaries, sets, strings, and ranges, as well as zero BigInts and
   zero complex values. Native typed collection and string conditions use

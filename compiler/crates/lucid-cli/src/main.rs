@@ -677,14 +677,23 @@ fn run_cir_file(
     };
     if !compiled.returns_value() {
         if function_name.is_some() {
-            unsafe { compiled.call_void_with_args(arguments) };
+            if let Err(error) = unsafe { compiled.try_call_void_with_args(arguments) } {
+                eprintln!("CIR execution error: {error}");
+                exit(1);
+            }
         } else {
             unsafe { compiled.call_void() };
         }
         return;
     }
     let value = if function_name.is_some() {
-        unsafe { compiled.call_with_args(arguments) }
+        match unsafe { compiled.try_call_with_args(arguments) } {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("CIR execution error: {error}");
+                exit(1);
+            }
+        }
     } else {
         unsafe { compiled.call() }
     };
