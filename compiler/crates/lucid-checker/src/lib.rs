@@ -711,7 +711,22 @@ impl Type {
                         "Reversible",
                     ],
                     "set" => &["Sized", "Container", "Collection", "Iterable", "Set"],
+                    "frozenset" => &[
+                        "Sized",
+                        "Container",
+                        "Collection",
+                        "Iterable",
+                        "Set",
+                        "Hashable",
+                    ],
                     "dict" => &["Sized", "Container", "Collection", "Iterable"],
+                    "frozendict" => &[
+                        "Sized",
+                        "Container",
+                        "Collection",
+                        "Iterable",
+                        "Hashable",
+                    ],
                     "Bytes" => &["Sized", "Container", "Buffer"],
                     "ByteArray" | "MemoryView" => &["Sized", "Container", "Buffer"],
                     _ => &[],
@@ -1263,6 +1278,10 @@ impl TypeChecker {
                 .into_iter()
                 .map(str::to_string),
         );
+        env.class_members
+            .entry("frozendict".into())
+            .or_default()
+            .extend(["get", "keys", "values", "items"].into_iter().map(str::to_string));
         for (method, arity) in [
             ("get", 2usize),
             ("pop", 1),
@@ -1273,6 +1292,15 @@ impl TypeChecker {
         ] {
             env.class_methods.insert(
                 ("dict".into(), method.into()),
+                Type::Function {
+                    params: vec![any.clone(); arity],
+                    return_type: Box::new(Type::TypeVar("Any".into())),
+                },
+            );
+        }
+        for (method, arity) in [("get", 2usize), ("keys", 0), ("values", 0), ("items", 0)] {
+            env.class_methods.insert(
+                ("frozendict".into(), method.into()),
                 Type::Function {
                     params: vec![any.clone(); arity],
                     return_type: Box::new(Type::TypeVar("Any".into())),
@@ -1291,6 +1319,21 @@ impl TypeChecker {
                 Type::Function {
                     params: vec![any.clone()],
                     return_type: Box::new(Type::TypeVar("Any".into())),
+                },
+            );
+        }
+        env.class_members.entry("frozenset".into()).or_default();
+        for (name, arity) in [("frozenset", 1usize), ("frozendict", 2usize)] {
+            env.classes.insert(
+                name.into(),
+                Type::Class {
+                    name: name.into(),
+                    type_args: vec![any.clone(); arity],
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
                 },
             );
         }
@@ -3396,10 +3439,16 @@ impl TypeChecker {
             Type::View { inner, .. } => self.iterable_element_type(inner),
             Type::Class {
                 name, type_args, ..
-            } if matches!(name.as_str(), "list" | "set" | "dict") => type_args
-                .first()
-                .cloned()
-                .unwrap_or(Type::TypeVar("Any".into())),
+            } if matches!(
+                name.as_str(),
+                "list" | "set" | "frozenset" | "dict" | "frozendict"
+            ) =>
+            {
+                type_args
+                    .first()
+                    .cloned()
+                    .unwrap_or(Type::TypeVar("Any".into()))
+            }
             Type::Class { name, .. } if name == "range" => Type::Int,
             Type::Shape(_) => Type::Int,
             Type::Record { fields, .. } => Type::make_union(
@@ -3433,7 +3482,10 @@ impl TypeChecker {
         matches!(
             base,
             Type::Class { name, .. }
-                if matches!(name.as_str(), "list" | "set" | "dict" | "range")
+                if matches!(
+                    name.as_str(),
+                    "list" | "set" | "frozenset" | "dict" | "frozendict" | "range"
+                )
         ) || matches!(base, Type::Shape(_) | Type::Record { .. })
             || matches!(base, Type::Class { name, .. }
                 if self.env.class_members.get(name).is_some_and(|members| members.contains("__iter__")))
@@ -3453,7 +3505,7 @@ impl TypeChecker {
         matches!(
             base,
             Type::Class { name, .. }
-                if matches!(name.as_str(), "list" | "set" | "range")
+                if matches!(name.as_str(), "list" | "set" | "frozenset" | "range")
                     || self.env.class_members.get(name).is_some_and(|members| members.contains("__reversed__"))
         )
     }
@@ -6281,7 +6333,7 @@ impl TypeChecker {
                         let supported = match membership_target {
                             Type::Class {
                                 name, type_args, ..
-                            } if name == "list" || name == "set" => {
+                            } if matches!(name.as_str(), "list" | "set" | "frozenset") => {
                                 if let Some(element_type) = type_args.first() {
                                     if !lt.is_subtype_of(element_type, &self.env) {
                                         return Err(TypeError {
@@ -6297,7 +6349,7 @@ impl TypeChecker {
                             }
                             Type::Class {
                                 name, type_args, ..
-                            } if name == "dict" => {
+                            } if matches!(name.as_str(), "dict" | "frozendict") => {
                                 if let Some(key_type) = type_args.first() {
                                     if !lt.is_subtype_of(key_type, &self.env) {
                                         return Err(TypeError {
@@ -7910,6 +7962,39 @@ impl TypeChecker {
             }
             Expr::Freeze { expr, .. } => {
                 let inner = self.type_of_expr(expr)?;
+                if let Type::Class {
+                    name,
+                    type_args,
+                    parent,
+                    traits,
+                    interfaces,
+                    fields,
+                    is_sealed,
+                } = &inner
+                {
+                    if name == "set" {
+                        return Ok(Type::Class {
+                            name: "frozenset".into(),
+                            type_args: type_args.clone(),
+                            parent: parent.clone(),
+                            traits: traits.clone(),
+                            interfaces: interfaces.clone(),
+                            fields: fields.clone(),
+                            is_sealed: *is_sealed,
+                        });
+                    }
+                    if name == "dict" {
+                        return Ok(Type::Class {
+                            name: "frozendict".into(),
+                            type_args: type_args.clone(),
+                            parent: parent.clone(),
+                            traits: traits.clone(),
+                            interfaces: interfaces.clone(),
+                            fields: fields.clone(),
+                            is_sealed: *is_sealed,
+                        });
+                    }
+                }
                 Ok(Type::View {
                     mutability: MutabilityView::Immutable,
                     inner: Box::new(inner),
@@ -12243,6 +12328,29 @@ def reject(value: not int) -> none:
             checker.env.variables.get("e").map(|(ty, _)| ty),
             Some(Type::Float)
         ));
+    }
+
+    #[test]
+    fn test_immutable_set_and_dict_literals_have_nominal_hashable_types() {
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(
+                &parse(
+                    "immutable_names = !{\"Ada\", \"Grace\"}\ngroups: dict[frozenset[str], int] = {immutable_names: 2}\nhas_ada = \"Ada\" in immutable_names\nname_hash = hash(immutable_names)\n",
+                )
+                .unwrap(),
+            )
+            .expect("immutable set literals should type as frozenset");
+
+        let mut dict_checker = TypeChecker::new();
+        dict_checker
+            .check_module(
+                &parse(
+                    "immutable_scores = !{\"Ada\": 10}\ngroups: dict[frozendict[str, int], int] = {immutable_scores: 1}\nhas_ada = \"Ada\" in immutable_scores\nscore_hash = hash(immutable_scores)\n",
+                )
+                .unwrap(),
+            )
+            .expect("immutable dict literals should type as frozendict");
     }
 
     #[test]
