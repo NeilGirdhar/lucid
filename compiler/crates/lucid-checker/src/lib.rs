@@ -3030,6 +3030,25 @@ impl TypeChecker {
             }
             Stmt::Function(func) => {
                 Self::reject_removed_decorators(func)?;
+                let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let function_type_bounds = func
+                    .type_params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .bound
+                            .as_ref()
+                            .map(|bound| self.resolve_type_expr(bound))
+                            .transpose()
+                            .map(|bound| (param.name.clone(), bound))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                for (name, bound) in &function_type_bounds {
+                    self.env.type_var_bounds.insert(
+                        name.clone(),
+                        bound.clone().unwrap_or(Type::TypeVar("Any".into())),
+                    );
+                }
                 if let Some((gather_index, gather)) = func
                     .params
                     .iter()
@@ -3174,6 +3193,7 @@ impl TypeChecker {
                         .map(|param| param.name.clone())
                         .collect(),
                 );
+                self.env.type_var_bounds = saved_type_var_bounds;
                 Ok(())
             }
             _ => Ok(()),
@@ -4592,6 +4612,24 @@ impl TypeChecker {
                 {
                     return Err(TypeError { message: "yield is only valid in a contextmanager definition".into(), span: func.span });
                 }
+                let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let function_type_bounds = func
+                    .type_params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .bound
+                            .as_ref()
+                            .map(|bound| self.resolve_type_expr(bound))
+                            .transpose()
+                            .map(|bound| (param.name.clone(), bound))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                for (name, bound) in function_type_bounds {
+                    self.env
+                        .type_var_bounds
+                        .insert(name, bound.unwrap_or(Type::TypeVar("Any".into())));
+                }
                 let ret_type = if let Some(ref r) = func.return_type {
                     Some(self.resolve_type_expr(r)?)
                 } else {
@@ -4686,6 +4724,7 @@ impl TypeChecker {
                 self.env.variables = old_vars;
                 self.env.exact_variables = old_exact_vars;
                 self.env.current_return_type = prev_ret;
+                self.env.type_var_bounds = saved_type_var_bounds;
                 Ok(())
             }
             Stmt::Return { value, span } => {
@@ -11231,6 +11270,17 @@ class Child(Base):
         TypeChecker::new().check_module(&module).expect(
             "Parameters.from_arguments should preserve generic bounds and inherited fields",
         );
+    }
+
+    #[test]
+    fn bounded_function_type_variables_work_in_shape_types() {
+        let module = parse(
+            "def batch_normalize[Batch: int](x: typing.shape[Batch, 3]) -> typing.shape[Batch, 3]:\n    return x\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("integer-bounded function type variables should be valid shape dimensions");
     }
 
     #[test]
