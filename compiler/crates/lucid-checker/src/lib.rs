@@ -10627,4 +10627,13 @@ def reject(value: not int) -> none:
         let error = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(error.message.contains("must be the method's final parameter"));
     }
+
+    #[test]
+    fn parameters_after_positional_only_marker_accept_keywords() {
+        let module = parse(
+            "def combine(left: int, /, right: int) -> int:\n    return left + right\nresult = combine(1, right=2)\n",
+        )
+        .unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
 }

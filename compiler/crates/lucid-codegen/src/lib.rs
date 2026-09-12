@@ -19827,6 +19827,25 @@ print(result[1])
         assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
     }
 
+    #[test]
+    fn native_positional_only_boundary_allows_later_keyword() {
+        let source = "def combine(left: int, /, right: int) -> int:\n    return left + right\nprint(combine(1, right=2))\n";
+        let module = parse(source).expect("positional-only boundary source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_positional_only_boundary_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("positional-only boundary should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run positional-only boundary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "positional-only boundary failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+    }
+
 
     #[test]
     fn native_named_class_gather_value_accepts_gather_spread() {
