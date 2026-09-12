@@ -4938,7 +4938,13 @@ impl Interpreter {
         );
 
         // time()
-        let time_now_fn = Rc::new(|_args: &[Value], _interp: &mut Interpreter| {
+        let time_now_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if !args.is_empty() {
+                return Err(RuntimeError {
+                    message: "time() takes no arguments".into(),
+                    span: Span::default(),
+                });
+            }
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -5312,7 +5318,13 @@ impl Interpreter {
 
         if module_name == "time" {
             let time_env = Rc::new(RefCell::new(Environment::new()));
-            let time_fn = Rc::new(|_args: &[Value], _interp: &mut Interpreter| {
+            let time_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+                if !args.is_empty() {
+                    return Err(RuntimeError {
+                        message: "time() takes no arguments".into(),
+                        span: Span::default(),
+                    });
+                }
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -14357,6 +14369,8 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             ("range()\n", "requires at least 1"),
             ("range(1, \"bad\")\n", "arguments must be int"),
             ("range(1, 2, 0)\n", "step cannot be zero"),
+            ("time(1)\n", "takes no arguments"),
+            ("import time\nresult = time.time(1)\n", "takes no arguments"),
             ("slice()\n", "requires at least 1"),
             ("slice(1, \"bad\")\n", "bounds must be int or none"),
             ("map(1)\n", "requires at least 2"),

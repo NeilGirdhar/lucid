@@ -281,6 +281,10 @@ diverged:
   points through checked parameterized adapters, so argument-count or ABI
   mismatches become CLI execution errors instead of assertion-backed unsafe
   calls.
+* The interpreter now enforces the same zero-argument contract for bare
+  `time()`/`now()` and imported `time.time()`/`time.monotonic()` that native
+  codegen already enforced, so unchecked runtime calls cannot silently ignore
+  clock arguments.
 * Truthiness now agrees across the interpreter and native backend for empty
   lists, dictionaries, sets, strings, and ranges, as well as zero BigInts and
   zero complex values. Native typed collection and string conditions use

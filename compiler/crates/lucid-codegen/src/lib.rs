@@ -23417,6 +23417,7 @@ print(result[1])
             ("range()\n", "requires at least 1"),
             ("range(1, \"bad\")\n", "arguments must be int"),
             ("range(1, 2, 0)\n", "step cannot be zero"),
+            ("time(1)\n", "takes no arguments"),
             ("slice()\n", "requires at least 1"),
             ("slice(1, \"bad\")\n", "bounds must be int or none"),
             ("map(1)\n", "requires at least 2"),
