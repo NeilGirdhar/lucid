@@ -10972,7 +10972,7 @@ impl TypeChecker {
                             name: other.to_string(),
                             type_args: resolved_args,
                             parent: None,
-                            traits: Vec::new(),
+                            traits: vec!["Eq".into(), "Ord".into(), "Hashable".into()],
                             interfaces: Vec::new(),
                             fields: HashMap::new(),
                             is_sealed: false,
@@ -11320,7 +11320,19 @@ fn type_is_hashable_key(ty: &Type, env: &TypeEnvironment) -> bool {
         Type::View {
             mutability: MutabilityView::Immutable,
             inner,
-        } => type_has_hashable_capability(inner, env),
+        } => match inner.as_ref() {
+            Type::Class {
+                name, type_args, ..
+            } if matches!(name.as_str(), "list" | "set") => type_args
+                .first()
+                .map_or(true, |element| type_is_hashable_key(element, env)),
+            Type::Class {
+                name, type_args, ..
+            } if name == "dict" => type_args
+                .first()
+                .map_or(true, |key| type_is_hashable_key(key, env)),
+            other => type_has_hashable_capability(other, env),
+        },
         Type::Class {
             name, type_args, ..
         } if name == "frozenset" => type_args
@@ -14493,6 +14505,28 @@ def reject(value: not int) -> none:
             )
             .expect_err("immutable views still require the underlying class to be hashable");
         assert!(error.message.contains("dictionary key type"));
+    }
+
+    #[test]
+    fn immutable_collection_key_types_require_hashable_contents() {
+        TypeChecker::new()
+            .check_module(&parse("cache: dict[!list[int], float] = {:}\n").unwrap())
+            .expect("immutable lists with hashable elements should be valid dictionary keys");
+
+        let error = TypeChecker::new()
+            .check_module(
+                &parse("class Box:\n    value: int\ncache: dict[!list[Box], float] = {:}\n")
+                    .unwrap(),
+            )
+            .expect_err("immutable lists with mutable class elements should not be hashable keys");
+        assert!(error.message.contains("dictionary key type"));
+    }
+
+    #[test]
+    fn forward_class_references_keep_default_value_semantics() {
+        TypeChecker::new()
+            .check_module(&parse("cache: dict[!ExternalModel[str], float] = {:}\n").unwrap())
+            .expect("forward or external class references should keep default Hashable semantics");
     }
 
     #[test]
