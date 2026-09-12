@@ -590,6 +590,28 @@ impl fmt::Debug for Value {
     }
 }
 
+fn identity_metadata_attr(value: &Value, attr: &str) -> Option<Value> {
+    match value {
+        Value::Function { name, .. } | Value::BuiltinFunction { name, .. } => match attr {
+            "__name__" | "__path__" => Some(Value::Str(name.clone())),
+            "__doc__" => Some(Value::None),
+            _ => None,
+        },
+        Value::ClassRef(name) | Value::TraitRef(name) => match attr {
+            "__name__" | "__path__" => Some(Value::Str(name.clone())),
+            "__doc__" => Some(Value::None),
+            _ => None,
+        },
+        Value::Module { name, path, .. } => match attr {
+            "__name__" => Some(Value::Str(name.clone())),
+            "__path__" => Some(Value::Str(path.clone())),
+            "__doc__" => Some(Value::None),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct Environment {
     pub bindings: HashMap<String, Value>,
@@ -2598,6 +2620,9 @@ impl Interpreter {
                             })
                         }
                     };
+                    if let Some(value) = identity_metadata_attr(&args[0], name) {
+                        return Ok(value);
+                    }
                     let value = match &args[0] {
                         Value::Object { fields, .. } => {
                             let value = fields.borrow().get(name).cloned();
@@ -2642,6 +2667,9 @@ impl Interpreter {
                         Value::Str(name) => name,
                         _ => return Ok(Value::Bool(false)),
                     };
+                    if identity_metadata_attr(&args[0], name).is_some() {
+                        return Ok(Value::Bool(true));
+                    }
                     let present = match &args[0] {
                         Value::Object { fields, .. } => {
                             fields.borrow().contains_key(name)
@@ -12721,6 +12749,20 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             interp.env.borrow().get("name"),
             Some(Value::Str("answer".into()))
         );
+    }
+
+    #[test]
+    fn reflection_builtins_expose_function_identity_metadata() {
+        let module = parse(
+            "def answer() -> int:\n    return 1\nitems = [answer]\nname = getattr(items[0], \"__name__\")\nhas_name = hasattr(items[0], \"__name__\")\nhas_missing = hasattr(items[0], \"missing\")\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::default();
+        interp.eval_module(&module).unwrap();
+        let env = interp.env.borrow();
+        assert_eq!(env.get("name"), Some(Value::Str("answer".into())));
+        assert_eq!(env.get("has_name"), Some(Value::Bool(true)));
+        assert_eq!(env.get("has_missing"), Some(Value::Bool(false)));
     }
 
     #[test]
