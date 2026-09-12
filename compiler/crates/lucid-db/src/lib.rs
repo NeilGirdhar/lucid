@@ -1297,14 +1297,35 @@ fn collect_typed_body<'db>(
                         });
                     }
                 }
-                if arms.len() >= 2
-                    && arms.iter().all(|arm| arm.guard.is_none())
-                    && arms
-                        .iter()
-                        .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
-                    && arms.iter().all(|arm| match_arm_result(arm).is_some())
-                {
-                    let detail = arms
+                let optional_value_arms =
+                    if arms.len() >= 2 && arms.iter().all(|arm| arm.guard.is_none()) {
+                        if matches!(
+                            arms.last().map(|arm| &arm.pattern),
+                            Some(lucid_syntax::Pattern::Wildcard(_))
+                        ) && arms
+                            .last()
+                            .is_some_and(|arm| arm.body.iter().all(typed_match_noop_statement))
+                        {
+                            Some(&arms[..arms.len() - 1])
+                        } else if arms
+                            .iter()
+                            .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                        {
+                            Some(arms.as_slice())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                if let Some(value_arms) = optional_value_arms.filter(|value_arms| {
+                    value_arms.len() >= 2
+                        && value_arms
+                            .iter()
+                            .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                        && value_arms.iter().all(|arm| match_arm_result(arm).is_some())
+                }) {
+                    let detail = value_arms
                         .iter()
                         .map(|arm| match &arm.pattern {
                             lucid_syntax::Pattern::Literal(
@@ -1320,8 +1341,8 @@ fn collect_typed_body<'db>(
                         .collect::<Result<Vec<_>, Arc<str>>>()?
                         .join(",");
                     let mut children = vec![subject_id];
-                    let mut result_ids = Vec::with_capacity(arms.len());
-                    for arm in arms {
+                    let mut result_ids = Vec::with_capacity(value_arms.len());
+                    for arm in value_arms {
                         let Some(value) = match_arm_result(arm) else {
                             return Err(Arc::from("unsupported match result"));
                         };
@@ -1336,11 +1357,11 @@ fn collect_typed_body<'db>(
                         };
                         result_ids.push(id);
                     }
-                    if result_ids.len() == arms.len() {
+                    if result_ids.len() == value_arms.len() {
                         children.extend(result_ids);
                         let id = u32::try_from(nodes.len())
                             .map_err(|_| Arc::<str>::from("too many expressions"))?;
-                        let Some(result) = match_arm_result(&arms[0]) else {
+                        let Some(result) = match_arm_result(&value_arms[0]) else {
                             return Err(Arc::from("unsupported match result"));
                         };
                         let ty = checker
@@ -7608,6 +7629,15 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("multi-arm pass fallback match should lower through optional CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm pass fallback match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));

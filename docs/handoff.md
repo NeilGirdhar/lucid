@@ -462,9 +462,10 @@ diverged:
 * Primitive literal `match` functions now lower through verified CIR decision
   chains: two-arm matches and larger literal chains support primitive
   expression results followed by a wildcard. Optional larger literal chains
-  without a wildcard now use the same typed-HIR/CIR seam and return `None` when
-  no arm matches. More complex patterns remain explicit lowering work rather
-  than being silently interpreted by a compatibility fallback.
+  without a wildcard, or with a no-op wildcard fallback such as `pass`, now use
+  the same typed-HIR/CIR seam and return `None` when no value arm matches. More
+  complex patterns remain explicit lowering work rather than being silently
+  interpreted by a compatibility fallback.
   The supported two-arm shape now carries its subject, arm results, and
   literal discriminator as one typed-HIR node before CIR lowering, including
   the simple branch-local assignment-and-return form.
