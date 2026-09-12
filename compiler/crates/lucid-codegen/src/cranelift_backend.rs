@@ -3772,6 +3772,33 @@ return total
     }
 
     #[test]
+    fn native_backend_rejects_seventeen_parameter_abi_boundary() {
+        let mut instructions = Vec::new();
+        for index in 0..17u32 {
+            instructions.push(Instruction::Param {
+                result: ValueId(index),
+                index,
+            });
+        }
+        let function = Function {
+            entry: lucid_cir::BlockId(0),
+            blocks: vec![lucid_cir::Block {
+                id: lucid_cir::BlockId(0),
+                instructions,
+                terminator: Terminator::Return(Some(ValueId(0))),
+            }],
+        };
+        match compile_integer_function(&function) {
+            Err(CraneliftError::UnsupportedInstruction(message)) => assert_eq!(
+                message,
+                "native integer invocation currently supports at most sixteen parameters".to_string()
+            ),
+            Ok(_) => panic!("expected compile to be rejected"),
+            Err(other) => panic!("expected unsupported-parameter error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn native_result_abi_executes_sixteen_parameter_boundary() {
         let mut instructions = Vec::new();
         for index in 0..16u32 {
