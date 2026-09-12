@@ -6466,9 +6466,6 @@ static inline void lucid_print_val(LucidVal v) {
             || f.decorators.iter().any(|decorator| {
                 matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
             })
-            || f.params.iter().any(|param| {
-                param.is_gather
-            })
         {
             return Ok(());
         }
@@ -6515,6 +6512,7 @@ static inline void lucid_print_val(LucidVal v) {
                     && !param.is_gather
             })
             .count();
+        let gather_index = f.params.iter().position(|param| param.is_gather);
         let variadic_index = f.params.iter().position(|param| param.is_variadic_positional);
         let keyword_variadic = f.params.iter().any(|param| param.is_variadic_keyword);
         if keyword_variadic {
@@ -6530,7 +6528,7 @@ static inline void lucid_print_val(LucidVal v) {
             self.emit_line(&format!(
                 "for (int64_t _closure_i = {index}; _closure_i < args->len; ++_closure_i) lucid_list_append(_closure_varargs, args->items[_closure_i]);"
             ));
-        } else {
+        } else if gather_index.is_none() {
             self.emit_line(&format!(
                 "if (!args || args->len > {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
                 f.params.len()
@@ -6545,11 +6543,109 @@ static inline void lucid_print_val(LucidVal v) {
             self.emit_line(&format!(
                 "if ((!args || args->len <= {index}) && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
                 c_escape_string(&param.name)
-            ));
-        }
+                ));
+            }
+        } else {
+            for (index, param) in f.params.iter().enumerate() {
+                if param.is_gather || param.default.is_some() {
+                    continue;
+                }
+                self.emit_line(&format!(
+                    "if ((!args || args->len <= {index}) && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
+                    c_escape_string(&param.name)
+                ));
+            }
         }
         let mut call_args = Vec::new();
         for (index, param) in f.params.iter().enumerate() {
+            if Some(index) == gather_index {
+                let class_name = match param.type_annotation.as_ref() {
+                    Some(TypeExpr::Named { name, .. }) => name.clone(),
+                    _ => "Arguments".to_string(),
+                };
+                let fields = self
+                    .known_classes
+                    .get(&class_name)
+                    .cloned()
+                    .unwrap_or_else(|| vec!["vpargs".into(), "kwargs".into()]);
+                let is_bundle = class_name == "Arguments"
+                    || class_name == "Parameters"
+                    || class_name.ends_with("Arguments")
+                    || class_name.ends_with("Parameters");
+                if !is_bundle {
+                    let constructor_args = fields
+                        .iter()
+                        .enumerate()
+                        .map(|(field_index, field)| {
+                            let ty = self
+                                .known_field_types
+                                .get(&(class_name.clone(), field.clone()))
+                                .cloned()
+                                .unwrap_or_else(|| "LucidVal".into());
+                            let source_index = index + field_index;
+                            let source = format!(
+                                "(kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\")) ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args && args->len > {source_index} ? args->items[{source_index}] : lucid_none()))",
+                                c_escape_string(field),
+                                c_escape_string(field)
+                            );
+                            match ty.as_str() {
+                                "int64_t" => format!("lucid_as_int({source})"),
+                                "double" => format!("lucid_as_float({source})"),
+                                "bool" => format!("lucid_as_bool({source})"),
+                                "const char*" => format!("lucid_as_str({source})"),
+                                "LucidList*" => format!("lucid_as_list({source})"),
+                                "LucidDict*" => format!("lucid_as_dict({source})"),
+                                "LucidSet*" => format!("lucid_as_set({source})"),
+                                "LucidVal" => source,
+                                other => format!("({other})lucid_as_ptr({source})"),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    call_args.push(format!("{class_name}_new({constructor_args})"));
+                    continue;
+                }
+                self.emit_line(&format!(
+                    "LucidList* _closure_gather_vpargs = lucid_list_new(args ? args->len - {index} : 0);"
+                ));
+                self.emit_line(&format!(
+                    "for (int64_t _closure_i = {index}; args && _closure_i < args->len; ++_closure_i) lucid_list_append(_closure_gather_vpargs, args->items[_closure_i]);"
+                ));
+                self.emit_line(
+                    "LucidDict* _closure_gather_kwargs = lucid_dict_new(kwargs ? kwargs->len : 0);",
+                );
+                let fixed_names = f.params[..index]
+                    .iter()
+                    .filter(|previous| !previous.is_variadic_keyword && !previous.is_gather)
+                    .map(|previous| c_escape_string(&previous.name))
+                    .collect::<Vec<_>>();
+                let consumed = if fixed_names.is_empty() {
+                    "false".to_string()
+                } else {
+                    fixed_names
+                        .iter()
+                        .map(|name| format!("strcmp(lucid_as_str(kwargs->keys[_closure_i]), \"{name}\") == 0"))
+                        .collect::<Vec<_>>()
+                        .join(" || ")
+                };
+                self.emit_line(&format!(
+                    "for (int64_t _closure_i = 0; kwargs && _closure_i < kwargs->len; ++_closure_i) if (!({consumed})) lucid_dict_set(_closure_gather_kwargs, kwargs->keys[_closure_i], kwargs->values[_closure_i]);"
+                ));
+                let constructor_args = fields
+                    .iter()
+                    .map(|field| match field.as_str() {
+                        "pargs" => format!(
+                            "({{ LucidList* _p = lucid_list_new({index}); for (int64_t _i = 0; _i < {index} && args && _i < args->len; ++_i) lucid_list_append(_p, args->items[_i]); _p; }})"
+                        ),
+                        "vpargs" => "_closure_gather_vpargs".to_string(),
+                        "kwargs" => "_closure_gather_kwargs".to_string(),
+                        _ => "NULL".to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                call_args.push(format!("{class_name}_new({constructor_args})"));
+                continue;
+            }
             let ty = if param.is_variadic_positional {
                 "LucidList*".to_string()
             } else {
@@ -15700,6 +15796,40 @@ print(z is complex)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "parameters gather failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+    }
+
+    #[test]
+    fn native_named_gather_function_value_uses_bundle_adapter() {
+        let source = "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef count(***rest: Arguments) -> int:\n    return len(rest.vpargs) + len(rest.kwargs)\nfs = [count]\nprint(fs[0](1, extra=2))\n";
+        let module = parse(source).expect("named gather function source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_named_gather_value_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("named gather value should compile");
+        let run = Command::new(&output).output().expect("run named gather value");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "named gather value failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+    }
+
+    #[test]
+    fn native_named_class_gather_function_value_uses_adapter() {
+        let source = "class Options:\n    retries: int\n    label: str\ndef render(***rest: Options) -> int:\n    return rest.retries + len(rest.label)\nfs = [render]\nprint(fs[0](3, \"ok\"))\n";
+        let module = parse(source).expect("named class gather source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_named_class_gather_value_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("named class gather should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run named class gather value");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "named class gather value failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
     #[test]
