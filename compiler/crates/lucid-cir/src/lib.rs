@@ -3094,13 +3094,18 @@ impl Function {
                 }
                 lucid_syntax::Expr::Binary {
                     op, left, right, ..
-                } if matches!(
-                    op,
-                    lucid_syntax::BinaryOp::Add
-                        | lucid_syntax::BinaryOp::Sub
-                        | lucid_syntax::BinaryOp::Mul
-                ) =>
-                {
+                } => {
+                    if !matches!(
+                        op,
+                        lucid_syntax::BinaryOp::Add
+                            | lucid_syntax::BinaryOp::Sub
+                            | lucid_syntax::BinaryOp::Mul
+                            | lucid_syntax::BinaryOp::Div
+                            | lucid_syntax::BinaryOp::FloorDiv
+                            | lucid_syntax::BinaryOp::Mod
+                    ) {
+                        return None;
+                    }
                     let (left_instruction, left_used_alias) =
                         atom_instruction(left.as_ref(), left_temp, parameter_names, bound_initial)?;
                     let (right_instruction, right_used_alias) = atom_instruction(
@@ -3121,6 +3126,21 @@ impl Function {
                             right: right_temp,
                         },
                         lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::Div => Instruction::Div {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::FloorDiv => Instruction::FloorDiv {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::Mod => Instruction::Mod {
                             result,
                             left: left_temp,
                             right: right_temp,
@@ -11105,6 +11125,24 @@ return n
                 .expect("dynamic arithmetic-bound counted loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(3)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
+            r#"while n > limit // scale:
+    n -= 1
+return n
+"#,
+        )
+        .expect("division-bound counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "scale".into()],
+        )
+        .expect("division-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 6, 2]), Ok(Some(3)));
+        assert_eq!(
+            function.execute_with_args(&[5, 6, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
 
         let module = lucid_syntax::parse(
             r#"stop = limit + 1

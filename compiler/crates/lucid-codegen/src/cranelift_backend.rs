@@ -3139,6 +3139,32 @@ return n
     }
 
     #[test]
+    fn result_abi_executes_division_bound_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"while n > limit // scale:
+    n -= 1
+return n
+"#,
+        )
+        .expect("division-bound counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "scale".into()],
+        )
+        .expect("division-bound counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile division-bound counted loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 6, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 3);
+        let zero = unsafe { compiled.call_result_with_args(&[5, 6, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::DivisionByZero
+        );
+    }
+
+    #[test]
     fn result_abi_executes_unary_dynamic_step_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"tick = -step

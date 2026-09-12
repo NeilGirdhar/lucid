@@ -811,6 +811,57 @@ fn run_cir_executes_dynamic_arithmetic_bound_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_division_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_division_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, limit: int, scale: int):\n    while n > limit // scale:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir division-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir division-bound counted loop zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn run_cir_executes_local_alias_arithmetic_bound_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_alias_arithmetic_bound_while_{}.lucid",
