@@ -501,6 +501,33 @@ impl Type {
         {
             return true;
         }
+        if let Type::Trait {
+            name: target_trait, ..
+        } = target
+        {
+            let builtin_traits: &[&str] = match self {
+                Type::Int => &[
+                    "SupportsInt",
+                    "SupportsFloat",
+                    "SupportsComplex",
+                    "SupportsIndex",
+                    "SupportsAbs",
+                    "SupportsRound",
+                ],
+                Type::Float => &[
+                    "SupportsFloat",
+                    "SupportsComplex",
+                    "SupportsAbs",
+                    "SupportsRound",
+                ],
+                Type::Bool => &["SupportsInt", "SupportsIndex"],
+                Type::Str => &["Sized", "Container"],
+                _ => &[],
+            };
+            if builtin_traits.contains(&target_trait.as_str()) {
+                return true;
+            }
+        }
 
         if let (
             Type::Interface {
@@ -1206,6 +1233,130 @@ impl TypeChecker {
             env.traits.insert(name.into(), trait_type.clone());
             env.variables
                 .insert(name.into(), (trait_type, MutabilityView::ReadOnly));
+        }
+        let complex_type = Type::Class {
+            name: "complex".into(),
+            type_args: Vec::new(),
+            parent: None,
+            traits: Vec::new(),
+            interfaces: Vec::new(),
+            fields: HashMap::new(),
+            is_sealed: true,
+        };
+        for (trait_name, method_name, return_type) in [
+            ("SupportsInt", "__int__", Type::Int),
+            ("SupportsFloat", "__float__", Type::Float),
+            ("SupportsComplex", "__complex__", complex_type.clone()),
+            ("SupportsIndex", "__index__", Type::Int),
+        ] {
+            let trait_type = Type::Trait {
+                name: trait_name.into(),
+                type_args: Vec::new(),
+                methods: [method_name.into()].into_iter().collect(),
+            };
+            env.traits.insert(trait_name.into(), trait_type.clone());
+            env.variables
+                .insert(trait_name.into(), (trait_type, MutabilityView::ReadOnly));
+            env.obligations
+                .entry(trait_name.into())
+                .or_default()
+                .insert(method_name.into());
+            env.trait_methods.insert(
+                (trait_name.into(), method_name.into()),
+                Type::Function {
+                    params: Vec::new(),
+                    return_type: Box::new(return_type),
+                },
+            );
+            env.trait_method_params.insert(
+                (trait_name.into(), method_name.into()),
+                vec!["self".into()],
+            );
+        }
+        for (trait_name, method_name, params) in [
+            ("SupportsAbs", "__abs__", Vec::new()),
+            (
+                "SupportsRound",
+                "__round__",
+                vec![Type::make_union(vec![Type::Int, Type::None])],
+            ),
+        ] {
+            let result_type = Type::TypeVar("K".into());
+            let trait_type = Type::Trait {
+                name: trait_name.into(),
+                type_args: vec![result_type.clone()],
+                methods: [method_name.into()].into_iter().collect(),
+            };
+            env.traits.insert(trait_name.into(), trait_type.clone());
+            env.variables
+                .insert(trait_name.into(), (trait_type, MutabilityView::ReadOnly));
+            env.trait_variance
+                .insert(trait_name.into(), vec![Variance::Covariant]);
+            env.trait_bounds.insert(trait_name.into(), vec![None]);
+            env.obligations
+                .entry(trait_name.into())
+                .or_default()
+                .insert(method_name.into());
+            env.trait_methods.insert(
+                (trait_name.into(), method_name.into()),
+                Type::Function {
+                    params,
+                    return_type: Box::new(result_type),
+                },
+            );
+            let param_names = if method_name == "__round__" {
+                vec!["self".into(), "ndigits".into()]
+            } else {
+                vec!["self".into()]
+            };
+            env.trait_method_params
+                .insert((trait_name.into(), method_name.into()), param_names);
+        }
+        for (class_name, methods) in [
+            (
+                "int",
+                vec![
+                    ("__int__", Type::Int),
+                    ("__float__", Type::Float),
+                    ("__complex__", complex_type.clone()),
+                    ("__index__", Type::Int),
+                    ("__abs__", Type::Int),
+                    ("__round__", Type::Int),
+                ],
+            ),
+            (
+                "float",
+                vec![
+                    ("__float__", Type::Float),
+                    ("__complex__", complex_type.clone()),
+                    ("__abs__", Type::Float),
+                    ("__round__", Type::Float),
+                ],
+            ),
+            (
+                "complex",
+                vec![
+                    ("__complex__", complex_type.clone()),
+                    ("__abs__", Type::Float),
+                ],
+            ),
+            ("bool", vec![("__int__", Type::Int), ("__index__", Type::Int)]),
+        ] {
+            let members = env.class_members.entry(class_name.into()).or_default();
+            for (method_name, return_type) in methods {
+                members.insert(method_name.into());
+                env.class_methods.insert(
+                    (class_name.into(), method_name.into()),
+                    Type::Function {
+                        params: Vec::new(),
+                        return_type: Box::new(return_type),
+                    },
+                );
+                env.class_method_params.insert(
+                    (class_name.into(), method_name.into()),
+                    vec!["self".into()],
+                );
+            }
         }
         for name in ["Bytes", "ByteArray", "MemoryView"] {
             env.classes.insert(
@@ -2124,7 +2275,12 @@ impl TypeChecker {
                 let mut fields = HashMap::new();
                 let mut final_fields = HashSet::new();
                 let mut final_methods = HashSet::new();
-                let mut member_names = HashSet::new();
+                let mut member_names = self
+                    .env
+                    .class_members
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default();
                 let mut class_vars = HashMap::new();
                 let mut field_order = Vec::new();
                 for member in body {
@@ -3743,6 +3899,10 @@ impl TypeChecker {
                 .trait_getter_type(name, attr)
                 .or_else(|| self.trait_field_type(name, attr))
                 .or_else(|| self.trait_method_type(name, attr)),
+            Type::Int => self.class_method_type("int", attr),
+            Type::Float => self.class_method_type("float", attr),
+            Type::Bool => self.class_method_type("bool", attr),
+            Type::Str => self.class_method_type("str", attr),
             Type::Record { fields, .. } => fields
                 .iter()
                 .find(|(name, _)| name.as_deref() == Some(attr))
@@ -6647,6 +6807,34 @@ impl TypeChecker {
                             });
                         }
                     }
+                    if name == "round" {
+                        if let Some(argument) = args.first() {
+                            let argument_type = self.type_of_expr(&argument.value)?;
+                            let numeric = matches!(
+                                argument_type,
+                                Type::Int | Type::LiteralInt(_) | Type::Float
+                            ) || matches!(
+                                &argument_type,
+                                Type::Class { name, .. } if name == "complex"
+                            ) || argument_type.is_subtype_of(
+                                &Type::Trait {
+                                    name: "SupportsRound".into(),
+                                    type_args: Vec::new(),
+                                    methods: HashSet::new(),
+                                },
+                                &self.env,
+                            );
+                            if !numeric {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "round() argument must support rounding, got {:?}",
+                                        argument_type
+                                    ),
+                                    span: argument.value.span(),
+                                });
+                            }
+                        }
+                    }
                     if name == "sum" {
                         if let Some(argument) = args.first() {
                             let argument_type = self.type_of_expr(&argument.value)?;
@@ -6705,6 +6893,13 @@ impl TypeChecker {
                             ) || matches!(
                                 &argument_type,
                                 Type::Class { name, .. } if name == "complex"
+                            ) || argument_type.is_subtype_of(
+                                &Type::Trait {
+                                    name: "SupportsAbs".into(),
+                                    type_args: Vec::new(),
+                                    methods: HashSet::new(),
+                                },
+                                &self.env,
                             );
                             if !numeric {
                                 return Err(TypeError {
@@ -10413,6 +10608,21 @@ class Child(Base):
         let module = parse("formatted = \"%s\" % \"value\"\n").unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("unsupported operands for %"));
+    }
+
+    #[test]
+    fn numeric_capability_traits_accept_builtin_stubs() {
+        let module = parse(
+            "trait SupportsInt:\n    def __int__(self: ~Self) -> int\n\ntrait SupportsFloat:\n    def __float__(self: ~Self) -> float\n\ntrait SupportsComplex:\n    def __complex__(self: ~Self) -> complex\n\ntrait SupportsIndex:\n    def __index__(self: ~Self) -> int\n\ntrait SupportsAbs[+K]:\n    def __abs__(self: ~Self) -> K\n\ntrait SupportsRound[+K]:\n    def __round__(self: ~Self, ndigits: int | none = none) -> K\n\nclass int(SupportsInt, SupportsFloat, SupportsComplex, SupportsIndex):\n    ...\n\ndef repeat(count: SupportsIndex, action: () -> none) -> none:\n    for _ in range(count.__index__()):\n        action()\n\ndef magnitude(x: SupportsAbs[float]) -> float:\n    return abs(x)\n\ndef rounded(x: SupportsRound[int]) -> int:\n    return round(x)\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("numeric builtins should satisfy their declared capability traits");
+
+        let module = parse("trait NeedsMethod:\n    def needed(self) -> int\n\nclass Empty(NeedsMethod):\n    ...\n").unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("required member 'needed'"));
     }
 
     #[test]
