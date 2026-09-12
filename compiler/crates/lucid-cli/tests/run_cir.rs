@@ -811,6 +811,37 @@ fn run_cir_executes_local_step_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_local_constant_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_constant_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    tick = 1 + 1\n    while n > 0:\n        n -= tick\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local constant-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-1");
+}
+
+#[test]
 fn run_cir_executes_local_init_local_step_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_init_local_step_while_{}.lucid",

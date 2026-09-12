@@ -609,8 +609,9 @@ diverged:
   and induction update steps, so `value = -3`, `while n > -3`, and `n += -1`
   lower through the counted path. Additive induction updates also accept the
   commuted spelling `n = -1 + n`, and the induction step may be a positional
-  parameter or a pre-loop local alias of a literal or parameter instead of only
-  a signed literal, as in `tick = step; while n > 0: n -= tick`. Checked
+  parameter or a pre-loop local alias of a literal, checked constant
+  expression, or parameter instead of only a signed literal, as in
+  `tick = step; while n > 0: n -= tick`. Checked
   constant integer step expressions such as `n -= 1 + 1` and comparison bounds
   such as `while n > 1 + 1` lower through the same path while overflow or
   dynamic expressions remain outside it. Plain counted
