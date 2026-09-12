@@ -2600,6 +2600,26 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_constant_local_step_alias_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stride = 0 - 1
+for i in range(n, 0, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("range constant step alias accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range constant step alias accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile range constant step alias loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[4]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 10);
+    }
+
+    #[test]
     fn result_abi_executes_void_range_with_local_aliases_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit
@@ -2952,6 +2972,24 @@ return n
         let result = unsafe { compiled.call_result_with_args(&[10, 3]) };
         assert!(result.is_ok());
         assert_eq!(result.value, -2);
+    }
+
+    #[test]
+    fn result_abi_executes_constant_step_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= 1 + 1
+return n
+"#,
+        )
+        .expect("constant-step counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("constant-step counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile constant-step counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, -1);
     }
 
     #[test]

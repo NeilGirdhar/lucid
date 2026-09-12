@@ -578,6 +578,9 @@ diverged:
   literal step through a local alias, as in `stride = -1; range(n, 0, stride)`.
   That step alias may itself point at another local literal alias, matching
   the existing chained range-bound alias behavior.
+  The step resolver now folds checked constant integer expressions in that
+  local alias as well, so `stride = 0 - 1` is accepted while dynamic or
+  parameter-backed steps remain outside this static-direction range lowering.
   Void no-op range loops now lower to the same counted CFG shape and return
   `None`; they accept the same local bound aliases and statically known literal
   step aliases as the accumulator form.
@@ -605,7 +608,9 @@ diverged:
   lower through the counted path. Additive induction updates also accept the
   commuted spelling `n = -1 + n`, and the induction step may be a positional
   parameter or a pre-loop local alias of a literal or parameter instead of only
-  a signed literal, as in `tick = step; while n > 0: n -= tick`. Plain counted
+  a signed literal, as in `tick = step; while n > 0: n -= tick`. Checked
+  constant integer step expressions such as `n -= 1 + 1` lower through the same
+  path while overflow or dynamic expressions remain outside it. Plain counted
   loops can also keep the induction value as a parameter while seeding the
   comparison bound from a local, with or without a local step alias, as in
   `stop = limit; tick = step; while n > stop`.

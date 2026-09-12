@@ -2746,6 +2746,69 @@ impl Function {
         }
     }
 
+    fn const_int_expr(expr: &lucid_syntax::Expr) -> Option<i64> {
+        match expr {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(*value),
+            lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Neg,
+                expr,
+                ..
+            } => Self::const_int_expr(expr)?.checked_neg(),
+            lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Pos,
+                expr,
+                ..
+            } => Self::const_int_expr(expr),
+            lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Invert,
+                expr,
+                ..
+            } => Some(!Self::const_int_expr(expr)?),
+            lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } => {
+                let left = Self::const_int_expr(left)?;
+                let right = Self::const_int_expr(right)?;
+                match op {
+                    lucid_syntax::BinaryOp::Add => left.checked_add(right),
+                    lucid_syntax::BinaryOp::Sub => left.checked_sub(right),
+                    lucid_syntax::BinaryOp::Mul => left.checked_mul(right),
+                    lucid_syntax::BinaryOp::Pow => u32::try_from(right)
+                        .ok()
+                        .and_then(|exponent| left.checked_pow(exponent)),
+                    lucid_syntax::BinaryOp::Div => left.checked_div(right),
+                    lucid_syntax::BinaryOp::FloorDiv => {
+                        let quotient = left.checked_div(right)?;
+                        let remainder = left.checked_rem(right)?;
+                        if remainder != 0 && (left < 0) != (right < 0) {
+                            quotient.checked_sub(1)
+                        } else {
+                            Some(quotient)
+                        }
+                    }
+                    lucid_syntax::BinaryOp::Mod => {
+                        let remainder = left.checked_rem(right)?;
+                        if remainder != 0 && (left < 0) != (right < 0) {
+                            remainder.checked_add(right)
+                        } else {
+                            Some(remainder)
+                        }
+                    }
+                    lucid_syntax::BinaryOp::BitAnd => Some(left & right),
+                    lucid_syntax::BinaryOp::BitOr => Some(left | right),
+                    lucid_syntax::BinaryOp::BitXor => Some(left ^ right),
+                    lucid_syntax::BinaryOp::Shl => left.checked_shl(u32::try_from(right).ok()?),
+                    lucid_syntax::BinaryOp::Shr => left.checked_shr(u32::try_from(right).ok()?),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Recognize and lower `while x > 0: x -= 1; return x`-style integer
     /// induction loops. The initial value must be a positional parameter;
     /// the body must contain exactly one augmented assignment to that same
@@ -2814,7 +2877,7 @@ impl Function {
             parameter_names: &[String],
             step_initial: Option<&lucid_syntax::Stmt>,
         ) -> Option<(Instruction, bool)> {
-            match Function::int_literal_expr(expr) {
+            match Function::const_int_expr(expr) {
                 Some(value) => Some((Instruction::ConstInt { result, value }, false)),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => match step_initial {
@@ -3430,7 +3493,7 @@ impl Function {
             result: ValueId,
             parameter_names: &[String],
         ) -> Option<Instruction> {
-            match Function::int_literal_expr(expr) {
+            match Function::const_int_expr(expr) {
                 Some(value) => Some(Instruction::ConstInt { result, value }),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
@@ -3468,7 +3531,7 @@ impl Function {
             parameter_names: &[String],
             alias_initial: Option<&lucid_syntax::Stmt>,
         ) -> Option<(Instruction, bool)> {
-            match Function::int_literal_expr(expr) {
+            match Function::const_int_expr(expr) {
                 Some(value) => Some((Instruction::ConstInt { result, value }, false)),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => match alias_initial {
@@ -4327,7 +4390,7 @@ impl Function {
             if depth > bound_aliases.len() {
                 return None;
             }
-            match Function::int_literal_expr(expr) {
+            match Function::const_int_expr(expr) {
                 Some(value) => Some(Instruction::ConstInt { result, value }),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => {
@@ -4355,7 +4418,7 @@ impl Function {
             if depth > bound_aliases.len() {
                 return None;
             }
-            match Function::int_literal_expr(expr) {
+            match Function::const_int_expr(expr) {
                 Some(value) => Some(value),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => {
@@ -4667,7 +4730,7 @@ impl Function {
             if depth > bound_aliases.len() {
                 return None;
             }
-            match Function::int_literal_expr(expr) {
+            match Function::const_int_expr(expr) {
                 Some(value) => Some(Instruction::ConstInt { result, value }),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => {
@@ -4695,7 +4758,7 @@ impl Function {
             if depth > bound_aliases.len() {
                 return None;
             }
-            match Function::int_literal_expr(expr) {
+            match Function::const_int_expr(expr) {
                 Some(value) => Some(value),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => {
@@ -10116,6 +10179,17 @@ return n
         assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(-2)));
 
         let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= 1 + 1
+return n
+"#,
+        )
+        .expect("constant-step counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("constant-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(-1)));
+
+        let module = lucid_syntax::parse(
             r#"value = n
 tick = step
 while value > 0:
@@ -10819,6 +10893,19 @@ return total
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
+            r#"total = 0
+stride = 0 - 1
+for i in range(n, 0, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("range step constant alias accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range step constant alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
             r#"for i in range(n):
     pass
 "#,
@@ -10853,6 +10940,20 @@ for i in range(n, stop, stride):
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("void descending range chained step alias loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(None));
+
+        let module = lucid_syntax::parse(
+            r#"stop = limit
+raw_stride = 0 - 1
+stride = raw_stride
+for i in range(n, stop, stride):
+    pass
+"#,
+        )
+        .expect("void descending range chained constant step alias fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("void descending range chained constant step alias loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(None));
 
         let module = lucid_syntax::parse(
