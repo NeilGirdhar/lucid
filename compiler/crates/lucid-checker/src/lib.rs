@@ -4875,6 +4875,12 @@ impl TypeChecker {
 
                 let mut local_vars = self.env.variables.clone();
                 let mut local_exact_vars = self.env.exact_variables.clone();
+                let mut local_bindings = HashSet::new();
+                collect_local_binding_names(&func.body, &mut local_bindings);
+                for name in &local_bindings {
+                    local_vars.remove(name);
+                    local_exact_vars.remove(name);
+                }
                 let mut seen_positional_default = false;
                 let mut parameter_names = HashSet::new();
                 for param in &func.params {
@@ -6223,6 +6229,12 @@ impl TypeChecker {
         let saved_return = self.env.current_return_type.take();
         let mut vars = saved_vars.clone();
         let mut exact_vars = saved_exact_vars.clone();
+        let mut local_bindings = HashSet::new();
+        collect_local_binding_names(body, &mut local_bindings);
+        for name in &local_bindings {
+            vars.remove(name);
+            exact_vars.remove(name);
+        }
         for param in params {
             let ty = if param.type_annotation.is_none()
                 && matches!(param.name.as_str(), "self" | "cls")
@@ -11115,6 +11127,139 @@ fn count_yields(statements: &[Stmt]) -> usize {
         .sum()
 }
 
+fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
+    match pattern {
+        Pattern::Ident(name, _)
+            if !matches!(
+                name.as_str(),
+                "_" | "int" | "float" | "bool" | "str" | "none" | "None"
+            ) =>
+        {
+            names.insert(name.clone());
+        }
+        Pattern::Tuple(items, _) => {
+            for item in items {
+                pattern_bound_names(item, names);
+            }
+        }
+        Pattern::Star(nested, _) => pattern_bound_names(nested, names),
+        Pattern::RecordDestructure(fields, _) | Pattern::ClassDestructure { fields, .. } => {
+            for (_, nested) in fields {
+                pattern_bound_names(nested, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn assignment_target_bound_names(target: &Expr, names: &mut HashSet<String>) {
+    match target {
+        Expr::Ident { name, .. } if name != "_" => {
+            names.insert(name.clone());
+        }
+        Expr::Record { fields, .. } => {
+            for (_, nested) in fields {
+                assignment_target_bound_names(nested, names);
+            }
+        }
+        Expr::List { elements, .. } => {
+            for nested in elements {
+                assignment_target_bound_names(nested, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_local_binding_names(statements: &[Stmt], names: &mut HashSet<String>) {
+    for statement in statements {
+        match statement {
+            Stmt::VarDef { pattern, .. } => pattern_bound_names(pattern, names),
+            Stmt::Assignment { target, .. } | Stmt::AugAssign { target, .. } => {
+                assignment_target_bound_names(target, names);
+            }
+            Stmt::For {
+                target,
+                body,
+                if_broken,
+                ..
+            } => {
+                pattern_bound_names(target, names);
+                collect_local_binding_names(body, names);
+                if let Some(if_broken) = if_broken {
+                    collect_local_binding_names(if_broken, names);
+                }
+            }
+            Stmt::While {
+                body, if_broken, ..
+            } => {
+                collect_local_binding_names(body, names);
+                if let Some(if_broken) = if_broken {
+                    collect_local_binding_names(if_broken, names);
+                }
+            }
+            Stmt::If {
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => {
+                collect_local_binding_names(then_branch, names);
+                for (_, branch) in elif_branches {
+                    collect_local_binding_names(branch, names);
+                }
+                if let Some(else_branch) = else_branch {
+                    collect_local_binding_names(else_branch, names);
+                }
+            }
+            Stmt::With { items, body, .. } => {
+                for item in items {
+                    if let Some(target) = &item.target {
+                        pattern_bound_names(target, names);
+                    }
+                }
+                collect_local_binding_names(body, names);
+            }
+            Stmt::Try {
+                body,
+                handlers,
+                finally_body,
+                ..
+            } => {
+                collect_local_binding_names(body, names);
+                for handler in handlers {
+                    if let Some(name) = &handler.name {
+                        names.insert(name.clone());
+                    }
+                    collect_local_binding_names(&handler.body, names);
+                }
+                if let Some(finally_body) = finally_body {
+                    collect_local_binding_names(finally_body, names);
+                }
+            }
+            Stmt::Match {
+                subject_alias,
+                arms,
+                ..
+            } => {
+                if let Some(alias) = subject_alias {
+                    names.insert(alias.clone());
+                }
+                for arm in arms {
+                    pattern_bound_names(&arm.pattern, names);
+                    collect_local_binding_names(&arm.body, names);
+                }
+            }
+            Stmt::Function(_)
+            | Stmt::ClassDef { .. }
+            | Stmt::InterfaceDef { .. }
+            | Stmt::TraitDef { .. }
+            | Stmt::ImplementDef { .. } => {}
+            _ => {}
+        }
+    }
+}
+
 fn exact_class_name_from_type(ty: &Type) -> Option<String> {
     match ty {
         Type::Exact(inner) => match inner.as_ref() {
@@ -11316,6 +11461,23 @@ class Child(Reusable, Base1, Base2):
         .unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("can never succeed"));
+    }
+
+    #[test]
+    fn function_assignment_masks_outer_binding() {
+        let module =
+            parse("counter = 0\n\ndef increment():\n    print(counter)\n    counter += 1\n")
+                .unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("undefined variable 'counter'"));
+
+        let module = parse(
+            "counter = Cell(0)\n\ndef next_id() -> int:\n    counter.value += 1\n    return counter.value\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("shared state should go through an explicit mutable object");
     }
 
     #[test]
