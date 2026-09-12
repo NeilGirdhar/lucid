@@ -2353,8 +2353,17 @@ impl TypeChecker {
                         InterfaceMember::FieldSig {
                             name: member_name,
                             type_annotation,
-                            ..
+                            is_final,
+                            span,
                         } => {
+                            if *is_final {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "final member '{member_name}' must have an implementation"
+                                    ),
+                                    span: *span,
+                                });
+                            }
                             required.insert(member_name.clone());
                             let field_type = self.resolve_type_expr(type_annotation)?;
                             self.env
@@ -2425,6 +2434,15 @@ impl TypeChecker {
                         Self::reject_removed_member(member_name, member_span)?;
                     }
                     match member {
+                        TraitMember::Field(field) if field.is_final => {
+                            return Err(TypeError {
+                                message: format!(
+                                    "final member '{}' must have an implementation",
+                                    field.name
+                                ),
+                                span: field.span,
+                            });
+                        }
                         TraitMember::Method(method) | TraitMember::ClassMethod(method)
                             if method.body.is_empty() =>
                         {
@@ -9216,6 +9234,23 @@ class Child(Reusable, Base1, Base2):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("final method 'Base.make' must have a body"));
+    }
+
+    #[test]
+    fn test_final_obligation_fields_are_rejected() {
+        let module = parse("trait Named:\n    final name: str\n").unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err
+            .message
+            .contains("final member 'name' must have an implementation"));
+
+        let module = parse("interface Named:\n    final name: str\n").unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err
+            .message
+            .contains("final member 'name' must have an implementation"));
     }
 
     #[test]
