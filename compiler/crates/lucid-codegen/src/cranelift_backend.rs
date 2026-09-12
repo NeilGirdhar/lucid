@@ -3043,6 +3043,28 @@ return n
     }
 
     #[test]
+    fn result_abi_executes_dynamic_arithmetic_bound_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"stop = limit + 1
+while n > stop:
+    n -= 1
+return n
+"#,
+        )
+        .expect("dynamic arithmetic-bound counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into()],
+        )
+        .expect("dynamic arithmetic-bound counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile dynamic arithmetic-bound counted loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 3);
+    }
+
+    #[test]
     fn result_abi_executes_local_bound_local_step_parameter_induction_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit

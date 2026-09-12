@@ -2975,6 +2975,108 @@ impl Function {
                 _ => None,
             }
         }
+        fn bound_expression_instructions(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            left_temp: ValueId,
+            right_temp: ValueId,
+            parameter_names: &[String],
+            bound_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(Vec<Instruction>, bool)> {
+            fn atom_instruction(
+                expr: &lucid_syntax::Expr,
+                result: ValueId,
+                parameter_names: &[String],
+                bound_initial: Option<&lucid_syntax::Stmt>,
+            ) -> Option<(Instruction, bool)> {
+                match Function::const_int_expr(expr) {
+                    Some(value) => Some((Instruction::ConstInt { result, value }, false)),
+                    None => match expr {
+                        lucid_syntax::Expr::Ident { name, .. } => match bound_initial {
+                            Some(statement) => {
+                                let (alias_name, _) = initialized_ident(statement)?;
+                                if alias_name == name {
+                                    None
+                                } else {
+                                    Some((
+                                        parameter_instruction(name, result, parameter_names)?,
+                                        false,
+                                    ))
+                                }
+                            }
+                            None => {
+                                Some((parameter_instruction(name, result, parameter_names)?, false))
+                            }
+                        },
+                        _ => None,
+                    },
+                }
+            }
+            if let Some((instruction, used_alias)) =
+                atom_instruction(expr, result, parameter_names, bound_initial)
+            {
+                return Some((vec![instruction], used_alias));
+            }
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => {
+                    let statement = bound_initial?;
+                    let (alias_name, value) = initialized_ident(statement)?;
+                    if alias_name != name {
+                        return None;
+                    }
+                    let (instructions, _) = bound_expression_instructions(
+                        value,
+                        result,
+                        left_temp,
+                        right_temp,
+                        parameter_names,
+                        None,
+                    )?;
+                    Some((instructions, true))
+                }
+                lucid_syntax::Expr::Binary {
+                    op, left, right, ..
+                } if matches!(
+                    op,
+                    lucid_syntax::BinaryOp::Add
+                        | lucid_syntax::BinaryOp::Sub
+                        | lucid_syntax::BinaryOp::Mul
+                ) =>
+                {
+                    let (left_instruction, left_used_alias) =
+                        atom_instruction(left.as_ref(), left_temp, parameter_names, bound_initial)?;
+                    let (right_instruction, right_used_alias) = atom_instruction(
+                        right.as_ref(),
+                        right_temp,
+                        parameter_names,
+                        bound_initial,
+                    )?;
+                    let combine = match op {
+                        lucid_syntax::BinaryOp::Add => Instruction::Add {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        _ => return None,
+                    };
+                    Some((
+                        vec![left_instruction, right_instruction, combine],
+                        left_used_alias || right_used_alias,
+                    ))
+                }
+                _ => None,
+            }
+        }
         let (initial, bound_initial, step_initial, while_statement, return_name) = match module
             .statements
             .as_slice()
@@ -3048,7 +3150,16 @@ impl Function {
                             return None;
                         }
                     }
-                    expr if Function::const_int_expr(expr).is_some() => {
+                    expr if bound_expression_instructions(
+                        expr,
+                        ValueId(2),
+                        ValueId(8),
+                        ValueId(9),
+                        parameter_names,
+                        None,
+                    )
+                    .is_some() =>
+                    {
                         if first_name == induction_name && second_name != induction_name {
                             (
                                 Some(first_statement),
@@ -3134,7 +3245,16 @@ impl Function {
                             return None;
                         }
                     }
-                    expr if Function::const_int_expr(expr).is_some() => {
+                    expr if bound_expression_instructions(
+                        expr,
+                        ValueId(2),
+                        ValueId(8),
+                        ValueId(9),
+                        parameter_names,
+                        None,
+                    )
+                    .is_some() =>
+                    {
                         if first_name == induction_name && second_name != induction_name {
                             (
                                 Some(first_statement),
@@ -3411,39 +3531,19 @@ impl Function {
                 initializer_instruction(statement, name, ValueId(0), parameter_names)?
             }
         };
-        let bound_instruction = match (right.as_ref(), bound_initial) {
-            (expr, None) if Function::const_int_expr(expr).is_some() => {
-                Some(Instruction::ConstInt {
-                    result: ValueId(2),
-                    value: Function::const_int_expr(expr)?,
-                })
-            }
-            (lucid_syntax::Expr::Ident { .. }, _) => None,
-            _ => return None,
-        };
         let mut entry_instructions = vec![initial_instruction];
-        match right.as_ref() {
-            expr if Function::const_int_expr(expr).is_some() => {}
-            lucid_syntax::Expr::Ident {
-                name: bound_name, ..
-            } if bound_name != name => {
-                if let Some(statement) = bound_initial {
-                    entry_instructions.push(initializer_instruction(
-                        statement,
-                        bound_name,
-                        ValueId(2),
-                        parameter_names,
-                    )?);
-                } else {
-                    entry_instructions.push(parameter_instruction(
-                        bound_name,
-                        ValueId(2),
-                        parameter_names,
-                    )?);
-                }
-            }
-            _ => return None,
+        let (bound_instructions, used_bound_initial) = bound_expression_instructions(
+            right.as_ref(),
+            ValueId(2),
+            ValueId(8),
+            ValueId(9),
+            parameter_names,
+            bound_initial,
+        )?;
+        if bound_initial.is_some() && !used_bound_initial {
+            return None;
         }
+        entry_instructions.extend(bound_instructions);
         let comparison = match op {
             lucid_syntax::BinaryOp::NotEq
             | lucid_syntax::BinaryOp::NotIdentity
@@ -3502,9 +3602,6 @@ impl Function {
                             result: ValueId(1),
                             incomings: vec![(BlockId(0), ValueId(0)), (BlockId(2), ValueId(5))],
                         }];
-                        if let Some(bound_instruction) = bound_instruction {
-                            instructions.push(bound_instruction);
-                        }
                         instructions.push(comparison);
                         instructions
                     },
@@ -10384,6 +10481,33 @@ return n
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("parameter-bound counted loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
+            r#"while n > limit + 1:
+    n -= 1
+return n
+"#,
+        )
+        .expect("dynamic arithmetic-bound counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("dynamic arithmetic-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
+            r#"stop = limit + 1
+while n > stop:
+    n -= 1
+return n
+"#,
+        )
+        .expect("local dynamic arithmetic-bound counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("local dynamic arithmetic-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(3)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
 
         let module = lucid_syntax::parse(

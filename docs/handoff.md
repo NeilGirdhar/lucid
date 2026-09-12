@@ -620,13 +620,13 @@ diverged:
   `tick = step; while n > 0: n -= tick`. Step expressions may also combine
   parameter or local-alias atoms with `+`, `-`, or `*`, so both
   `n -= step + 1` and `tick = step + 1; n -= tick` lower through the counted
-  CFG. Checked constant integer step expressions such as `n -= 1 + 1` and
-  comparison bounds such as `while n > 1 + 1` lower through the same path
-  while broader dynamic comparison expressions remain outside it. Plain counted
-  loops can also keep the induction value as a parameter while seeding the
-  comparison bound from a local, including a checked constant-expression local
-  such as `stop = 1 + 1`, with or without a local step alias, as in
-  `stop = limit; tick = step; while n > stop`.
+  CFG. Comparison bounds use the same loop-invariant integer-expression subset:
+  checked constants, parameters, local aliases, and `+`, `-`, or `*`
+  combinations lower through the counted path, so `while n > limit + 1`,
+  `stop = limit + 1; while n > stop`, and `while n > 1 + 1` all share the same
+  Phi-backed CFG. Plain counted loops can also keep the induction value as a
+  parameter while seeding the comparison bound from a local, with or without a
+  local step alias, as in `stop = limit; tick = step; while n > stop`.
   Plain counted
   loops can seed local induction, bound, and step-alias values from parameters
   or checked constant expressions, in any setup order, before lowering the same

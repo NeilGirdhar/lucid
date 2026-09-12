@@ -780,6 +780,37 @@ fn run_cir_executes_local_constant_bound_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_dynamic_arithmetic_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_dynamic_arithmetic_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, limit: int):\n    stop = limit + 1\n    while n > stop:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir dynamic arithmetic-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
+}
+
+#[test]
 fn run_cir_executes_local_step_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_step_while_{}.lucid",
