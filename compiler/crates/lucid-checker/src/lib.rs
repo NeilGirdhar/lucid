@@ -3375,6 +3375,23 @@ impl TypeChecker {
                 } => Some(name),
                 _ => None,
             };
+            if private_name.is_some_and(|name| name == "__all__") {
+                let span = match inner.as_ref() {
+                    Stmt::ClassDef { span, .. }
+                    | Stmt::InterfaceDef { span, .. }
+                    | Stmt::TraitDef { span, .. }
+                    | Stmt::TypeAlias { span, .. }
+                    | Stmt::VarDef { span, .. }
+                    | Stmt::Assignment { span, .. } => *span,
+                    Stmt::Function(FunctionDef { span, .. }) => *span,
+                    _ => Span::default(),
+                };
+                return Err(TypeError {
+                    message: "__all__ is not supported; Lucid uses leading '_' for module privacy"
+                        .into(),
+                    span,
+                });
+            }
             if let Some(name) = private_name.filter(|name| name.starts_with('_')) {
                 let span = match inner.as_ref() {
                     Stmt::ClassDef { span, .. }
@@ -3392,6 +3409,16 @@ impl TypeChecker {
                 });
             }
             return self.check_statement(inner);
+        }
+        if let Some((name, span)) = Self::reserved_module_binding(stmt) {
+            if name == "__all__" {
+                return Err(TypeError {
+                    message:
+                        "__all__ is not supported; Lucid uses leading '_' for module privacy"
+                            .into(),
+                    span,
+                });
+            }
         }
         match stmt {
             Stmt::ClassDef {
@@ -4714,6 +4741,28 @@ impl TypeChecker {
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+
+    fn reserved_module_binding(stmt: &Stmt) -> Option<(&str, Span)> {
+        match stmt {
+            Stmt::Export(inner) => Self::reserved_module_binding(inner),
+            Stmt::ClassDef { name, span, .. }
+            | Stmt::InterfaceDef { name, span, .. }
+            | Stmt::TraitDef { name, span, .. }
+            | Stmt::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
+            Stmt::Function(FunctionDef { name, span, .. }) => Some((name.as_str(), *span)),
+            Stmt::VarDef {
+                pattern: Pattern::Ident(name, _),
+                span,
+                ..
+            }
+            | Stmt::Assignment {
+                target: Expr::Ident { name, .. },
+                span,
+                ..
+            } => Some((name.as_str(), *span)),
+            _ => None,
         }
     }
 
@@ -10966,6 +11015,24 @@ def reject(value: not int) -> none:
             .expect_err("private exports must fail static checking");
         assert!(error.message.contains("cannot export private name"));
         assert!(error.span.end > error.span.start);
+    }
+
+    #[test]
+    fn test_dunder_all_binding_is_rejected_statically() {
+        for source in [
+            "__all__ = [\"value\"]\nvalue = 1\n",
+            "let __all__ = [\"value\"]\n",
+            "def __all__() -> int:\n    return 1\n",
+            "class __all__:\n    pass\n",
+            "export __all__ = [\"value\"]\n",
+        ] {
+            let mut checker = TypeChecker::new();
+            let error = checker
+                .check_module(&parse(source).unwrap())
+                .expect_err("__all__ binding must fail static checking");
+            assert!(error.message.contains("__all__ is not supported"));
+            assert!(error.span.end > error.span.start);
+        }
     }
 
     #[test]

@@ -522,6 +522,14 @@ export class Service:
     assert!(evl.is_ok());
 }
 
+#[test]
+fn test_modules_reject_dunder_all() {
+    let src = "__all__ = [\"helper\"]\nhelper = 1\n";
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("__all__ is not supported"));
+}
+
 // ---------------------------------------------------------------------------
 // 20. Keyword reference (docs/keywords.rst)
 // ---------------------------------------------------------------------------
