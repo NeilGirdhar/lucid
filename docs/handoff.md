@@ -466,7 +466,7 @@ diverged:
   the same typed-HIR/CIR seam and return `None` when no value arm matches. More
   complex patterns remain explicit lowering work rather than being silently
   interpreted by a compatibility fallback.
-  Void literal chains now also have a typed-HIR node and lower to a CIR
+  Literal void matches now also have a typed-HIR node and lower to a CIR
   decision ladder whose selected and fall-through blocks return `None`.
   The supported two-arm shape now carries its subject, arm results, and
   literal discriminator as one typed-HIR node before CIR lowering, including

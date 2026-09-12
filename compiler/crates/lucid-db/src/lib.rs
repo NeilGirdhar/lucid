@@ -1380,7 +1380,7 @@ fn collect_typed_body<'db>(
                         });
                     }
                 }
-                let void_arms = if arms.len() >= 2 && arms.iter().all(|arm| arm.guard.is_none()) {
+                let void_arms = if !arms.is_empty() && arms.iter().all(|arm| arm.guard.is_none()) {
                     if matches!(
                         arms.last().map(|arm| &arm.pattern),
                         Some(lucid_syntax::Pattern::Wildcard(_))
@@ -7715,6 +7715,15 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("single-arm void match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("single-arm void match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "void-match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
