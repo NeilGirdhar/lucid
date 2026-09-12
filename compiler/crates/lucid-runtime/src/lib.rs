@@ -1002,6 +1002,103 @@ impl Default for Interpreter {
 }
 
 impl Interpreter {
+    fn removed_member_message(name: &str) -> Option<&'static str> {
+        match name {
+            "__delitem__" => {
+                Some("__delitem__ is not supported; use an explicit removal method instead")
+            }
+            "__getattr__" => Some("__getattr__ is not supported; declare visible members instead"),
+            "__getattribute__" => {
+                Some("__getattribute__ is not supported; attribute reads use visible members")
+            }
+            "__setattr__" => Some("__setattr__ is not supported; use declared fields or setters"),
+            "__del__" => Some("__del__ is not supported; use context managers for cleanup"),
+            "__mro_entries__" => Some("__mro_entries__ is not supported; class bases are explicit"),
+            "__prepare__" => Some("__prepare__ is not supported; class bodies use normal scope"),
+            "__instancecheck__" => {
+                Some("__instancecheck__ is not supported; type checks are not programmable")
+            }
+            "__subclasscheck__" => {
+                Some("__subclasscheck__ is not supported; type checks are not programmable")
+            }
+            "__get__" => Some("__get__ is not supported; Lucid does not include descriptors"),
+            "__set__" => Some("__set__ is not supported; use declared fields or setters"),
+            "__delete__" => Some("__delete__ is not supported; Lucid does not include descriptors"),
+            "__set_name__" => Some(
+                "__set_name__ is not supported; use caller-captured values for assignment names",
+            ),
+            _ => None,
+        }
+    }
+
+    fn validate_class_member_names(body: &[ClassMember]) -> Result<(), RuntimeError> {
+        for member in body {
+            let (name, span) = match member {
+                ClassMember::Method(method) | ClassMember::ClassMethod(method) => {
+                    (&method.name, method.span)
+                }
+                ClassMember::Factory(factory) => (&factory.name, factory.span),
+                ClassMember::Getter(getter) => (&getter.name, getter.span),
+                ClassMember::Setter(setter) => (&setter.name, setter.span),
+                ClassMember::Field(field) | ClassMember::ClassVar(field) => {
+                    (&field.name, field.span)
+                }
+                ClassMember::TypeAlias { name, span, .. } => (name, *span),
+                ClassMember::Pass(_) | ClassMember::Ellipsis(_) => continue,
+            };
+            if let Some(message) = Self::removed_member_message(name) {
+                return Err(RuntimeError {
+                    message: message.into(),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_trait_member_names(body: &[TraitMember]) -> Result<(), RuntimeError> {
+        for member in body {
+            let (name, span) = match member {
+                TraitMember::Method(method) | TraitMember::ClassMethod(method) => {
+                    (&method.name, method.span)
+                }
+                TraitMember::Getter(getter) => (&getter.name, getter.span),
+                TraitMember::Setter(setter) => (&setter.name, setter.span),
+                TraitMember::Field(field) => (&field.name, field.span),
+                TraitMember::Pass(_) | TraitMember::Ellipsis(_) => continue,
+            };
+            if let Some(message) = Self::removed_member_message(name) {
+                return Err(RuntimeError {
+                    message: message.into(),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_interface_member_names(body: &[InterfaceMember]) -> Result<(), RuntimeError> {
+        for member in body {
+            let (name, span) = match member {
+                InterfaceMember::MethodSig { name, span, .. }
+                | InterfaceMember::GetterSig { name, span, .. }
+                | InterfaceMember::SetterSig { name, span, .. }
+                | InterfaceMember::ClassMethodSig { name, span, .. }
+                | InterfaceMember::FactorySig { name, span, .. }
+                | InterfaceMember::FieldSig { name, span, .. }
+                | InterfaceMember::AssociatedTypeSig { name, span, .. } => (name, *span),
+                InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => continue,
+            };
+            if let Some(message) = Self::removed_member_message(name) {
+                return Err(RuntimeError {
+                    message: message.into(),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn removed_builtin_message(name: &str) -> Option<&'static str> {
         match name {
             "tuple" => Some("tuple is not supported; use a class or !list instead"),
@@ -5350,6 +5447,7 @@ impl Interpreter {
                     ..
                 } = stmt.clone()
                 {
+                    Self::validate_class_member_names(&body)?;
                     for base in &bases {
                         if let TypeExpr::Named { name: parent, .. } = base {
                             let parent_def = self.classes.get(parent);
@@ -5413,6 +5511,7 @@ impl Interpreter {
                 Ok(Value::None)
             }
             Stmt::TraitDef { name, body, .. } => {
+                Self::validate_trait_member_names(body)?;
                 self.traits.insert(name.clone(), body.clone());
                 self.env
                     .borrow_mut()
@@ -5422,7 +5521,11 @@ impl Interpreter {
             // Interfaces and aliases are compile-time declarations.  Keep
             // them explicit here so they are not mistaken for an
             // accidentally unhandled executable statement.
-            Stmt::InterfaceDef { .. } | Stmt::TypeAlias { .. } => Ok(Value::None),
+            Stmt::InterfaceDef { body, .. } => {
+                Self::validate_interface_member_names(body)?;
+                Ok(Value::None)
+            }
+            Stmt::TypeAlias { .. } => Ok(Value::None),
             Stmt::ImplementDef {
                 interface,
                 target,
@@ -13717,6 +13820,83 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             Some(Value::DottedPath(vec!["Named".into()]))
         );
         assert_eq!(env.get("doc"), Some(Value::None));
+    }
+
+    #[test]
+    fn runtime_rejects_unsupported_special_members() {
+        for (source, expected) in [
+            (
+                "class Bag:\n    def __delitem__(self, index: int):\n        pass\n",
+                "__delitem__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __getattr__(self, name: str) -> int:\n        return 1\n",
+                "__getattr__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __getattribute__(self, name: str) -> int:\n        return 1\n",
+                "__getattribute__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __setattr__(self, name: str, value: int):\n        pass\n",
+                "__setattr__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __del__(self):\n        pass\n",
+                "__del__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __mro_entries__(self) -> int:\n        return 1\n",
+                "__mro_entries__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __prepare__(self) -> int:\n        return 1\n",
+                "__prepare__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __instancecheck__(self) -> bool:\n        return true\n",
+                "__instancecheck__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __subclasscheck__(self) -> bool:\n        return true\n",
+                "__subclasscheck__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __get__(self, obj: object, owner: object) -> int:\n        return 1\n",
+                "__get__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __set__(self, obj: object, value: int):\n        pass\n",
+                "__set__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __delete__(self, obj: object):\n        pass\n",
+                "__delete__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __set_name__(self, owner: object, name: str):\n        pass\n",
+                "__set_name__ is not supported",
+            ),
+            (
+                "interface Hook:\n    def __getattr__(self, name: str) -> int\n",
+                "__getattr__ is not supported",
+            ),
+            (
+                "trait Hook:\n    def __setattr__(self, name: str, value: int):\n        pass\n",
+                "__setattr__ is not supported",
+            ),
+        ] {
+            let module = parse(source).expect("unsupported member source should parse");
+            let mut interp = Interpreter::default();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("unsupported member must fail at runtime");
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

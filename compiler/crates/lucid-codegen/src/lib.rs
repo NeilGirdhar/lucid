@@ -267,6 +267,119 @@ impl Default for CCodeGenerator {
 }
 
 impl CCodeGenerator {
+    fn removed_member_message(name: &str) -> Option<&'static str> {
+        match name {
+            "__delitem__" => {
+                Some("__delitem__ is not supported; use an explicit removal method instead")
+            }
+            "__getattr__" => Some("__getattr__ is not supported; declare visible members instead"),
+            "__getattribute__" => {
+                Some("__getattribute__ is not supported; attribute reads use visible members")
+            }
+            "__setattr__" => Some("__setattr__ is not supported; use declared fields or setters"),
+            "__del__" => Some("__del__ is not supported; use context managers for cleanup"),
+            "__mro_entries__" => Some("__mro_entries__ is not supported; class bases are explicit"),
+            "__prepare__" => Some("__prepare__ is not supported; class bodies use normal scope"),
+            "__instancecheck__" => {
+                Some("__instancecheck__ is not supported; type checks are not programmable")
+            }
+            "__subclasscheck__" => {
+                Some("__subclasscheck__ is not supported; type checks are not programmable")
+            }
+            "__get__" => Some("__get__ is not supported; Lucid does not include descriptors"),
+            "__set__" => Some("__set__ is not supported; use declared fields or setters"),
+            "__delete__" => Some("__delete__ is not supported; Lucid does not include descriptors"),
+            "__set_name__" => Some(
+                "__set_name__ is not supported; use caller-captured values for assignment names",
+            ),
+            _ => None,
+        }
+    }
+
+    fn validate_removed_member(name: &str) -> Result<(), CodegenError> {
+        if let Some(message) = Self::removed_member_message(name) {
+            return Err(CodegenError {
+                message: message.into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_class_member_names(body: &[ClassMember]) -> Result<(), CodegenError> {
+        for member in body {
+            match member {
+                ClassMember::Method(method) | ClassMember::ClassMethod(method) => {
+                    Self::validate_removed_member(&method.name)?;
+                }
+                ClassMember::Factory(factory) => {
+                    Self::validate_removed_member(&factory.name)?;
+                }
+                ClassMember::Getter(getter) => {
+                    Self::validate_removed_member(&getter.name)?;
+                }
+                ClassMember::Setter(setter) => {
+                    Self::validate_removed_member(&setter.name)?;
+                }
+                ClassMember::Field(field) | ClassMember::ClassVar(field) => {
+                    Self::validate_removed_member(&field.name)?;
+                }
+                ClassMember::TypeAlias { name, .. } => {
+                    Self::validate_removed_member(name)?;
+                }
+                ClassMember::Pass(_) | ClassMember::Ellipsis(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_trait_member_names(body: &[TraitMember]) -> Result<(), CodegenError> {
+        for member in body {
+            match member {
+                TraitMember::Method(method) | TraitMember::ClassMethod(method) => {
+                    Self::validate_removed_member(&method.name)?;
+                }
+                TraitMember::Getter(getter) => {
+                    Self::validate_removed_member(&getter.name)?;
+                }
+                TraitMember::Setter(setter) => {
+                    Self::validate_removed_member(&setter.name)?;
+                }
+                TraitMember::Field(field) => {
+                    Self::validate_removed_member(&field.name)?;
+                }
+                TraitMember::Pass(_) | TraitMember::Ellipsis(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_interface_member_names(body: &[InterfaceMember]) -> Result<(), CodegenError> {
+        for member in body {
+            match member {
+                InterfaceMember::MethodSig { name, .. }
+                | InterfaceMember::GetterSig { name, .. }
+                | InterfaceMember::SetterSig { name, .. }
+                | InterfaceMember::ClassMethodSig { name, .. }
+                | InterfaceMember::FactorySig { name, .. }
+                | InterfaceMember::FieldSig { name, .. }
+                | InterfaceMember::AssociatedTypeSig { name, .. } => {
+                    Self::validate_removed_member(name)?;
+                }
+                InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_declared_member_names(stmt: &Stmt) -> Result<(), CodegenError> {
+        match Self::unwrap_export(stmt) {
+            Stmt::ClassDef { body, .. } => Self::validate_class_member_names(body),
+            Stmt::TraitDef { body, .. } => Self::validate_trait_member_names(body),
+            Stmt::InterfaceDef { body, .. } => Self::validate_interface_member_names(body),
+            _ => Ok(()),
+        }
+    }
+
     fn removed_builtin_message(name: &str) -> Option<&'static str> {
         match name {
             "tuple" => Some("tuple is not supported; use a class or !list instead"),
@@ -924,6 +1037,9 @@ impl CCodeGenerator {
         self.from_imports.clear();
         self.type_aliases.clear();
         self.known_list_element_classes.clear();
+        for stmt in &module.statements {
+            Self::validate_declared_member_names(stmt)?;
+        }
         for stmt in &module.statements {
             match Self::unwrap_export(stmt) {
                 Stmt::Import { module, alias, .. } => {
@@ -22712,6 +22828,83 @@ print(result[1])
             let _ = fs::remove_file(&output);
             let error = compile_to_native(&module, &output, 0)
                 .expect_err("bare skip must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn native_rejects_unsupported_special_members() {
+        for (source, expected) in [
+            (
+                "class Bag:\n    def __delitem__(self, index: int):\n        pass\n",
+                "__delitem__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __getattr__(self, name: str) -> int:\n        return 1\n",
+                "__getattr__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __getattribute__(self, name: str) -> int:\n        return 1\n",
+                "__getattribute__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __setattr__(self, name: str, value: int):\n        pass\n",
+                "__setattr__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __del__(self):\n        pass\n",
+                "__del__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __mro_entries__(self) -> int:\n        return 1\n",
+                "__mro_entries__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __prepare__(self) -> int:\n        return 1\n",
+                "__prepare__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __instancecheck__(self) -> bool:\n        return true\n",
+                "__instancecheck__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __subclasscheck__(self) -> bool:\n        return true\n",
+                "__subclasscheck__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __get__(self, obj: object, owner: object) -> int:\n        return 1\n",
+                "__get__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __set__(self, obj: object, value: int):\n        pass\n",
+                "__set__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __delete__(self, obj: object):\n        pass\n",
+                "__delete__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __set_name__(self, owner: object, name: str):\n        pass\n",
+                "__set_name__ is not supported",
+            ),
+            (
+                "interface Hook:\n    def __getattr__(self, name: str) -> int\n",
+                "__getattr__ is not supported",
+            ),
+            (
+                "trait Hook:\n    def __setattr__(self, name: str, value: int):\n        pass\n",
+                "__setattr__ is not supported",
+            ),
+        ] {
+            let module = parse(source).expect("unsupported member source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_native_unsupported_member_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("unsupported member must fail native codegen");
             let _ = fs::remove_file(&output);
             assert!(error.message.contains(expected), "{source}: {error}");
         }
