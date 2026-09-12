@@ -1174,6 +1174,10 @@ diverged:
   When the function is representable by the recoverable result ABI, `run-cir`
   now executes that ABI and reports checked division errors instead of falling
   back to the legacy trap-prone integer path.
+  Setup statements before a guard return now lower through the typed statement
+  conditional path with local bindings, so `base = seed + 1; if flag: return
+  base; return base * 2` selects the branch result instead of merging `base`
+  and then always evaluating the fallback return.
 * Checker union/intersection normalization and callable-parameter metadata
   lookups now use recoverable fallbacks instead of internal panics when fed
   malformed intermediate state.
