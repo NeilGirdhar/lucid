@@ -2883,6 +2883,93 @@ pub fn lower_function_body(
         }
     }
     if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition) == Some(false)
+        && !elif_branches.is_empty()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        let Some((else_name, else_value)) = assigned_value(else_branch) else {
+            return Err(Arc::from("unsupported false-leading local elif chain"));
+        };
+        if else_name == returned
+            && let Some(elif_values) = elif_branches
+                .iter()
+                .map(|(condition, branch)| {
+                    assigned_value(branch)
+                        .and_then(|(name, value)| (name == returned).then_some((condition, value)))
+                })
+                .collect::<Option<Vec<_>>>()
+            && let Some(((first_condition, first_value), tail_values)) = elif_values.split_first()
+        {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let lowered = if tail_values.is_empty() {
+                lucid_cir::Function::from_parameterized_if_direct(
+                    first_condition,
+                    first_value,
+                    else_value,
+                    &function.parameter_names,
+                )
+            } else {
+                lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    first_condition,
+                    first_value,
+                    tail_values,
+                    else_value,
+                    &function.parameter_names,
+                )
+            };
+            return lowered
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported false-leading local elif chain"));
+        }
+    }
+    if let [
         initial,
         lucid_syntax::Stmt::If {
             condition,
@@ -7037,10 +7124,22 @@ mod tests {
             "dynamic-elif-before-return.lucid",
             "def answer(value: int):\n    if false:\n        result = 0\n    elif value > 0:\n        result = 1\n    else:\n        result = 2\n    return result\n",
         );
-        let error = lower_function_body(&db, file, "answer".into())
+        let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
-            .expect_err("dynamic elif assignment must not be treated as a selected else");
-        assert!(error.contains("multi-statement function bodies"));
+            .expect("dead leading branch before dynamic elif assignment should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "dynamic-multiple-elif-before-return.lucid",
+            "def answer(value: int):\n    if false:\n        result = 0\n    elif value > 10:\n        result = 10\n    elif value > 0:\n        result = 1\n    else:\n        result = 2\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dead leading branch before dynamic elif assignment chain should lower");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(10)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(2)));
 
         let file = db.add_file(
             "dead-while-before-return.lucid",
