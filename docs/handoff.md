@@ -1046,7 +1046,10 @@ diverged:
 * The syntax crate now also exposes a recovering parser API for tooling: it
   keeps successfully parsed statements after a syntax error and returns each
   recovered `ParseError` with its original span, while strict compilation
-  remains fail-fast.
+  remains fail-fast. Recovery now treats malformed block-owning statements as
+  one discarded unit: a bad `if`, function, class, loop, `with`, `match`, or
+  `try` header no longer lets its indented body leak out as fake top-level
+  statements, and a later top-level statement still parses.
 * The parser now normalizes hand-built token streams by inserting a terminal
   EOF token, so editor and fuzzing callers cannot trigger an empty-stream
   panic before ordinary parse errors are reported.
@@ -2116,6 +2119,8 @@ gaps are architectural rather than isolated syntax features:
 1. The lossless CST, source-file inputs, source maps, and structured
    diagnostics exist at the database boundary, but parser recovery and
    source-map propagation through every lowering stage are still incomplete.
+   Parser recovery now synchronizes across malformed block-owning statements
+   instead of parsing their abandoned body tokens as top-level statements.
    The database now exposes a UTF-8-safe tracked span-to-source lookup for
    diagnostic and editor consumers.
    Source positions also normalize CRLF line endings while retaining

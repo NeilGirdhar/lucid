@@ -567,6 +567,27 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn recovering_parser_discards_malformed_block_header_body() {
+        let (module, errors) = parse_recovering("if :\n    leaked = 1\nkept = 2\n").unwrap();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(module.statements.len(), 1);
+        assert!(
+            matches!(&module.statements[0], Stmt::Assignment { target: Expr::Ident { name, .. }, .. } if name == "kept")
+        );
+    }
+
+    #[test]
+    fn recovering_parser_discards_rest_of_malformed_multiline_statement() {
+        let source = "def broken():\n    ok = 1\n    bad =\n    leaked = 2\nkept = 3\n";
+        let (module, errors) = parse_recovering(source).unwrap();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(module.statements.len(), 1);
+        assert!(
+            matches!(&module.statements[0], Stmt::Assignment { target: Expr::Ident { name, .. }, .. } if name == "kept")
+        );
+    }
+
+    #[test]
     fn recovering_parser_reports_lexical_errors_with_spans() {
         let (module, errors) = parse_recovering("ok = 1\nbad = `unterminated\n").unwrap();
         assert!(!module.statements.is_empty());

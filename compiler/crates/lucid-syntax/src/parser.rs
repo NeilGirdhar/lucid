@@ -109,6 +109,8 @@ impl Parser {
         let mut errors = Vec::new();
 
         while !self.check(&TokenKind::Eof) {
+            let statement_start = self.peek().span;
+            let statement_start_kind = self.peek_kind().clone();
             match self.parse_statement() {
                 Ok(statement) => {
                     if let Err(error) = Self::reject_reserved_module_binding(&statement) {
@@ -119,9 +121,7 @@ impl Parser {
                 }
                 Err(error) => {
                     errors.push(error);
-                    while !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) {
-                        self.advance();
-                    }
+                    self.synchronize_after_statement_error(&statement_start_kind, statement_start);
                 }
             }
             self.skip_newlines();
@@ -134,6 +134,75 @@ impl Parser {
                 span: start_span.merge(end_span),
             },
             errors,
+        )
+    }
+
+    fn synchronize_after_statement_error(&mut self, start_kind: &TokenKind, start_span: Span) {
+        while !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) {
+            self.advance();
+        }
+        self.skip_newlines();
+
+        if self.check(&TokenKind::Indent) {
+            self.skip_recovery_indented_block();
+            return;
+        }
+
+        if Self::statement_can_own_block(start_kind) {
+            while !self.check(&TokenKind::Eof) {
+                if self.check(&TokenKind::Newline) || self.check(&TokenKind::Dedent) {
+                    self.advance();
+                    continue;
+                }
+                if self.peek().span.column <= start_span.column {
+                    break;
+                }
+                self.advance();
+            }
+        }
+    }
+
+    fn skip_recovery_indented_block(&mut self) {
+        let mut depth = 0usize;
+        while !self.check(&TokenKind::Eof) {
+            if self.check(&TokenKind::Indent) {
+                depth += 1;
+                self.advance();
+                continue;
+            }
+            if self.check(&TokenKind::Dedent) {
+                self.advance();
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    break;
+                }
+                continue;
+            }
+            self.advance();
+        }
+    }
+
+    fn statement_can_own_block(kind: &TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::Export
+                | TokenKind::Class
+                | TokenKind::Sealed
+                | TokenKind::Final
+                | TokenKind::Interface
+                | TokenKind::Trait
+                | TokenKind::Implement
+                | TokenKind::Dispatch
+                | TokenKind::Def
+                | TokenKind::Async
+                | TokenKind::ContextManager
+                | TokenKind::Factory
+                | TokenKind::With
+                | TokenKind::If
+                | TokenKind::For
+                | TokenKind::While
+                | TokenKind::Match
+                | TokenKind::Try
         )
     }
 
