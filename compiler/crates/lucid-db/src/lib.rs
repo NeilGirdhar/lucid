@@ -2836,6 +2836,100 @@ pub fn lower_function_body(
         lucid_syntax::Stmt::If {
             condition,
             then_branch,
+            else_branch,
+            elif_branches,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && matches!(
+            then_branch.as_slice(),
+            [lucid_syntax::Stmt::Return { value: None, .. }]
+        )
+        && else_branch
+            .as_ref()
+            .is_none_or(|branch| matches!(branch.as_slice(), [lucid_syntax::Stmt::Pass(_)]))
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        if function.is_dispatch {
+            return Err(Arc::from(
+                "dispatch function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_void(
+            condition,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional dynamic void branch"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && matches!(
+            then_branch.as_slice(),
+            [lucid_syntax::Stmt::Return { value: None, .. }]
+        )
+        && else_branch
+            .as_ref()
+            .is_none_or(|branch| matches!(branch.as_slice(), [lucid_syntax::Stmt::Pass(_)]))
+    {
+        let Some(elif_conditions) = elif_branches
+            .iter()
+            .map(|(condition, branch)| {
+                matches!(
+                    branch.as_slice(),
+                    [lucid_syntax::Stmt::Return { value: None, .. }]
+                )
+                .then_some(condition)
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Err(Arc::from("unsupported optional dynamic void elif chain"));
+        };
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        if function.is_dispatch {
+            return Err(Arc::from(
+                "dispatch function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_void_chain(
+            condition,
+            &elif_conditions,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional dynamic void elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
             else_branch: Some(else_branch),
             elif_branches,
             ..
@@ -5331,12 +5425,56 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-1]), Ok(None));
 
         let file = db.add_file(
+            "parameterized-optional-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("optional dynamic void conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-pass-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pass dynamic void conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
             "parameterized-void-elif.lucid",
             "def answer(value: int):\n    if value > 10:\n        return\n    elif value > 0:\n        return\n    elif value < 0:\n        return\n    else:\n        return\n",
         );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("dynamic void elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-optional-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        return\n    elif value > 0:\n        return\n    elif value < 0:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("optional dynamic void elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-pass-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        return\n    elif value > 0:\n        return\n    elif value < 0:\n        return\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pass dynamic void elif chain should lower through CIR");
         assert_eq!(function.execute_with_args(&[15]), Ok(None));
         assert_eq!(function.execute_with_args(&[5]), Ok(None));
         assert_eq!(function.execute_with_args(&[-5]), Ok(None));
