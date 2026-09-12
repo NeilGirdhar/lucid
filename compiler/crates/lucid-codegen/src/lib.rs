@@ -1390,9 +1390,12 @@ impl CCodeGenerator {
 
         // 4. Emit function bodies
         let top_function_aliases = self.function_aliases.clone();
+        let mut closure_adapter_names = HashSet::new();
         for stmt in &module.statements {
             if let Stmt::Function(f) = Self::unwrap_export(stmt) {
-                self.emit_closure_adapter(f, true)?;
+                if closure_adapter_names.insert(f.name.clone()) {
+                    self.emit_closure_adapter(f, true)?;
+                }
             }
         }
         self.emit_line("");
@@ -1404,9 +1407,12 @@ impl CCodeGenerator {
                 self.emit_function(f)?;
             }
         }
+        closure_adapter_names.clear();
         for stmt in &module.statements {
             if let Stmt::Function(f) = Self::unwrap_export(stmt) {
-                self.emit_closure_adapter(f, false)?;
+                if closure_adapter_names.insert(f.name.clone()) {
+                    self.emit_closure_adapter(f, false)?;
+                }
             }
         }
         self.emit_line("");
@@ -6078,8 +6084,7 @@ static inline void lucid_print_val(LucidVal v) {
     /// are the ABI boundary used when a function is stored in a value (for
     /// example in a list) and later invoked through `lucid_call`.
     fn emit_closure_adapter(&mut self, f: &FunctionDef, prototype: bool) -> Result<(), CodegenError> {
-        if f.is_dispatch
-            || f.is_async
+        if f.is_async
             || f.decorators.iter().any(|decorator| {
                 matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
             })
@@ -6093,6 +6098,19 @@ static inline void lucid_print_val(LucidVal v) {
         let adapter = Self::closure_adapter_name(f);
         if prototype {
             self.emit_line(&format!("static LucidVal {adapter}(void*, LucidList*);"));
+            return Ok(());
+        }
+        if f.is_dispatch {
+            let helper = format!(
+                "lucid_dynamic_dispatch_{}",
+                Self::mangle_component(&f.name)
+            );
+            self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args) {{"));
+            self.indent += 1;
+            self.emit_line("(void)_env;");
+            self.emit_line(&format!("return {helper}(args);"));
+            self.indent -= 1;
+            self.emit_line("}");
             return Ok(());
         }
         let fn_name = self.dispatch_name(f, &f.name);
@@ -14565,6 +14583,22 @@ print(z is complex)
         let run = Command::new(&output).output().expect("run variadic closure");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "variadic closure failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+    }
+
+    #[test]
+    fn native_erased_dispatch_function_value_selects_overload() {
+        let source = "dispatch def choose(value: int) -> int:\n    return value + 1\ndispatch def choose(value: str) -> str:\n    return value + \"!\"\nfs = [choose]\nprint(fs[0](2))\n";
+        let module = parse(source).expect("dispatch closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_dispatch_function_value_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("dispatch closure should compile");
+        let run = Command::new(&output).output().expect("run dispatch closure");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "dispatch closure failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
     }
 
