@@ -6760,8 +6760,25 @@ static inline void lucid_print_val(LucidVal v) {
                         "for (int64_t _anonymous_i = {index}; args && _anonymous_i < args->len; ++_anonymous_i) lucid_list_append(_anonymous_gather_vpargs, args->items[_anonymous_i]);"
                     ));
                     self.emit_line(
-                        "LucidDict* _anonymous_gather_kwargs = kwargs ? kwargs : lucid_dict_new(0);",
+                        "LucidDict* _anonymous_gather_kwargs = lucid_dict_new(kwargs ? kwargs->len : 0);",
                     );
+                    let fixed_names = params[..index]
+                        .iter()
+                        .filter(|param| !param.is_variadic_keyword && !param.is_gather)
+                        .map(|param| c_escape_string(&param.name))
+                        .collect::<Vec<_>>();
+                    let consumed = if fixed_names.is_empty() {
+                        "false".to_string()
+                    } else {
+                        fixed_names
+                            .iter()
+                            .map(|name| format!("strcmp(lucid_as_str(kwargs->keys[_anonymous_i]), \"{name}\") == 0"))
+                            .collect::<Vec<_>>()
+                            .join(" || ")
+                    };
+                    self.emit_line(&format!(
+                        "for (int64_t _anonymous_i = 0; kwargs && _anonymous_i < kwargs->len; ++_anonymous_i) if (!({consumed})) lucid_dict_set(_anonymous_gather_kwargs, kwargs->keys[_anonymous_i], kwargs->values[_anonymous_i]);"
+                    ));
                     let constructor_args = if is_bundle {
                         fields
                             .iter()
@@ -15605,6 +15622,25 @@ print(z is complex)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "prefixed anonymous gather failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "13\n");
+    }
+
+    #[test]
+    fn native_anonymous_bundle_gather_excludes_named_prefix() {
+        let source = "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\nf = def(prefix: int, ***rest: Arguments): len(rest.kwargs)\nprint(f(prefix=10, extra=2))\n";
+        let module = parse(source).expect("named prefix gather source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_named_prefix_gather_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("named prefix gather should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run named prefix gather");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "named prefix gather failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
     }
 
     #[test]
