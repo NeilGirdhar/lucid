@@ -6677,7 +6677,15 @@ impl Interpreter {
                         };
                         match message_value {
                             Value::Str(text) => text,
-                            other => format!("{other:?}"),
+                            other => {
+                                return Err(RuntimeError {
+                                    message: format!(
+                                        "assert message must be str, got {}",
+                                        other.type_name()
+                                    ),
+                                    span: message.span(),
+                                });
+                            }
                         }
                     } else {
                         "assertion failed".to_string()
@@ -14147,6 +14155,30 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
                 error.message
             );
         }
+    }
+
+    #[test]
+    fn runtime_rejects_non_string_assert_messages() {
+        for source in ["assert(false, 42)\n", "assert(false, def: 42)\n"] {
+            let module = parse(source).expect("invalid assert message source should parse");
+            let mut interp = Interpreter::default();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("non-string assert message must fail at runtime");
+            assert!(
+                error.message.contains("assert message must be str"),
+                "{source}: {}",
+                error.message
+            );
+        }
+
+        let module =
+            parse("assert(false, def() -> str: \"failure detail\")\n").expect("valid lazy assert");
+        let mut interp = Interpreter::default();
+        let error = interp
+            .eval_module(&module)
+            .expect_err("failed assertion should report string detail");
+        assert_eq!(error.message, "failure detail");
     }
 
     #[test]

@@ -10108,6 +10108,15 @@ static inline void lucid_print_val(LucidVal v) {
                                 },
                             ] = body.as_slice()
                             {
+                                let message_type = self.expr_native_type(expr);
+                                if !matches!(
+                                    message_type.as_str(),
+                                    "const char*" | "char*" | "LucidVal"
+                                ) {
+                                    return Err(CodegenError {
+                                        message: "assert message must be str".into(),
+                                    });
+                                }
                                 self.emit_expr(expr)?
                             } else {
                                 return Err(CodegenError {
@@ -10121,6 +10130,12 @@ static inline void lucid_print_val(LucidVal v) {
                             });
                         }
                     } else {
+                        let message_type = self.expr_native_type(message);
+                        if !matches!(message_type.as_str(), "const char*" | "char*" | "LucidVal") {
+                            return Err(CodegenError {
+                                message: "assert message must be str".into(),
+                            });
+                        }
                         self.emit_expr(message)?
                     };
                     let truth = self.emit_condition(condition)?;
@@ -23259,6 +23274,35 @@ print(result[1])
             let _ = fs::remove_file(&output);
             assert!(error.message.contains(expected), "{source}: {error}");
         }
+    }
+
+    #[test]
+    fn native_rejects_non_string_assert_messages() {
+        for source in ["assert(false, 42)\n", "assert(false, def: 42)\n"] {
+            let module = parse(source).expect("invalid assert message source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_native_assert_message_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("non-string assert message must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(
+                error.message.contains("assert message must be str"),
+                "{source}: {error}"
+            );
+        }
+
+        let module =
+            parse("assert(true, def() -> str: \"not evaluated\")\n").expect("valid lazy assert");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_valid_assert_message_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("valid lazy assert should compile");
+        let _ = fs::remove_file(&output);
     }
 
     #[test]
