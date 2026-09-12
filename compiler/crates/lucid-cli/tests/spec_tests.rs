@@ -650,3 +650,39 @@ fn test_native_local_from_imports() {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "15\n6\n");
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_native_declaration_only_import_cycle() {
+    use std::fs;
+    use std::process::Command;
+    let temp_dir =
+        std::env::temp_dir().join(format!("lucid_native_decl_cycle_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let a_path = temp_dir.join("a.lucid");
+    let b_path = temp_dir.join("b.lucid");
+    let output_path = temp_dir.join("a_bin");
+    fs::write(
+        &a_path,
+        "from .b import B\nclass A:\n    pass\n",
+    )
+    .unwrap();
+    fs::write(
+        &b_path,
+        "from .a import A\nclass B:\n    pass\n",
+    )
+    .unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "build",
+            a_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "declaration cycle build failed");
+    let run = Command::new(&output_path).output().unwrap();
+    assert!(run.status.success(), "declaration cycle binary failed");
+    let _ = fs::remove_dir_all(&temp_dir);
+}
