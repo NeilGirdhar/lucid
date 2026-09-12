@@ -291,6 +291,13 @@ pub enum Value {
     Bytes(Vec<u8>),
     None,
     List(Rc<RefCell<Vec<Value>>>),
+    MemoryView {
+        data: Rc<RefCell<Vec<Value>>>,
+        start: i64,
+        len: i64,
+        stride: i64,
+        read_only: bool,
+    },
     Dict(Rc<RefCell<HashMap<String, Value>>>),
     Record(Rc<RefCell<HashMap<String, Value>>>),
     Object {
@@ -349,6 +356,7 @@ impl Value {
             Value::Bytes(_) => "Bytes",
             Value::None => "none",
             Value::List(_) => "list",
+            Value::MemoryView { .. } => "MemoryView",
             Value::Dict(_) => "dict",
             Value::Set(_) => "set",
             Value::Range { .. } => "range",
@@ -395,6 +403,10 @@ impl Value {
                 for item in items.borrow().iter() {
                     item.freeze_with_visited(visited);
                 }
+            }
+            Value::MemoryView { data, .. } => {
+                let identity = Rc::as_ptr(data) as usize;
+                mark_container_frozen(identity);
             }
             Value::Set(items) => {
                 let identity = Rc::as_ptr(items) as usize;
@@ -471,6 +483,32 @@ impl PartialEq for Value {
                 },
             ) => s1 == s2 && e1 == e2 && st1 == st2,
             (Value::List(a), Value::List(b)) => *a.borrow() == *b.borrow(),
+            (
+                Value::MemoryView {
+                    data: left_data,
+                    start: left_start,
+                    len: left_len,
+                    stride: left_stride,
+                    ..
+                },
+                Value::MemoryView {
+                    data: right_data,
+                    start: right_start,
+                    len: right_len,
+                    stride: right_stride,
+                    ..
+                },
+            ) => {
+                if left_len != right_len {
+                    return false;
+                }
+                let left = left_data.borrow();
+                let right = right_data.borrow();
+                (0..*left_len).all(|offset| {
+                    left[(left_start + offset * left_stride) as usize]
+                        == right[(right_start + offset * right_stride) as usize]
+                })
+            }
             (Value::Set(a), Value::Set(b)) => {
                 let left = a.borrow();
                 let right = b.borrow();
@@ -522,6 +560,7 @@ impl fmt::Debug for Value {
                 }
             }
             Value::List(items) => write!(f, "{:?}", *items.borrow()),
+            Value::MemoryView { len, .. } => write!(f, "memoryview(len={len})"),
             Value::Set(items) => write!(f, "{{{:?}}}", *items.borrow()),
             Value::Dict(entries) => write!(f, "{:?}", *entries.borrow()),
             Value::Record(fields) => write!(f, "record {:?}", *fields.borrow()),
@@ -2153,6 +2192,7 @@ impl Interpreter {
                 Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
                 Value::Bytes(bytes) => Ok(Value::Int(bytes.len() as i64)),
                 Value::List(l) => Ok(Value::Int(l.borrow().len() as i64)),
+                Value::MemoryView { len, .. } => Ok(Value::Int(*len)),
                 Value::Dict(d) => Ok(Value::Int(d.borrow().len() as i64)),
                 Value::Set(s) => Ok(Value::Int(s.borrow().len() as i64)),
                 Value::Record(r) => Ok(Value::Int(r.borrow().len() as i64)),
@@ -3541,7 +3581,29 @@ impl Interpreter {
                     span: Span::default(),
                 });
             }
-            Ok(args[0].clone())
+            match &args[0] {
+                Value::MemoryView { .. } => Ok(args[0].clone()),
+                Value::List(items) => Ok(Value::MemoryView {
+                    data: Rc::clone(items),
+                    start: 0,
+                    len: items.borrow().len() as i64,
+                    stride: 1,
+                    read_only: false,
+                }),
+                Value::Bytes(bytes) => Ok(Value::MemoryView {
+                    data: Rc::new(RefCell::new(
+                        bytes.iter().map(|byte| Value::Int(*byte as i64)).collect(),
+                    )),
+                    start: 0,
+                    len: bytes.len() as i64,
+                    stride: 1,
+                    read_only: true,
+                }),
+                other => Err(RuntimeError {
+                    message: format!("memoryview() cannot convert {}", other.type_name()),
+                    span: Span::default(),
+                }),
+            }
         });
         self.env.borrow_mut().set(
             "memoryview".into(),
@@ -3683,6 +3745,20 @@ impl Interpreter {
             }
             match &args[0] {
                 Value::List(l) => Ok(Value::List(Rc::new(RefCell::new(l.borrow().clone())))),
+                Value::MemoryView {
+                    data,
+                    start,
+                    len,
+                    stride,
+                    ..
+                } => {
+                    let items = data.borrow();
+                    Ok(Value::List(Rc::new(RefCell::new(
+                        (0..*len)
+                            .map(|offset| items[(start + offset * stride) as usize].clone())
+                            .collect(),
+                    ))))
+                }
                 Value::Set(s) => Ok(Value::List(Rc::new(RefCell::new(s.borrow().clone())))),
                 Value::Range { start, stop, step } => {
                     let items = materialize_range(*start, *stop, *step);
@@ -5418,6 +5494,42 @@ impl Interpreter {
                                     })
                                 }
                             },
+                            Value::MemoryView {
+                                data,
+                                start,
+                                len,
+                                stride,
+                                read_only,
+                            } => match idx {
+                                Value::Int(i) => {
+                                    if read_only {
+                                        return Err(RuntimeError {
+                                            message: "cannot mutate read-only memoryview".into(),
+                                            span: *idx_span,
+                                        });
+                                    }
+                                    let actual_i = if i < 0 { len + i } else { i };
+                                    if actual_i < 0 || actual_i >= len {
+                                        return Err(RuntimeError {
+                                            message: format!(
+                                                "memoryview index out of range: index {i}, len {len}"
+                                            ),
+                                            span: *idx_span,
+                                        });
+                                    }
+                                    data.borrow_mut()[(start + actual_i * stride) as usize] =
+                                        val.clone();
+                                }
+                                _ => {
+                                    return Err(RuntimeError {
+                                        message: format!(
+                                            "memoryview indices must be integers, got {}",
+                                            idx.type_name()
+                                        ),
+                                        span: *idx_span,
+                                    })
+                                }
+                            },
                             Value::Dict(d) => {
                                 if container_is_frozen(Rc::as_ptr(&d) as usize) {
                                     return Err(RuntimeError {
@@ -5517,6 +5629,45 @@ impl Interpreter {
                                     return Err(RuntimeError {
                                         message: format!(
                                             "list indices must be integers, got {}",
+                                            idx.type_name()
+                                        ),
+                                        span: *idx_span,
+                                    })
+                                }
+                            },
+                            Value::MemoryView {
+                                data,
+                                start,
+                                len,
+                                stride,
+                                read_only,
+                            } => match idx {
+                                Value::Int(i) => {
+                                    if read_only {
+                                        return Err(RuntimeError {
+                                            message: "cannot mutate read-only memoryview".into(),
+                                            span: *idx_span,
+                                        });
+                                    }
+                                    let actual_i = if i < 0 { len + i } else { i };
+                                    if actual_i < 0 || actual_i >= len {
+                                        return Err(RuntimeError {
+                                            message: format!(
+                                                "memoryview index out of range: index {i}, len {len}"
+                                            ),
+                                            span: *idx_span,
+                                        });
+                                    }
+                                    let storage_index = start + actual_i * stride;
+                                    let cur = data.borrow()[storage_index as usize].clone();
+                                    let new_val = self.eval_binary_op(op, cur, rhs, span)?;
+                                    data.borrow_mut()[storage_index as usize] = new_val.clone();
+                                    Ok(new_val)
+                                }
+                                _ => {
+                                    return Err(RuntimeError {
+                                        message: format!(
+                                            "memoryview indices must be integers, got {}",
                                             idx.type_name()
                                         ),
                                         span: *idx_span,
@@ -6109,6 +6260,18 @@ impl Interpreter {
     ) -> Result<Vec<Value>, RuntimeError> {
         match value {
             Value::List(values) => Ok(values.borrow().clone()),
+            Value::MemoryView {
+                data,
+                start,
+                len,
+                stride,
+                ..
+            } => {
+                let items = data.borrow();
+                Ok((0..len)
+                    .map(|offset| items[(start + offset * stride) as usize].clone())
+                    .collect())
+            }
             Value::Set(values) => Ok(values.borrow().clone()),
             Value::Dict(values) => Ok(values.borrow().keys().cloned().map(Value::Str).collect()),
             Value::Bytes(bytes) => Ok(bytes.into_iter().map(|byte| Value::Int(byte as i64)).collect()),
@@ -7929,6 +8092,48 @@ impl Interpreter {
                             }
                             return Ok(Value::List(Rc::new(RefCell::new(res))));
                         }
+                        Value::MemoryView {
+                            data,
+                            start,
+                            len,
+                            stride,
+                            read_only,
+                        } => {
+                            let mut slice_start = start_val.unwrap_or(if step_val > 0 { 0 } else { len - 1 });
+                            let mut slice_stop = stop_val.unwrap_or(if step_val > 0 { len } else { -1 });
+                            if slice_start < 0 {
+                                slice_start += len;
+                            }
+                            if slice_stop < 0 && !(stop_val.is_none() && step_val < 0) {
+                                slice_stop += len;
+                            }
+                            if step_val > 0 {
+                                slice_start = slice_start.clamp(0, len);
+                                slice_stop = slice_stop.clamp(0, len);
+                            } else {
+                                slice_start = slice_start.clamp(-1, len - 1);
+                                slice_stop = slice_stop.min(len - 1);
+                            }
+                            let mut count = 0;
+                            let mut cur = slice_start;
+                            while if step_val > 0 { cur < slice_stop } else { cur > slice_stop } {
+                                count += 1;
+                                let Some(next) = cur.checked_add(step_val) else {
+                                    return Err(RuntimeError {
+                                        message: "slice step overflow".into(),
+                                        span: slice_span,
+                                    });
+                                };
+                                cur = next;
+                            }
+                            return Ok(Value::MemoryView {
+                                data,
+                                start: start + slice_start * stride,
+                                len: count,
+                                stride: stride * step_val,
+                                read_only,
+                            });
+                        }
                         Value::Str(s) => {
                             let chars: Vec<char> = s.chars().collect();
                             let len = chars.len() as i64;
@@ -8062,6 +8267,25 @@ impl Interpreter {
                             });
                         }
                         Ok(vec[actual_idx as usize].clone())
+                    }
+                    (
+                        Value::MemoryView {
+                            data,
+                            start,
+                            len,
+                            stride,
+                            ..
+                        },
+                        Value::Int(i),
+                    ) => {
+                        let actual_idx = if i < 0 { len + i } else { i };
+                        if actual_idx < 0 || actual_idx >= len {
+                            return Err(RuntimeError {
+                                message: format!("index {i} out of range"),
+                                span: *span,
+                            });
+                        }
+                        Ok(data.borrow()[(start + actual_idx * stride) as usize].clone())
                     }
                     (Value::Str(s), Value::Int(i)) => {
                         let chars: Vec<char> = s.chars().collect();
@@ -9444,6 +9668,7 @@ impl Interpreter {
             Value::Str(s) => !s.is_empty(),
             Value::None => false,
             Value::List(l) => !l.borrow().is_empty(),
+            Value::MemoryView { len, .. } => *len > 0,
             Value::Dict(d) => !d.borrow().is_empty(),
             Value::Set(s) => !s.borrow().is_empty(),
             Value::Range { start, stop, step } => {
@@ -11570,13 +11795,23 @@ is_not_other = child is not Box
         let src = r#"
 buffer = bytearray(b"hi")
 view = memoryview(buffer)
+window = view[0:2]
 buffer[0] = 72
 first = view[0]
+second = window[1]
+view[1] = 73
+mutated = buffer[1]
 "#;
         let module = parse(src).unwrap();
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("first"), Some(Value::Int(72)));
+        assert_eq!(interp.env.borrow().get("second"), Some(Value::Int(105)));
+        assert_eq!(interp.env.borrow().get("mutated"), Some(Value::Int(73)));
+        assert!(matches!(
+            interp.env.borrow().get("window"),
+            Some(Value::MemoryView { len: 2, .. })
+        ));
     }
 
     #[test]

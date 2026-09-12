@@ -1422,9 +1422,9 @@ impl CCodeGenerator {
             self.indent -= 1;
             self.emit_line("}");
         }
-        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0 || strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_LIST;");
+        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0 || strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_LIST;");
         self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0 || strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;");
         self.emit_line("if (strcmp(capability, \"Set\") == 0) return value.type == LUCID_TYPE_SET;");
         self.emit_line("if (strcmp(capability, \"Eq\") == 0 || strcmp(capability, \"Ord\") == 0 || strcmp(capability, \"Hashable\") == 0) return value.type != LUCID_TYPE_NONE;");
@@ -1534,6 +1534,7 @@ typedef struct LucidList LucidList;
 typedef struct LucidDict LucidDict;
 typedef struct LucidSet LucidSet;
 typedef struct LucidBytes LucidBytes;
+typedef struct LucidMemoryView LucidMemoryView;
 typedef struct LucidVal LucidVal;
 typedef struct LucidFuture LucidFuture;
 typedef struct LucidContext LucidContext;
@@ -1722,6 +1723,7 @@ typedef enum {
     LUCID_TYPE_BOOL,
     LUCID_TYPE_STR,
     LUCID_TYPE_BYTES,
+    LUCID_TYPE_MEMORYVIEW,
     LUCID_TYPE_LIST,
     LUCID_TYPE_DICT,
     LUCID_TYPE_SET,
@@ -1743,6 +1745,7 @@ typedef struct LucidVal {
     LucidList* list;
     LucidDict* dict;
     LucidSet* set;
+    LucidMemoryView* view;
     LucidFuture* future;
     LucidContext* context;
     void* ptr;
@@ -1774,6 +1777,13 @@ struct LucidSet {
 struct LucidBytes {
     unsigned char* data;
     int64_t len;
+};
+
+struct LucidMemoryView {
+    LucidList* list;
+    int64_t start;
+    int64_t len;
+    int64_t stride;
 };
 
 struct LucidFuture {
@@ -2362,6 +2372,48 @@ static inline LucidVal lucid_char_str(char* s) {
 static inline LucidVal lucid_list_val(LucidList* l) {
     LucidVal v = {0}; v.type = LUCID_TYPE_LIST; v.list = l; v.ptr = (void*)l; return v;
 }
+static inline LucidVal lucid_list_get(LucidList* l, int64_t idx);
+static inline void lucid_list_set(LucidList* l, int64_t idx, LucidVal v);
+static inline LucidVal lucid_memoryview(LucidVal value) {
+    if (value.type == LUCID_TYPE_MEMORYVIEW) return value;
+    if (value.type != LUCID_TYPE_LIST || !value.list) {
+        fprintf(stderr, "memoryview() cannot convert value\n"); exit(1);
+    }
+    LucidMemoryView* view = (LucidMemoryView*)malloc(sizeof(LucidMemoryView));
+    if (!view) { fprintf(stderr, "out of memory allocating memoryview\n"); exit(1); }
+    view->list = value.list;
+    view->start = 0;
+    view->len = value.list->len;
+    view->stride = 1;
+    LucidVal out = {0};
+    out.type = LUCID_TYPE_MEMORYVIEW;
+    out.view = view;
+    out.ptr = (void*)view;
+    return out;
+}
+static inline int64_t lucid_memoryview_offset(LucidMemoryView* view, int64_t idx) {
+    if (!view) { fprintf(stderr, "index 0 out of range\n"); exit(1); }
+    if (idx < 0) idx += view->len;
+    if (idx < 0 || idx >= view->len) {
+        fprintf(stderr, "index %lld out of range\n", (long long)idx);
+        exit(1);
+    }
+    return view->start + idx * view->stride;
+}
+static inline LucidVal lucid_memoryview_get(LucidMemoryView* view, int64_t idx) {
+    int64_t offset = lucid_memoryview_offset(view, idx);
+    return lucid_list_get(view->list, offset);
+}
+static inline void lucid_memoryview_set(LucidMemoryView* view, int64_t idx, LucidVal value) {
+    int64_t offset = lucid_memoryview_offset(view, idx);
+    lucid_list_set(view->list, offset, value);
+}
+static inline LucidList* lucid_memoryview_to_list(LucidMemoryView* view) {
+    LucidList* out = lucid_list_new(view ? view->len : 0);
+    if (view) for (int64_t i = 0; i < view->len; ++i)
+        lucid_list_append(out, lucid_memoryview_get(view, i));
+    return out;
+}
 static inline LucidVal lucid_dict_val(LucidDict* d) {
     LucidVal v = {0}; v.type = LUCID_TYPE_DICT; v.dict = d; v.ptr = (void*)d; return v;
 }
@@ -2507,6 +2559,7 @@ static inline bool lucid_as_bool(LucidVal v) {
     if (v.type == LUCID_TYPE_COMPLEX) return v.real != 0.0 || v.imag != 0.0;
     if (v.type == LUCID_TYPE_STR) return v.s && v.s[0] != '\0';
     if (v.type == LUCID_TYPE_BYTES) return v.bytes && v.bytes->len > 0;
+    if (v.type == LUCID_TYPE_MEMORYVIEW) return v.view && v.view->len > 0;
     if (v.type == LUCID_TYPE_LIST) return v.list && v.list->len > 0;
     if (v.type == LUCID_TYPE_DICT) return v.dict && v.dict->len > 0;
     if (v.type == LUCID_TYPE_SET) return v.set && v.set->len > 0;
@@ -3466,6 +3519,9 @@ static inline LucidVal lucid_get_index(LucidVal container, int64_t idx) {
     if (container.type == LUCID_TYPE_LIST) {
         return lucid_list_get(container.list, idx);
     }
+    if (container.type == LUCID_TYPE_MEMORYVIEW) {
+        return lucid_memoryview_get(container.view, idx);
+    }
     if (container.type == LUCID_TYPE_STR) {
         return lucid_str(lucid_str_index(container.s, idx));
     }
@@ -3498,7 +3554,7 @@ static inline LucidVal lucid_get_index_value(LucidVal container, LucidVal index)
     }
     if (container.type == LUCID_TYPE_DICT)
         return lucid_get_key(container, index);
-    if (container.type == LUCID_TYPE_LIST || container.type == LUCID_TYPE_STR || container.type == LUCID_TYPE_BYTES) {
+    if (container.type == LUCID_TYPE_LIST || container.type == LUCID_TYPE_MEMORYVIEW || container.type == LUCID_TYPE_STR || container.type == LUCID_TYPE_BYTES) {
         if (index.type != LUCID_TYPE_INT) {
             fprintf(stderr, "indices must be integers\n");
             exit(1);
@@ -3526,6 +3582,14 @@ static inline void lucid_set_index_value(LucidVal container, LucidVal index, Luc
             exit(1);
         }
         lucid_list_set(container.list, index.i, value);
+        return;
+    }
+    if (container.type == LUCID_TYPE_MEMORYVIEW) {
+        if (index.type != LUCID_TYPE_INT) {
+            fprintf(stderr, "memoryview indices must be integers\n");
+            exit(1);
+        }
+        lucid_memoryview_set(container.view, index.i, value);
         return;
     }
     if (container.type == LUCID_TYPE_STR || container.type == LUCID_TYPE_BYTES)
@@ -3729,6 +3793,9 @@ static inline LucidList* lucid_iterable_to_list(LucidVal value) {
         LucidList* out = lucid_list_new(value.list->len);
         for (int64_t i = 0; i < value.list->len; ++i) lucid_list_append(out, value.list->items[i]);
         return out;
+    }
+    if (value.type == LUCID_TYPE_MEMORYVIEW && value.view) {
+        return lucid_memoryview_to_list(value.view);
     }
     if (value.type == LUCID_TYPE_SET && value.set) {
         LucidList* out = lucid_list_new(value.set->len);
@@ -3969,11 +4036,50 @@ static inline LucidVal lucid_bytes_slice_value(LucidVal source, int64_t start, i
     out[pos] = '\0';
     return lucid_bytes_from_data(out, pos);
 }
+static inline LucidVal lucid_memoryview_slice_value(LucidVal source, int64_t start, int64_t stop, int64_t step) {
+    if (source.type != LUCID_TYPE_MEMORYVIEW || !source.view) return lucid_memoryview(source);
+    if (step == 0) { fprintf(stderr, "slice step cannot be zero\n"); exit(1); }
+    LucidMemoryView* parent = source.view;
+    int64_t len = parent->len;
+    bool default_start = start == INT64_MIN;
+    bool default_stop = stop == INT64_MIN;
+    if (default_start) start = step > 0 ? 0 : len - 1;
+    if (default_stop) stop = step > 0 ? len : -1;
+    if (start < 0) start += len;
+    if (stop < 0 && !(default_stop && step < 0)) stop += len;
+    if (step > 0) {
+        if (start < 0) start = 0; if (start > len) start = len;
+        if (stop < 0) stop = 0; if (stop > len) stop = len;
+    } else {
+        if (start >= len) start = len - 1; if (start < -1) start = -1;
+        if (stop >= len) stop = len - 1;
+    }
+    int64_t count = 0;
+    for (int64_t i = start; (step > 0 ? i < stop : i > stop); ) {
+        ++count;
+        int64_t next;
+        if (!lucid_checked_range_advance(i, step, &next)) break;
+        i = next;
+    }
+    LucidMemoryView* view = (LucidMemoryView*)malloc(sizeof(LucidMemoryView));
+    if (!view) { fprintf(stderr, "out of memory allocating memoryview\n"); exit(1); }
+    view->list = parent->list;
+    view->start = parent->start + start * parent->stride;
+    view->len = count;
+    view->stride = parent->stride * step;
+    LucidVal out = {0};
+    out.type = LUCID_TYPE_MEMORYVIEW;
+    out.view = view;
+    out.ptr = (void*)view;
+    return out;
+}
 static inline LucidVal lucid_slice_value(LucidVal value, int64_t start, int64_t stop, int64_t step) {
     if (value.type == LUCID_TYPE_STR)
         return lucid_str(lucid_str_slice(value.s, start, stop, step));
     if (value.type == LUCID_TYPE_BYTES)
         return lucid_bytes_slice_value(value, start, stop, step);
+    if (value.type == LUCID_TYPE_MEMORYVIEW)
+        return lucid_memoryview_slice_value(value, start, stop, step);
     if (value.type == LUCID_TYPE_LIST)
         return lucid_list_val(lucid_list_slice(value.list, start, stop, step));
     fprintf(stderr, "slicing not supported\n");
@@ -3990,6 +4096,7 @@ static inline int64_t _len_val(LucidVal v) {
     if (v.type == LUCID_TYPE_LIST) return v.list ? v.list->len : 0;
     if (v.type == LUCID_TYPE_STR) return _len_str(v.s);
     if (v.type == LUCID_TYPE_BYTES) return v.bytes ? v.bytes->len : 0;
+    if (v.type == LUCID_TYPE_MEMORYVIEW) return v.view ? v.view->len : 0;
     if (v.type == LUCID_TYPE_DICT) return v.dict ? v.dict->len : 0;
     if (v.type == LUCID_TYPE_SET) return v.set ? v.set->len : 0;
     if (v.type == LUCID_TYPE_PTR && v.ptr) return lucid_dynamic_len(v);
@@ -4090,6 +4197,7 @@ static inline void lucid_print_val(LucidVal v) {
         case LUCID_TYPE_BYTES:
             if (v.bytes && v.bytes->len > 0) fwrite(v.bytes->data, 1, (size_t)v.bytes->len, stdout);
             break;
+        case LUCID_TYPE_MEMORYVIEW: printf("<memoryview len=%ld>", v.view ? v.view->len : 0); break;
         case LUCID_TYPE_NONE: printf("none"); break;
         case LUCID_TYPE_LIST: printf("[list len=%ld]", v.list ? v.list->len : 0); break;
         case LUCID_TYPE_DICT: printf("[dict len=%ld]", v.dict ? v.dict->len : 0); break;
@@ -4753,6 +4861,7 @@ static inline void lucid_print_val(LucidVal v) {
                 "bool" => format!("{subject}.type == LUCID_TYPE_BOOL"),
                 "str" => format!("{subject}.type == LUCID_TYPE_STR"),
                 "bytes" | "Bytes" => format!("{subject}.type == LUCID_TYPE_BYTES"),
+                "MemoryView" => format!("{subject}.type == LUCID_TYPE_MEMORYVIEW"),
                 "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
                 name if self.known_classes.contains_key(name) => {
                     let names = self.class_pattern_names(name);
@@ -9567,6 +9676,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 "bytes" | "Bytes" => {
                                     format!("(lucid_wrap({l_str}).type == LUCID_TYPE_BYTES)")
                                 }
+                                "MemoryView" => {
+                                    format!("(lucid_wrap({l_str}).type == LUCID_TYPE_MEMORYVIEW)")
+                                }
                                 name if self.known_classes.contains_key(name) => {
                                     if left_ty.ends_with('*') {
                                         format!(
@@ -9770,6 +9882,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 "str" => format!("(lucid_wrap({l_str}).type != LUCID_TYPE_STR)"),
                                 "bytes" | "Bytes" => {
                                     format!("(lucid_wrap({l_str}).type != LUCID_TYPE_BYTES)")
+                                }
+                                "MemoryView" => {
+                                    format!("(lucid_wrap({l_str}).type != LUCID_TYPE_MEMORYVIEW)")
                                 }
                                 name if self.known_classes.contains_key(name) => {
                                     if left_ty.ends_with('*') {
@@ -11458,7 +11573,8 @@ static inline void lucid_print_val(LucidVal v) {
                                 });
                             }
                             if let Some(a) = args.first() {
-                                return self.emit_expr(&a.value);
+                                let value = self.emit_expr(&a.value)?;
+                                return Ok(format!("lucid_memoryview(lucid_wrap({value}))"));
                             }
                         }
                         _ => {}
@@ -15672,7 +15788,14 @@ match value:
 buffer = bytearray(b"hi")
 print(buffer[0])
 view = memoryview(buffer)
+window = view[0:2]
+buffer[0] = 72
 print(view[1])
+print(window[0])
+view[1] = 73
+print(buffer[1])
+value: Any = window
+print(value is MemoryView)
 "#;
         let module = parse(source).expect("binary program should parse");
         let output =
@@ -15684,7 +15807,7 @@ print(view[1])
             .expect("compiled program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "104\n105\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "104\n105\n72\n73\ntrue\n");
     }
 
     #[test]
