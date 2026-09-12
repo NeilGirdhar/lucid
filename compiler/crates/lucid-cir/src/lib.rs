@@ -4634,7 +4634,7 @@ impl Function {
         struct BranchLowering {
             bindings: HashMap<String, ValueId>,
             instructions: Vec<Instruction>,
-            value: ValueId,
+            value: Option<ValueId>,
         }
         fn lower_dynamic_if(
             prefix: &[lucid_syntax::Stmt],
@@ -4823,11 +4823,10 @@ impl Function {
                     )?;
                     produced_value |= branch_last.is_some();
                 }
-                let value = branch_last.ok_or(LowerError::NoLowerableAssignment)?;
                 Ok(BranchLowering {
                     bindings: branch_bindings,
                     instructions: branch_instructions,
-                    value,
+                    value: branch_last,
                 })
             }
 
@@ -4882,43 +4881,51 @@ impl Function {
                 fallthrough_value,
                 state.next,
             )?;
-            let merged_name = then_lowering
-                .bindings
-                .iter()
-                .find_map(|(name, value)| {
-                    if *value != then_lowering.value
-                        || else_lowering.bindings.get(name).copied() != Some(else_lowering.value)
+            let merged_name = then_lowering.value.and_then(|then_value| {
+                let else_value = else_lowering.value?;
+                then_lowering.bindings.iter().find_map(|(name, value)| {
+                    if *value != then_value
+                        || else_lowering.bindings.get(name).copied() != Some(else_value)
                     {
                         return None;
                     }
-                    lowered_elifs
-                        .iter()
-                        .all(|(_, _, branch)| {
-                            branch.bindings.get(name).copied() == Some(branch.value)
-                        })
-                        .then(|| name.clone())
+                    let mut elif_values = Vec::new();
+                    for (_, _, branch) in &lowered_elifs {
+                        let branch_value = branch.value?;
+                        if branch.bindings.get(name).copied() != Some(branch_value) {
+                            return None;
+                        }
+                        elif_values.push(branch_value);
+                    }
+                    Some((name.clone(), then_value, elif_values, else_value))
                 })
-                .ok_or(LowerError::UnsupportedExpression)?;
-            let result = ValueId(*state.next);
-            *state.next += 1;
+            });
             let mut merge_bindings = base_bindings;
-            merge_bindings.insert(merged_name, result);
             let fallback_block = BlockId(
                 2 + u32::try_from(ladder.elif_branches.len())
                     .map_err(|_| LowerError::UnsupportedExpression)?
                     * 2,
             );
             let merge_block = BlockId(fallback_block.0 + 1);
-            let mut incomings = vec![(BlockId(1), then_lowering.value)];
-            for (index, (_, _, branch)) in lowered_elifs.iter().enumerate() {
-                let arm_block = BlockId(
-                    3 + u32::try_from(index).map_err(|_| LowerError::UnsupportedExpression)? * 2,
-                );
-                incomings.push((arm_block, branch.value));
-            }
-            incomings.push((fallback_block, else_lowering.value));
-            let mut merge_instructions = vec![Instruction::Phi { result, incomings }];
-            let mut merge_last = Some(result);
+            let (mut merge_instructions, mut merge_last) =
+                if let Some((merged_name, then_value, elif_values, else_value)) = merged_name {
+                    let result = ValueId(*state.next);
+                    *state.next += 1;
+                    merge_bindings.insert(merged_name, result);
+                    let mut incomings = vec![(BlockId(1), then_value)];
+                    for (index, branch_value) in elif_values.into_iter().enumerate() {
+                        let arm_block = BlockId(
+                            3 + u32::try_from(index)
+                                .map_err(|_| LowerError::UnsupportedExpression)?
+                                * 2,
+                        );
+                        incomings.push((arm_block, branch_value));
+                    }
+                    incomings.push((fallback_block, else_value));
+                    (vec![Instruction::Phi { result, incomings }], Some(result))
+                } else {
+                    (Vec::new(), fallthrough_value)
+                };
             visit_all(
                 ladder.suffix,
                 &mut merge_bindings,
@@ -10351,6 +10358,31 @@ return total
         assert_eq!(function.execute_with_args(&[0, 1, 1]), Ok(Some(21)));
         assert_eq!(function.execute_with_args(&[0, 0, 1]), Ok(Some(31)));
         assert_eq!(function.execute_with_args(&[0, 0, 0]), Ok(Some(41)));
+        let module = lucid_syntax::parse(
+            "if first:\n    left = 10\nelif second:\n    middle = 20\nelif third:\n    right = 30\nelse:\n    fallback = 40\nvalue = 99\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["first".into(), "second".into(), "third".into()],
+        )
+        .expect("unused dynamic elif branch locals should not require a phi");
+        assert_eq!(function.execute_with_args(&[1, 1, 1]), Ok(Some(99)));
+        assert_eq!(function.execute_with_args(&[0, 1, 1]), Ok(Some(99)));
+        assert_eq!(function.execute_with_args(&[0, 0, 1]), Ok(Some(99)));
+        assert_eq!(function.execute_with_args(&[0, 0, 0]), Ok(Some(99)));
+        let module = lucid_syntax::parse(
+            "if first:\n    left = 1 / 0\nelif second:\n    middle = 20\nelse:\n    fallback = 40\nvalue = 99\n",
+        )
+        .unwrap();
+        let function =
+            Function::from_module_linear_with_params(&module, &["first".into(), "second".into()])
+                .expect("unused dynamic elif branch errors should remain conditional");
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(99)));
+        assert_eq!(
+            function.execute_with_args(&[1, 1]),
+            Err(ExecuteError::DivisionByZero)
+        );
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
         )

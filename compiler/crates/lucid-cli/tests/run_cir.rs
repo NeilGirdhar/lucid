@@ -1180,6 +1180,54 @@ fn run_cir_executes_multiple_dynamic_elif_post_diamond_continuation() {
 }
 
 #[test]
+fn run_cir_executes_unused_dynamic_elif_branch_locals() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_unused_elif_locals_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(a: int, b: int, c: int):\n    if a > 0:\n        first = a\n    elif b > 0:\n        second = b\n    elif c > 0:\n        third = c\n    else:\n        fallback = 0\n    return 42\n",
+    )
+    .expect("temporary source should be writable");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,2,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-2,-3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        selected.status.success(),
+        "selected unused branch failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallback unused branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "42");
+}
+
+#[test]
 fn run_cir_executes_one_sided_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_optional_if_{}.lucid",

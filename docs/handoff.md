@@ -1827,6 +1827,9 @@ diverged:
   continuation lowering, so dead branches no longer hide a supported ladder.
   The same continuation lowering now emits a full condition-block ladder for
   multiple dynamic `elif` arms that assign the same merged local.
+  If the continuation does not read branch-local bindings, dynamic `elif`
+  ladders can now continue without fabricating a Phi while preserving
+  conditional branch errors.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
