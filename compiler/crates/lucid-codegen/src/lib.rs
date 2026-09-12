@@ -4922,6 +4922,13 @@ static inline void lucid_print_val(LucidVal v) {
                         if ty == "LucidVal" && matches!(value, Expr::Call { .. }) {
                             self.dynamic_vars.insert(name.clone());
                         }
+                        if let Expr::Ident { name: source, .. } = value {
+                            if let Some(order) = self.record_field_orders.get(source).cloned() {
+                                self.record_field_orders.insert(name.clone(), order);
+                            }
+                        } else {
+                            self.record_field_orders.remove(name);
+                        }
                         vars.insert(name.clone(), ty);
                     }
                 } else if let Expr::Record { fields, .. } = target {
@@ -15900,6 +15907,9 @@ print(point.x + point.y)
 point: (x: int, y: int) = (x=1, y=2)
 let (x, y) = point
 print(x + y)
+other = point
+let (a, b) = other
+print(a + b)
 "#;
         let module = parse(source).expect("record destructuring program should parse");
         let output = std::env::temp_dir().join(format!(
@@ -15913,7 +15923,7 @@ print(x + y)
             .expect("compiled record destructuring program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n3\n");
     }
 
     #[test]
