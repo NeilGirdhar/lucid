@@ -833,10 +833,11 @@ impl<'a> Lexer<'a> {
         let span = Span::new(start_pos, end_pos, start_line, start_col);
 
         let kind = match text.as_str() {
-            // Lowercase constants
-            "true" => TokenKind::True,
-            "false" => TokenKind::False,
-            "none" => TokenKind::None,
+            // Constants. Lucid accepts Python's spelling and the lowercase
+            // spelling used throughout most of the spec.
+            "True" | "true" => TokenKind::True,
+            "False" | "false" => TokenKind::False,
+            "None" | "none" => TokenKind::None,
 
             // Lucid keywords
             "export" => TokenKind::Export,
