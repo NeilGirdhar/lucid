@@ -7685,6 +7685,15 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("pass fallback match should lower through optional CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("single-arm pass fallback match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
