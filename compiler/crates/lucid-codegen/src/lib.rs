@@ -5726,6 +5726,20 @@ static inline void lucid_print_val(LucidVal v) {
         Ok(())
     }
 
+    fn reject_duplicate_named_arguments(args: &[Arg]) -> Result<(), CodegenError> {
+        let mut names = HashSet::new();
+        for argument in args {
+            if let Some(name) = &argument.name {
+                if !names.insert(name.clone()) {
+                    return Err(CodegenError {
+                        message: format!("argument '{name}' passed more than once"),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn reject_bare_skip_value(expr: &Expr, context: &str) -> Result<(), CodegenError> {
         if matches!(expr, Expr::Skip(_)) {
             return Err(CodegenError {
@@ -11802,6 +11816,7 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Expr::Call { func, args, span } => {
                 Self::reject_late_positional_arguments(args)?;
+                Self::reject_duplicate_named_arguments(args)?;
                 if let Expr::Attribute { value, attr, .. } = &**func {
                     if matches!(&**value, Expr::Ident { name, .. } if name == "str")
                         && matches!(attr.as_str(), "bin" | "oct" | "hex")
@@ -23373,6 +23388,31 @@ print(result[1])
             let _ = fs::remove_file(&output);
             let error = compile_to_native(&module, &output, 0)
                 .expect_err("nonfinal gather parameter must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn native_rejects_invalid_named_call_shapes() {
+        for (source, expected) in [
+            (
+                "def f(value: int) -> int:\n    return value\nresult = f(value=1, value=2)\n",
+                "passed more than once",
+            ),
+            (
+                "def f(left: int, right: int) -> int:\n    return left + right\nresult = f(left=1, 2)\n",
+                "positional argument follows keyword",
+            ),
+        ] {
+            let module = parse(source).expect("invalid named call source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_native_invalid_named_call_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("invalid named call shape must fail native codegen");
             let _ = fs::remove_file(&output);
             assert!(error.message.contains(expected), "{source}: {error}");
         }

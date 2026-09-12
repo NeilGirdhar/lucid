@@ -9980,15 +9980,23 @@ impl Interpreter {
     ) -> Result<Vec<Value>, RuntimeError> {
         let mut positional = Vec::new();
         let mut keywords = HashMap::new();
+        let mut keyword_section_started = false;
         for (name, value) in args {
             if let Some(name) = name {
+                keyword_section_started = true;
                 if keywords.insert(name.clone(), value.clone()).is_some() {
                     return Err(RuntimeError {
-                        message: format!("multiple values for argument '{name}'"),
+                        message: format!("argument '{name}' passed more than once"),
                         span: Span::default(),
                     });
                 }
             } else {
+                if keyword_section_started {
+                    return Err(RuntimeError {
+                        message: "positional argument follows keyword argument".into(),
+                        span: Span::default(),
+                    });
+                }
                 positional.push(value.clone());
             }
         }
@@ -10017,8 +10025,32 @@ impl Interpreter {
                 continue;
             }
             let value = if let Some(value) = keywords.remove(&param.name) {
+                if param.is_positional_only {
+                    return Err(RuntimeError {
+                        message: format!(
+                            "positional-only argument '{}' passed by keyword",
+                            param.name
+                        ),
+                        span: param.span,
+                    });
+                }
+                if position < positional.len() {
+                    return Err(RuntimeError {
+                        message: format!("argument '{}' passed more than once", param.name),
+                        span: param.span,
+                    });
+                }
                 value
             } else if position < positional.len() {
+                if param.is_keyword_only {
+                    return Err(RuntimeError {
+                        message: format!(
+                            "keyword-only argument '{}' passed positionally",
+                            param.name
+                        ),
+                        span: param.span,
+                    });
+                }
                 let value = positional[position].clone();
                 position += 1;
                 value
@@ -10033,6 +10065,12 @@ impl Interpreter {
             bound.push(value);
         }
         if position < positional.len() || !keywords.is_empty() {
+            if let Some(name) = keywords.keys().next() {
+                return Err(RuntimeError {
+                    message: format!("no parameter named '{name}'"),
+                    span: Span::default(),
+                });
+            }
             return Err(RuntimeError {
                 message: "too many arguments for function".into(),
                 span: Span::default(),
@@ -14248,6 +14286,43 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             let error = interp
                 .eval_module(&module)
                 .expect_err("nonfinal gather parameter must fail at runtime");
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_rejects_invalid_named_call_shapes() {
+        for (source, expected) in [
+            (
+                "def f(value: int) -> int:\n    return value\nresult = f(value=1, value=2)\n",
+                "passed more than once",
+            ),
+            (
+                "def f(left: int, right: int) -> int:\n    return left + right\nresult = f(left=1, 2)\n",
+                "positional argument follows keyword",
+            ),
+            (
+                "def f(left: int, right: int) -> int:\n    return left + right\nresult = f(1, 2, x=4)\n",
+                "no parameter named 'x'",
+            ),
+            (
+                "def f(value: int, /) -> int:\n    return value\nresult = f(value=1)\n",
+                "positional-only argument",
+            ),
+            (
+                "def f(*, value: int) -> int:\n    return value\nresult = f(1)\n",
+                "keyword-only argument",
+            ),
+        ] {
+            let module = parse(source).expect("invalid named call source should parse");
+            let mut interp = Interpreter::default();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("invalid named call shape must fail at runtime");
             assert!(
                 error.message.contains(expected),
                 "{source}: {}",
