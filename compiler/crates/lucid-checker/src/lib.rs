@@ -3762,11 +3762,48 @@ impl TypeChecker {
                 is_final,
                 ..
             } => {
-                let inferred_val = if let Some(ref e) = value {
-                    Some(self.type_of_expr(e)?)
-                } else {
-                    None
+                let provisional = match (pattern, value.as_ref()) {
+                    (
+                        Pattern::Ident(name, _),
+                        Some(Expr::AnonymousDef {
+                            params,
+                            return_type,
+                            ..
+                        }),
+                    ) => Some((
+                        name.clone(),
+                        self.anonymous_function_type(params, return_type.as_ref())?,
+                    )),
+                    _ => None,
                 };
+                let previous = provisional.as_ref().map(|(name, ty)| {
+                    self.env
+                        .variables
+                        .insert(name.clone(), (ty.clone(), MutabilityView::Mutable))
+                });
+                let inferred_val = match value {
+                    Some(e) => match self.type_of_expr(e) {
+                        Ok(ty) => Some(ty),
+                        Err(error) => {
+                            if let Some((name, _)) = &provisional {
+                                if let Some(Some(previous)) = previous.clone() {
+                                    self.env.variables.insert(name.clone(), previous);
+                                } else {
+                                    self.env.variables.remove(name);
+                                }
+                            }
+                            return Err(error);
+                        }
+                    },
+                    None => None,
+                };
+                if let Some((name, _)) = &provisional {
+                    if let Some(Some(previous)) = previous {
+                        self.env.variables.insert(name.clone(), previous);
+                    } else {
+                        self.env.variables.remove(name);
+                    }
+                }
 
                 let target_type = if let Some(ref t) = type_annotation {
                     let resolved = self.resolve_type_expr(t)?;
@@ -3854,7 +3891,45 @@ impl TypeChecker {
                 value,
                 span,
             } => {
-                let val_type = self.type_of_expr(value)?;
+                let provisional = match target {
+                    Expr::Ident { name, .. } => match value {
+                        Expr::AnonymousDef {
+                            params,
+                            return_type,
+                            ..
+                        } => Some((
+                            name.clone(),
+                            self.anonymous_function_type(params, return_type.as_ref())?,
+                        )),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let previous = provisional.as_ref().map(|(name, ty)| {
+                    self.env
+                        .variables
+                        .insert(name.clone(), (ty.clone(), MutabilityView::Mutable))
+                });
+                let val_type = match self.type_of_expr(value) {
+                    Ok(ty) => ty,
+                    Err(error) => {
+                        if let Some((name, _)) = &provisional {
+                            if let Some(Some(previous)) = previous.clone() {
+                                self.env.variables.insert(name.clone(), previous);
+                            } else {
+                                self.env.variables.remove(name);
+                            }
+                        }
+                        return Err(error);
+                    }
+                };
+                if let Some((name, _)) = &provisional {
+                    if let Some(Some(previous)) = previous {
+                        self.env.variables.insert(name.clone(), previous);
+                    } else {
+                        self.env.variables.remove(name);
+                    }
+                }
                 match target {
                     Expr::Ident { name, .. } => {
                         if self.env.final_variables.contains(name) {
@@ -4929,6 +5004,41 @@ impl TypeChecker {
             },
             _ => Ok(()),
         }
+    }
+
+    fn anonymous_function_signature(
+        &self,
+        params: &[Param],
+        return_type: Option<&TypeExpr>,
+    ) -> Result<(Vec<Type>, Type, Type), TypeError> {
+        let ptypes: Vec<Type> = params
+            .iter()
+            .map(|p| {
+                p.type_annotation
+                    .as_ref()
+                    .map(|te| self.resolve_type_expr(te))
+                    .transpose()
+                    .map(|ty| ty.unwrap_or(Type::None))
+            })
+            .collect::<Result<Vec<_>, TypeError>>()?;
+        let declared_return = return_type
+            .map(|te| self.resolve_type_expr(te))
+            .transpose()?;
+        let function_return = declared_return.clone().unwrap_or(Type::None);
+        let body_return = declared_return.unwrap_or_else(|| Type::TypeVar("Any".into()));
+        Ok((ptypes, function_return, body_return))
+    }
+
+    fn anonymous_function_type(
+        &self,
+        params: &[Param],
+        return_type: Option<&TypeExpr>,
+    ) -> Result<Type, TypeError> {
+        let (params, return_type, _) = self.anonymous_function_signature(params, return_type)?;
+        Ok(Type::Function {
+            params,
+            return_type: Box::new(return_type),
+        })
     }
 
     pub fn type_of_expr(&self, expr: &Expr) -> Result<Type, TypeError> {
@@ -7233,27 +7343,10 @@ impl TypeChecker {
                 body,
                 ..
             } => {
-                let ptypes: Vec<Type> = params
-                    .iter()
-                    .map(|p| {
-                        p.type_annotation
-                            .as_ref()
-                            .map(|te| self.resolve_type_expr(te))
-                            .transpose()
-                            .map(|ty| ty.unwrap_or(Type::None))
-                    })
-                    .collect::<Result<Vec<_>, TypeError>>()?;
-                let declared_return = return_type
-                    .as_ref()
-                    .map(|te| self.resolve_type_expr(te))
-                    .transpose()?;
-                let ret_t = declared_return.clone().unwrap_or(Type::None);
+                let (ptypes, ret_t, body_return_type) =
+                    self.anonymous_function_signature(params, return_type.as_ref())?;
                 let mut closure_checker = self.clone();
-                closure_checker.env.current_return_type = Some(
-                    declared_return
-                        .clone()
-                        .unwrap_or_else(|| Type::TypeVar("Any".into())),
-                );
+                closure_checker.env.current_return_type = Some(body_return_type);
                 for (param, parameter_type) in params.iter().zip(ptypes.iter()) {
                     closure_checker.env.variables.insert(
                         param.name.clone(),
@@ -10894,6 +10987,21 @@ def reject(value: not int) -> none:
 
         let callable = parse("def f() -> int:\n    return 1\nresult = f is Callable\n").unwrap();
         assert!(TypeChecker::new().check_module(&callable).is_ok());
+    }
+
+    #[test]
+    fn recursive_anonymous_bindings_are_visible_inside_their_body() {
+        let module = parse(
+            "def make() -> (int) -> int:\n    fact = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\n    return fact\nrun = make()\nresult = run(5)\n",
+        )
+        .unwrap();
+        TypeChecker::new().check_module(&module).unwrap();
+
+        let annotated = parse(
+            "def make() -> (int) -> int:\n    fact: (int) -> int = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\n    return fact\nrun = make()\nresult = run(5)\n",
+        )
+        .unwrap();
+        TypeChecker::new().check_module(&annotated).unwrap();
     }
 
     #[test]

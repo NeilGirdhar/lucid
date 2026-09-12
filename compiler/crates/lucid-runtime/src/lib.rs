@@ -10093,6 +10093,17 @@ for i in [1, 2, 3]:
     }
 
     #[test]
+    fn recursive_closure_escapes_defining_function() {
+        let module = parse(
+            "def make() -> (int) -> int:\n    fact = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\n    return fact\nrun = make()\nresult = run(5)\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(120)));
+    }
+
+    #[test]
     fn comprehension_target_does_not_rebind_outer_name() {
         let module = parse("i = 99\nvalues = [i for i in [1, 2]]\nresult = i\n").unwrap();
         let mut interp = Interpreter::new();

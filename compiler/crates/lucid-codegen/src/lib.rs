@@ -19766,6 +19766,27 @@ print(result[1])
     }
 
     #[test]
+    fn native_recursive_closure_escapes_activation() {
+        let source = "def make() -> (int) -> int:\n    fact = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\n    return fact\nprint(make()(5))\n";
+        let module = parse(source).expect("recursive escaping closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_recursive_escaping_closure_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("recursive escaping closure should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run recursive escaping closure");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "recursive escaping closure failed: {run:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "120\n");
+    }
+
+    #[test]
     fn native_loop_closures_capture_fresh_iteration_bindings() {
         let source = "fns = []\nfor i in [1, 2, 3]:\n    fns.append(def() -> int: i)\nfor f in fns:\n    print(f())\n";
         let module = parse(source).expect("loop closure source should parse");
