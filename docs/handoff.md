@@ -1201,6 +1201,9 @@ diverged:
   handler types lower to explicit tag checks, known classes lower to object
   checks, and unsupported handler types fail codegen instead of becoming
   catch-all handlers.
+  Union exception handlers now work in both interpreter and native execution:
+  `except int | str` matches either listed raised value kind instead of being
+  rejected natively or treated as a catch-all by the interpreter.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an

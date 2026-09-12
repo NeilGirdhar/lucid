@@ -5734,14 +5734,19 @@ static inline void lucid_print_val(LucidVal v) {
     }
 
     fn exception_condition(&self, exception_type: &TypeExpr) -> Result<String, CodegenError> {
-        let name = match exception_type {
-            TypeExpr::Named { name, .. } => name.as_str(),
-            _ => {
-                return Err(CodegenError {
-                    message: "unsupported non-name exception handler type".to_string(),
-                });
+        let TypeExpr::Named { name, .. } = exception_type else {
+            if let TypeExpr::Union { types, .. } = exception_type {
+                let conditions = types
+                    .iter()
+                    .map(|exception_type| self.exception_condition(exception_type))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(format!("({})", conditions.join(" || ")));
             }
+            return Err(CodegenError {
+                message: "unsupported non-name exception handler type".to_string(),
+            });
         };
+        let name = name.as_str();
         Ok(match name {
             "Any" | "Exception" | "BaseException" => "true".to_string(),
             "int" => "lucid_pending_exception.type == LUCID_TYPE_INT || lucid_pending_exception.type == LUCID_TYPE_BIGINT".to_string(),
@@ -17169,6 +17174,37 @@ except str:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "right\n");
+    }
+
+    #[test]
+    fn native_try_union_handler_matches_only_union_members() {
+        let source = r#"
+try:
+    raise "boom"
+except int | bool:
+    print("wrong")
+except str:
+    print("right")
+try:
+    raise true
+except int | str:
+    print("wrong")
+except bool:
+    print("right")
+"#;
+        let module = parse(source).expect("union handler program should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_union_handler_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("union handler program should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled union handler program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "right\nright\n");
     }
 
     #[test]

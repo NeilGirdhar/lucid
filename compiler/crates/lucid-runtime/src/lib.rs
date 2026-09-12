@@ -10077,16 +10077,20 @@ impl Interpreter {
     }
 
     fn error_matches_handler(&self, error: &RuntimeError, exception_type: &TypeExpr) -> bool {
-        let name = match exception_type {
-            TypeExpr::Named { name, .. } => name.as_str(),
-            _ => return true,
-        };
-        if matches!(name, "Any" | "Exception" | "BaseException") {
-            return true;
+        match exception_type {
+            TypeExpr::Named { name, .. } => {
+                if matches!(name.as_str(), "Any" | "Exception" | "BaseException") {
+                    return true;
+                }
+                error
+                    .message
+                    .starts_with(&format!("raised invariant ({name}):"))
+            }
+            TypeExpr::Union { types, .. } => types
+                .iter()
+                .any(|exception_type| self.error_matches_handler(error, exception_type)),
+            _ => false,
         }
-        error
-            .message
-            .starts_with(&format!("raised invariant ({name}):"))
     }
 }
 
@@ -10862,6 +10866,33 @@ except str:
             interp.env.borrow().get("result"),
             Some(Value::Str("right".into()))
         );
+    }
+
+    #[test]
+    fn test_try_union_handler_matches_only_union_members() {
+        let src = r#"
+first = ""
+try:
+    raise "boom"
+except int | bool:
+    first = "wrong"
+except str:
+    first = "right"
+
+second = ""
+try:
+    raise true
+except int | str:
+    second = "wrong"
+except bool:
+    second = "right"
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        let env = interp.env.borrow();
+        assert_eq!(env.get("first"), Some(Value::Str("right".into())));
+        assert_eq!(env.get("second"), Some(Value::Str("right".into())));
     }
 
     #[test]
