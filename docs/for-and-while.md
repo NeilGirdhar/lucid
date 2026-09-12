@@ -36,7 +36,7 @@ instead of getting a type invented to represent it. It matches like
 any other case:
 
 ```python
-match cursor.next():
+match cursor.next() as item:
     case Literal[iteration.done]:
         ...
     case _:

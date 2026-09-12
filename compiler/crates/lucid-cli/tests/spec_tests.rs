@@ -508,6 +508,19 @@ def sound(p: Pet) -> str:
     );
 }
 
+#[test]
+fn test_control_flow_match_expression_subject_requires_alias() {
+    let src = r#"
+def render(value: int) -> int:
+    match value + 1:
+        case _:
+            return value
+"#;
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("requires `as` alias"));
+}
+
 // ---------------------------------------------------------------------------
 // 13. Strings and collections (docs/collections.rst)
 // ---------------------------------------------------------------------------

@@ -5970,6 +5970,12 @@ impl TypeChecker {
                 ..
             } => {
                 let subject_type = self.type_of_expr(subject)?;
+                if subject_alias.is_none() && !matches!(subject, Expr::Ident { .. }) {
+                    return Err(TypeError {
+                        message: "match subject expression requires `as` alias".into(),
+                        span: subject.span(),
+                    });
+                }
                 self.check_match_exhaustiveness(&subject_type, arms, *span)?;
                 let saved_match_vars = self.env.variables.clone();
                 let saved_match_exact_vars = self.env.exact_variables.clone();
@@ -12479,6 +12485,14 @@ def render(s: Shape) -> int:
         .unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&aliased).is_ok());
+
+        let missing_alias = parse(
+            "def render(value: int) -> int:\n    match value + 1:\n        case _:\n            return value\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&missing_alias).unwrap_err();
+        assert!(err.message.contains("requires `as` alias"));
     }
 
     #[test]

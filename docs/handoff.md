@@ -1062,7 +1062,9 @@ diverged:
   Match exhaustiveness now ignores guarded arms unless an unguarded wildcard
   covers the remaining space.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
-  to each arm’s pattern, matching runtime alias behavior.
+  to each arm’s pattern, matching runtime alias behavior. Non-name match
+  subjects now require that alias, so narrowing cannot depend on an
+  unnameable expression.
   Interface and trait subtyping now follows their declared inheritance
   chains, so derived obligations can be used wherever a base contract is
   required.
