@@ -1370,6 +1370,7 @@ impl CCodeGenerator {
         dynamic_classes.sort();
         self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr, LucidVal fallback, bool has_default) {");
         self.indent += 1;
+        self.emit_line("if (strcmp(attr, \"__class__\") == 0) { fprintf(stderr, \"__class__ is not part of Lucid; class shape is fixed\\n\"); exit(1); }");
         self.emit_line("if (value.type == LUCID_TYPE_COMPLEX) { if (strcmp(attr, \"real\") == 0) return lucid_float(value.real); if (strcmp(attr, \"imag\") == 0) return lucid_float(value.imag); }");
         self.emit_line("if (value.type == LUCID_TYPE_FUNCTION) { if (strcmp(attr, \"__name__\") == 0) return lucid_str(lucid_function_name(value)); if (strcmp(attr, \"__path__\") == 0) return lucid_dotted_path(lucid_function_name(value)); if (strcmp(attr, \"__doc__\") == 0) return lucid_none(); if (has_default) return fallback; fprintf(stderr, \"function has no requested attribute\\n\"); exit(1); }");
         self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) { if (has_default) return fallback; fprintf(stderr, \"attribute access requires an object\\n\"); exit(1); }");
@@ -1408,6 +1409,7 @@ impl CCodeGenerator {
         self.emit_line("}");
         self.emit_line("static bool lucid_dynamic_has_attr(LucidVal value, const char* attr) {");
         self.indent += 1;
+        self.emit_line("if (strcmp(attr, \"__class__\") == 0) { fprintf(stderr, \"__class__ is not part of Lucid; class shape is fixed\\n\"); exit(1); }");
         self.emit_line("if (value.type == LUCID_TYPE_COMPLEX) return strcmp(attr, \"real\") == 0 || strcmp(attr, \"imag\") == 0;");
         self.emit_line("if (value.type == LUCID_TYPE_FUNCTION) return strcmp(attr, \"__name__\") == 0 || strcmp(attr, \"__path__\") == 0 || strcmp(attr, \"__doc__\") == 0;");
         self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) return false;");
@@ -1454,6 +1456,7 @@ impl CCodeGenerator {
         self.emit_line("}");
         self.emit_line("static void lucid_dynamic_set_attr(LucidVal object, const char* attr, LucidVal value) {");
         self.indent += 1;
+        self.emit_line("if (strcmp(attr, \"__class__\") == 0) { fprintf(stderr, \"__class__ is not part of Lucid; class shape is fixed\\n\"); exit(1); }");
         self.emit_line("if (object.type != LUCID_TYPE_PTR || !object.ptr) { fprintf(stderr, \"attribute assignment requires an object\\n\"); exit(1); }");
         self.emit_line("if (lucid_object_frozen(object.ptr)) { fprintf(stderr, \"cannot mutate frozen object\\n\"); exit(1); }");
         self.emit_line("const char* class_name = lucid_object_class_name(object.ptr);");
@@ -11832,6 +11835,12 @@ static inline void lucid_print_val(LucidVal v) {
                                     ));
                                 }
                             };
+                            if attr_name == "__class__" {
+                                return Err(CodegenError {
+                                    message: "__class__ is not part of Lucid; class shape is fixed"
+                                        .into(),
+                                });
+                            }
                             let mut object = self.emit_expr(&args[0].value)?;
                             let class_name = self
                                 .infer_expr_type(&args[0].value, &HashMap::new())
@@ -15140,6 +15149,11 @@ static inline void lucid_print_val(LucidVal v) {
                 ))
             }
             Expr::Attribute { value, attr, .. } => {
+                if attr == "__class__" {
+                    return Err(CodegenError {
+                        message: "__class__ is not part of Lucid; class shape is fixed".into(),
+                    });
+                }
                 if let Some(function_name) = Self::str_base_metadata_name(value) {
                     match attr.as_str() {
                         "__name__" => {
@@ -21445,6 +21459,32 @@ print(any("".chars))
             let _ = fs::remove_file(&output);
             assert!(
                 error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn native_rejects_class_shape_introspection() {
+        for source in [
+            "class Point:\n    x: int\np = Point(1)\nprint(p.__class__)\n",
+            "class Point:\n    x: int\np = Point(1)\nprint(getattr(p, \"__class__\"))\n",
+            "class Point:\n    x: int\np = Point(1)\nprint(hasattr(p, \"__class__\"))\n",
+            "class Point:\n    x: int\np = Point(1)\nsetattr(p, \"__class__\", Point)\n",
+        ] {
+            let module = parse(source).expect("__class__ source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_codegen_no_class_attr_{}_{}",
+                source.len(),
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("__class__ access should not compile");
+            let _ = fs::remove_file(&output);
+            assert!(
+                error.message.contains("__class__ is not part of Lucid"),
                 "{source}: {}",
                 error.message
             );

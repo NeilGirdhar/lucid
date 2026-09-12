@@ -2849,6 +2849,12 @@ impl Interpreter {
                             })
                         }
                     };
+                    if name == "__class__" {
+                        return Err(RuntimeError {
+                            message: "__class__ is not part of Lucid; class shape is fixed".into(),
+                            span: Span::default(),
+                        });
+                    }
                     if let Some(value) = identity_metadata_attr(&args[0], name) {
                         return Ok(value);
                     }
@@ -2896,6 +2902,12 @@ impl Interpreter {
                         Value::Str(name) => name,
                         _ => return Ok(Value::Bool(false)),
                     };
+                    if name == "__class__" {
+                        return Err(RuntimeError {
+                            message: "__class__ is not part of Lucid; class shape is fixed".into(),
+                            span: Span::default(),
+                        });
+                    }
                     if identity_metadata_attr(&args[0], name).is_some() {
                         return Ok(Value::Bool(true));
                     }
@@ -2931,6 +2943,12 @@ impl Interpreter {
                             })
                         }
                     };
+                    if name == "__class__" {
+                        return Err(RuntimeError {
+                            message: "__class__ is not part of Lucid; class shape is fixed".into(),
+                            span: Span::default(),
+                        });
+                    }
                     match &args[0] {
                         Value::Object {
                             fields, is_frozen, ..
@@ -7359,6 +7377,12 @@ impl Interpreter {
                 }
             }
             Expr::Attribute { value, attr, span } => {
+                if attr == "__class__" {
+                    return Err(RuntimeError {
+                        message: "__class__ is not part of Lucid; class shape is fixed".into(),
+                        span: *span,
+                    });
+                }
                 if let Expr::Ident { name, .. } = &**value {
                     match (name.as_str(), attr.as_str()) {
                         ("float", "inf") => return Ok(Value::Float(f64::INFINITY)),
@@ -10409,6 +10433,26 @@ mod tests {
                 .eval_module(&module)
                 .expect_err("removed builtin must fail explicitly");
             assert!(error.message.contains(expected), "{source}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn runtime_rejects_class_shape_introspection() {
+        for source in [
+            "class Point:\n    x: int\np = Point(1)\nvalue = p.__class__\n",
+            "class Point:\n    x: int\np = Point(1)\nvalue = getattr(p, \"__class__\")\n",
+            "class Point:\n    x: int\np = Point(1)\nvalue = hasattr(p, \"__class__\")\n",
+            "class Point:\n    x: int\np = Point(1)\nsetattr(p, \"__class__\", Point)\n",
+        ] {
+            let module = parse(source).unwrap();
+            let mut interp = Interpreter::new();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("__class__ must not be observable");
+            assert!(
+                error.message.contains("__class__ is not part of Lucid"),
+                "{source}: {error:?}"
+            );
         }
     }
 
