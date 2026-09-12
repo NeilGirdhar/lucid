@@ -11598,7 +11598,13 @@ first = view[0]
              first = data[0]\n\
              tail = data[1:]\n\
              values = list(data)\n\
-             mutable = bytearray(data)\n",
+             mutable = bytearray(data)\n\
+             zero = bytes([0, 65])\n\
+             zero_len = len(zero)\n\
+             zero_first = zero[0]\n\
+             zero_tail = zero[1:]\n\
+             zero_values = list(zero)\n\
+             zero_mutable = bytearray(zero)\n",
         )
         .unwrap();
         let mut interp = Interpreter::new();
@@ -11607,7 +11613,7 @@ first = view[0]
             .expect("bytes conversion should evaluate");
         assert_eq!(
             value,
-            Value::List(Rc::new(RefCell::new(vec![Value::Int(65), Value::Int(66)])))
+            Value::List(Rc::new(RefCell::new(vec![Value::Int(0), Value::Int(65)])))
         );
         assert_eq!(
             interp.env.borrow().get("data"),
@@ -11631,6 +11637,30 @@ first = view[0]
             Some(Value::List(Rc::new(RefCell::new(vec![
                 Value::Int(65),
                 Value::Int(66)
+            ]))))
+        );
+        assert_eq!(
+            interp.env.borrow().get("zero"),
+            Some(Value::Bytes(vec![0, 65]))
+        );
+        assert_eq!(interp.env.borrow().get("zero_len"), Some(Value::Int(2)));
+        assert_eq!(interp.env.borrow().get("zero_first"), Some(Value::Int(0)));
+        assert_eq!(
+            interp.env.borrow().get("zero_tail"),
+            Some(Value::Bytes(vec![65]))
+        );
+        assert_eq!(
+            interp.env.borrow().get("zero_values"),
+            Some(Value::List(Rc::new(RefCell::new(vec![
+                Value::Int(0),
+                Value::Int(65)
+            ]))))
+        );
+        assert_eq!(
+            interp.env.borrow().get("zero_mutable"),
+            Some(Value::List(Rc::new(RefCell::new(vec![
+                Value::Int(0),
+                Value::Int(65)
             ]))))
         );
     }

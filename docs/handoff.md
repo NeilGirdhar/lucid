@@ -517,7 +517,8 @@ diverged:
   The lexer and parser recognize `b"..."` literals, and both execution paths
   now carry immutable bytes as distinct runtime values for conversion,
   indexing, slicing, iteration, length, hashing, printing, and erased type
-  checks.
+  checks. Native bytes use an explicit pointer-and-length payload, so embedded
+  zero bytes are preserved instead of truncating through C string semantics.
 * Recovering syntax parses now preserve valid prefixes and report lexical
   failures as structured `ParseError` values with source spans, matching
   grammar-error recovery and giving diagnostic consumers one error shape.
