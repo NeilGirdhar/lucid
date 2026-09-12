@@ -884,7 +884,15 @@ impl Type {
                         "Reversible",
                         "Buffer",
                     ],
-                    "ByteArray" | "MemoryView" => &["Sized", "Container", "Buffer"],
+                    "ByteArray" | "MemoryView" => &[
+                        "Sized",
+                        "Container",
+                        "Collection",
+                        "Sequence",
+                        "Iterable",
+                        "Reversible",
+                        "Buffer",
+                    ],
                     _ => &[],
                 };
                 if builtin_traits.contains(&target_trait.as_str()) {
@@ -1615,7 +1623,7 @@ impl TypeChecker {
             }
         }
         for name in ["Bytes", "ByteArray", "MemoryView"] {
-            let interfaces = if name == "Bytes" {
+            let interfaces = if matches!(name, "Bytes" | "ByteArray" | "MemoryView") {
                 vec![
                     "Buffer".into(),
                     "Sized".into(),
@@ -2136,7 +2144,15 @@ impl TypeChecker {
                             type_args: Vec::new(),
                             parent: None,
                             traits: Vec::new(),
-                            interfaces: vec!["Buffer".into()],
+                            interfaces: vec![
+                                "Buffer".into(),
+                                "Sized".into(),
+                                "Container".into(),
+                                "Collection".into(),
+                                "Sequence".into(),
+                                "Iterable".into(),
+                                "Reversible".into(),
+                            ],
                             fields: HashMap::new(),
                             is_sealed: true,
                         }),
@@ -4415,7 +4431,11 @@ impl TypeChecker {
                     .unwrap_or(Type::TypeVar("Any".into()))
             }
             Type::Class { name, .. } if name == "range" => Type::Int,
-            Type::Class { name, .. } if name == "Bytes" => Type::Int,
+            Type::Class { name, .. }
+                if matches!(name.as_str(), "Bytes" | "ByteArray" | "MemoryView") =>
+            {
+                Type::Int
+            }
             Type::Shape(_) => Type::Int,
             Type::Record { fields, .. } => Type::make_union(
                 fields
@@ -4459,7 +4479,15 @@ impl TypeChecker {
             Type::Class { name, .. }
                 if matches!(
                     name.as_str(),
-                    "list" | "set" | "frozenset" | "dict" | "frozendict" | "range" | "Bytes"
+                    "list"
+                        | "set"
+                        | "frozenset"
+                        | "dict"
+                        | "frozendict"
+                        | "range"
+                        | "Bytes"
+                        | "ByteArray"
+                        | "MemoryView"
                 )
         ) || matches!(base, Type::Shape(_) | Type::Record { .. })
             || matches!(base, Type::Class { name, .. }
@@ -4490,7 +4518,10 @@ impl TypeChecker {
         matches!(
             base,
             Type::Class { name, .. }
-                if matches!(name.as_str(), "list" | "set" | "frozenset" | "range" | "Bytes")
+                if matches!(
+                    name.as_str(),
+                    "list" | "set" | "frozenset" | "range" | "Bytes" | "ByteArray" | "MemoryView"
+                )
                     || self.env.class_members.get(name).is_some_and(|members| members.contains("__reversed__"))
         )
     }
@@ -6762,7 +6793,15 @@ impl TypeChecker {
                 type_args: Vec::new(),
                 parent: None,
                 traits: Vec::new(),
-                interfaces: vec!["Buffer".into(), "Sized".into(), "Container".into()],
+                interfaces: vec![
+                    "Buffer".into(),
+                    "Sized".into(),
+                    "Container".into(),
+                    "Collection".into(),
+                    "Sequence".into(),
+                    "Iterable".into(),
+                    "Reversible".into(),
+                ],
                 fields: HashMap::new(),
                 is_sealed: true,
             }),
@@ -13791,24 +13830,32 @@ u.id = 2
     }
 
     #[test]
-    fn bytes_are_integer_sequences() {
+    fn binary_buffers_are_integer_sequences() {
         let module = parse(
             r#"data: Bytes = b"AB"
+buffer: ByteArray = bytearray(data)
+view: MemoryView = memoryview(data)
 total = 0
 for byte in data:
     total = total + byte
 copied: list[int] = [byte for byte in data]
+mutable_copy: list[int] = [byte for byte in buffer]
+view_copy: list[int] = [byte for byte in view]
 rev = reversed(data)
+buffer_rev = reversed(buffer)
+view_rev = reversed(view)
 is_iterable = data is Iterable
 is_collection = data is Collection
 is_sequence = data is Sequence
 is_reversible = data is Reversible
+buffer_is_sequence = buffer is Sequence
+view_is_sequence = view is Sequence
 "#,
         )
         .unwrap();
         TypeChecker::new()
             .check_module(&module)
-            .expect("Bytes should type-check as an integer sequence");
+            .expect("binary buffers should type-check as integer sequences");
 
         let bad = parse("data: Bytes = b\"A\"\nfor byte in data:\n    text: str = byte\n").unwrap();
         TypeChecker::new()

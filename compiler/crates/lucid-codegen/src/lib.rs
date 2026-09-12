@@ -1780,9 +1780,9 @@ impl CCodeGenerator {
         }
         self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
         self.emit_line("if (strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_BYTES;");
         self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_LIST || (value.type == LUCID_TYPE_PTR && value.ptr && lucid_object_buffer(value.ptr));");
-        self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_BYTES;");
         self.emit_line(
             "if (strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;",
         );
@@ -17714,21 +17714,21 @@ print(readonly[1:][0])
     }
 
     #[test]
-    fn native_bytes_iterate_as_integer_sequence() {
-        let source = "data = b\"AB\"\ntotal = 0\nfor byte in data:\n    total = total + byte\nprint(total)\nprint(list(data)[1])\nprint(reversed(data)[0])\nprint(sum(data))\nprint(max(data))\nprint(enumerate(data)[0][1])\nprint(sorted(bytes([66, 65]))[0])\nprint(data is Iterable)\nprint(data is Collection)\nprint(data is Sequence)\nprint(data is Reversible)\ndef identity(value: Any) -> Any:\n    return value\nprint(identity(data) is Sequence)\n";
-        let module = parse(source).expect("bytes sequence source should parse");
+    fn native_binary_buffers_iterate_as_integer_sequences() {
+        let source = "data = b\"AB\"\nbuffer = bytearray(data)\nview = memoryview(data)\ntotal = 0\nfor byte in data:\n    total = total + byte\nbuffer_total = 0\nfor byte in buffer:\n    buffer_total = buffer_total + byte\nview_total = 0\nfor byte in view:\n    view_total = view_total + byte\nprint(total)\nprint(buffer_total)\nprint(view_total)\nprint(list(data)[1])\nprint(list(buffer)[1])\nprint(list(view)[1])\nprint(reversed(data)[0])\nprint(reversed(buffer)[0])\nprint(reversed(view)[0])\nprint(sum(data))\nprint(sum(view))\nprint(max(data))\nprint(enumerate(data)[0][1])\nprint(sorted(bytes([66, 65]))[0])\nprint(data is Iterable)\nprint(data is Collection)\nprint(data is Sequence)\nprint(data is Reversible)\nprint(buffer is Sequence)\nprint(view is Sequence)\ndef identity(value: Any) -> Any:\n    return value\nprint(identity(data) is Sequence)\nprint(identity(view) is Sequence)\n";
+        let module = parse(source).expect("binary sequence source should parse");
         let output = std::env::temp_dir().join(format!(
-            "lucid_native_bytes_sequence_{}",
+            "lucid_native_binary_sequence_{}",
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("bytes sequence should compile");
+        compile_to_native(&module, &output, 0).expect("binary sequence should compile");
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "131\n66\n66\n131\n66\n65\n65\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+            "131\n131\n131\n66\n66\n66\n66\n66\n66\n131\n131\n66\n65\n65\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
         );
     }
 
@@ -18100,7 +18100,7 @@ print(view is Collection)
         assert!(run.status.success(), "erased capability failed: {run:?}");
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "false\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\n"
+            "false\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
         );
     }
 

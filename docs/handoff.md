@@ -202,12 +202,12 @@ Native modular `pow` now accepts BigInt exponents and performs the same exact
 repeated-squaring reduction as the interpreter.
 Unary negation now preserves the `int.inf` and `-int.inf` sentinels in both
 execution paths while retaining the checked overflow behavior for `int.nan`.
-`Bytes` now follows the binary-types specification as an immutable integer
-sequence, not only as a buffer: the checker accepts iteration, sequence
-capability checks, comprehensions, and reversible use; the interpreter and
-native backend materialize byte values as `int` elements for loops and
-iterable builtins while preserving `Bytes` membership as byte-value
-membership.
+The binary buffer family now follows the binary-types specification as integer
+sequences, not only as buffers: the checker accepts iteration, sequence
+capability checks, comprehensions, and reversible use for `Bytes`,
+`ByteArray`, and `MemoryView`; the interpreter and native backend materialize
+byte values as `int` elements for loops and iterable builtins while preserving
+binary membership as byte-value membership.
 
 ## Verified baseline
 
