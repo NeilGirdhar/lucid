@@ -33,7 +33,7 @@ class Parameters[X, Y, Z: ~dict[str, object]](Arguments[Y, Z]):
     factory from_arguments(cls, args: ~Arguments[Y, Z]) -> Parameters[(), Y, Z]:
         return construct(args.vpargs, args.kwargs, ())
 
-    def __spread__(self: ~Self) -> ~Self:
+    override def __spread__(self: ~Self) -> ~Self:
         return self
 ```
 `Arguments` converts itself into the `Parameters` it structurally is

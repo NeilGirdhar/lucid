@@ -610,11 +610,23 @@ impl Type {
         match (self, target) {
             (
                 Type::View {
-                    mutability: MutabilityView::Immutable,
+                    mutability: MutabilityView::Immutable | MutabilityView::ReadOnly,
                     inner: i1,
                 },
                 Type::View {
                     mutability: MutabilityView::ReadOnly,
+                    inner: i2,
+                },
+            ) => {
+                return i1.is_subtype_of(i2, env);
+            }
+            (
+                Type::View {
+                    mutability: MutabilityView::Immutable,
+                    inner: i1,
+                },
+                Type::View {
+                    mutability: MutabilityView::Immutable,
                     inner: i2,
                 },
             ) => {
@@ -8861,18 +8873,23 @@ impl TypeChecker {
                         span: *span,
                     });
                 };
-                let Some(class_type) = self.env.classes.get(class_name).cloned() else {
+                let Some(mut class_type) = self.env.classes.get(class_name).cloned() else {
                     return Err(TypeError {
                         message: format!("unknown enclosing class '{class_name}'"),
                         span: *span,
                     });
                 };
-                let field_order = self
-                    .env
-                    .class_field_order
-                    .get(class_name)
-                    .cloned()
-                    .unwrap_or_default();
+                if let Some(Type::Class {
+                    name: return_class, ..
+                }) = self.env.current_return_type.as_ref()
+                {
+                    if return_class == class_name {
+                        if let Some(return_type) = self.env.current_return_type.clone() {
+                            class_type = return_type;
+                        }
+                    }
+                }
+                let field_order = self.class_constructor_field_names(class_name);
                 if args.len() != field_order.len() {
                     return Err(TypeError {
                         message: format!(
@@ -8884,31 +8901,34 @@ impl TypeChecker {
                         span: *span,
                     });
                 }
-                if let Type::Class { fields, .. } = &class_type {
-                    for (index, argument) in args.iter().enumerate() {
-                        let field_name = argument
-                            .name
-                            .as_deref()
-                            .unwrap_or_else(|| field_order[index].as_str());
-                        let Some(field_type) = fields.get(field_name) else {
-                            return Err(TypeError {
-                                message: format!(
-                                    "construct for '{}' has no field named '{}'",
-                                    class_name, field_name
-                                ),
-                                span: argument.span,
-                            });
-                        };
-                        let argument_type = self.type_of_expr(&argument.value)?;
-                        if !argument_type.is_subtype_of(field_type, &self.env) {
-                            return Err(TypeError {
-                                message: format!(
-                                    "construct field '{}' expects {:?}, got {:?}",
-                                    field_name, field_type, argument_type
-                                ),
-                                span: argument.value.span(),
-                            });
-                        }
+                for (index, argument) in args.iter().enumerate() {
+                    let field_name = argument
+                        .name
+                        .as_deref()
+                        .unwrap_or_else(|| field_order[index].as_str());
+                    let Some(field_type) = self.class_field_type(class_name, field_name) else {
+                        return Err(TypeError {
+                            message: format!(
+                                "construct for '{}' has no field named '{}'",
+                                class_name, field_name
+                            ),
+                            span: argument.span,
+                        });
+                    };
+                    let field_type = if let Type::Class { type_args, .. } = &class_type {
+                        self.instantiate_class_member_type(class_name, type_args, field_type)
+                    } else {
+                        field_type
+                    };
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !argument_type.is_subtype_of(&field_type, &self.env) {
+                        return Err(TypeError {
+                            message: format!(
+                                "construct field '{}' expects {:?}, got {:?}",
+                                field_name, field_type, argument_type
+                            ),
+                            span: argument.value.span(),
+                        });
                     }
                 }
                 Ok(class_type)
@@ -11200,6 +11220,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("a type variable should satisfy a generic bound carried from its declaration");
+    }
+
+    #[test]
+    fn parameter_bundle_factory_uses_bounds_and_inherited_construct_fields() {
+        let module = parse(
+            "class Arguments[Y, Z: ~dict[str, object]]:\n    vpargs: list[Y]\n    kwargs: Z\n\n    def __spread__(self: ~Self) -> ~Parameters[(), Y, Z]:\n        return Parameters.from_arguments(self)\n\nclass Parameters[X, Y, Z: ~dict[str, object]](Arguments[Y, Z]):\n    pargs: X\n\n    factory from_arguments(cls, args: ~Arguments[Y, Z]) -> Parameters[(), Y, Z]:\n        return construct(args.vpargs, args.kwargs, ())\n\n    override def __spread__(self: ~Self) -> ~Self:\n        return self\n",
+        )
+        .unwrap();
+        TypeChecker::new().check_module(&module).expect(
+            "Parameters.from_arguments should preserve generic bounds and inherited fields",
+        );
     }
 
     #[test]
