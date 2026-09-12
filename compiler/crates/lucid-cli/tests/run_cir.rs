@@ -937,6 +937,71 @@ fn run_cir_executes_post_diamond_continuation() {
 }
 
 #[test]
+fn run_cir_executes_dynamic_elif_post_diamond_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_elif_post_diamond_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int, other: int):\n    if value > 0:\n        result = value\n    elif other > 0:\n        result = other\n    else:\n        result = 0\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let first = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "41,5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let second = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        first.status.success(),
+        "first branch failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "elif branch failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "else branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), "6");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "1");
+}
+
+#[test]
 fn run_cir_executes_one_sided_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_optional_if_{}.lucid",

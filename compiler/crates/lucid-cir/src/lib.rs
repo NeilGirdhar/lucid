@@ -4623,6 +4623,19 @@ impl Function {
             instructions: &'a mut Vec<Instruction>,
             next: &'a mut u32,
         }
+        struct DynamicElifContinuation<'a> {
+            condition: &'a lucid_syntax::Expr,
+            then_branch: &'a [lucid_syntax::Stmt],
+            elif_condition: &'a lucid_syntax::Expr,
+            elif_branch: &'a [lucid_syntax::Stmt],
+            else_branch: &'a [lucid_syntax::Stmt],
+            suffix: &'a [lucid_syntax::Stmt],
+        }
+        struct BranchLowering {
+            bindings: HashMap<String, ValueId>,
+            instructions: Vec<Instruction>,
+            value: ValueId,
+        }
         fn lower_dynamic_if(
             prefix: &[lucid_syntax::Stmt],
             condition: &lucid_syntax::Expr,
@@ -4773,6 +4786,174 @@ impl Function {
             Ok(function)
         }
 
+        fn lower_dynamic_if_one_elif(
+            prefix: &[lucid_syntax::Stmt],
+            ladder: DynamicElifContinuation<'_>,
+            state: &mut LinearLoweringState<'_>,
+        ) -> Result<Function, LowerError> {
+            fn lower_branch(
+                branch: &[lucid_syntax::Stmt],
+                base_bindings: &HashMap<String, ValueId>,
+                base_instructions: &[Instruction],
+                fallthrough_value: Option<ValueId>,
+                next: &mut u32,
+            ) -> Result<BranchLowering, LowerError> {
+                let mut branch_bindings = base_bindings.clone();
+                let mut branch_instructions = Vec::new();
+                let mut branch_last = fallthrough_value;
+                let mut produced_value = false;
+                for statement in branch {
+                    if statement_static_noop(statement, base_bindings, base_instructions) {
+                        continue;
+                    }
+                    if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
+                        && produced_value
+                    {
+                        continue;
+                    }
+                    visit(
+                        statement,
+                        &mut branch_bindings,
+                        &mut branch_instructions,
+                        next,
+                        &mut branch_last,
+                    )?;
+                    produced_value |= branch_last.is_some();
+                }
+                let value = branch_last.ok_or(LowerError::NoLowerableAssignment)?;
+                Ok(BranchLowering {
+                    bindings: branch_bindings,
+                    instructions: branch_instructions,
+                    value,
+                })
+            }
+
+            let mut last = None;
+            for statement in prefix {
+                visit(
+                    statement,
+                    state.bindings,
+                    state.instructions,
+                    state.next,
+                    &mut last,
+                )?;
+            }
+            let fallthrough_value = last;
+            let condition_value = lower(
+                ladder.condition,
+                state.bindings,
+                state.instructions,
+                state.next,
+            )?;
+            let base_bindings = state.bindings.clone();
+            let base_instructions = state.instructions.clone();
+            let then_lowering = lower_branch(
+                ladder.then_branch,
+                &base_bindings,
+                &base_instructions,
+                fallthrough_value,
+                state.next,
+            )?;
+            let mut elif_condition_instructions = Vec::new();
+            let elif_condition_value = lower(
+                ladder.elif_condition,
+                &base_bindings,
+                &mut elif_condition_instructions,
+                state.next,
+            )?;
+            let elif_lowering = lower_branch(
+                ladder.elif_branch,
+                &base_bindings,
+                &base_instructions,
+                fallthrough_value,
+                state.next,
+            )?;
+            let else_lowering = lower_branch(
+                ladder.else_branch,
+                &base_bindings,
+                &base_instructions,
+                fallthrough_value,
+                state.next,
+            )?;
+            let merged_name = then_lowering
+                .bindings
+                .iter()
+                .find_map(|(name, value)| {
+                    (*value == then_lowering.value
+                        && elif_lowering.bindings.get(name).copied() == Some(elif_lowering.value)
+                        && else_lowering.bindings.get(name).copied() == Some(else_lowering.value))
+                    .then(|| name.clone())
+                })
+                .ok_or(LowerError::UnsupportedExpression)?;
+            let result = ValueId(*state.next);
+            *state.next += 1;
+            let mut merge_bindings = base_bindings;
+            merge_bindings.insert(merged_name, result);
+            let mut merge_instructions = vec![Instruction::Phi {
+                result,
+                incomings: vec![
+                    (BlockId(1), then_lowering.value),
+                    (BlockId(3), elif_lowering.value),
+                    (BlockId(4), else_lowering.value),
+                ],
+            }];
+            let mut merge_last = Some(result);
+            visit_all(
+                ladder.suffix,
+                &mut merge_bindings,
+                &mut merge_instructions,
+                state.next,
+                &mut merge_last,
+            )?;
+            let function = Function {
+                entry: BlockId(0),
+                blocks: vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: std::mem::take(state.instructions),
+                        terminator: Terminator::Branch {
+                            condition: condition_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(2),
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: then_lowering.instructions,
+                        terminator: Terminator::Jump(BlockId(5)),
+                    },
+                    Block {
+                        id: BlockId(2),
+                        instructions: elif_condition_instructions,
+                        terminator: Terminator::Branch {
+                            condition: elif_condition_value,
+                            then_block: BlockId(3),
+                            else_block: BlockId(4),
+                        },
+                    },
+                    Block {
+                        id: BlockId(3),
+                        instructions: elif_lowering.instructions,
+                        terminator: Terminator::Jump(BlockId(5)),
+                    },
+                    Block {
+                        id: BlockId(4),
+                        instructions: else_lowering.instructions,
+                        terminator: Terminator::Jump(BlockId(5)),
+                    },
+                    Block {
+                        id: BlockId(5),
+                        instructions: merge_instructions,
+                        terminator: Terminator::Return(merge_last),
+                    },
+                ],
+            };
+            function
+                .verify()
+                .map_err(|_| LowerError::UnsupportedExpression)?;
+            Ok(function)
+        }
+
         for (index, statement) in module.statements.iter().enumerate() {
             if index + 1 == module.statements.len() {
                 break;
@@ -4791,6 +4972,28 @@ impl Function {
                 continue;
             }
             let prefix = &module.statements[..index];
+            if let ([(elif_condition, elif_branch)], Some(else_branch)) =
+                (elif_branches.as_slice(), else_branch.as_deref())
+            {
+                if constant_truth(elif_condition).is_none() {
+                    return lower_dynamic_if_one_elif(
+                        prefix,
+                        DynamicElifContinuation {
+                            condition,
+                            then_branch,
+                            elif_condition,
+                            elif_branch,
+                            else_branch,
+                            suffix: &module.statements[index + 1..],
+                        },
+                        &mut LinearLoweringState {
+                            bindings: &mut bindings,
+                            instructions: &mut instructions,
+                            next: &mut next,
+                        },
+                    );
+                }
+            }
             let mut probe_bindings = bindings.clone();
             let mut probe_instructions = instructions.clone();
             let mut probe_next = next;
@@ -10060,6 +10263,16 @@ return total
             .expect("one-sided reassignment should merge with the incoming value");
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(2)));
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(3)));
+        let module = lucid_syntax::parse(
+            "if first:\n    value = 10\nelif second:\n    value = 20\nelse:\n    value = 30\nvalue = value + 1\n",
+        )
+        .unwrap();
+        let function =
+            Function::from_module_linear_with_params(&module, &["first".into(), "second".into()])
+                .expect("dynamic elif continuation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(31)));
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
         )

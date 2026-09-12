@@ -1818,6 +1818,9 @@ diverged:
   body path for supported dynamic pre-return statements, so `run-cir
   --function` can execute branch-local assignment followed by post-diamond
   computation.
+  A single dynamic `elif` with an `else` can now use the same post-chain
+  continuation path when all three arms assign the same local, and the
+  function-lowering fallback exposes that shape through `run-cir --function`.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
