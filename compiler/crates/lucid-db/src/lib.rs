@@ -1297,6 +1297,68 @@ fn collect_typed_body<'db>(
                         });
                     }
                 }
+                if arms.len() >= 2
+                    && arms.iter().all(|arm| arm.guard.is_none())
+                    && arms
+                        .iter()
+                        .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                    && arms.iter().all(|arm| match_arm_result(arm).is_some())
+                {
+                    let detail = arms
+                        .iter()
+                        .map(|arm| match &arm.pattern {
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Int(value),
+                                _,
+                            ) => Ok(format!("i{value}")),
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Bool(value),
+                                _,
+                            ) => Ok(format!("b{value}")),
+                            _ => Err(Arc::from("unsupported match literal pattern")),
+                        })
+                        .collect::<Result<Vec<_>, Arc<str>>>()?
+                        .join(",");
+                    let mut children = vec![subject_id];
+                    let mut result_ids = Vec::with_capacity(arms.len());
+                    for arm in arms {
+                        let Some(value) = match_arm_result(arm) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let Some(id) = nodes
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == value.span())
+                            .map(|node| node.id)
+                        else {
+                            result_ids.clear();
+                            break;
+                        };
+                        result_ids.push(id);
+                    }
+                    if result_ids.len() == arms.len() {
+                        children.extend(result_ids);
+                        let id = u32::try_from(nodes.len())
+                            .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                        let Some(result) = match_arm_result(&arms[0]) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let ty = checker
+                            .type_of_expr(result)
+                            .map_err(|error| Arc::<str>::from(error.message))?
+                            .canonical();
+                        nodes.push(TypedExpr {
+                            id,
+                            type_id: TypeId::new(db, ty.canonical_string()),
+                            type_name: ty.canonical_string(),
+                            kind: "optional-match-chain".into(),
+                            detail: Some(format!("literal-chain:{detail}")),
+                            children: Arc::from(children),
+                            literal: None,
+                            span: subject.span(),
+                        });
+                    }
+                }
             }
             Stmt::Try {
                 body,
@@ -1868,7 +1930,10 @@ pub fn lower_function_body(
         )
     {
         if let Some(root) = function.body_expressions.iter().rev().find(|node| {
-            matches!(node.kind.as_str(), "match" | "match-chain") && node.span == subject.span()
+            matches!(
+                node.kind.as_str(),
+                "match" | "match-chain" | "optional-match-chain"
+            ) && node.span == subject.span()
         }) {
             let nodes = function
                 .body_expressions
@@ -7513,6 +7578,15 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("multi-arm optional match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm optional match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));

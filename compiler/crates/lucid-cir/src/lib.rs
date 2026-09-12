@@ -699,7 +699,10 @@ impl Function {
                         local_bindings,
                     );
                 }
-                if node.kind == "match-chain" && node.children.len() >= 3 {
+                if matches!(node.kind.as_str(), "match-chain" | "optional-match-chain")
+                    && node.children.len() >= 3
+                {
+                    let optional_chain = node.kind == "optional-match-chain";
                     let Some(detail) = node.detail.as_deref() else {
                         return Err(LowerError::UnsupportedExpression);
                     };
@@ -722,7 +725,8 @@ impl Function {
                     let Some(patterns) = patterns else {
                         return Err(LowerError::UnsupportedExpression);
                     };
-                    if patterns.len() + 2 != node.children.len() {
+                    let expected_children = patterns.len() + if optional_chain { 1 } else { 2 };
+                    if expected_children != node.children.len() {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     fn remap_instruction(instruction: &Instruction, offset: u32) -> Instruction {
@@ -1040,7 +1044,7 @@ impl Function {
                             local_bindings,
                         )?)?);
                     }
-                    let mut results = Vec::with_capacity(patterns.len() + 1);
+                    let mut results = Vec::with_capacity(node.children.len() - 1);
                     for result in &node.children[1..] {
                         results.push(single_block(Self::from_typed_graph(
                             nodes,
@@ -1050,7 +1054,8 @@ impl Function {
                         )?)?);
                     }
                     let mut next_value_offset = 0;
-                    let mut blocks = Vec::with_capacity(patterns.len() * 2 + 2);
+                    let mut blocks =
+                        Vec::with_capacity(patterns.len() * 2 + if optional_chain { 1 } else { 2 });
                     let merge_block = BlockId(
                         u32::try_from(patterns.len() * 2 + 1)
                             .map_err(|_| LowerError::UnsupportedExpression)?,
@@ -1095,16 +1100,36 @@ impl Function {
                             &mut next_value_offset,
                         );
                         phi_incomings.push((result_block, result_value));
+                        let result_terminator = if optional_chain {
+                            Terminator::Return(Some(result_value))
+                        } else {
+                            Terminator::Jump(merge_block)
+                        };
                         blocks.push(Block {
                             id: result_block,
                             instructions: result_instructions,
-                            terminator: Terminator::Jump(merge_block),
+                            terminator: result_terminator,
                         });
                     }
                     let fallback_block = BlockId(
                         u32::try_from(patterns.len() * 2)
                             .map_err(|_| LowerError::UnsupportedExpression)?,
                     );
+                    if optional_chain {
+                        blocks.push(Block {
+                            id: fallback_block,
+                            instructions: Vec::new(),
+                            terminator: Terminator::Return(None),
+                        });
+                        let function = Self {
+                            entry: BlockId(0),
+                            blocks,
+                        };
+                        function
+                            .verify()
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        return Ok(function);
+                    }
                     let fallback = results.last().ok_or(LowerError::UnsupportedExpression)?;
                     let (fallback_instructions, fallback_value) =
                         remap_block(fallback.0.clone(), fallback.1, &mut next_value_offset);
@@ -7795,6 +7820,59 @@ return total
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
+    }
+
+    #[test]
+    fn lowers_typed_optional_match_chain_with_expression_results() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("Mul".into()),
+                children: vec![0, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "optional-match-chain".into(),
+                detail: Some("literal-chain:i1,i2".into()),
+                children: vec![0, 2, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 5, &["value".into()])
+            .expect("typed optional match-chain should lower nonliteral arm results");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
     }
 
     #[test]
