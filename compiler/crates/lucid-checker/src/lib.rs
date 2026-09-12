@@ -6345,6 +6345,37 @@ impl TypeChecker {
                                     .get(name)
                                     .cloned()
                                     .unwrap_or_default();
+                                if let Some((required, maximum)) = self.env.function_arity.get(name) {
+                                    let supplied = args
+                                        .iter()
+                                        .filter(|argument| !matches!(argument.value, Expr::Skip(_)))
+                                        .count();
+                                    if supplied < *required {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "function '{}' requires at least {} arguments",
+                                                name, required
+                                            ),
+                                            span: args
+                                                .first()
+                                                .map(|argument| argument.value.span())
+                                                .unwrap_or_default(),
+                                        });
+                                    }
+                                    if maximum.is_some_and(|maximum| supplied > maximum) {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "function '{}' accepts at most {} arguments",
+                                                name,
+                                                maximum.unwrap_or_default()
+                                            ),
+                                            span: args
+                                                .last()
+                                                .map(|argument| argument.value.span())
+                                                .unwrap_or_default(),
+                                        });
+                                    }
+                                }
                                 let mut positional_index = 0usize;
                                 let mut saw_named = false;
                                 let mut seen_named = HashSet::new();
@@ -10736,5 +10767,19 @@ def reject(value: not int) -> none:
         .unwrap();
         let error = TypeChecker::new().check_module(&keyword_only).unwrap_err();
         assert!(error.message.contains("keyword-only argument"));
+
+        let too_many = parse(
+            "def f(value: int) -> int:\n    return value\nresult = f(1, 2)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&too_many).unwrap_err();
+        assert!(error.message.contains("accepts at most"));
+
+        let too_few = parse(
+            "def f(left: int, right: int) -> int:\n    return left + right\nresult = f(1)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&too_few).unwrap_err();
+        assert!(error.message.contains("requires at least") || error.message.contains("required argument"));
     }
 }
