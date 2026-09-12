@@ -1563,7 +1563,7 @@ pub fn lower_function_body(
     if !function.is_async
         && matches!(
             source_function.body.last(),
-            Some(lucid_syntax::Stmt::Return { .. })
+            Some(lucid_syntax::Stmt::Return { .. } | lucid_syntax::Stmt::Pass(_))
         )
         && source_function
             .body
@@ -1574,9 +1574,20 @@ pub fn lower_function_body(
             statements: source_function.body.clone(),
             span: source_function.span,
         };
-        if let Ok(lowered) =
+        if let Ok(mut lowered) =
             lucid_cir::Function::from_module_linear_with_params(&module, &function.parameter_names)
         {
+            if matches!(
+                source_function.body.last(),
+                Some(lucid_syntax::Stmt::Pass(_))
+            ) {
+                if let Some(block) = lowered.blocks.last_mut() {
+                    block.terminator = lucid_cir::Terminator::Return(None);
+                }
+                lowered
+                    .verify()
+                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+            }
             return Ok(Arc::new(lowered));
         }
     }
@@ -5981,6 +5992,22 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("setup before pass should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "augassign-before-pass.lucid",
+            "def answer(value: int):\n    temporary = value\n    temporary += 1\n    pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("augmented assignment before pass should lower to void CIR");
         assert_eq!(function.execute_with_args(&[42]), Ok(None));
         assert!(
             function
