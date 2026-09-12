@@ -10805,6 +10805,20 @@ return total
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
+            r#"total = 0
+raw_stride = -1
+stride = raw_stride
+for i in range(n, 0, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("range chained step literal alias accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range chained step literal alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
             r#"for i in range(n):
     pass
 "#,
@@ -10825,6 +10839,20 @@ for i in range(n, stop, stride):
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("void descending range alias loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(None));
+
+        let module = lucid_syntax::parse(
+            r#"stop = limit
+raw_stride = -1
+stride = raw_stride
+for i in range(n, stop, stride):
+    pass
+"#,
+        )
+        .expect("void descending range chained step alias fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("void descending range chained step alias loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(None));
 
         let module = lucid_syntax::parse(

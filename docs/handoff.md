@@ -576,6 +576,8 @@ diverged:
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
   CIR/native path. Three-argument ranges may also spell a statically known
   literal step through a local alias, as in `stride = -1; range(n, 0, stride)`.
+  That step alias may itself point at another local literal alias, matching
+  the existing chained range-bound alias behavior.
   Void no-op range loops now lower to the same counted CFG shape and return
   `None`; they accept the same local bound aliases and statically known literal
   step aliases as the accumulator form.

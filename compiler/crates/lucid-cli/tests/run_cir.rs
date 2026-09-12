@@ -1803,6 +1803,37 @@ fn run_cir_executes_range_accumulator_with_local_step_literal_alias() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_chained_local_step_literal_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_chained_step_literal_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down(n: int):\n    total = 0\n    raw_stride = -1\n    stride = raw_stride\n    for i in range(n, 0, stride):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range chained step literal-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
 fn run_cir_executes_void_range_with_local_aliases() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_void_range_aliases_{}.lucid",
