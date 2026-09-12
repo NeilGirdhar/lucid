@@ -4327,6 +4327,9 @@ impl TypeChecker {
                 };
 
                 if let Pattern::Ident(name, _) = pattern {
+                    if name == "_" {
+                        return Ok(());
+                    }
                     self.env
                         .variables
                         .insert(name.clone(), (target_type, MutabilityView::Mutable));
@@ -4398,6 +4401,10 @@ impl TypeChecker {
                 }
                 match target {
                     Expr::Ident { name, .. } => {
+                        if name == "_" {
+                            self.env.exact_variables.remove(name);
+                            return Ok(());
+                        }
                         if self.env.final_variables.contains(name) {
                             return Err(TypeError {
                                 message: format!("cannot reassign final variable '{name}'"),
@@ -4473,6 +4480,9 @@ impl TypeChecker {
                                 _ => None,
                             };
                             if let Some(name) = name {
+                                if name == "_" {
+                                    continue;
+                                }
                                 if self.env.final_variables.contains(name) {
                                     return Err(TypeError {
                                         message: format!("cannot reassign final variable '{name}'"),
@@ -5430,7 +5440,7 @@ impl TypeChecker {
             Pattern::Ident(name, _)
                 if !matches!(
                     name.as_str(),
-                    "int" | "float" | "bool" | "str" | "none" | "None"
+                    "_" | "int" | "float" | "bool" | "str" | "none" | "None"
                 ) && !self.env.classes.contains_key(name) =>
             {
                 self.env.variables.insert(
@@ -5976,7 +5986,13 @@ impl TypeChecker {
                 LiteralValue::Ellipsis => Type::None,
             }),
             Expr::Ident { name, span } => {
-                if let Some((t, _)) = self.env.variables.get(name) {
+                if name == "_" {
+                    Err(TypeError {
+                        message: "'_' is a black-hole assignment target, not a readable value"
+                            .into(),
+                        span: *span,
+                    })
+                } else if let Some((t, _)) = self.env.variables.get(name) {
                     Ok(t.clone())
                 } else if let Some(t) = self.env.classes.get(name) {
                     Ok(t.clone())
@@ -8321,9 +8337,11 @@ impl TypeChecker {
                 let elem_t = self.iterable_element_type(&iter_t);
                 let mut sub = self.clone();
                 if let Pattern::Ident(name, _) = target {
+                    if name != "_" {
                     sub.env
                         .variables
                         .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                    }
                 }
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
@@ -8365,9 +8383,11 @@ impl TypeChecker {
                 let elem_t = self.iterable_element_type(&iter_t);
                 let mut sub = self.clone();
                 if let Pattern::Ident(name, _) = target {
+                    if name != "_" {
                     sub.env
                         .variables
                         .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                    }
                 }
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
@@ -8410,9 +8430,11 @@ impl TypeChecker {
                 let elem_t = self.iterable_element_type(&iter_t);
                 let mut sub = self.clone();
                 if let Pattern::Ident(name, _) = target {
+                    if name != "_" {
                     sub.env
                         .variables
                         .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                    }
                 }
                 if let Some(condition) = condition {
                     let condition_type = sub.type_of_expr(condition)?;
@@ -10244,6 +10266,26 @@ u.id = 2
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&bad).unwrap_err();
         assert!(err.message.contains("undefined variable 'value'"));
+    }
+
+    #[test]
+    fn black_hole_assignment_target_is_not_readable() {
+        let module = parse("_ = 1\nother = 2\n").unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(&module)
+            .expect("discard assignment should not bind a readable name");
+
+        for source in [
+            "_ = 1\nvalue = _\n",
+            "left, _ = [1, 2]\nvalue = _\n",
+            "values = [_ for _ in [1, 2]]\n",
+        ] {
+            let module = parse(source).unwrap();
+            let mut checker = TypeChecker::new();
+            let err = checker.check_module(&module).unwrap_err();
+            assert!(err.message.contains("black-hole assignment target"));
+        }
     }
 
     #[test]
