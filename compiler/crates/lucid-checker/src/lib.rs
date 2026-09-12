@@ -1048,6 +1048,29 @@ impl TypeChecker {
         }
     }
 
+    fn check_call_argument_order(args: &[Arg]) -> Result<(), TypeError> {
+        let mut keyword_section_started = false;
+        for argument in args {
+            if argument.name.is_some() || argument.is_dict_spread {
+                keyword_section_started = true;
+            } else if argument.is_gather_spread {
+                if keyword_section_started {
+                    return Err(TypeError {
+                        message: "positional argument follows named argument".into(),
+                        span: argument.span,
+                    });
+                }
+                keyword_section_started = true;
+            } else if keyword_section_started {
+                return Err(TypeError {
+                    message: "positional argument follows named argument".into(),
+                    span: argument.span,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         let mut env = TypeEnvironment::default();
         // Register builtins
@@ -5915,6 +5938,7 @@ impl TypeChecker {
                 }
             }
             Expr::Call { func, args, .. } => {
+                Self::check_call_argument_order(args)?;
                 if matches!(&**func, Expr::Type(_)) {
                     return Err(TypeError {
                         message: "type() is not supported; use class[X] for type annotations and `is` for instance checks".into(),
@@ -11836,6 +11860,30 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         let error = TypeChecker::new().check_module(&late).unwrap_err();
+        assert!(error.message.contains("positional argument follows named"));
+
+        let late_spread = parse(
+            "def f(left: int, right: int, tail: int) -> int:\n    return left + right + tail\nresult = f(tail=3, *[1, 2])\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&late_spread).unwrap_err();
+        assert!(error.message.contains("positional argument follows named"));
+
+        let spread_before_keyword = parse(
+            "def f(left: int, right: int, tail: int) -> int:\n    return left + right + tail\nresult = f(*[1, 2], tail=3)\n",
+        )
+        .unwrap();
+        assert!(TypeChecker::new()
+            .check_module(&spread_before_keyword)
+            .is_ok());
+
+        let late_gather_spread = parse(
+            "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef f(left: int, right: int, ***rest: Arguments) -> int:\n    return left + right\nresult = f(left=1, ***missing)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new()
+            .check_module(&late_gather_spread)
+            .unwrap_err();
         assert!(error.message.contains("positional argument follows named"));
 
         let positional_only = parse(
