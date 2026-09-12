@@ -563,6 +563,9 @@ diverged:
   standard builtin namespace.
   It tracks modules still being initialized and rejects value cycles instead
   of exposing an incomplete placeholder environment.
+  Imported class, trait, and class-variable registries are propagated back to
+  the importing interpreter, so imported constructors use the same runtime
+  metadata as local classes.
 * Shared ABI consumers now use one `NativeResult::from_result` conversion path
   for successful integer values and checked CIR errors.
   The shared `execute_cir` bridge now maps a valid void return to successful
