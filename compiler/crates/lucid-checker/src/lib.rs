@@ -5664,6 +5664,17 @@ impl TypeChecker {
             .any(|param| param.type_annotation.is_none() && !param.is_gather)
     }
 
+    fn is_argument_bundle_type(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Class { name, .. }
+                if name == "Arguments"
+                    || name == "Parameters"
+                    || name.ends_with("Arguments")
+                    || name.ends_with("Parameters")
+        )
+    }
+
     fn anonymous_function_type_against_expected(
         &self,
         params: &[Param],
@@ -7026,6 +7037,13 @@ impl TypeChecker {
                                 || argument.is_dict_spread
                                 || argument.is_gather_spread
                         }) {
+                            let accepts_gather_bundle = matches!(
+                                &ft,
+                                Type::Function { params, .. }
+                                    if params
+                                        .last()
+                                        .is_some_and(Self::is_argument_bundle_type)
+                            );
                             if let Some(parameter_names) = self.env.function_param_names.get(name) {
                                 let mut seen_named = HashSet::new();
                                 let mut saw_named = false;
@@ -7034,10 +7052,10 @@ impl TypeChecker {
                                 for argument in args {
                                     if let Some(argument_name) = &argument.name {
                                         saw_named = true;
-                                        if !parameter_names
+                                        let known_parameter = parameter_names
                                             .iter()
-                                            .any(|parameter_name| parameter_name == argument_name)
-                                        {
+                                            .any(|parameter_name| parameter_name == argument_name);
+                                        if !known_parameter && !accepts_gather_bundle {
                                             return Err(TypeError {
                                                 message: format!(
                                                     "function '{}' has no parameter named '{}'",
@@ -7055,7 +7073,9 @@ impl TypeChecker {
                                                 span: argument.value.span(),
                                             });
                                         }
-                                        bound.insert(argument_name.clone());
+                                        if known_parameter {
+                                            bound.insert(argument_name.clone());
+                                        }
                                     } else if saw_named {
                                         return Err(TypeError {
                                             message: format!(
@@ -7572,13 +7592,15 @@ impl TypeChecker {
                                 let mut positional_index = 0usize;
                                 let mut saw_named = false;
                                 let mut seen_named = HashSet::new();
+                                let accepts_gather_bundle =
+                                    params.last().is_some_and(Self::is_argument_bundle_type);
                                 for argument in args {
                                     let index = if let Some(argument_name) = &argument.name {
                                         saw_named = true;
-                                        let Some(index) = parameter_names
+                                        let index = parameter_names
                                             .iter()
-                                            .position(|parameter_name| parameter_name == argument_name)
-                                        else {
+                                            .position(|parameter_name| parameter_name == argument_name);
+                                        if index.is_none() && !accepts_gather_bundle {
                                             return Err(TypeError {
                                                 message: format!(
                                                     "callable has no parameter named '{}'",
@@ -7586,7 +7608,7 @@ impl TypeChecker {
                                                 ),
                                                 span: argument.value.span(),
                                             });
-                                        };
+                                        }
                                         if self
                                             .env
                                             .function_positional_only
@@ -7610,6 +7632,9 @@ impl TypeChecker {
                                                 span: argument.value.span(),
                                             });
                                         }
+                                        let Some(index) = index else {
+                                            continue;
+                                        };
                                         index
                                     } else {
                                         if saw_named {
@@ -7639,6 +7664,11 @@ impl TypeChecker {
                                     let Some(parameter) = params.get(index) else {
                                         continue;
                                     };
+                                    if index + 1 == params.len()
+                                        && Self::is_argument_bundle_type(parameter)
+                                    {
+                                        continue;
+                                    }
                                     if matches!(&argument.value, Expr::Ident { name, .. } if name == "_")
                                     {
                                         continue;
@@ -12694,6 +12724,22 @@ def reject(value: not int) -> none:
         .unwrap();
         assert!(TypeChecker::new().check_module(&gather).is_ok());
 
+    }
+
+    #[test]
+    fn gather_parameter_accepts_leftover_keyword_arguments() {
+        let module = parse(
+            "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef f(left: int, right: int, ***rest: Arguments) -> int:\n    return left + right + len(rest.vpargs) + len(rest.kwargs)\nresult = f(1, 2, 3, x=4)\n",
+        )
+        .unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+
+        let no_gather = parse(
+            "def f(left: int, right: int) -> int:\n    return left + right\nresult = f(1, 2, x=4)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&no_gather).unwrap_err();
+        assert!(error.message.contains("no parameter named 'x'"));
     }
 
     #[test]
