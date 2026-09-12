@@ -183,6 +183,7 @@ pub struct CCodeGenerator {
     buffer: String,
     indent: usize,
     temp_var_id: usize,
+    anonymous_adapter_id: usize,
     in_function: bool,
     current_fn_ret_type: Option<String>,
     current_fn_async: bool,
@@ -316,6 +317,7 @@ impl CCodeGenerator {
             buffer: String::new(),
             indent: 0,
             temp_var_id: 0,
+            anonymous_adapter_id: 0,
             in_function: false,
             current_fn_ret_type: None,
             current_fn_async: false,
@@ -7155,7 +7157,40 @@ static inline void lucid_print_val(LucidVal v) {
                     self.collect_anonymous_captures(bound, params, captures);
                 }
             }
-            Expr::Literal { .. } | Expr::Type(_) | Expr::Skip(_) | Expr::AnonymousDef { .. } => {}
+            Expr::AnonymousDef {
+                params: nested_params,
+                body,
+                ..
+            } => {
+                let mut nested_bound = params.clone();
+                for param in nested_params {
+                    nested_bound.insert(param.name.clone());
+                }
+                for param in nested_params {
+                    if let Some(default) = &param.default {
+                        self.collect_anonymous_captures(default, &nested_bound, captures);
+                    }
+                }
+                for statement in body {
+                    match statement {
+                        Stmt::Return {
+                            value: Some(value), ..
+                        }
+                        | Stmt::Expr(value) => {
+                            self.collect_anonymous_captures(value, &nested_bound, captures);
+                        }
+                        Stmt::VarDef {
+                            value: Some(value), ..
+                        }
+                        | Stmt::Assignment { value, .. }
+                        | Stmt::AugAssign { value, .. } => {
+                            self.collect_anonymous_captures(value, &nested_bound, captures);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Expr::Literal { .. } | Expr::Type(_) | Expr::Skip(_) => {}
         }
     }
 
@@ -7166,11 +7201,9 @@ static inline void lucid_print_val(LucidVal v) {
         captures: &[String],
         recursive_name: Option<String>,
     ) -> (String, String) {
-        let adapter = format!(
-            "lucid_closure_call_anon_{}",
-            self.pending_anonymous_adapters.len() + 1
-        );
-        let env_type = format!("LucidAnonEnv_{}", self.pending_anonymous_adapters.len() + 1);
+        self.anonymous_adapter_id += 1;
+        let adapter = format!("lucid_closure_call_anon_{}", self.anonymous_adapter_id);
+        let env_type = format!("LucidAnonEnv_{}", self.anonymous_adapter_id);
         self.pending_anonymous_adapters.push((
             adapter.clone(),
             env_type.clone(),
@@ -7951,8 +7984,14 @@ static inline void lucid_print_val(LucidVal v) {
             self.indent -= 1;
             self.emit_line("}");
         }
-        self.var_types.clear();
-        self.active_capture_names.clear();
+        if !self.pending_anonymous_adapters.is_empty() {
+            self.var_types.clear();
+            self.active_capture_names.clear();
+            self.emit_pending_anonymous_adapters()?;
+        } else {
+            self.var_types.clear();
+            self.active_capture_names.clear();
+        }
         Ok(())
     }
 
@@ -15463,6 +15502,25 @@ print(" ".join(capitalized))
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
             "2\noriginal\noriginal\n<def>"
+        );
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_decorator_factories_capture_configuration() {
+        let source = "def add_offset(amount: int):\n    return def(f: () -> int):\n        return def() -> int: f() + amount\n@add_offset(5)\ndef original() -> int:\n    return 1\nprint(original())\nprint(original.__name__)\n";
+        let module = parse(source).expect("decorator factory source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_decorator_factory_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("decorator factory should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout).trim(),
+            "6\noriginal"
         );
         let _ = std::fs::remove_file(output);
     }
