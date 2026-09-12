@@ -11347,11 +11347,13 @@ static inline void lucid_print_val(LucidVal v) {
                         let callable = self.emit_expr(func)?;
                         let call_args = self.new_temp();
                         let call_kwargs = self.new_temp();
-                        let has_keywords = args.iter().any(|arg| arg.name.is_some());
+                        let has_keywords = args
+                            .iter()
+                            .any(|arg| arg.name.is_some() || arg.is_gather_spread);
                         let mut parts = vec![format!(
                             "LucidList* {call_args} = lucid_list_new({});",
                             args.iter()
-                                .filter(|arg| !matches!(arg.value, Expr::Skip(_)) && arg.name.is_none())
+                                .filter(|arg| !matches!(arg.value, Expr::Skip(_)) && arg.name.is_none() && !arg.is_gather_spread)
                                 .count()
                         )];
                         if has_keywords {
@@ -11359,6 +11361,35 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         for arg in args {
                             if matches!(arg.value, Expr::Skip(_)) {
+                                continue;
+                            }
+                            if arg.is_gather_spread {
+                                let value = self.emit_expr(&arg.value)?;
+                                let bundle_type = self.infer_expr_type(&arg.value, &HashMap::new());
+                                let bundle_name = bundle_type.trim_end_matches('*');
+                                let is_bundle = bundle_name == "Arguments"
+                                    || bundle_name == "Parameters"
+                                    || bundle_name.ends_with("Arguments")
+                                    || bundle_name.ends_with("Parameters");
+                                if !is_bundle {
+                                    return Err(CodegenError { message: "gather spread requires an Arguments or Parameters value".into() });
+                                }
+                                let object = format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
+                                if self
+                                    .known_classes
+                                    .get(bundle_name)
+                                    .is_some_and(|fields| fields.iter().any(|field| field == "pargs"))
+                                {
+                                    parts.push(format!(
+                                        "for (int64_t _i = 0; {object}->pargs && _i < {object}->pargs->len; ++_i) lucid_list_append({call_args}, {object}->pargs->items[_i]);"
+                                    ));
+                                }
+                                parts.push(format!(
+                                    "for (int64_t _i = 0; {object}->vpargs && _i < {object}->vpargs->len; ++_i) lucid_list_append({call_args}, {object}->vpargs->items[_i]);"
+                                ));
+                                parts.push(format!(
+                                    "for (int64_t _i = 0; {object}->kwargs && _i < {object}->kwargs->len; ++_i) lucid_dict_set({call_kwargs}, {object}->kwargs->keys[_i], {object}->kwargs->values[_i]);"
+                                ));
                                 continue;
                             }
                             let value = self.emit_expr(&arg.value)?;
@@ -12990,11 +13021,13 @@ static inline void lucid_print_val(LucidVal v) {
                     let callable = self.emit_expr(func)?;
                     let call_args = self.new_temp();
                     let call_kwargs = self.new_temp();
-                    let has_keywords = args.iter().any(|arg| arg.name.is_some());
+                    let has_keywords = args
+                        .iter()
+                        .any(|arg| arg.name.is_some() || arg.is_gather_spread);
                     let mut parts = vec![format!(
                         "LucidList* {call_args} = lucid_list_new({});",
                         args.iter()
-                            .filter(|arg| !matches!(arg.value, Expr::Skip(_)) && arg.name.is_none())
+                            .filter(|arg| !matches!(arg.value, Expr::Skip(_)) && arg.name.is_none() && !arg.is_gather_spread)
                             .count()
                     )];
                     if has_keywords {
@@ -13002,6 +13035,25 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                     for arg in args {
                         if matches!(arg.value, Expr::Skip(_)) {
+                            continue;
+                        }
+                        if arg.is_gather_spread {
+                            let value = self.emit_expr(&arg.value)?;
+                            let bundle_type = self.infer_expr_type(&arg.value, &HashMap::new());
+                            let bundle_name = bundle_type.trim_end_matches('*');
+                            let is_bundle = bundle_name == "Arguments"
+                                || bundle_name == "Parameters"
+                                || bundle_name.ends_with("Arguments")
+                                || bundle_name.ends_with("Parameters");
+                            if !is_bundle {
+                                return Err(CodegenError { message: "gather spread requires an Arguments or Parameters value".into() });
+                            }
+                            let object = format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
+                            if self.known_classes.get(bundle_name).is_some_and(|fields| fields.iter().any(|field| field == "pargs")) {
+                                parts.push(format!("for (int64_t _i = 0; {object}->pargs && _i < {object}->pargs->len; ++_i) lucid_list_append({call_args}, {object}->pargs->items[_i]);"));
+                            }
+                            parts.push(format!("for (int64_t _i = 0; {object}->vpargs && _i < {object}->vpargs->len; ++_i) lucid_list_append({call_args}, {object}->vpargs->items[_i]);"));
+                            parts.push(format!("for (int64_t _i = 0; {object}->kwargs && _i < {object}->kwargs->len; ++_i) lucid_dict_set({call_kwargs}, {object}->kwargs->keys[_i], {object}->kwargs->values[_i]);"));
                             continue;
                         }
                         let value = self.emit_expr(&arg.value)?;
@@ -19704,6 +19756,25 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "6\n");
+    }
+
+    #[test]
+    fn native_named_gather_value_accepts_gather_spread() {
+        let source = "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef count(***rest: Arguments) -> int:\n    return len(rest.vpargs) + len(rest.kwargs)\nfs = [count]\nargs = Arguments([1], {\"extra\": 2})\nprint(fs[0](***args))\n";
+        let module = parse(source).expect("gather spread value source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_named_gather_spread_value_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("gather spread value should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run gather spread value");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "gather spread value failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
     }
 
     #[test]
