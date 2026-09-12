@@ -3828,6 +3828,25 @@ impl Function {
         }) {
             return None;
         }
+        fn int_literal(expr: &lucid_syntax::Expr) -> Option<i64> {
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(value),
+                    ..
+                } => Some(*value),
+                lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Neg,
+                    expr,
+                    ..
+                } => int_literal(expr).and_then(i64::checked_neg),
+                lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Pos,
+                    expr,
+                    ..
+                } => int_literal(expr),
+                _ => None,
+            }
+        }
         let accumulator_update = match &body[0] {
             lucid_syntax::Stmt::AugAssign {
                 target:
@@ -3867,17 +3886,11 @@ impl Function {
             [stop] => (&zero, &stop.value, 1),
             [start, stop] => (&start.value, &stop.value, 1),
             [start, stop, step] => {
-                let lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(step),
-                    ..
-                } = &step.value
-                else {
-                    return None;
-                };
-                if *step == 0 {
+                let step = int_literal(&step.value)?;
+                if step == 0 {
                     return None;
                 }
-                (&start.value, &stop.value, *step)
+                (&start.value, &stop.value, step)
             }
             _ => return None,
         };
@@ -3885,40 +3898,33 @@ impl Function {
             if let Some(statement) = bound_alias {
                 let (alias_name, value) = initialized_ident(statement)?;
                 if matches!(expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name) {
-                    return match value {
-                        lucid_syntax::Expr::Literal {
-                            value: lucid_syntax::LiteralValue::Int(value),
-                            ..
-                        } => Some(Instruction::ConstInt {
-                            result,
-                            value: *value,
-                        }),
-                        lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
-                            result,
-                            index: parameter_names
-                                .iter()
-                                .position(|parameter| parameter == name)?
-                                as u32,
-                        }),
-                        _ => None,
+                    return match int_literal(value) {
+                        Some(value) => Some(Instruction::ConstInt { result, value }),
+                        None => match value {
+                            lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
+                                result,
+                                index: parameter_names
+                                    .iter()
+                                    .position(|parameter| parameter == name)?
+                                    as u32,
+                            }),
+                            _ => None,
+                        },
                     };
                 }
             }
-            match expr {
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                } => Some(Instruction::ConstInt {
-                    result,
-                    value: *value,
-                }),
-                lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
-                    result,
-                    index: parameter_names
-                        .iter()
-                        .position(|parameter| parameter == name)? as u32,
-                }),
-                _ => None,
+            match int_literal(expr) {
+                Some(value) => Some(Instruction::ConstInt { result, value }),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
+                        result,
+                        index: parameter_names
+                            .iter()
+                            .position(|parameter| parameter == name)?
+                            as u32,
+                    }),
+                    _ => None,
+                },
             }
         };
         if let Some(statement) = bound_alias {
@@ -9473,6 +9479,34 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("range start alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = limit
+for i in range(n, stop, -1):
+    total += i
+return total
+"#,
+        )
+        .expect("descending range alias accumulation fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("descending range alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+unused = n
+for i in range(n):
+    total += i
+return total
+"#,
+        )
+        .expect("unused range alias fixture should parse");
+        assert_eq!(
+            Function::from_module_linear_with_params(&module, &["n".into()]),
+            Err(LowerError::UnsupportedExpression)
+        );
 
         let module =
             lucid_syntax::parse("total = 20\nfor i in range(n):\n    total -= i\nreturn total\n")

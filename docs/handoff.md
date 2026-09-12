@@ -564,9 +564,12 @@ diverged:
   form also has Cranelift result-ABI coverage.
   Range accumulator loops now also accept one pre-loop local alias for a
   literal or parameter-backed range bound, whether that alias is used as the
-  start or stop operand, so `limit = n; for i in range(limit)` and
-  `begin = seed; for i in range(begin, n)` stay on the same Phi-backed
-  CIR/native path.
+  start or stop operand in one-, two-, or three-argument ranges with a literal
+  step. This keeps `limit = n; for i in range(limit)`,
+  `begin = seed; for i in range(begin, n)`, and
+  `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
+  CIR/native path. An unused pre-loop alias is still rejected instead of being
+  treated as loop setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from an integer literal or parameter, then updated before the
   induction update. The accumulator step can be a literal or the current
