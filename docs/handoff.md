@@ -485,8 +485,8 @@ diverged:
   now reuses the same typed-local CIR path for selected `then`, `elif`, and
   `else` arms.
   Selected static branches ending in a bare `return` lower to verified void CIR
-  when their prefix is provably no-op; setup work before a bare return remains
-  rejected until the void path can preserve those instructions.
+  through the same typed-local void path, preserving setup instructions before
+  returning no value.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking

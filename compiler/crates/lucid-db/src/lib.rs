@@ -4268,6 +4268,52 @@ pub fn lower_function_body(
             .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
         Ok(Arc::new(function))
     };
+    let lower_bindings_to_void = |local_specs: &[(String, lucid_syntax::Span)]| {
+        if local_specs.is_empty() {
+            return void_function();
+        }
+        let nodes = function
+            .body_expressions
+            .iter()
+            .map(|node| lucid_cir::TypedExprNode {
+                id: node.id,
+                kind: node.kind.clone(),
+                detail: node.detail.clone(),
+                children: node.children.to_vec(),
+                literal: node.literal,
+            })
+            .collect::<Vec<_>>();
+        let local_bindings = local_specs
+            .iter()
+            .map(|(name, span)| {
+                function
+                    .body_expressions
+                    .iter()
+                    .rev()
+                    .find(|node| node.span == *span)
+                    .map(|node| (name.clone(), node.id))
+                    .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let root_id = local_bindings
+            .last()
+            .map(|(_, id)| *id)
+            .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
+        let mut lowered = lucid_cir::Function::from_typed_function_body_with_locals(
+            &nodes,
+            root_id,
+            &function.parameter_names,
+            &local_bindings,
+        )
+        .map_err(|_| Arc::<str>::from("unsupported expression before bare return"))?;
+        if let Some(block) = lowered.blocks.last_mut() {
+            block.terminator = lucid_cir::Terminator::Return(None);
+        }
+        lowered
+            .verify()
+            .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+        Ok(Arc::new(lowered))
+    };
     let (root_span, local_specs): (lucid_syntax::Span, Vec<(String, lucid_syntax::Span)>) =
         match source_function.body.as_slice() {
             [
@@ -4308,12 +4354,7 @@ pub fn lower_function_body(
                                 for statement in &branch[..branch.len().saturating_sub(1)] {
                                     collect_pre_return_binding(statement, &mut bindings)?;
                                 }
-                                if bindings.is_empty() {
-                                    return void_function();
-                                }
-                                return Err(Arc::from(
-                                    "constant function branch has no lowerable return",
-                                ));
+                                return lower_bindings_to_void(&bindings);
                             }
                             let Some(lucid_syntax::Stmt::Return {
                                 value: Some(value), ..
@@ -5809,10 +5850,17 @@ mod tests {
             "constant-setup-before-bare-return-branch.lucid",
             "def answer(value: int):\n    if true:\n        temporary = value + 1\n        return\n    else:\n        return value\n",
         );
-        let error = lower_function_body(&db, file, "answer".into())
+        let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
-            .expect_err("setup before selected bare return must not be erased");
-        assert!(error.contains("constant function branch"));
+            .expect("setup before selected bare return should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
 
         let file = db.add_file(
             "dynamic-elif-pass-branch.lucid",
