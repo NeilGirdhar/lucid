@@ -5044,7 +5044,13 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                 }
             }
-            Stmt::Match { arms, .. } => {
+            Stmt::Match {
+                subject_alias, arms, ..
+            } => {
+                if let Some(alias) = subject_alias {
+                    vars.entry(alias.clone())
+                        .or_insert_with(|| "LucidVal".to_string());
+                }
                 for arm in arms {
                     self.collect_pattern_vars(&arm.pattern, vars);
                     for s in &arm.body {
@@ -8488,7 +8494,12 @@ static inline void lucid_print_val(LucidVal v) {
                     .unwrap_or(base_deleted);
                 Ok(())
             }
-            Stmt::Match { subject, arms, .. } => {
+            Stmt::Match {
+                subject,
+                subject_alias,
+                arms,
+                ..
+            } => {
                 let subject_code = self.emit_expr(subject)?;
                 let subject_tmp = self.new_temp();
                 self.emit_line(&format!(
@@ -8508,6 +8519,12 @@ static inline void lucid_print_val(LucidVal v) {
                         self.emit_line(&format!("}} else if ({guarded}) {{"));
                     }
                     self.indent += 1;
+                    if let Some(alias) = subject_alias {
+                        self.emit_line(&format!("lucid_var_{alias} = {subject_tmp};"));
+                        if self.current_fn_ret_type.as_deref() != Some("void") {
+                            self.emit_line(&format!("lucid_alive_{alias} = true;"));
+                        }
+                    }
                     self.emit_pattern_bindings(&arm.pattern, &subject_tmp);
                     for statement in &arm.body {
                         self.emit_stmt(statement)?;
@@ -15004,6 +15021,38 @@ print(" ".join(capitalized))
             .output()
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "10");
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_match_alias_binds_non_name_subject() {
+        let source = r#"
+class Value:
+    value: int
+
+class ParseError:
+    message: str
+
+def parse(text: str) -> Value | ParseError:
+    if text == "bad":
+        return ParseError("bad")
+    return Value(5)
+
+match parse("ok") as outcome:
+    case ParseError:
+        print(outcome.message)
+    case Value:
+        print(outcome.value + 1)
+"#;
+        let module = parse(source).expect("match alias source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_native_match_alias_{}", std::process::id()));
+        compile_to_native(&module, &output, 0).expect("match alias should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert!(result.status.success(), "native program failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "6");
         let _ = std::fs::remove_file(output);
     }
 
