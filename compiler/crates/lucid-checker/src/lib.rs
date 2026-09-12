@@ -7351,6 +7351,11 @@ impl TypeChecker {
                         } else if matches!(op, BinaryOp::Add) && lt == Type::Str && rt == Type::Str
                         {
                             Ok(Type::Str)
+                        } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                            && matches!(&lt, Type::Class { name, .. } if name == "promote")
+                            && lt == rt
+                        {
+                            Ok(lt)
                         } else if matches!(op, BinaryOp::Mul)
                             && matches!(&lt, Type::Class { name, .. } if name == "list")
                             && rt.is_subtype_of(&Type::Int, &self.env)
@@ -11627,6 +11632,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("now() should be available as a timestamp builtin");
+    }
+
+    #[test]
+    fn promote_type_placeholder_supports_generic_arithmetic_body() {
+        let module = parse(
+            "trait Promotes:\n    classvar promotes_to: !set[type]\n\ndef dispatch __add__[A: Promotes, B: Promotes](lhs: A, rhs: B) -> promote[A, B]:\n    common = type promote[A, B]\n    return common(lhs) + common(rhs)\n",
+        )
+        .unwrap();
+        TypeChecker::new().check_module(&module).expect(
+            "promote[A, B] arithmetic bodies should preserve the promoted placeholder type",
+        );
     }
 
     #[test]
