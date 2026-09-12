@@ -952,6 +952,7 @@ impl Interpreter {
                 | "list"
                 | "set"
                 | "dict"
+                | "DottedPath"
                 | "none"
                 | "None"
         ) && !name.chars().next().is_some_and(char::is_uppercase)
@@ -9901,6 +9902,7 @@ impl Interpreter {
                 Value::List(_) if name == "list" => true,
                 Value::Set(_) if name == "set" => true,
                 Value::Dict(_) if name == "dict" => true,
+                Value::DottedPath(_) if name == "DottedPath" => true,
                 Value::None if name == "none" => true,
                 Value::Object { class_name, .. }
                     if class_name == name || self.is_subclass(class_name, name) =>
@@ -10096,6 +10098,7 @@ mod tests {
         assert!(!Interpreter::pattern_identifier_binds("list"));
         assert!(!Interpreter::pattern_identifier_binds("set"));
         assert!(!Interpreter::pattern_identifier_binds("dict"));
+        assert!(!Interpreter::pattern_identifier_binds("DottedPath"));
         assert!(!Interpreter::pattern_identifier_binds("_"));
         assert!(Interpreter::pattern_identifier_binds("value"));
     }
@@ -10653,6 +10656,15 @@ match mapping:
         dict_result = 1
     case _:
         dict_result = 0
+
+def sample() -> int:
+    return 1
+path = sample.__path__
+match path:
+    case DottedPath:
+        path_result = 1
+    case _:
+        path_result = 0
 "#;
         let module = parse(src).unwrap();
         let mut interp = Interpreter::new();
@@ -10664,6 +10676,7 @@ match mapping:
         assert_eq!(env.get("list_result"), Some(Value::Int(1)));
         assert_eq!(env.get("set_result"), Some(Value::Int(1)));
         assert_eq!(env.get("dict_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("path_result"), Some(Value::Int(1)));
     }
 
     #[test]

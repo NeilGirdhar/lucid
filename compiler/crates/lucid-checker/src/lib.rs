@@ -6793,6 +6793,7 @@ impl TypeChecker {
                         | "list"
                         | "set"
                         | "dict"
+                        | "DottedPath"
                         | "none"
                         | "None"
                 ) && self.named_pattern_type(name).is_none() =>
@@ -11982,6 +11983,7 @@ fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
                     | "list"
                     | "set"
                     | "dict"
+                    | "DottedPath"
                     | "none"
                     | "None"
             ) && !looks_like_class_name(name) =>
@@ -12439,6 +12441,7 @@ mod tests {
                     Pattern::Ident("list".into(), Span::default()),
                     Pattern::Ident("set".into(), Span::default()),
                     Pattern::Ident("dict".into(), Span::default()),
+                    Pattern::Ident("DottedPath".into(), Span::default()),
                 ],
                 Span::default(),
             ),
@@ -12453,6 +12456,7 @@ mod tests {
         assert!(!names.contains("list"));
         assert!(!names.contains("set"));
         assert!(!names.contains("dict"));
+        assert!(!names.contains("DottedPath"));
         assert!(names.contains("value"));
     }
 
