@@ -563,8 +563,10 @@ diverged:
   matching the public checker boundary. The repeated-`pass` counted-`while`
   form also has Cranelift result-ABI coverage.
   Range accumulator loops now also accept one pre-loop local alias for a
-  literal or parameter-backed range bound, so `limit = n; for i in range(limit)`
-  stays on the same Phi-backed CIR/native path.
+  literal or parameter-backed range bound, whether that alias is used as the
+  start or stop operand, so `limit = n; for i in range(limit)` and
+  `begin = seed; for i in range(begin, n)` stay on the same Phi-backed
+  CIR/native path.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from an integer literal or parameter, then updated before the
   induction update. The accumulator step can be a literal or the current

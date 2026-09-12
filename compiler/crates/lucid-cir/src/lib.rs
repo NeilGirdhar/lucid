@@ -9460,6 +9460,20 @@ return total
             .expect("range alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
+        let module = lucid_syntax::parse(
+            r#"total = 0
+begin = seed
+for i in range(begin, n):
+    total += i
+return total
+"#,
+        )
+        .expect("range start alias accumulation fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
+                .expect("range start alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
         let module =
             lucid_syntax::parse("total = 20\nfor i in range(n):\n    total -= i\nreturn total\n")
                 .expect("range subtraction fixture should parse");
