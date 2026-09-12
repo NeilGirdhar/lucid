@@ -483,7 +483,12 @@ impl CCodeGenerator {
             .insert(method.name.clone(), class.to_string());
         self.known_method_param_names.insert(
             (class.to_string(), method.name.clone()),
-            method.params.iter().skip(1).map(|p| p.name.clone()).collect(),
+            method
+                .params
+                .iter()
+                .skip(1)
+                .map(|p| p.name.clone())
+                .collect(),
         );
         self.known_method_param_types.insert(
             (class.to_string(), method.name.clone()),
@@ -521,11 +526,9 @@ impl CCodeGenerator {
                 );
             }
         }
-        if method
-            .decorators
-            .iter()
-            .any(|decorator| matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"))
-        {
+        if method.decorators.iter().any(
+            |decorator| matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"),
+        ) {
             self.contextmanager_methods
                 .insert((class.to_string(), method.name.clone()));
         }
@@ -534,8 +537,7 @@ impl CCodeGenerator {
     fn is_builtin_capability(name: &str) -> bool {
         matches!(
             name,
-            "Eq"
-                | "Ord"
+            "Eq" | "Ord"
                 | "Hashable"
                 | "Sized"
                 | "Iterable"
@@ -949,13 +951,19 @@ impl CCodeGenerator {
                 ..
             } = stmt
             {
-                let TypeExpr::Named { name: target_name, .. } = target else {
+                let TypeExpr::Named {
+                    name: target_name, ..
+                } = target
+                else {
                     continue;
                 };
                 if !self.known_classes.contains_key(target_name) {
                     continue;
                 }
-                if let TypeExpr::Named { name: interface_name, .. } = interface
+                if let TypeExpr::Named {
+                    name: interface_name,
+                    ..
+                } = interface
                     && Self::is_builtin_capability(interface_name)
                 {
                     self.known_capabilities
@@ -963,7 +971,11 @@ impl CCodeGenerator {
                         .or_default()
                         .insert(interface_name.clone());
                 }
-                if let TypeExpr::Named { name: interface_name, .. } = interface {
+                if let TypeExpr::Named {
+                    name: interface_name,
+                    ..
+                } = interface
+                {
                     self.known_class_traits
                         .entry(target_name.clone())
                         .or_default()
@@ -1387,22 +1399,52 @@ impl CCodeGenerator {
         // back to the ordinary built-in implementation.
         for (operator, helper, fallback) in [
             ("+", "lucid_dynamic_add", "lucid_add_value(left, right)"),
-            ("-", "lucid_dynamic_sub", "lucid_setop_value(left, right, '-')"),
+            (
+                "-",
+                "lucid_dynamic_sub",
+                "lucid_setop_value(left, right, '-')",
+            ),
             ("*", "lucid_dynamic_mul", "lucid_mul_value(left, right)"),
             ("/", "lucid_dynamic_div", "lucid_div_value(left, right)"),
-            ("//", "lucid_dynamic_floor_div", "lucid_floor_div_value(left, right)"),
+            (
+                "//",
+                "lucid_dynamic_floor_div",
+                "lucid_floor_div_value(left, right)",
+            ),
             ("%", "lucid_dynamic_mod", "lucid_mod_value(left, right)"),
             ("**", "lucid_dynamic_pow", "lucid_pow(left, right)"),
-            ("&", "lucid_dynamic_and", "lucid_setop_value(left, right, '&')"),
-            ("|", "lucid_dynamic_or", "lucid_setop_value(left, right, '|')"),
-            ("^", "lucid_dynamic_xor", "lucid_setop_value(left, right, '^')"),
-            ("<<", "lucid_dynamic_shl", "lucid_shift_value(left, right, true)"),
-            (">>", "lucid_dynamic_shr", "lucid_shift_value(left, right, false)"),
+            (
+                "&",
+                "lucid_dynamic_and",
+                "lucid_setop_value(left, right, '&')",
+            ),
+            (
+                "|",
+                "lucid_dynamic_or",
+                "lucid_setop_value(left, right, '|')",
+            ),
+            (
+                "^",
+                "lucid_dynamic_xor",
+                "lucid_setop_value(left, right, '^')",
+            ),
+            (
+                "<<",
+                "lucid_dynamic_shl",
+                "lucid_shift_value(left, right, true)",
+            ),
+            (
+                ">>",
+                "lucid_dynamic_shr",
+                "lucid_shift_value(left, right, false)",
+            ),
         ] {
             if !self.dispatch_signatures.contains_key(operator) {
                 continue;
             }
-            self.emit_line(&format!("static LucidVal {helper}(LucidVal left, LucidVal right) {{"));
+            self.emit_line(&format!(
+                "static LucidVal {helper}(LucidVal left, LucidVal right) {{"
+            ));
             self.indent += 1;
             self.emit_line("if (left.type == LUCID_TYPE_PTR && left.ptr && right.type == LUCID_TYPE_PTR && right.ptr) {");
             self.indent += 1;
@@ -1433,8 +1475,8 @@ impl CCodeGenerator {
         }
 
         let operator_keys: HashSet<&str> = [
-            "+", "-", "*", "/", "//", "%", "**", "&", "|", "^", "<<", ">>",
-            "==", "!=", "<", "<=", ">", ">=",
+            "+", "-", "*", "/", "//", "%", "**", "&", "|", "^", "<<", ">>", "==", "!=", "<", "<=",
+            ">", ">=",
         ]
         .into_iter()
         .collect();
@@ -1448,7 +1490,9 @@ impl CCodeGenerator {
             let helper = format!("lucid_dynamic_dispatch_{}", Self::mangle_component(&name));
             self.emit_line(&format!("static LucidVal {helper}(LucidList* args) {{"));
             self.indent += 1;
-            self.emit_line("if (!args) { fprintf(stderr, \"dispatch requires arguments\\n\"); exit(1); }");
+            self.emit_line(
+                "if (!args) { fprintf(stderr, \"dispatch requires arguments\\n\"); exit(1); }",
+            );
             for (types, emitted) in signatures {
                 if types.is_empty() {
                     continue;
@@ -1480,14 +1524,18 @@ impl CCodeGenerator {
                     .iter()
                     .enumerate()
                     .map(|(index, ty)| {
-                        if ty.ends_with('*') && self.known_classes.contains_key(ty.trim_end_matches('*')) {
+                        if ty.ends_with('*')
+                            && self.known_classes.contains_key(ty.trim_end_matches('*'))
+                        {
                             format!("({ty})lucid_as_ptr(args->items[{index}])")
                         } else {
                             match ty.as_str() {
                                 "int64_t" => format!("lucid_as_int(args->items[{index}])"),
                                 "double" => format!("lucid_as_float(args->items[{index}])"),
                                 "bool" => format!("lucid_as_bool(args->items[{index}])"),
-                                "const char*" | "char*" => format!("lucid_as_str(args->items[{index}])"),
+                                "const char*" | "char*" => {
+                                    format!("lucid_as_str(args->items[{index}])")
+                                }
                                 "LucidList*" => format!("lucid_as_list(args->items[{index}])"),
                                 "LucidDict*" => format!("lucid_as_dict(args->items[{index}])"),
                                 "LucidSet*" => format!("lucid_as_set(args->items[{index}])"),
@@ -1500,7 +1548,8 @@ impl CCodeGenerator {
                     .join(", ");
                 self.emit_line(&format!(
                     "if (args->len == {} && {}) return lucid_wrap({emitted}({call_args}));",
-                    types.len(), checks
+                    types.len(),
+                    checks
                 ));
             }
             self.emit_line(&format!(
@@ -1522,7 +1571,9 @@ impl CCodeGenerator {
             if !self.dispatch_signatures.contains_key(operator) {
                 continue;
             }
-            self.emit_line(&format!("static bool {helper}(LucidVal left, LucidVal right) {{"));
+            self.emit_line(&format!(
+                "static bool {helper}(LucidVal left, LucidVal right) {{"
+            ));
             self.indent += 1;
             self.emit_line("if (left.type == LUCID_TYPE_PTR && left.ptr && right.type == LUCID_TYPE_PTR && right.ptr) {");
             self.indent += 1;
@@ -1552,18 +1603,36 @@ impl CCodeGenerator {
             self.emit_line("");
         }
 
-        self.emit_line("static bool lucid_dynamic_capability(LucidVal value, const char* capability) {");
+        self.emit_line(
+            "static bool lucid_dynamic_capability(LucidVal value, const char* capability) {",
+        );
         self.indent += 1;
         self.emit_line("if (!capability) return false;");
         self.emit_line("const char* class_name = (value.type == LUCID_TYPE_PTR && value.ptr) ? lucid_object_class_name(value.ptr) : NULL;");
         let mut capability_classes: Vec<String> = self.known_classes.keys().cloned().collect();
         capability_classes.sort();
         for class in capability_classes {
-            self.emit_line(&format!("if (class_name && strcmp(class_name, \"{class}\") == 0) {{"));
+            self.emit_line(&format!(
+                "if (class_name && strcmp(class_name, \"{class}\") == 0) {{"
+            ));
             self.indent += 1;
-            for capability in ["Eq", "Ord", "Hashable", "Sized", "Iterable", "Collection", "Sequence", "Reversible", "Set", "Container", "Shape"] {
+            for capability in [
+                "Eq",
+                "Ord",
+                "Hashable",
+                "Sized",
+                "Iterable",
+                "Collection",
+                "Sequence",
+                "Reversible",
+                "Set",
+                "Container",
+                "Shape",
+            ] {
                 if self.class_has_capability(&class, capability) {
-                    self.emit_line(&format!("if (strcmp(capability, \"{capability}\") == 0) return true;"));
+                    self.emit_line(&format!(
+                        "if (strcmp(capability, \"{capability}\") == 0) return true;"
+                    ));
                 }
             }
             self.indent -= 1;
@@ -1574,7 +1643,9 @@ impl CCodeGenerator {
         self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_BYTES;");
         self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_LIST || (value.type == LUCID_TYPE_PTR && value.ptr && lucid_object_buffer(value.ptr));");
         self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0 || strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;");
-        self.emit_line("if (strcmp(capability, \"Set\") == 0) return value.type == LUCID_TYPE_SET;");
+        self.emit_line(
+            "if (strcmp(capability, \"Set\") == 0) return value.type == LUCID_TYPE_SET;",
+        );
         self.emit_line("if (strcmp(capability, \"Eq\") == 0 || strcmp(capability, \"Ord\") == 0 || strcmp(capability, \"Hashable\") == 0) return value.type != LUCID_TYPE_NONE;");
         self.emit_line("return false;");
         self.indent -= 1;
@@ -4437,11 +4508,7 @@ static inline void lucid_print_val(LucidVal v) {
                     .iter()
                     .filter_map(|field| field.name.clone())
                     .collect::<Vec<_>>();
-                if names.is_empty() {
-                    None
-                } else {
-                    Some(names)
-                }
+                if names.is_empty() { None } else { Some(names) }
             }
             Some(TypeExpr::View { inner, .. }) => {
                 Self::record_field_order_from_type_expr(Some(inner))
@@ -4670,12 +4737,9 @@ static inline void lucid_print_val(LucidVal v) {
                             if args.len() == 1 {
                                 "int64_t".to_string()
                             } else {
-                                if args
-                                    .first()
-                                    .is_some_and(|arg| {
-                                        self.infer_expr_type(&arg.value, vars) == "LucidVal"
-                                    })
-                                {
+                                if args.first().is_some_and(|arg| {
+                                    self.infer_expr_type(&arg.value, vars) == "LucidVal"
+                                }) {
                                     "LucidVal".to_string()
                                 } else {
                                     "double".to_string()
@@ -5046,7 +5110,9 @@ static inline void lucid_print_val(LucidVal v) {
                 }
             }
             Stmt::Match {
-                subject_alias, arms, ..
+                subject_alias,
+                arms,
+                ..
             } => {
                 if let Some(alias) = subject_alias {
                     vars.entry(alias.clone())
@@ -5443,7 +5509,9 @@ static inline void lucid_print_val(LucidVal v) {
                     self.known_fns
                         .get(name)
                         .map(|ty| ty == "LucidVal")
-                        .unwrap_or_else(|| self.infer_expr_type(expr, &HashMap::new()) == "LucidVal")
+                        .unwrap_or_else(|| {
+                            self.infer_expr_type(expr, &HashMap::new()) == "LucidVal"
+                        })
                 } else {
                     self.infer_expr_type(expr, &HashMap::new()) == "LucidVal"
                 }
@@ -5560,37 +5628,33 @@ static inline void lucid_print_val(LucidVal v) {
                     })
                     .map(|owner| (owner, false))
             });
-        let hash_owner = self
-            .method_owner(name, "__hash__")
-            .filter(|owner| {
-                self.known_method_return_types
-                    .get(&(owner.clone(), "__hash__".to_string()))
-                    .is_some_and(|ty| ty == "int64_t")
-            });
-        let eq_owner = self
-            .method_owner(name, "__eq__")
-            .and_then(|owner| {
-                if !self
-                    .known_method_return_types
-                    .get(&(owner.clone(), "__eq__".to_string()))
-                    .is_some_and(|ty| ty == "bool")
-                {
-                    return None;
-                }
-                let parameter_type = self
-                    .known_method_param_types
-                    .get(&(owner.clone(), "__eq__".to_string()))
-                    .and_then(|types| types.first())
-                    .cloned()?;
-                let dispatch_class = parameter_type
-                    .strip_suffix('*')
-                    .filter(|class| self.known_classes.contains_key(*class))
-                    .map(ToOwned::to_owned);
-                if parameter_type != "LucidVal" && dispatch_class.is_none() {
-                    return None;
-                }
-                Some((owner, parameter_type, dispatch_class))
-            });
+        let hash_owner = self.method_owner(name, "__hash__").filter(|owner| {
+            self.known_method_return_types
+                .get(&(owner.clone(), "__hash__".to_string()))
+                .is_some_and(|ty| ty == "int64_t")
+        });
+        let eq_owner = self.method_owner(name, "__eq__").and_then(|owner| {
+            if !self
+                .known_method_return_types
+                .get(&(owner.clone(), "__eq__".to_string()))
+                .is_some_and(|ty| ty == "bool")
+            {
+                return None;
+            }
+            let parameter_type = self
+                .known_method_param_types
+                .get(&(owner.clone(), "__eq__".to_string()))
+                .and_then(|types| types.first())
+                .cloned()?;
+            let dispatch_class = parameter_type
+                .strip_suffix('*')
+                .filter(|class| self.known_classes.contains_key(*class))
+                .map(ToOwned::to_owned);
+            if parameter_type != "LucidVal" && dispatch_class.is_none() {
+                return None;
+            }
+            Some((owner, parameter_type, dispatch_class))
+        });
         let comparison_owner = |method: &str| {
             self.method_owner(name, method).and_then(|owner| {
                 if !self
@@ -5619,87 +5683,73 @@ static inline void lucid_print_val(LucidVal v) {
         let le_owner = comparison_owner("__le__");
         let gt_owner = comparison_owner("__gt__");
         let ge_owner = comparison_owner("__ge__");
-        let contains_owner = self
-            .method_owner(name, "__contains__")
-            .and_then(|owner| {
-                let parameter_type = self
-                    .known_method_param_types
-                    .get(&(owner.clone(), "__contains__".to_string()))
-                    .and_then(|types| types.first())
-                    .cloned()?;
-                Some((owner, parameter_type))
-            });
-        let getitem_owner = self
-            .method_owner(name, "__getitem__")
-            .and_then(|owner| {
-                let return_type = self
-                    .known_method_return_types
-                    .get(&(owner.clone(), "__getitem__".to_string()))
-                    .cloned()?;
-                if return_type == "void" {
-                    return None;
-                }
-                let parameter_types = self
-                    .known_method_param_types
-                    .get(&(owner.clone(), "__getitem__".to_string()))
-                    .cloned()?;
-                if parameter_types.is_empty() {
-                    return None;
-                }
-                Some((owner, parameter_types, return_type))
-            });
-        let setitem_owner = self
-            .method_owner(name, "__setitem__")
-            .and_then(|owner| {
-                let parameter_types = self
-                    .known_method_param_types
-                    .get(&(owner.clone(), "__setitem__".to_string()))?;
-                if parameter_types.len() < 2 {
-                    return None;
-                }
-                let return_type = self
-                    .known_method_return_types
-                    .get(&(owner.clone(), "__setitem__".to_string()))
-                    .cloned()
-                    .unwrap_or_else(|| "LucidVal".to_string());
-                Some((owner, parameter_types.clone(), return_type))
-            });
-        let iter_owner = self
-            .method_owner(name, "__iter__")
-            .and_then(|owner| {
-                let return_type = self
-                    .known_method_return_types
-                    .get(&(owner.clone(), "__iter__".to_string()))
-                    .cloned()?;
-                (return_type != "void").then_some((owner, return_type))
-            });
-        let next_owner = self
-            .method_owner(name, "next")
-            .and_then(|owner| {
-                let return_type = self
-                    .known_method_return_types
-                    .get(&(owner.clone(), "next".to_string()))
-                    .cloned()?;
-                (return_type != "void").then_some((owner, return_type))
-            });
-        let reversed_owner = self
-            .method_owner(name, "__reversed__")
-            .and_then(|owner| {
-                let return_type = self
-                    .known_method_return_types
-                    .get(&(owner.clone(), "__reversed__".to_string()))
-                    .cloned()?;
-                (return_type != "void").then_some((owner, return_type))
-            });
-        let buffer_owner = self
-            .method_owner(name, "__buffer__")
-            .and_then(|owner| {
-                let return_type = self
-                    .known_method_return_types
-                    .get(&(owner.clone(), "__buffer__".to_string()))
-                    .cloned()?;
-                (return_type != "void").then_some((owner, return_type))
-            });
+        let contains_owner = self.method_owner(name, "__contains__").and_then(|owner| {
+            let parameter_type = self
+                .known_method_param_types
+                .get(&(owner.clone(), "__contains__".to_string()))
+                .and_then(|types| types.first())
+                .cloned()?;
+            Some((owner, parameter_type))
+        });
+        let getitem_owner = self.method_owner(name, "__getitem__").and_then(|owner| {
+            let return_type = self
+                .known_method_return_types
+                .get(&(owner.clone(), "__getitem__".to_string()))
+                .cloned()?;
+            if return_type == "void" {
+                return None;
+            }
+            let parameter_types = self
+                .known_method_param_types
+                .get(&(owner.clone(), "__getitem__".to_string()))
+                .cloned()?;
+            if parameter_types.is_empty() {
+                return None;
+            }
+            Some((owner, parameter_types, return_type))
+        });
+        let setitem_owner = self.method_owner(name, "__setitem__").and_then(|owner| {
+            let parameter_types = self
+                .known_method_param_types
+                .get(&(owner.clone(), "__setitem__".to_string()))?;
+            if parameter_types.len() < 2 {
+                return None;
+            }
+            let return_type = self
+                .known_method_return_types
+                .get(&(owner.clone(), "__setitem__".to_string()))
+                .cloned()
+                .unwrap_or_else(|| "LucidVal".to_string());
+            Some((owner, parameter_types.clone(), return_type))
+        });
+        let iter_owner = self.method_owner(name, "__iter__").and_then(|owner| {
+            let return_type = self
+                .known_method_return_types
+                .get(&(owner.clone(), "__iter__".to_string()))
+                .cloned()?;
+            (return_type != "void").then_some((owner, return_type))
+        });
+        let next_owner = self.method_owner(name, "next").and_then(|owner| {
+            let return_type = self
+                .known_method_return_types
+                .get(&(owner.clone(), "next".to_string()))
+                .cloned()?;
+            (return_type != "void").then_some((owner, return_type))
+        });
+        let reversed_owner = self.method_owner(name, "__reversed__").and_then(|owner| {
+            let return_type = self
+                .known_method_return_types
+                .get(&(owner.clone(), "__reversed__".to_string()))
+                .cloned()?;
+            (return_type != "void").then_some((owner, return_type))
+        });
+        let buffer_owner = self.method_owner(name, "__buffer__").and_then(|owner| {
+            let return_type = self
+                .known_method_return_types
+                .get(&(owner.clone(), "__buffer__".to_string()))
+                .cloned()?;
+            (return_type != "void").then_some((owner, return_type))
+        });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
             self.emit_line(&format!(
@@ -5859,17 +5909,13 @@ static inline void lucid_print_val(LucidVal v) {
             ));
         }
         if let Some((owner, return_type)) = &iter_owner {
-            self.emit_line(&format!(
-                "{return_type} {owner}___iter__({owner}* self);"
-            ));
+            self.emit_line(&format!("{return_type} {owner}___iter__({owner}* self);"));
             self.emit_line(&format!(
                 "static LucidVal {name}_iter(void* raw) {{ return lucid_wrap({owner}___iter__(({owner}*)raw)); }}"
             ));
         }
         if let Some((owner, return_type)) = &next_owner {
-            self.emit_line(&format!(
-                "{return_type} {owner}_next({owner}* self);"
-            ));
+            self.emit_line(&format!("{return_type} {owner}_next({owner}* self);"));
             self.emit_line(&format!(
                 "static LucidVal {name}_next_callback(void* raw) {{ return lucid_wrap({owner}_next(({owner}*)raw)); }}"
             ));
@@ -5883,9 +5929,7 @@ static inline void lucid_print_val(LucidVal v) {
             ));
         }
         if let Some((owner, return_type)) = &buffer_owner {
-            self.emit_line(&format!(
-                "{return_type} {owner}___buffer__({owner}* self);"
-            ));
+            self.emit_line(&format!("{return_type} {owner}___buffer__({owner}* self);"));
             self.emit_line(&format!(
                 "static LucidVal {name}_buffer(void* raw) {{ return lucid_wrap({owner}___buffer__(({owner}*)raw)); }}"
             ));
@@ -5895,13 +5939,17 @@ static inline void lucid_print_val(LucidVal v) {
         self.indent += 1;
         self.emit_line(&format!("{name}* self = ({name}*)raw;"));
         self.emit_line("char* out = (char*)malloc(1024); if (!out) return \"<out of memory>\"; size_t pos = 0;");
-        self.emit_line(&format!("pos += (size_t)snprintf(out + pos, 1024 - pos, \"{name}({{\");"));
+        self.emit_line(&format!(
+            "pos += (size_t)snprintf(out + pos, 1024 - pos, \"{name}({{\");"
+        ));
         for (index, (field, _)) in fields.iter().enumerate() {
             let value = format!("lucid_as_str(lucid_repr_value(lucid_wrap(self->{field})))");
             let prefix = if index == 0 { "" } else { ", " };
             self.emit_line(&format!("pos += (size_t)snprintf(out + pos, pos < 1024 ? 1024 - pos : 0, \"{prefix}\\\"{field}\\\": %s\", {value});"));
         }
-        self.emit_line("if (pos < 1023) snprintf(out + pos, 1024 - pos, \"})\"); else out[1023] = '\\0';");
+        self.emit_line(
+            "if (pos < 1023) snprintf(out + pos, 1024 - pos, \"})\"); else out[1023] = '\\0';",
+        );
         self.emit_line("return out;");
         self.indent -= 1;
         self.emit_line("}");
@@ -6724,11 +6772,7 @@ static inline void lucid_print_val(LucidVal v) {
         format!("lucid_closure_call_{}", Self::mangle_component(name))
     }
 
-    fn emit_partial_value(
-        &mut self,
-        target: &str,
-        args: &[Arg],
-    ) -> Result<String, CodegenError> {
+    fn emit_partial_value(&mut self, target: &str, args: &[Arg]) -> Result<String, CodegenError> {
         let bound = self.new_temp();
         let count = args
             .iter()
@@ -6761,7 +6805,10 @@ static inline void lucid_print_val(LucidVal v) {
         let bound = self.new_temp();
         let mut slots: Vec<Option<&Arg>> = vec![None; parameter_names.len()];
         let mut positional = 0usize;
-        for arg in args.iter().filter(|arg| !matches!(arg.value, Expr::Skip(_))) {
+        for arg in args
+            .iter()
+            .filter(|arg| !matches!(arg.value, Expr::Skip(_)))
+        {
             if let Some(name) = &arg.name {
                 let index = parameter_names
                     .iter()
@@ -6788,7 +6835,10 @@ static inline void lucid_print_val(LucidVal v) {
                 positional += 1;
             }
         }
-        self.emit_line(&format!("LucidList* {bound} = lucid_list_new({});", slots.len()));
+        self.emit_line(&format!(
+            "LucidList* {bound} = lucid_list_new({});",
+            slots.len()
+        ));
         for slot in slots {
             let value = if slot
                 .is_some_and(|arg| matches!(&arg.value, Expr::Ident { name, .. } if name == "_"))
@@ -6796,7 +6846,9 @@ static inline void lucid_print_val(LucidVal v) {
                 "lucid_partial_hole()".to_string()
             } else {
                 let arg = slot.ok_or_else(|| CodegenError {
-                    message: "anonymous partial application requires a value or '_' for every parameter".into(),
+                    message:
+                        "anonymous partial application requires a value or '_' for every parameter"
+                            .into(),
                 })?;
                 format!("lucid_wrap({})", self.emit_expr(&arg.value)?)
             };
@@ -6812,9 +6864,9 @@ static inline void lucid_print_val(LucidVal v) {
         captures: &mut HashSet<String>,
     ) {
         const BUILTINS: &[&str] = &[
-            "abs", "all", "any", "bool", "bytes", "chr", "dict", "float", "int",
-            "len", "list", "max", "min", "ord", "pow", "print", "range", "repr",
-            "round", "set", "str", "sum", "type", "none", "None", "true", "false",
+            "abs", "all", "any", "bool", "bytes", "chr", "dict", "float", "int", "len", "list",
+            "max", "min", "ord", "pow", "print", "range", "repr", "round", "set", "str", "sum",
+            "type", "none", "None", "true", "false",
         ];
         match expr {
             Expr::Ident { name, .. } => {
@@ -6845,12 +6897,19 @@ static inline void lucid_print_val(LucidVal v) {
                     self.collect_anonymous_captures(&arg.value, params, captures);
                 }
             }
-            Expr::Attribute { value, .. } => self.collect_anonymous_captures(value, params, captures),
+            Expr::Attribute { value, .. } => {
+                self.collect_anonymous_captures(value, params, captures)
+            }
             Expr::Index { value, index, .. } => {
                 self.collect_anonymous_captures(value, params, captures);
                 self.collect_anonymous_captures(index, params, captures);
             }
-            Expr::IfExpr { condition, then_branch, else_branch, .. } => {
+            Expr::IfExpr {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 self.collect_anonymous_captures(condition, params, captures);
                 self.collect_anonymous_captures(then_branch, params, captures);
                 self.collect_anonymous_captures(else_branch, params, captures);
@@ -6875,12 +6934,16 @@ static inline void lucid_print_val(LucidVal v) {
                 self.collect_anonymous_captures(element, params, captures);
                 self.collect_anonymous_captures(iter, params, captures);
             }
-            Expr::DictComp { key, value, iter, .. } => {
+            Expr::DictComp {
+                key, value, iter, ..
+            } => {
                 self.collect_anonymous_captures(key, params, captures);
                 self.collect_anonymous_captures(value, params, captures);
                 self.collect_anonymous_captures(iter, params, captures);
             }
-            Expr::Slice { start, stop, step, .. } => {
+            Expr::Slice {
+                start, stop, step, ..
+            } => {
                 for bound in [start, stop, step].into_iter().flatten() {
                     self.collect_anonymous_captures(bound, params, captures);
                 }
@@ -6901,15 +6964,14 @@ static inline void lucid_print_val(LucidVal v) {
             self.pending_anonymous_adapters.len() + 1
         );
         let env_type = format!("LucidAnonEnv_{}", self.pending_anonymous_adapters.len() + 1);
-        self.pending_anonymous_adapters
-            .push((
-                adapter.clone(),
-                env_type.clone(),
-                params.to_vec(),
-                body,
-                captures.to_vec(),
-                recursive_name,
-            ));
+        self.pending_anonymous_adapters.push((
+            adapter.clone(),
+            env_type.clone(),
+            params.to_vec(),
+            body,
+            captures.to_vec(),
+            recursive_name,
+        ));
         let capture_types = captures
             .iter()
             .map(|capture| {
@@ -6923,8 +6985,11 @@ static inline void lucid_print_val(LucidVal v) {
                 )
             })
             .collect();
-        self.anonymous_capture_types.insert(adapter.clone(), capture_types);
-        self.emit_line(&format!("LucidVal {adapter}(void*, LucidList*, LucidDict*);"));
+        self.anonymous_capture_types
+            .insert(adapter.clone(), capture_types);
+        self.emit_line(&format!(
+            "LucidVal {adapter}(void*, LucidList*, LucidDict*);"
+        ));
         let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
         let maker_params = captures
             .iter()
@@ -6946,10 +7011,12 @@ static inline void lucid_print_val(LucidVal v) {
         params: &[Param],
         body: &[Stmt],
     ) -> Result<bool, CodegenError> {
-        let [Stmt::Return {
-            value: Some(body_expr),
-            ..
-        }] = body
+        let [
+            Stmt::Return {
+                value: Some(body_expr),
+                ..
+            },
+        ] = body
         else {
             return Ok(false);
         };
@@ -6975,9 +7042,7 @@ static inline void lucid_print_val(LucidVal v) {
         let mut captures = captures.into_iter().collect::<Vec<_>>();
         captures.sort();
         for capture in &captures {
-            if !self.var_types.contains_key(capture)
-                && !self.global_vars.contains_key(capture)
-            {
+            if !self.var_types.contains_key(capture) && !self.global_vars.contains_key(capture) {
                 return Err(CodegenError {
                     message: format!("unknown anonymous closure capture '{capture}'"),
                 });
@@ -7001,10 +7066,7 @@ static inline void lucid_print_val(LucidVal v) {
             if env_args.is_empty() {
                 "NULL".to_string()
             } else {
-            format!(
-                "{maker}({})",
-                env_args.join(", ")
-            )
+                format!("{maker}({})", env_args.join(", "))
             }
         };
         self.emit_line(&format!(
@@ -7017,7 +7079,11 @@ static inline void lucid_print_val(LucidVal v) {
     /// native entry points retain their typed C signatures; these adapters
     /// are the ABI boundary used when a function is stored in a value (for
     /// example in a list) and later invoked through `lucid_call`.
-    fn emit_closure_adapter(&mut self, f: &FunctionDef, prototype: bool) -> Result<(), CodegenError> {
+    fn emit_closure_adapter(
+        &mut self,
+        f: &FunctionDef,
+        prototype: bool,
+    ) -> Result<(), CodegenError> {
         if f.is_async
             || f.decorators.iter().any(|decorator| {
                 matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
@@ -7028,23 +7094,39 @@ static inline void lucid_print_val(LucidVal v) {
         if f.is_dispatch
             && matches!(
                 Self::dispatch_operator_key(&f.name).as_str(),
-                "+" | "-" | "*" | "/" | "//" | "%" | "**" | "&" | "|" | "^"
-                    | "<<" | ">>" | "==" | "!=" | "<" | "<=" | ">" | ">="
+                "+" | "-"
+                    | "*"
+                    | "/"
+                    | "//"
+                    | "%"
+                    | "**"
+                    | "&"
+                    | "|"
+                    | "^"
+                    | "<<"
+                    | ">>"
+                    | "=="
+                    | "!="
+                    | "<"
+                    | "<="
+                    | ">"
+                    | ">="
             )
         {
             return Ok(());
         }
         let adapter = Self::closure_adapter_name(f);
         if prototype {
-            self.emit_line(&format!("static LucidVal {adapter}(void*, LucidList*, LucidDict*);"));
+            self.emit_line(&format!(
+                "static LucidVal {adapter}(void*, LucidList*, LucidDict*);"
+            ));
             return Ok(());
         }
         if f.is_dispatch {
-            let helper = format!(
-                "lucid_dynamic_dispatch_{}",
-                Self::mangle_component(&f.name)
-            );
-            self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args, LucidDict* kwargs) {{"));
+            let helper = format!("lucid_dynamic_dispatch_{}", Self::mangle_component(&f.name));
+            self.emit_line(&format!(
+                "static LucidVal {adapter}(void* _env, LucidList* args, LucidDict* kwargs) {{"
+            ));
             self.indent += 1;
             self.emit_line("(void)_env;");
             self.emit_line("(void)kwargs;");
@@ -7055,7 +7137,9 @@ static inline void lucid_print_val(LucidVal v) {
         }
         let fn_name = self.dispatch_name(f, &f.name);
         let ret_ty = self.map_type_expr(f.return_type.as_ref());
-        self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args, LucidDict* kwargs) {{"));
+        self.emit_line(&format!(
+            "static LucidVal {adapter}(void* _env, LucidList* args, LucidDict* kwargs) {{"
+        ));
         self.indent += 1;
         self.emit_line("(void)_env;");
         let required = f
@@ -7069,7 +7153,10 @@ static inline void lucid_print_val(LucidVal v) {
             })
             .count();
         let gather_index = f.params.iter().position(|param| param.is_gather);
-        let variadic_index = f.params.iter().position(|param| param.is_variadic_positional);
+        let variadic_index = f
+            .params
+            .iter()
+            .position(|param| param.is_variadic_positional);
         let keyword_variadic = f.params.iter().any(|param| param.is_variadic_keyword);
         if keyword_variadic {
             self.emit_line("LucidDict* _closure_kwargs = kwargs ? kwargs : lucid_dict_new(0);");
@@ -7089,14 +7176,14 @@ static inline void lucid_print_val(LucidVal v) {
                 "if (!args || args->len > {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
                 f.params.len()
             ));
-        for (index, param) in f.params.iter().enumerate() {
-            if param.is_variadic_positional
-                || param.is_variadic_keyword
-                || param.default.is_some()
-            {
-                continue;
-            }
-            self.emit_line(&format!(
+            for (index, param) in f.params.iter().enumerate() {
+                if param.is_variadic_positional
+                    || param.is_variadic_keyword
+                    || param.default.is_some()
+                {
+                    continue;
+                }
+                self.emit_line(&format!(
                 "if ((!args || args->len <= {index}) && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
                 c_escape_string(&param.name)
                 ));
@@ -7158,7 +7245,11 @@ static inline void lucid_print_val(LucidVal v) {
                         .collect::<Vec<_>>();
                     let unexpected = allowed_names
                         .iter()
-                        .map(|name| format!("strcmp(lucid_as_str(kwargs->keys[_closure_i]), \"{name}\") != 0"))
+                        .map(|name| {
+                            format!(
+                                "strcmp(lucid_as_str(kwargs->keys[_closure_i]), \"{name}\") != 0"
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join(" && ");
                     if !unexpected.is_empty() {
@@ -7221,7 +7312,11 @@ static inline void lucid_print_val(LucidVal v) {
                 } else {
                     fixed_names
                         .iter()
-                        .map(|name| format!("strcmp(lucid_as_str(kwargs->keys[_closure_i]), \"{name}\") == 0"))
+                        .map(|name| {
+                            format!(
+                                "strcmp(lucid_as_str(kwargs->keys[_closure_i]), \"{name}\") == 0"
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join(" || ")
                 };
@@ -7274,7 +7369,10 @@ static inline void lucid_print_val(LucidVal v) {
             };
             let expression = if let Some(default) = &param.default {
                 let default_code = self.emit_expr(default)?;
-                format!("((args && args->len > {index}) || (kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\"))) ? {supplied} : {default_code})", c_escape_string(&param.name))
+                format!(
+                    "((args && args->len > {index}) || (kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\"))) ? {supplied} : {default_code})",
+                    c_escape_string(&param.name)
+                )
             } else {
                 supplied
             };
@@ -7321,7 +7419,9 @@ static inline void lucid_print_val(LucidVal v) {
                 .join(", ");
             self.emit_line(&format!("void* {maker}({maker_params}) {{"));
             self.indent += 1;
-            self.emit_line(&format!("{env_type}* env = ({env_type}*)malloc(sizeof({env_type}));"));
+            self.emit_line(&format!(
+                "{env_type}* env = ({env_type}*)malloc(sizeof({env_type}));"
+            ));
             self.emit_line(&format!("if (!env) {{ fprintf(stderr, \"out of memory allocating closure environment\\n\"); exit(1); }}"));
             for capture in &env_captures {
                 self.emit_line(&format!("env->{capture} = {capture};"));
@@ -7360,19 +7460,30 @@ static inline void lucid_print_val(LucidVal v) {
                     "if (!args || args->len > {positional_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
                 ));
                 for (index, param) in params.iter().enumerate() {
-                    if param.is_variadic_positional || param.is_variadic_keyword || param.default.is_some() {
+                    if param.is_variadic_positional
+                        || param.is_variadic_keyword
+                        || param.default.is_some()
+                    {
                         continue;
                     }
                     let positional_index = params[..index]
                         .iter()
-                        .filter(|previous| !previous.is_keyword_only && !previous.is_variadic_keyword)
+                        .filter(|previous| {
+                            !previous.is_keyword_only && !previous.is_variadic_keyword
+                        })
                         .count();
                     let missing = if param.is_positional_only {
                         format!("args->len <= {positional_index}")
                     } else if param.is_keyword_only {
-                        format!("!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\"))", c_escape_string(&param.name))
+                        format!(
+                            "!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\"))",
+                            c_escape_string(&param.name)
+                        )
                     } else {
-                        format!("args->len <= {positional_index} && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))", c_escape_string(&param.name))
+                        format!(
+                            "args->len <= {positional_index} && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))",
+                            c_escape_string(&param.name)
+                        )
                     };
                     self.emit_line(&format!(
                         "if ({missing}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
@@ -7385,7 +7496,9 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                     let positional_index = params[..index]
                         .iter()
-                        .filter(|previous| !previous.is_keyword_only && !previous.is_variadic_keyword)
+                        .filter(|previous| {
+                            !previous.is_keyword_only && !previous.is_variadic_keyword
+                        })
                         .count();
                     self.emit_line(&format!(
                         "if ((!args || args->len <= {positional_index}) && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}",
@@ -7394,7 +7507,9 @@ static inline void lucid_print_val(LucidVal v) {
                 }
             }
             if has_keyword_variadic {
-                self.emit_line("LucidDict* _anonymous_kwargs = kwargs ? kwargs : lucid_dict_new(0);");
+                self.emit_line(
+                    "LucidDict* _anonymous_kwargs = kwargs ? kwargs : lucid_dict_new(0);",
+                );
             }
             self.var_types.clear();
             self.active_capture_names = captures.iter().cloned().collect();
@@ -7552,7 +7667,8 @@ static inline void lucid_print_val(LucidVal v) {
                     continue;
                 }
                 if param.is_variadic_positional {
-                    self.var_types.insert(param.name.clone(), "LucidList*".into());
+                    self.var_types
+                        .insert(param.name.clone(), "LucidList*".into());
                     self.emit_line(&format!(
                         "LucidList* lucid_var_{} = lucid_list_new(args->len - {index});",
                         param.name
@@ -7564,7 +7680,8 @@ static inline void lucid_print_val(LucidVal v) {
                     continue;
                 }
                 if param.is_variadic_keyword {
-                    self.var_types.insert(param.name.clone(), "LucidDict*".into());
+                    self.var_types
+                        .insert(param.name.clone(), "LucidDict*".into());
                     self.emit_line(&format!(
                         "LucidDict* lucid_var_{} = _anonymous_kwargs;",
                         param.name
@@ -7586,9 +7703,15 @@ static inline void lucid_print_val(LucidVal v) {
                 };
                 let source = if let Some(default) = &param.default {
                     let default_code = self.emit_expr(default)?;
-                    format!("({keyword_source} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args->len > {positional_index} ? args->items[{positional_index}] : lucid_wrap({default_code})))", c_escape_string(&param.name))
+                    format!(
+                        "({keyword_source} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args->len > {positional_index} ? args->items[{positional_index}] : lucid_wrap({default_code})))",
+                        c_escape_string(&param.name)
+                    )
                 } else {
-                    format!("({keyword_source} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : args->items[{positional_index}])", c_escape_string(&param.name))
+                    format!(
+                        "({keyword_source} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : args->items[{positional_index}])",
+                        c_escape_string(&param.name)
+                    )
                 };
                 let value = match ty.as_str() {
                     "int64_t" => format!("lucid_as_int({source})"),
@@ -7867,7 +7990,8 @@ static inline void lucid_print_val(LucidVal v) {
                                 .collect();
                             self.anonymous_bindings
                                 .insert(name.clone(), (parameter_specs, body_expr.clone()));
-                            let closure = self.emit_expr(value.as_ref().expect("anonymous value"))?;
+                            let closure =
+                                self.emit_expr(value.as_ref().expect("anonymous value"))?;
                             self.emit_line(&format!("lucid_var_{name} = {closure};"));
                             return Ok(());
                         }
@@ -7958,11 +8082,7 @@ static inline void lucid_print_val(LucidVal v) {
                                 .iter()
                                 .filter_map(|(name, _)| name.clone())
                                 .collect::<Vec<_>>();
-                            if names.is_empty() {
-                                None
-                            } else {
-                                Some(names)
-                            }
+                            if names.is_empty() { None } else { Some(names) }
                         }
                         _ => None,
                     };
@@ -8004,28 +8124,28 @@ static inline void lucid_print_val(LucidVal v) {
                                 return Ok(());
                             }
                             if !params.iter().any(|param| param.is_gather) {
-                            if let [
-                                Stmt::Return {
-                                    value: Some(body_expr),
-                                    ..
-                                },
-                            ] = body.as_slice()
-                            {
-                                let parameter_specs = params
-                                    .iter()
-                                    .map(|param| {
-                                        (
-                                            param.name.clone(),
-                                            self.map_type_expr(param.type_annotation.as_ref()),
-                                        )
-                                    })
-                                    .collect();
-                                self.anonymous_bindings
-                                    .insert(name.clone(), (parameter_specs, body_expr.clone()));
-                                let closure = self.emit_expr(value)?;
-                                self.emit_line(&format!("lucid_var_{name} = {closure};"));
-                                return Ok(());
-                            }
+                                if let [
+                                    Stmt::Return {
+                                        value: Some(body_expr),
+                                        ..
+                                    },
+                                ] = body.as_slice()
+                                {
+                                    let parameter_specs = params
+                                        .iter()
+                                        .map(|param| {
+                                            (
+                                                param.name.clone(),
+                                                self.map_type_expr(param.type_annotation.as_ref()),
+                                            )
+                                        })
+                                        .collect();
+                                    self.anonymous_bindings
+                                        .insert(name.clone(), (parameter_specs, body_expr.clone()));
+                                    let closure = self.emit_expr(value)?;
+                                    self.emit_line(&format!("lucid_var_{name} = {closure};"));
+                                    return Ok(());
+                                }
                             }
                             if params.iter().any(|param| param.is_gather) {
                                 let closure = self.emit_expr(value)?;
@@ -8052,7 +8172,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 self.anonymous_bindings.insert(name.clone(), binding);
                                 return Ok(());
                             }
-                            if let Some(binding) = self.anonymous_block_bindings.get(source).cloned() {
+                            if let Some(binding) =
+                                self.anonymous_block_bindings.get(source).cloned()
+                            {
                                 self.anonymous_block_bindings.insert(name.clone(), binding);
                                 return Ok(());
                             }
@@ -9045,7 +9167,9 @@ static inline void lucid_print_val(LucidVal v) {
                 self.emit_finally_cleanups()?;
                 let depth = self.loop_context_depths.last().copied().unwrap_or(0);
                 self.emit_context_cleanups_from(depth);
-                if let Some(Some((current, step, next))) = self.loop_continue_updates.last().cloned() {
+                if let Some(Some((current, step, next))) =
+                    self.loop_continue_updates.last().cloned()
+                {
                     self.emit_line(&format!("if (!lucid_checked_range_advance({current}, {step}, &{next})) {{ fprintf(stderr, \"range step overflow\\n\"); exit(1); }}"));
                     self.emit_line(&format!("{current} = {next};"));
                 }
@@ -9053,10 +9177,12 @@ static inline void lucid_print_val(LucidVal v) {
                 Ok(())
             }
             Stmt::Function(function) if self.in_function => {
-                if let [Stmt::Return {
-                    value: Some(body_expr),
-                    ..
-                }] = function.body.as_slice()
+                if let [
+                    Stmt::Return {
+                        value: Some(body_expr),
+                        ..
+                    },
+                ] = function.body.as_slice()
                 {
                     let parameter_specs = function
                         .params
@@ -9068,10 +9194,8 @@ static inline void lucid_print_val(LucidVal v) {
                             )
                         })
                         .collect();
-                    self.anonymous_bindings.insert(
-                        function.name.clone(),
-                        (parameter_specs, body_expr.clone()),
-                    );
+                    self.anonymous_bindings
+                        .insert(function.name.clone(), (parameter_specs, body_expr.clone()));
                     return Ok(());
                 }
                 let parameter_specs = function
@@ -9084,8 +9208,10 @@ static inline void lucid_print_val(LucidVal v) {
                         )
                     })
                     .collect();
-                self.anonymous_block_bindings
-                    .insert(function.name.clone(), (parameter_specs, function.body.clone()));
+                self.anonymous_block_bindings.insert(
+                    function.name.clone(),
+                    (parameter_specs, function.body.clone()),
+                );
                 Ok(())
             }
             Stmt::Expr(expr) => {
@@ -9193,7 +9319,7 @@ static inline void lucid_print_val(LucidVal v) {
                 Some(_) => {
                     return Err(CodegenError {
                         message: "nested native function must end with return".into(),
-                    })
+                    });
                 }
                 None => (&[][..], None),
             };
@@ -9285,7 +9411,11 @@ static inline void lucid_print_val(LucidVal v) {
             Expr::Skip(_) => Ok("lucid_none()".to_string()),
             Expr::AnonymousDef { params, body, .. } => {
                 let expression_body = match body.as_slice() {
-                    [Stmt::Return { value: Some(expr), .. }] => Some(expr),
+                    [
+                        Stmt::Return {
+                            value: Some(expr), ..
+                        },
+                    ] => Some(expr),
                     _ => None,
                 };
                 let parameter_names = params
@@ -9300,11 +9430,15 @@ static inline void lucid_print_val(LucidVal v) {
                 }
                 for statement in body {
                     match statement {
-                        Stmt::Return { value: Some(value), .. }
+                        Stmt::Return {
+                            value: Some(value), ..
+                        }
                         | Stmt::Expr(value) => {
                             self.collect_anonymous_captures(value, &parameter_names, &mut captures);
                         }
-                        Stmt::VarDef { value: Some(value), .. }
+                        Stmt::VarDef {
+                            value: Some(value), ..
+                        }
                         | Stmt::Assignment { value, .. }
                         | Stmt::AugAssign { value, .. } => {
                             self.collect_anonymous_captures(value, &parameter_names, &mut captures);
@@ -9378,10 +9512,13 @@ static inline void lucid_print_val(LucidVal v) {
                     "self" => Ok("self".to_string()),
                     _ if self.known_fn_params.contains_key(name)
                         && !self.var_types.contains_key(name)
-                        && !self.global_vars.contains_key(name) => Ok(format!(
-                        "lucid_closure({}, NULL, NULL)",
-                        Self::closure_adapter_name_for_name(name)
-                    )),
+                        && !self.global_vars.contains_key(name) =>
+                    {
+                        Ok(format!(
+                            "lucid_closure({}, NULL, NULL)",
+                            Self::closure_adapter_name_for_name(name)
+                        ))
+                    }
                     _ => Ok(format!("lucid_var_{name}")),
                 }
             }
@@ -9944,74 +10081,136 @@ static inline void lucid_print_val(LucidVal v) {
                                 "trait" | "interface" => "((bool)0)".to_string(),
                                 "Sized" => {
                                     if left_ty == "LucidVal" {
-                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Sized\")")
+                                        format!(
+                                            "lucid_dynamic_capability(lucid_wrap({l_str}), \"Sized\")"
+                                        )
                                     } else if matches!(
                                         left_ty.as_str(),
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
                                         "((bool)1)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), "Sized"))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool){})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                "Sized"
+                                            )
+                                        )
                                     } else {
                                         "((bool)0)".into()
                                     }
                                 }
                                 "Container" => {
                                     if left_ty == "LucidVal" {
-                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Container\")")
+                                        format!(
+                                            "lucid_dynamic_capability(lucid_wrap({l_str}), \"Container\")"
+                                        )
                                     } else if matches!(
                                         left_ty.as_str(),
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
                                         "((bool)1)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), "Container"))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool){})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                "Container"
+                                            )
+                                        )
                                     } else {
                                         "((bool)0)".into()
                                     }
                                 }
                                 "Iterable" | "Collection" => {
                                     if left_ty == "LucidVal" {
-                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\")", type_name)
+                                        format!(
+                                            "lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\")",
+                                            type_name
+                                        )
                                     } else if matches!(
                                         left_ty.as_str(),
                                         "LucidList*" | "LucidSet*" | "LucidDict*"
                                     ) {
                                         "((bool)1)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool){})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                type_name
+                                            )
+                                        )
                                     } else {
                                         "((bool)0)".into()
                                     }
                                 }
                                 "Sequence" | "Reversible" => {
                                     if left_ty == "LucidVal" {
-                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\")", type_name)
+                                        format!(
+                                            "lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\")",
+                                            type_name
+                                        )
                                     } else if left_ty == "LucidList*" {
                                         "((bool)1)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool){})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                type_name
+                                            )
+                                        )
                                     } else {
                                         "((bool)0)".into()
                                     }
                                 }
                                 "Set" => {
                                     if left_ty == "LucidVal" {
-                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\")")
+                                        format!(
+                                            "lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\")"
+                                        )
                                     } else if left_ty == "LucidSet*" {
                                         "((bool)1)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), "Set"))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool){})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                "Set"
+                                            )
+                                        )
                                     } else {
                                         "((bool)0)".into()
                                     }
                                 }
                                 "Buffer" => {
                                     if left_ty == "LucidVal" {
-                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Buffer\")")
+                                        format!(
+                                            "lucid_dynamic_capability(lucid_wrap({l_str}), \"Buffer\")"
+                                        )
                                     } else if left_ty == "LucidList*" {
                                         "((bool)1)".into()
-                                    } else if self.method_owner(left_ty.trim_end_matches('*'), "__buffer__").is_some() {
+                                    } else if self
+                                        .method_owner(left_ty.trim_end_matches('*'), "__buffer__")
+                                        .is_some()
+                                    {
                                         "((bool)1)".into()
                                     } else {
                                         "((bool)0)".into()
@@ -10019,11 +10218,22 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "Shape" => {
                                     if left_ty == "LucidVal" {
-                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Shape\")")
+                                        format!(
+                                            "lucid_dynamic_capability(lucid_wrap({l_str}), \"Shape\")"
+                                        )
                                     } else if left_ty == "LucidList*" {
                                         "((bool)1)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), "Shape"))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool){})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                "Shape"
+                                            )
+                                        )
                                     } else {
                                         "((bool)0)".into()
                                     }
@@ -10033,7 +10243,9 @@ static inline void lucid_print_val(LucidVal v) {
                                     if is_none_expr(left) {
                                         "((bool)0)".into()
                                     } else if left_ty == "LucidVal" {
-                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"{capability}\")")
+                                        format!(
+                                            "lucid_dynamic_capability(lucid_wrap({l_str}), \"{capability}\")"
+                                        )
                                     } else if self
                                         .known_classes
                                         .contains_key(left_ty.trim_end_matches('*'))
@@ -10223,14 +10435,25 @@ static inline void lucid_print_val(LucidVal v) {
                                 "trait" | "interface" => "((bool)1)".into(),
                                 "Sized" | "Container" => {
                                     if left_ty == "LucidVal" {
-                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{type_name}\"))")
+                                        format!(
+                                            "(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{type_name}\"))"
+                                        )
                                     } else if matches!(
                                         left_ty.as_str(),
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
                                         "((bool)0)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool)!{})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                type_name
+                                            )
+                                        )
                                     } else {
                                         "((bool)1)".into()
                                     }
@@ -10240,7 +10463,9 @@ static inline void lucid_print_val(LucidVal v) {
                                     if is_none_expr(left) {
                                         "((bool)1)".into()
                                     } else if left_ty == "LucidVal" {
-                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{capability}\"))")
+                                        format!(
+                                            "(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{capability}\"))"
+                                        )
                                     } else if self
                                         .known_classes
                                         .contains_key(left_ty.trim_end_matches('*'))
@@ -10258,54 +10483,105 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "Iterable" | "Collection" => {
                                     if left_ty == "LucidVal" {
-                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))", type_name)
+                                        format!(
+                                            "(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))",
+                                            type_name
+                                        )
                                     } else if matches!(
                                         left_ty.as_str(),
                                         "LucidList*" | "LucidSet*" | "LucidDict*"
                                     ) {
                                         "((bool)0)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool)!{})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                type_name
+                                            )
+                                        )
                                     } else {
                                         "((bool)1)".into()
                                     }
                                 }
                                 "Sequence" | "Reversible" => {
                                     if left_ty == "LucidVal" {
-                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))", type_name)
+                                        format!(
+                                            "(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))",
+                                            type_name
+                                        )
                                     } else if left_ty == "LucidList*" {
                                         "((bool)0)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool)!{})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                type_name
+                                            )
+                                        )
                                     } else {
                                         "((bool)1)".into()
                                     }
                                 }
                                 "Set" => {
                                     if left_ty == "LucidVal" {
-                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\"))")
+                                        format!(
+                                            "(!lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\"))"
+                                        )
                                     } else if left_ty == "LucidSet*" {
                                         "((bool)0)".into()
-                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
-                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), "Set"))
+                                    } else if self
+                                        .known_classes
+                                        .contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!(
+                                            "((bool)!{})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                "Set"
+                                            )
+                                        )
                                     } else {
                                         "((bool)1)".into()
                                     }
                                 }
                                 "Buffer" | "Shape" => {
                                     if left_ty == "LucidVal" {
-                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))", type_name)
+                                        format!(
+                                            "(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))",
+                                            type_name
+                                        )
                                     } else if type_name == "Buffer"
                                         && (left_ty == "LucidList*"
-                                            || self.method_owner(left_ty.trim_end_matches('*'), "__buffer__").is_some())
+                                            || self
+                                                .method_owner(
+                                                    left_ty.trim_end_matches('*'),
+                                                    "__buffer__",
+                                                )
+                                                .is_some())
                                     {
                                         "((bool)0)".into()
                                     } else if type_name == "Shape" && left_ty == "LucidList*" {
                                         "((bool)0)".into()
                                     } else if type_name == "Shape"
-                                        && self.known_classes.contains_key(left_ty.trim_end_matches('*'))
+                                        && self
+                                            .known_classes
+                                            .contains_key(left_ty.trim_end_matches('*'))
                                     {
-                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), "Shape"))
+                                        format!(
+                                            "((bool)!{})",
+                                            self.class_has_capability(
+                                                left_ty.trim_end_matches('*'),
+                                                "Shape"
+                                            )
+                                        )
                                     } else {
                                         "((bool)1)".into()
                                     }
@@ -11170,9 +11446,7 @@ static inline void lucid_print_val(LucidVal v) {
                                 return Ok(format!("{owner}___iter__(({owner}*)({value}))"));
                             }
                             if value_type == "LucidVal" {
-                                return Ok(format!(
-                                    "lucid_iter_dynamic(lucid_wrap({value}))"
-                                ));
+                                return Ok(format!("lucid_iter_dynamic(lucid_wrap({value}))"));
                             }
                             return Ok(format!("lucid_iter_value(lucid_wrap({value}))"));
                         }
@@ -11423,13 +11697,17 @@ static inline void lucid_print_val(LucidVal v) {
                                                 message: "native map() requires a unary function"
                                                     .into(),
                                             })?;
-                                        (vec![parameter_type], MapBody::Expression(param_name, body_expr))
+                                        (
+                                            vec![parameter_type],
+                                            MapBody::Expression(param_name, body_expr),
+                                        )
                                     } else if let Some((specs, body)) =
                                         self.anonymous_block_bindings.get(function_name).cloned()
                                     {
                                         if specs.len() != 1 {
                                             return Err(CodegenError {
-                                                message: "native map() requires a unary function".into(),
+                                                message: "native map() requires a unary function"
+                                                    .into(),
                                             });
                                         }
                                         (vec![specs[0].1.clone()], MapBody::Block(specs, body))
@@ -11472,9 +11750,7 @@ static inline void lucid_print_val(LucidVal v) {
                                                 value: Some(expr), ..
                                             },
                                         ] => Some(expr.clone()),
-                                        _ => {
-                                            None
-                                        }
+                                        _ => None,
                                     };
                                     let map_body = if let Some(expr) = expr {
                                         MapBody::Expression(params[0].name.clone(), expr)
@@ -11542,7 +11818,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 _ => format!("{source_tmp}->items[{index_tmp}]"),
                             };
-                            let call = if let MapBody::Expression(param_name, body_expr) = &call_body {
+                            let call = if let MapBody::Expression(param_name, body_expr) =
+                                &call_body
+                            {
                                 let param_type = &parameter_types[0];
                                 let binding = format!("lucid_var_{param_name}");
                                 let converted = match param_type.as_str() {
@@ -11643,7 +11921,8 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if args.len() == 1 {
                                 let arg_str = self.emit_expr(&args[0].value)?;
-                                let arg_type = self.infer_expr_type(&args[0].value, &HashMap::new());
+                                let arg_type =
+                                    self.infer_expr_type(&args[0].value, &HashMap::new());
                                 if arg_type == "LucidVal" {
                                     return Ok(format!(
                                         "lucid_round_dynamic(lucid_wrap({arg_str}))"
@@ -12081,7 +12360,9 @@ static inline void lucid_print_val(LucidVal v) {
                         let mut parts = vec![format!(
                             "LucidList* {call_args} = lucid_list_new({});",
                             args.iter()
-                                .filter(|arg| !matches!(arg.value, Expr::Skip(_)) && arg.name.is_none() && !arg.is_gather_spread)
+                                .filter(|arg| !matches!(arg.value, Expr::Skip(_))
+                                    && arg.name.is_none()
+                                    && !arg.is_gather_spread)
                                 .count()
                         )];
                         if has_keywords {
@@ -12095,13 +12376,16 @@ static inline void lucid_print_val(LucidVal v) {
                                 let value = self.emit_expr(&arg.value)?;
                                 let bundle_type = self.infer_expr_type(&arg.value, &HashMap::new());
                                 let bundle_name = bundle_type.trim_end_matches('*');
-                                let object = format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
+                                let object =
+                                    format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
                                 let is_bundle = bundle_name == "Arguments"
                                     || bundle_name == "Parameters"
                                     || bundle_name.ends_with("Arguments")
                                     || bundle_name.ends_with("Parameters");
                                 if !is_bundle {
-                                    if let Some(fields) = self.known_classes.get(bundle_name).cloned() {
+                                    if let Some(fields) =
+                                        self.known_classes.get(bundle_name).cloned()
+                                    {
                                         for field in fields {
                                             parts.push(format!(
                                                 "lucid_list_append({call_args}, lucid_wrap({object}->{field}));"
@@ -12111,11 +12395,9 @@ static inline void lucid_print_val(LucidVal v) {
                                     }
                                     return Err(CodegenError { message: "gather spread requires a declared bundle or class value".into() });
                                 }
-                                if self
-                                    .known_classes
-                                    .get(bundle_name)
-                                    .is_some_and(|fields| fields.iter().any(|field| field == "pargs"))
-                                {
+                                if self.known_classes.get(bundle_name).is_some_and(|fields| {
+                                    fields.iter().any(|field| field == "pargs")
+                                }) {
                                     parts.push(format!(
                                         "for (int64_t _i = 0; {object}->pargs && _i < {object}->pargs->len; ++_i) lucid_list_append({call_args}, {object}->pargs->items[_i]);"
                                     ));
@@ -12681,37 +12963,34 @@ static inline void lucid_print_val(LucidVal v) {
                                 .filter_map(|arg| arg.name.clone())
                                 .collect::<HashSet<_>>();
                             let convert_value_arg = |rendered: String, index: usize| {
-                                if param_types.get(index).map(String::as_str)
-                                    == Some("LucidVal")
-                                {
+                                if param_types.get(index).map(String::as_str) == Some("LucidVal") {
                                     format!("lucid_wrap({rendered})")
                                 } else {
                                     rendered
                                 }
                             };
-                            let convert_list_item = |item: String, index: usize| {
-                                match param_types
-                                    .get(index)
-                                    .map(String::as_str)
-                                    .unwrap_or("LucidVal")
-                                {
-                                    "int64_t" => format!("lucid_as_int({item})"),
-                                    "double" => format!("lucid_as_float({item})"),
-                                    "bool" => format!("lucid_as_bool({item})"),
-                                    "const char*" => format!("lucid_as_str({item})"),
-                                    "LucidList*" => format!("lucid_as_list({item})"),
-                                    "LucidDict*" => format!("lucid_as_dict({item})"),
-                                    "LucidSet*" => format!("lucid_as_set({item})"),
-                                    "LucidVal" => item,
-                                    other => format!("({other})lucid_as_ptr({item})"),
-                                }
+                            let convert_list_item = |item: String, index: usize| match param_types
+                                .get(index)
+                                .map(String::as_str)
+                                .unwrap_or("LucidVal")
+                            {
+                                "int64_t" => format!("lucid_as_int({item})"),
+                                "double" => format!("lucid_as_float({item})"),
+                                "bool" => format!("lucid_as_bool({item})"),
+                                "const char*" => format!("lucid_as_str({item})"),
+                                "LucidList*" => format!("lucid_as_list({item})"),
+                                "LucidDict*" => format!("lucid_as_dict({item})"),
+                                "LucidSet*" => format!("lucid_as_set({item})"),
+                                "LucidVal" => item,
+                                other => format!("({other})lucid_as_ptr({item})"),
                             };
                             let mut prelude = Vec::new();
                             let mut slots: Vec<Option<String>> = vec![None; param_names.len()];
                             let mut positional = 0usize;
                             let mut extras = Vec::new();
-                            for arg in
-                                args.iter().filter(|arg| !matches!(arg.value, Expr::Skip(_)))
+                            for arg in args
+                                .iter()
+                                .filter(|arg| !matches!(arg.value, Expr::Skip(_)))
                             {
                                 if let Some(arg_name) = &arg.name {
                                     if let Some(index) =
@@ -12746,9 +13025,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     let mut spread_index = 0usize;
                                     while positional < slots.len()
                                         && !keyword_names.contains(&param_names[positional])
-                                        && static_len
-                                            .map(|len| spread_index < len)
-                                            .unwrap_or(true)
+                                        && static_len.map(|len| spread_index < len).unwrap_or(true)
                                     {
                                         let item =
                                             format!("lucid_list_get({list}, {spread_index}LL)");
@@ -12928,7 +13205,9 @@ static inline void lucid_print_val(LucidVal v) {
                             (raw_args, rendered)
                         };
                     if self.dispatch_signatures.contains_key(&resolved_name)
-                        && effective_args.iter().any(|arg| self.expr_is_dynamic_value(&arg.value))
+                        && effective_args
+                            .iter()
+                            .any(|arg| self.expr_is_dynamic_value(&arg.value))
                     {
                         let helper = format!(
                             "lucid_dynamic_dispatch_{}",
@@ -12940,7 +13219,9 @@ static inline void lucid_print_val(LucidVal v) {
                             arg_strs
                                 .iter()
                                 .map(|value| {
-                                    format!("lucid_list_append(_dispatch_args, lucid_wrap({value}));")
+                                    format!(
+                                        "lucid_list_append(_dispatch_args, lucid_wrap({value}));"
+                                    )
                                 })
                                 .collect::<Vec<_>>()
                                 .join(" ")
@@ -13914,7 +14195,9 @@ static inline void lucid_print_val(LucidVal v) {
                     let mut parts = vec![format!(
                         "LucidList* {call_args} = lucid_list_new({});",
                         args.iter()
-                            .filter(|arg| !matches!(arg.value, Expr::Skip(_)) && arg.name.is_none() && !arg.is_gather_spread)
+                            .filter(|arg| !matches!(arg.value, Expr::Skip(_))
+                                && arg.name.is_none()
+                                && !arg.is_gather_spread)
                             .count()
                     )];
                     if has_keywords {
@@ -13928,7 +14211,8 @@ static inline void lucid_print_val(LucidVal v) {
                             let value = self.emit_expr(&arg.value)?;
                             let bundle_type = self.infer_expr_type(&arg.value, &HashMap::new());
                             let bundle_name = bundle_type.trim_end_matches('*');
-                            let object = format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
+                            let object =
+                                format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
                             let is_bundle = bundle_name == "Arguments"
                                 || bundle_name == "Parameters"
                                 || bundle_name.ends_with("Arguments")
@@ -13940,9 +14224,17 @@ static inline void lucid_print_val(LucidVal v) {
                                     }
                                     continue;
                                 }
-                                return Err(CodegenError { message: "gather spread requires a declared bundle or class value".into() });
+                                return Err(CodegenError {
+                                    message:
+                                        "gather spread requires a declared bundle or class value"
+                                            .into(),
+                                });
                             }
-                            if self.known_classes.get(bundle_name).is_some_and(|fields| fields.iter().any(|field| field == "pargs")) {
+                            if self
+                                .known_classes
+                                .get(bundle_name)
+                                .is_some_and(|fields| fields.iter().any(|field| field == "pargs"))
+                            {
                                 parts.push(format!("for (int64_t _i = 0; {object}->pargs && _i < {object}->pargs->len; ++_i) lucid_list_append({call_args}, {object}->pargs->items[_i]);"));
                             }
                             parts.push(format!("for (int64_t _i = 0; {object}->vpargs && _i < {object}->vpargs->len; ++_i) lucid_list_append({call_args}, {object}->vpargs->items[_i]);"));
@@ -15130,8 +15422,7 @@ match parse("ok") as outcome:
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("dynamic multi-index should compile");
+        compile_to_native(&module, &output, 0).expect("dynamic multi-index should compile");
         let run = Command::new(&output)
             .output()
             .expect("run dynamic multi-index");
@@ -15181,13 +15472,15 @@ match parse("ok") as outcome:
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("dynamic multi-setitem should compile");
+        compile_to_native(&module, &output, 0).expect("dynamic multi-setitem should compile");
         let run = Command::new(&output)
             .output()
             .expect("run dynamic multi-setitem");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "dynamic multi-setitem failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "dynamic multi-setitem failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "27\n");
     }
 
@@ -15800,7 +16093,10 @@ print(c.x, c.y)
             .output()
             .expect("run erased named dispatch");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "erased named dispatch failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "erased named dispatch failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "animal\nint\n");
     }
 
@@ -15882,7 +16178,9 @@ print(c.x, c.y)
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("erased custom len should compile");
-        let run = Command::new(&output).output().expect("run erased custom len");
+        let run = Command::new(&output)
+            .output()
+            .expect("run erased custom len");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "erased custom len failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
@@ -15934,7 +16232,10 @@ print(c.x, c.y)
             .output()
             .expect("run dynamic custom contains");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "dynamic custom contains failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "dynamic custom contains failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
     }
 
@@ -15978,7 +16279,9 @@ print(c.x, c.y)
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("dynamic reversed should compile");
-        let run = Command::new(&output).output().expect("run dynamic reversed");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic reversed");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic reversed failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "[list len=3]\n");
@@ -16287,7 +16590,10 @@ finally:
             .output()
             .expect("run nested return-finally");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "nested return-finally failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "nested return-finally failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
     }
 
@@ -16525,10 +16831,8 @@ print(mutable[1])
 print(packet.storage[1])
 "#;
         let module = parse(source).expect("buffer protocol source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_native_user_buffer_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_native_user_buffer_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("buffer protocol source should compile");
         let run = Command::new(&output).output().expect("run native binary");
@@ -16562,19 +16866,14 @@ print(bytes(identity(packet))[0])
 print(packet.storage[0])
 "#;
         let module = parse(source).expect("retroactive buffer source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_native_retro_buffer_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_native_retro_buffer_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("retroactive buffer should compile");
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(
-            String::from_utf8_lossy(&run.stdout),
-            "true\ntrue\n72\n72\n"
-        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n72\n72\n");
     }
 
     #[test]
@@ -16766,7 +17065,9 @@ print(erased is not Named)
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("erased capability should compile");
-        let run = Command::new(&output).output().expect("run erased capability");
+        let run = Command::new(&output)
+            .output()
+            .expect("run erased capability");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "erased capability failed: {run:?}");
         assert_eq!(
@@ -16824,8 +17125,7 @@ print(erased is not Named)
 
     #[test]
     fn native_erased_function_value_packs_positional_variadic_arguments() {
-        let source =
-            "def count(*values: int) -> int:\n    return len(values)\nfs = [count]\nprint(fs[0](1, 2, 3))\n";
+        let source = "def count(*values: int) -> int:\n    return len(values)\nfs = [count]\nprint(fs[0](1, 2, 3))\n";
         let module = parse(source).expect("variadic closure source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_function_value_variadic_{}",
@@ -16833,7 +17133,9 @@ print(erased is not Named)
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("variadic closure should compile");
-        let run = Command::new(&output).output().expect("run variadic closure");
+        let run = Command::new(&output)
+            .output()
+            .expect("run variadic closure");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "variadic closure failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
@@ -16849,7 +17151,9 @@ print(erased is not Named)
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("dispatch closure should compile");
-        let run = Command::new(&output).output().expect("run dispatch closure");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dispatch closure");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dispatch closure failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
@@ -16874,8 +17178,7 @@ print(erased is not Named)
 
     #[test]
     fn native_erased_function_value_packs_keyword_variadic_arguments() {
-        let source =
-            "def count(**values: int) -> int:\n    return len(values)\nfs = [count]\nprint(fs[0](a=1, b=2))\n";
+        let source = "def count(**values: int) -> int:\n    return len(values)\nfs = [count]\nprint(fs[0](a=1, b=2))\n";
         let module = parse(source).expect("keyword variadic closure source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_function_value_keyword_variadic_{}",
@@ -16886,7 +17189,10 @@ print(erased is not Named)
             .output()
             .expect("run keyword variadic closure");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "keyword variadic closure failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "keyword variadic closure failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
     }
 
@@ -16900,7 +17206,9 @@ print(erased is not Named)
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("anonymous gather should compile");
-        let run = Command::new(&output).output().expect("run anonymous gather");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous gather");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous gather failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
@@ -16920,7 +17228,10 @@ print(erased is not Named)
             .output()
             .expect("run anonymous class gather");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "anonymous class gather failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "anonymous class gather failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
@@ -16933,13 +17244,15 @@ print(erased is not Named)
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("prefixed anonymous gather should compile");
+        compile_to_native(&module, &output, 0).expect("prefixed anonymous gather should compile");
         let run = Command::new(&output)
             .output()
             .expect("run prefixed anonymous gather");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "prefixed anonymous gather failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "prefixed anonymous gather failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "13\n");
     }
 
@@ -16957,7 +17270,10 @@ print(erased is not Named)
             .output()
             .expect("run surplus anonymous gather");
         let _ = fs::remove_file(&output);
-        assert!(!run.status.success(), "surplus gather unexpectedly succeeded");
+        assert!(
+            !run.status.success(),
+            "surplus gather unexpectedly succeeded"
+        );
         assert!(String::from_utf8_lossy(&run.stderr).contains("too many arguments"));
     }
 
@@ -16970,8 +17286,7 @@ print(erased is not Named)
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("named prefix gather should compile");
+        compile_to_native(&module, &output, 0).expect("named prefix gather should compile");
         let run = Command::new(&output)
             .output()
             .expect("run named prefix gather");
@@ -16989,8 +17304,7 @@ print(erased is not Named)
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("parameters gather should compile");
+        compile_to_native(&module, &output, 0).expect("parameters gather should compile");
         let run = Command::new(&output)
             .output()
             .expect("run parameters gather");
@@ -17009,7 +17323,9 @@ print(erased is not Named)
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("named gather value should compile");
-        let run = Command::new(&output).output().expect("run named gather value");
+        let run = Command::new(&output)
+            .output()
+            .expect("run named gather value");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "named gather value failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
@@ -17029,7 +17345,10 @@ print(erased is not Named)
             .output()
             .expect("run named class gather value");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "named class gather value failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "named class gather value failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
@@ -17047,7 +17366,10 @@ print(erased is not Named)
             .output()
             .expect("run invalid named gather");
         let _ = fs::remove_file(&output);
-        assert!(!run.status.success(), "unknown gather keyword unexpectedly succeeded");
+        assert!(
+            !run.status.success(),
+            "unknown gather keyword unexpectedly succeeded"
+        );
         assert!(String::from_utf8_lossy(&run.stderr).contains("unknown keyword"));
     }
 
@@ -17065,7 +17387,10 @@ print(erased is not Named)
             .output()
             .expect("run missing named gather");
         let _ = fs::remove_file(&output);
-        assert!(!run.status.success(), "missing gather field unexpectedly succeeded");
+        assert!(
+            !run.status.success(),
+            "missing gather field unexpectedly succeeded"
+        );
         assert!(String::from_utf8_lossy(&run.stderr).contains("missing gathered argument"));
     }
 
@@ -17078,13 +17403,15 @@ print(erased is not Named)
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("named parameters gather should compile");
+        compile_to_native(&module, &output, 0).expect("named parameters gather should compile");
         let run = Command::new(&output)
             .output()
             .expect("run named parameters gather");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "named parameters gather failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "named parameters gather failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
     }
 
@@ -17416,10 +17743,15 @@ with managed() as value:
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("sequential contexts should compile");
-        let run = Command::new(&output).output().expect("run sequential contexts");
+        let run = Command::new(&output)
+            .output()
+            .expect("run sequential contexts");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "sequential contexts failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "a\n1\nexit\nb\n1\nexit\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "a\n1\nexit\nb\n1\nexit\n"
+        );
     }
 
     #[test]
@@ -17467,7 +17799,9 @@ with managed() as value:
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("nested loop context should compile");
-        let run = Command::new(&output).output().expect("run nested loop context");
+        let run = Command::new(&output)
+            .output()
+            .expect("run nested loop context");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "nested loop context failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "enter\nafter\nexit\n");
@@ -18042,10 +18376,8 @@ print(all({1, 2}))
     fn native_str_formats_complex_values() {
         let source = "print(str(3 + 4j))\n";
         let module = parse(source).expect("complex str source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_str_complex_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_str_complex_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("complex str should compile");
         let run = Command::new(&output).output().expect("run complex str");
@@ -18058,32 +18390,34 @@ print(all({1, 2}))
     fn native_repr_formats_object_fields() {
         let source = "class Point:\n    x: int\n    y: int\np = Point(1, 2)\nprint(repr(p))\n";
         let module = parse(source).expect("object repr source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_repr_object_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_repr_object_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("object repr should compile");
         let run = Command::new(&output).output().expect("run object repr");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "object repr failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "Point({\"x\": 1, \"y\": 2})\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "Point({\"x\": 1, \"y\": 2})\n"
+        );
     }
 
     #[test]
     fn native_str_formats_object_values() {
         let source = "class Point:\n    x: int\n    y: int\np = Point(1, 2)\nprint(str(p))\n";
         let module = parse(source).expect("object str source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_str_object_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_str_object_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("object str should compile");
         let run = Command::new(&output).output().expect("run object str");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "object str failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "Point({\"x\": 1, \"y\": 2})\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "Point({\"x\": 1, \"y\": 2})\n"
+        );
     }
 
     #[test]
@@ -18099,7 +18433,10 @@ print(all({1, 2}))
         let run = Command::new(&output).output().expect("run bigint min/max");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "bigint min/max failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "9007199254740992\n9007199254740993\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "9007199254740992\n9007199254740993\n"
+        );
     }
 
     #[test]
@@ -18122,19 +18459,20 @@ print(all({1, 2}))
     fn native_hash_wide_bigints_uses_decimal_fold() {
         let source = "print(hash(100000000000000000000))\n";
         let module = parse(source).expect("bigint hash source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_hash_bigint_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_hash_bigint_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("bigint hash should compile");
         let run = Command::new(&output).output().expect("run bigint hash");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "bigint hash failed: {run:?}");
-        let expected = "100000000000000000000"
-            .bytes()
-            .fold(17i64, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte as i64));
-        assert_eq!(String::from_utf8_lossy(&run.stdout), format!("{expected}\n"));
+        let expected = "100000000000000000000".bytes().fold(17i64, |acc, byte| {
+            acc.wrapping_mul(31).wrapping_add(byte as i64)
+        });
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            format!("{expected}\n")
+        );
     }
 
     #[test]
@@ -18150,7 +18488,10 @@ print(all({1, 2}))
         let run = Command::new(&output).output().expect("run bigint format");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "bigint format failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000000\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "100000000000000000000\n"
+        );
     }
 
     #[test]
@@ -18179,7 +18520,9 @@ print(all({1, 2}))
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("dynamic object hash should compile");
-        let run = Command::new(&output).output().expect("run dynamic object hash");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic object hash");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic object hash failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "70\n");
@@ -18195,9 +18538,14 @@ print(all({1, 2}))
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("dynamic object equality should compile");
-        let run = Command::new(&output).output().expect("run dynamic object equality");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic object equality");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "dynamic object equality failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "dynamic object equality failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 
@@ -18210,8 +18558,7 @@ print(all({1, 2}))
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("inherited dynamic equality should compile");
+        compile_to_native(&module, &output, 0).expect("inherited dynamic equality should compile");
         let run = Command::new(&output)
             .output()
             .expect("run inherited dynamic equality");
@@ -18227,10 +18574,8 @@ print(all({1, 2}))
     fn native_eq_dispatches_object_methods_with_any_parameter() {
         let source = "class Key:\n    value: int\n    def __eq__(self, other: Any) -> bool:\n        return self.value == getattr(other, \"value\")\ndef identity(value: Any) -> Any:\n    return value\nprint(identity(Key(7)) == identity(Key(7)))";
         let module = parse(source).expect("Any equality source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_any_eq_test_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_any_eq_test_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("Any equality should compile");
         let run = Command::new(&output).output().expect("run Any equality");
@@ -18253,7 +18598,10 @@ print(all({1, 2}))
             .output()
             .expect("run dynamic object ordering");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "dynamic object ordering failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "dynamic object ordering failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 
@@ -18267,7 +18615,9 @@ print(all({1, 2}))
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("dynamic ordering should compile");
-        let run = Command::new(&output).output().expect("run dynamic ordering");
+        let run = Command::new(&output)
+            .output()
+            .expect("run dynamic ordering");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "dynamic ordering failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\ntrue\n");
@@ -18275,7 +18625,8 @@ print(all({1, 2}))
 
     #[test]
     fn native_complex_rejects_non_numeric_erased_values() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(complex(identity(\"3\")))\n";
+        let source =
+            "def identity(value: Any) -> Any:\n    return value\nprint(complex(identity(\"3\")))\n";
         let module = parse(source).expect("dynamic complex source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_complex_dynamic_invalid_{}",
@@ -18291,7 +18642,8 @@ print(all({1, 2}))
 
     #[test]
     fn native_chr_rejects_non_integer_erased_values() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(chr(identity(65.0)))\n";
+        let source =
+            "def identity(value: Any) -> Any:\n    return value\nprint(chr(identity(65.0)))\n";
         let module = parse(source).expect("dynamic chr source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_chr_dynamic_invalid_{}",
@@ -18315,7 +18667,9 @@ print(all({1, 2}))
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("bigint modular pow should compile");
-        let run = Command::new(&output).output().expect("run bigint modular pow");
+        let run = Command::new(&output)
+            .output()
+            .expect("run bigint modular pow");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "bigint modular pow failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n");
@@ -18347,7 +18701,9 @@ print(all({1, 2}))
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("wide bigint exponent should compile");
-        let run = Command::new(&output).output().expect("run wide bigint exponent");
+        let run = Command::new(&output)
+            .output()
+            .expect("run wide bigint exponent");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "wide bigint exponent failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
@@ -18362,19 +18718,22 @@ print(all({1, 2}))
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("bigint modular exponent should compile");
+        compile_to_native(&module, &output, 0).expect("bigint modular exponent should compile");
         let run = Command::new(&output)
             .output()
             .expect("run bigint modular exponent");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "bigint modular exponent failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "bigint modular exponent failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
     }
 
     #[test]
     fn native_numeric_conversions_reject_unsupported_erased_values() {
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(int(identity(none)))\n";
+        let source =
+            "def identity(value: Any) -> Any:\n    return value\nprint(int(identity(none)))\n";
         let module = parse(source).expect("dynamic int source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_int_dynamic_invalid_{}",
@@ -18387,7 +18746,8 @@ print(all({1, 2}))
         assert!(!run.status.success(), "int(none) should fail");
         assert!(String::from_utf8_lossy(&run.stderr).contains("int() cannot convert"));
 
-        let source = "def identity(value: Any) -> Any:\n    return value\nprint(float(identity(none)))\n";
+        let source =
+            "def identity(value: Any) -> Any:\n    return value\nprint(float(identity(none)))\n";
         let module = parse(source).expect("dynamic float source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_float_dynamic_invalid_{}",
@@ -18419,16 +18779,22 @@ print(all({1, 2}))
     fn native_int_preserves_big_integer_literals() {
         let source = "print(int(100000000000000000001))\n";
         let module = parse(source).expect("big integer conversion source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_int_bigint_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_int_bigint_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("big integer conversion should compile");
-        let run = Command::new(&output).output().expect("run big integer conversion");
+        let run = Command::new(&output)
+            .output()
+            .expect("run big integer conversion");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "big integer conversion failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
+        assert!(
+            run.status.success(),
+            "big integer conversion failed: {run:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "100000000000000000001\n"
+        );
     }
 
     #[test]
@@ -18450,7 +18816,10 @@ print(all({1, 2}))
             run.status.success(),
             "dynamic big integer conversion failed: {run:?}"
         );
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "100000000000000000001\n"
+        );
     }
 
     #[test]
@@ -18472,7 +18841,10 @@ print(all({1, 2}))
             run.status.success(),
             "string big integer conversion failed: {run:?}"
         );
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "100000000000000000001\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "100000000000000000001\n"
+        );
     }
 
     #[test]
@@ -18484,14 +18856,19 @@ print(all({1, 2}))
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("special int conversion should compile");
+        compile_to_native(&module, &output, 0).expect("special int conversion should compile");
         let run = Command::new(&output)
             .output()
             .expect("run special int conversion");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "special int conversion failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "int.inf\nint.nan\n0\n");
+        assert!(
+            run.status.success(),
+            "special int conversion failed: {run:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "int.inf\nint.nan\n0\n"
+        );
     }
 
     #[test]
@@ -18504,7 +18881,9 @@ print(all({1, 2}))
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("special negation should compile");
-        let run = Command::new(&output).output().expect("run special negation");
+        let run = Command::new(&output)
+            .output()
+            .expect("run special negation");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "special negation failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "-int.inf\n");
@@ -18520,12 +18899,13 @@ print(all({1, 2}))
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("special round should compile");
-        let run = Command::new(&output)
-            .output()
-            .expect("run special round");
+        let run = Command::new(&output).output().expect("run special round");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "special round failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "int.inf\nint.nan\n0\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "int.inf\nint.nan\n0\n"
+        );
     }
 
     #[test]
@@ -20116,7 +20496,10 @@ print(g(21))
             .output()
             .expect("run partial container");
         let _ = std::fs::remove_file(output);
-        assert!(result.status.success(), "partial container failed: {result:?}");
+        assert!(
+            result.status.success(),
+            "partial container failed: {result:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&result.stdout), "43\n");
     }
 
@@ -20153,7 +20536,10 @@ print(result[1])
             .output()
             .expect("run function alias value");
         let _ = std::fs::remove_file(output);
-        assert!(result.status.success(), "function alias value failed: {result:?}");
+        assert!(
+            result.status.success(),
+            "function alias value failed: {result:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&result.stdout), "true\n42\n");
     }
 
@@ -20170,7 +20556,10 @@ print(result[1])
             .output()
             .expect("run keyword closure");
         let _ = std::fs::remove_file(output);
-        assert!(result.status.success(), "keyword closure failed: {result:?}");
+        assert!(
+            result.status.success(),
+            "keyword closure failed: {result:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&result.stdout), "43\n");
     }
 
@@ -20184,7 +20573,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("function value list should compile");
-        let run = Command::new(&output).output().expect("run function value list");
+        let run = Command::new(&output)
+            .output()
+            .expect("run function value list");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "function value list failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n42\n");
@@ -20215,15 +20606,21 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("capturing anonymous list should compile");
-        let run = Command::new(&output).output().expect("run capturing anonymous list");
+        let run = Command::new(&output)
+            .output()
+            .expect("run capturing anonymous list");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "capturing anonymous list failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "capturing anonymous list failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "12\n");
     }
 
     #[test]
     fn native_erased_function_value_uses_default_arguments() {
-        let source = "def add(a: int, b: int = 5) -> int:\n    return a + b\nfs = [add]\nprint(fs[0](3))\n";
+        let source =
+            "def add(a: int, b: int = 5) -> int:\n    return a + b\nfs = [add]\nprint(fs[0](3))\n";
         let module = parse(source).expect("default closure source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_function_value_default_{}",
@@ -20276,7 +20673,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("escaping closure should compile");
-        let run = Command::new(&output).output().expect("run escaping closure");
+        let run = Command::new(&output)
+            .output()
+            .expect("run escaping closure");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "escaping closure failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "12\n");
@@ -20307,10 +20706,8 @@ print(result[1])
     fn native_loop_closures_capture_fresh_iteration_bindings() {
         let source = "fns = []\nfor i in [1, 2, 3]:\n    fns.append(def() -> int: i)\nfor f in fns:\n    print(f())\n";
         let module = parse(source).expect("loop closure source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_native_loop_closure_{}",
-            std::process::id()
-        ));
+        let output =
+            std::env::temp_dir().join(format!("lucid_native_loop_closure_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("loop closure should compile");
         let run = Command::new(&output).output().expect("run loop closure");
@@ -20329,15 +20726,21 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("comprehension closure should compile");
-        let run = Command::new(&output).output().expect("run comprehension closure");
+        let run = Command::new(&output)
+            .output()
+            .expect("run comprehension closure");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "comprehension closure failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "comprehension closure failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n2\n3\n");
     }
 
     #[test]
     fn native_recursive_anonymous_function_is_callable() {
-        let source = "fact = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\nprint(fact(5))\n";
+        let source =
+            "fact = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\nprint(fact(5))\n";
         let module = parse(source).expect("recursive anonymous source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_recursive_anonymous_{}",
@@ -20345,7 +20748,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("recursive anonymous should compile");
-        let run = Command::new(&output).output().expect("run recursive anonymous");
+        let run = Command::new(&output)
+            .output()
+            .expect("run recursive anonymous");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "recursive anonymous failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "120\n");
@@ -20361,7 +20766,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("mutual recursion should compile");
-        let run = Command::new(&output).output().expect("run mutual recursion");
+        let run = Command::new(&output)
+            .output()
+            .expect("run mutual recursion");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "mutual recursion failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
@@ -20377,7 +20784,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("anonymous variadic should compile");
-        let run = Command::new(&output).output().expect("run anonymous variadic");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous variadic");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous variadic failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
@@ -20393,9 +20802,14 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("anonymous keyword variadic should compile");
-        let run = Command::new(&output).output().expect("run anonymous keyword variadic");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous keyword variadic");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "anonymous keyword variadic failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "anonymous keyword variadic failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
     }
 
@@ -20409,7 +20823,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("anonymous default should compile");
-        let run = Command::new(&output).output().expect("run anonymous default");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous default");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous default failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
@@ -20425,9 +20841,14 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("captured anonymous default should compile");
-        let run = Command::new(&output).output().expect("run captured anonymous default");
+        let run = Command::new(&output)
+            .output()
+            .expect("run captured anonymous default");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "captured anonymous default failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "captured anonymous default failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
     }
 
@@ -20441,7 +20862,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("anonymous partial should compile");
-        let run = Command::new(&output).output().expect("run anonymous partial");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous partial");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous partial failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "43\n");
@@ -20449,7 +20872,8 @@ print(result[1])
 
     #[test]
     fn native_named_partial_application_supports_anonymous_closures() {
-        let source = "f = def(a: int, b: int) -> int: a * 10 + b\npart = f(b=_, a=4)\nprint(part(3))\n";
+        let source =
+            "f = def(a: int, b: int) -> int: a * 10 + b\npart = f(b=_, a=4)\nprint(part(3))\n";
         let module = parse(source).expect("named anonymous partial source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_named_anonymous_partial_{}",
@@ -20457,9 +20881,14 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("named anonymous partial should compile");
-        let run = Command::new(&output).output().expect("run named anonymous partial");
+        let run = Command::new(&output)
+            .output()
+            .expect("run named anonymous partial");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "named anonymous partial failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "named anonymous partial failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "43\n");
     }
 
@@ -20473,7 +20902,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("anonymous keyword should compile");
-        let run = Command::new(&output).output().expect("run anonymous keyword");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous keyword");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous keyword failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
@@ -20489,9 +20920,14 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("anonymous keyword-only should compile");
-        let run = Command::new(&output).output().expect("run anonymous keyword-only");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous keyword-only");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "anonymous keyword-only failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "anonymous keyword-only failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
@@ -20505,9 +20941,14 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("anonymous positional-only should compile");
-        let run = Command::new(&output).output().expect("run anonymous positional-only");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous positional-only");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "anonymous positional-only failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "anonymous positional-only failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
@@ -20515,7 +20956,8 @@ print(result[1])
     fn native_named_nested_closure_alias_preserves_capture() {
         let source = "def run(threshold: int) -> bool:\n    def check(x: int) -> bool:\n        return x > threshold\n    g = check\n    return g(4)\nprint(run(3))\n";
         let module = parse(source).unwrap();
-        let output = std::env::temp_dir().join(format!("lucid_debug_nested_{}", std::process::id()));
+        let output =
+            std::env::temp_dir().join(format!("lucid_debug_nested_{}", std::process::id()));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).unwrap();
         let run = Command::new(&output).output().unwrap();
@@ -20534,9 +20976,14 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("nested expression function should compile");
-        let run = Command::new(&output).output().expect("run nested expression function");
+        let run = Command::new(&output)
+            .output()
+            .expect("run nested expression function");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "nested expression function failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "nested expression function failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
     }
 
@@ -20550,9 +20997,14 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("nested closure let alias should compile");
-        let run = Command::new(&output).output().expect("run nested closure let alias");
+        let run = Command::new(&output)
+            .output()
+            .expect("run nested closure let alias");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "nested closure let alias failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "nested closure let alias failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     }
 
@@ -20566,7 +21018,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("nested closure map should compile");
-        let run = Command::new(&output).output().expect("run nested closure map");
+        let run = Command::new(&output)
+            .output()
+            .expect("run nested closure map");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "nested closure map failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
@@ -20586,7 +21040,10 @@ print(result[1])
             .output()
             .expect("run nested block function");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "nested block function failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "nested block function failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "14\n");
     }
 
@@ -20600,7 +21057,9 @@ print(result[1])
         ));
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("nested map block should compile");
-        let run = Command::new(&output).output().expect("run nested map block");
+        let run = Command::new(&output)
+            .output()
+            .expect("run nested map block");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "nested map block failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "12\n");
@@ -20957,8 +21416,7 @@ print(result[1])
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("gather spread value should compile");
+        compile_to_native(&module, &output, 0).expect("gather spread value should compile");
         let run = Command::new(&output)
             .output()
             .expect("run gather spread value");
@@ -20976,13 +21434,15 @@ print(result[1])
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("parameters spread value should compile");
+        compile_to_native(&module, &output, 0).expect("parameters spread value should compile");
         let run = Command::new(&output)
             .output()
             .expect("run parameters spread value");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "parameters spread value failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "parameters spread value failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
     }
 
@@ -20995,16 +21455,17 @@ print(result[1])
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("positional-only boundary should compile");
+        compile_to_native(&module, &output, 0).expect("positional-only boundary should compile");
         let run = Command::new(&output)
             .output()
             .expect("run positional-only boundary");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "positional-only boundary failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "positional-only boundary failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
     }
-
 
     #[test]
     fn native_named_class_gather_value_accepts_gather_spread() {
@@ -21015,13 +21476,15 @@ print(result[1])
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0)
-            .expect("class gather spread value should compile");
+        compile_to_native(&module, &output, 0).expect("class gather spread value should compile");
         let run = Command::new(&output)
             .output()
             .expect("run class gather spread value");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "class gather spread value failed: {run:?}");
+        assert!(
+            run.status.success(),
+            "class gather spread value failed: {run:?}"
+        );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 

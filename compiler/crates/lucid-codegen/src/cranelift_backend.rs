@@ -3788,8 +3788,8 @@ return total
                 terminator: Terminator::Return(None),
             }],
         };
-        let compiled = compile_integer_function(&function)
-            .expect("sixteen-parameter void CIR should compile");
+        let compiled =
+            compile_integer_function(&function).expect("sixteen-parameter void CIR should compile");
         assert_eq!(compiled.parameter_count(), 16);
         let args = (1..=16).collect::<Vec<_>>();
         unsafe { compiled.call_void_with_args(&args) };
@@ -3828,7 +3828,8 @@ return total
         match compile_integer_function(&function) {
             Err(CraneliftError::UnsupportedInstruction(message)) => assert_eq!(
                 message,
-                "native integer invocation currently supports at most sixteen parameters".to_string()
+                "native integer invocation currently supports at most sixteen parameters"
+                    .to_string()
             ),
             Ok(_) => panic!("expected compile to be rejected"),
             Err(other) => panic!("expected unsupported-parameter error, got {other:?}"),
@@ -3897,7 +3898,8 @@ return total
         match compile_integer_result_function(&function) {
             Err(CraneliftError::UnsupportedInstruction(message)) => assert_eq!(
                 message,
-                "native integer invocation currently supports at most sixteen parameters".to_string()
+                "native integer invocation currently supports at most sixteen parameters"
+                    .to_string()
             ),
             Ok(_) => panic!("expected result compile to be rejected"),
             Err(other) => panic!("expected unsupported-parameter error, got {other:?}"),

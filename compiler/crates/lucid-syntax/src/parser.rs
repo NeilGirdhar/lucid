@@ -188,10 +188,10 @@ impl Parser {
             TokenKind::Async => {
                 self.advance();
                 self.expect(&TokenKind::Def)?;
-            let mut function = self.parse_raw_function(false, decorators)?;
-            function.is_async = true;
-            function.is_final = false;
-            Ok(Stmt::Function(function))
+                let mut function = self.parse_raw_function(false, decorators)?;
+                function.is_async = true;
+                function.is_final = false;
+                Ok(Stmt::Function(function))
             }
             TokenKind::ContextManager => {
                 let modifier_span = self.advance().span;

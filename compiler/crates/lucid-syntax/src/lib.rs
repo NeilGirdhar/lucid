@@ -272,15 +272,14 @@ contextmanager def locked(lock: Lock):
 
     #[test]
     fn test_parse_class_value_semantics_options() {
-        let module =
-            parse("class Point(eq=true, order=false, hash=false):\n    pass\n").unwrap();
-        let Stmt::ClassDef {
-            without_traits, ..
-        } = &module.statements[0]
-        else {
+        let module = parse("class Point(eq=true, order=false, hash=false):\n    pass\n").unwrap();
+        let Stmt::ClassDef { without_traits, .. } = &module.statements[0] else {
             panic!("expected class definition");
         };
-        assert_eq!(without_traits, &vec!["Ord".to_string(), "Hashable".to_string()]);
+        assert_eq!(
+            without_traits,
+            &vec!["Ord".to_string(), "Hashable".to_string()]
+        );
     }
 
     #[test]
