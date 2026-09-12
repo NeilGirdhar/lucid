@@ -4559,6 +4559,249 @@ impl Function {
         )
     }
 
+    /// Lower no-op `for i in range(...): pass` loops to a real counted CFG.
+    /// The loop body must contain only no-op tail statements, so dropping the
+    /// body while preserving the range iteration count is semantics-preserving.
+    fn from_counted_for_void(
+        module: &lucid_syntax::Module,
+        parameter_names: &[String],
+    ) -> Option<Result<Self, LowerError>> {
+        fn initialized_ident(
+            statement: &lucid_syntax::Stmt,
+        ) -> Option<(&String, &lucid_syntax::Expr)> {
+            match statement {
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(value),
+                    ..
+                } => Some((name, value)),
+                _ => None,
+            }
+        }
+        let (bound_aliases, _index_name, func, args, body, if_broken) = {
+            let [setup @ .., for_statement] = module.statements.as_slice() else {
+                return None;
+            };
+            let lucid_syntax::Stmt::For {
+                target: lucid_syntax::Pattern::Ident(index_name, _),
+                iterable: lucid_syntax::Expr::Call { func, args, .. },
+                body,
+                if_broken,
+                ..
+            } = for_statement
+            else {
+                return None;
+            };
+            let mut seen_aliases = std::collections::HashSet::new();
+            for statement in setup {
+                let (alias_name, _) = initialized_ident(statement)?;
+                if alias_name == index_name || !seen_aliases.insert(alias_name.as_str()) {
+                    return None;
+                }
+            }
+            (
+                setup.iter().collect::<Vec<_>>(),
+                index_name,
+                func,
+                args,
+                body,
+                if_broken,
+            )
+        };
+        if !Self::canonical_loop_tail(body)
+            || !(1..=3).contains(&args.len())
+            || !matches!(func.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == "range")
+        {
+            return None;
+        }
+        let _ = if_broken;
+        if args.iter().any(|arg| {
+            arg.name.is_some() || arg.is_spread || arg.is_dict_spread || arg.is_gather_spread
+        }) {
+            return None;
+        }
+        fn bound_alias_value<'a>(
+            name: &str,
+            bound_aliases: &[&'a lucid_syntax::Stmt],
+        ) -> Option<&'a lucid_syntax::Expr> {
+            for statement in bound_aliases {
+                let (alias_name, value) = initialized_ident(statement)?;
+                if alias_name == name {
+                    return Some(value);
+                }
+            }
+            None
+        }
+        fn expr_uses_bound_alias(
+            expr: &lucid_syntax::Expr,
+            alias: &str,
+            bound_aliases: &[&lucid_syntax::Stmt],
+            depth: usize,
+        ) -> Option<bool> {
+            if depth > bound_aliases.len() {
+                return Some(false);
+            }
+            let lucid_syntax::Expr::Ident { name, .. } = expr else {
+                return Some(false);
+            };
+            if name == alias {
+                return Some(true);
+            }
+            match bound_alias_value(name, bound_aliases) {
+                Some(value) => expr_uses_bound_alias(value, alias, bound_aliases, depth + 1),
+                None => Some(false),
+            }
+        }
+        fn operand(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            bound_aliases: &[&lucid_syntax::Stmt],
+            parameter_names: &[String],
+            depth: usize,
+        ) -> Option<Instruction> {
+            if depth > bound_aliases.len() {
+                return None;
+            }
+            match Function::int_literal_expr(expr) {
+                Some(value) => Some(Instruction::ConstInt { result, value }),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } => {
+                        if let Some(value) = bound_alias_value(name, bound_aliases) {
+                            operand(value, result, bound_aliases, parameter_names, depth + 1)
+                        } else {
+                            Some(Instruction::Param {
+                                result,
+                                index: parameter_names
+                                    .iter()
+                                    .position(|parameter| parameter == name)?
+                                    as u32,
+                            })
+                        }
+                    }
+                    _ => None,
+                },
+            }
+        }
+        fn int_literal_operand(
+            expr: &lucid_syntax::Expr,
+            bound_aliases: &[&lucid_syntax::Stmt],
+            depth: usize,
+        ) -> Option<i64> {
+            if depth > bound_aliases.len() {
+                return None;
+            }
+            match Function::int_literal_expr(expr) {
+                Some(value) => Some(value),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } => {
+                        bound_alias_value(name, bound_aliases)
+                            .and_then(|value| int_literal_operand(value, bound_aliases, depth + 1))
+                    }
+                    _ => None,
+                },
+            }
+        }
+        let zero = lucid_syntax::Expr::Literal {
+            value: lucid_syntax::LiteralValue::Int(0),
+            span: func.span(),
+        };
+        let (start_expr, stop_expr, step_expr, step) = match args.as_slice() {
+            [stop] => (&zero, &stop.value, None, 1),
+            [start, stop] => (&start.value, &stop.value, None, 1),
+            [start, stop, step_arg] => {
+                let step = int_literal_operand(&step_arg.value, &bound_aliases, 0)?;
+                if step == 0 {
+                    return None;
+                }
+                (&start.value, &stop.value, Some(&step_arg.value), step)
+            }
+            _ => return None,
+        };
+        for statement in &bound_aliases {
+            let (alias_name, _) = initialized_ident(statement)?;
+            if !expr_uses_bound_alias(start_expr, alias_name, &bound_aliases, 0)?
+                && !expr_uses_bound_alias(stop_expr, alias_name, &bound_aliases, 0)?
+                && !step_expr.is_some_and(|expr| {
+                    expr_uses_bound_alias(expr, alias_name, &bound_aliases, 0).unwrap_or(false)
+                })
+            {
+                return None;
+            }
+        }
+        let start_instruction =
+            operand(start_expr, ValueId(1), &bound_aliases, parameter_names, 0)?;
+        let stop_instruction = operand(stop_expr, ValueId(0), &bound_aliases, parameter_names, 0)?;
+        let comparison = if step > 0 {
+            Instruction::CmpLt {
+                result: ValueId(3),
+                left: ValueId(2),
+                right: ValueId(0),
+            }
+        } else {
+            Instruction::CmpGt {
+                result: ValueId(3),
+                left: ValueId(2),
+                right: ValueId(0),
+            }
+        };
+        let function = Self {
+            entry: BlockId(0),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    instructions: vec![stop_instruction, start_instruction],
+                    terminator: Terminator::Jump(BlockId(1)),
+                },
+                Block {
+                    id: BlockId(1),
+                    instructions: vec![
+                        Instruction::Phi {
+                            result: ValueId(2),
+                            incomings: vec![(BlockId(0), ValueId(1)), (BlockId(2), ValueId(4))],
+                        },
+                        comparison,
+                    ],
+                    terminator: Terminator::Branch {
+                        condition: ValueId(3),
+                        then_block: BlockId(2),
+                        else_block: BlockId(3),
+                    },
+                },
+                Block {
+                    id: BlockId(2),
+                    instructions: vec![
+                        Instruction::ConstInt {
+                            result: ValueId(5),
+                            value: step,
+                        },
+                        Instruction::Add {
+                            result: ValueId(4),
+                            left: ValueId(2),
+                            right: ValueId(5),
+                        },
+                    ],
+                    terminator: Terminator::Jump(BlockId(1)),
+                },
+                Block {
+                    id: BlockId(3),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(None),
+                },
+            ],
+        };
+        Some(
+            function
+                .verify()
+                .map(|_| function)
+                .map_err(|_| LowerError::UnsupportedExpression),
+        )
+    }
+
     /// Lower a straight-line module, retaining bindings between assignments.
     /// This is the first statement-level lowering boundary: control-flow
     /// statements still belong to the structured lowering pass, but ordinary
@@ -4586,6 +4829,9 @@ impl Function {
             return function;
         }
         if let Some(function) = Self::from_counted_for(module, parameter_names) {
+            return function;
+        }
+        if let Some(function) = Self::from_counted_for_void(module, parameter_names) {
             return function;
         }
         // Expression lowering owns short-circuit CFGs. Keep a standalone
@@ -10557,6 +10803,29 @@ return total
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("range step literal alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"for i in range(n):
+    pass
+"#,
+        )
+        .expect("void range fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("void range loop should lower");
+        assert_eq!(function.execute_with_args(&[4]), Ok(None));
+
+        let module = lucid_syntax::parse(
+            r#"stop = limit
+stride = -1
+for i in range(n, stop, stride):
+    pass
+"#,
+        )
+        .expect("void descending range alias fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("void descending range alias loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(None));
 
         let module = lucid_syntax::parse(
             r#"total = 0

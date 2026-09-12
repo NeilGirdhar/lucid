@@ -2579,6 +2579,28 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_void_range_with_local_aliases_cfg() {
+        let module = lucid_syntax::parse(
+            r#"stop = limit
+stride = -1
+for i in range(n, stop, stride):
+    pass
+"#,
+        )
+        .expect("void descending range alias fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into()],
+        )
+        .expect("void descending range alias loop should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile void descending range alias loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 0);
+    }
+
+    #[test]
     fn result_abi_executes_while_induction_accumulation_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0

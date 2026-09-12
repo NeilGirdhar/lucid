@@ -1772,6 +1772,37 @@ fn run_cir_executes_range_accumulator_with_local_step_literal_alias() {
 }
 
 #[test]
+fn run_cir_executes_void_range_with_local_aliases() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_void_range_aliases_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, limit: int):\n    stop = limit\n    stride = -1\n    for i in range(n, stop, stride):\n        pass\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir void range alias loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn run_cir_executes_conditional_return_expression() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_conditional_expr_{}.lucid",
