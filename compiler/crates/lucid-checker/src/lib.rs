@@ -2989,6 +2989,15 @@ impl TypeChecker {
                 for member in body {
                     let (member_name, explicitly_override) = match member {
                         ClassMember::Method(m) | ClassMember::ClassMethod(m) => {
+                            if m.is_final && m.body.is_empty() {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "final method '{name}.{}' must have a body",
+                                        m.name
+                                    ),
+                                    span: m.span,
+                                });
+                            }
                             (m.name.as_str(), m.is_override)
                         }
                         _ => continue,
@@ -9194,6 +9203,19 @@ class Child(Reusable, Base1, Base2):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("final and cannot be overridden"));
+    }
+
+    #[test]
+    fn test_final_methods_must_have_bodies() {
+        let module = parse("class Base:\n    final def save(self) -> int\n").unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err.message.contains("final method 'Base.save' must have a body"));
+
+        let module = parse("class Base:\n    final classmethod make(cls) -> int\n").unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err.message.contains("final method 'Base.make' must have a body"));
     }
 
     #[test]
