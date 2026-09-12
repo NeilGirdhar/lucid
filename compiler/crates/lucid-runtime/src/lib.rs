@@ -1101,6 +1101,94 @@ impl Interpreter {
         Ok(())
     }
 
+    fn exported_binding(inner: &Stmt) -> Option<(&str, Span)> {
+        match inner {
+            Stmt::ClassDef { name, span, .. }
+            | Stmt::InterfaceDef { name, span, .. }
+            | Stmt::TraitDef { name, span, .. }
+            | Stmt::TypeAlias { name, span, .. } => Some((name, *span)),
+            Stmt::Function(FunctionDef { name, span, .. }) => Some((name, *span)),
+            Stmt::VarDef {
+                pattern: Pattern::Ident(name, _),
+                span,
+                ..
+            }
+            | Stmt::Assignment {
+                target: Expr::Ident { name, .. },
+                span,
+                ..
+            } => Some((name, *span)),
+            _ => None,
+        }
+    }
+
+    fn validate_module_boundaries(module: &Module) -> Result<(), RuntimeError> {
+        let mut import_bindings = HashSet::new();
+        for statement in &module.statements {
+            match statement {
+                Stmt::Export(inner) => {
+                    if let Some((name, span)) = Self::exported_binding(inner) {
+                        if name == "__all__" {
+                            return Err(RuntimeError {
+                                message:
+                                    "__all__ is not supported; Lucid uses leading '_' for module privacy"
+                                        .into(),
+                                span,
+                            });
+                        }
+                        if name.starts_with('_') {
+                            return Err(RuntimeError {
+                                message: format!("cannot export private name '{name}'"),
+                                span,
+                            });
+                        }
+                    }
+                }
+                Stmt::Import {
+                    module,
+                    alias,
+                    span,
+                } => {
+                    let bound_name = alias
+                        .clone()
+                        .unwrap_or_else(|| module.rsplit('.').next().unwrap_or(module).to_string());
+                    if !import_bindings.insert(bound_name.clone()) {
+                        return Err(RuntimeError {
+                            message: format!("duplicate imported binding '{bound_name}'"),
+                            span: *span,
+                        });
+                    }
+                }
+                Stmt::FromImport {
+                    module,
+                    names,
+                    span,
+                    ..
+                } => {
+                    for (name, alias) in names {
+                        if name.starts_with('_') {
+                            return Err(RuntimeError {
+                                message: format!(
+                                    "cannot import private name '{name}' from module '{module}'"
+                                ),
+                                span: *span,
+                            });
+                        }
+                        let bound_name = alias.as_ref().unwrap_or(name).clone();
+                        if !import_bindings.insert(bound_name.clone()) {
+                            return Err(RuntimeError {
+                                message: format!("duplicate imported binding '{bound_name}'"),
+                                span: *span,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn reject_removed_decorators(function: &FunctionDef) -> Result<(), RuntimeError> {
         for decorator in &function.decorators {
             let (name, span) = match decorator {
@@ -5214,6 +5302,7 @@ impl Interpreter {
     }
 
     pub fn eval_module(&mut self, module: &Module) -> Result<Value, RuntimeError> {
+        Self::validate_module_boundaries(module)?;
         // Entry modules are evaluated directly rather than through
         // `load_module`. Publish their environment first so a recursive
         // import observes the same declaration set and cannot re-enter the
@@ -13961,6 +14050,36 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             let error = interp
                 .eval_module(&module)
                 .expect_err("removed Python decorator must fail at runtime");
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_rejects_invalid_module_boundaries() {
+        for (source, expected) in [
+            ("export _private = 1\n", "cannot export private name"),
+            (
+                "from helpers import _private\n",
+                "cannot import private name '_private'",
+            ),
+            (
+                "import one as shared\nimport two as shared\n",
+                "duplicate imported binding 'shared'",
+            ),
+            (
+                "from one import value as shared\nfrom two import other as shared\n",
+                "duplicate imported binding 'shared'",
+            ),
+        ] {
+            let module = parse(source).expect("module-boundary source should parse");
+            let mut interp = Interpreter::default();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("invalid module boundary must fail at runtime");
             assert!(
                 error.message.contains(expected),
                 "{source}: {}",

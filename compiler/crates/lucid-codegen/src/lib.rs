@@ -402,6 +402,78 @@ impl CCodeGenerator {
         Ok(())
     }
 
+    fn exported_binding(inner: &Stmt) -> Option<&str> {
+        match inner {
+            Stmt::ClassDef { name, .. }
+            | Stmt::InterfaceDef { name, .. }
+            | Stmt::TraitDef { name, .. }
+            | Stmt::TypeAlias { name, .. } => Some(name),
+            Stmt::Function(FunctionDef { name, .. }) => Some(name),
+            Stmt::VarDef {
+                pattern: Pattern::Ident(name, _),
+                ..
+            }
+            | Stmt::Assignment {
+                target: Expr::Ident { name, .. },
+                ..
+            } => Some(name),
+            _ => None,
+        }
+    }
+
+    fn validate_module_boundaries(module: &Module) -> Result<(), CodegenError> {
+        let mut import_bindings = HashSet::new();
+        for statement in &module.statements {
+            match statement {
+                Stmt::Export(inner) => {
+                    if let Some(name) = Self::exported_binding(inner) {
+                        if name == "__all__" {
+                            return Err(CodegenError {
+                                message:
+                                    "__all__ is not supported; Lucid uses leading '_' for module privacy"
+                                        .into(),
+                            });
+                        }
+                        if name.starts_with('_') {
+                            return Err(CodegenError {
+                                message: format!("cannot export private name '{name}'"),
+                            });
+                        }
+                    }
+                }
+                Stmt::Import { module, alias, .. } => {
+                    let bound_name = alias
+                        .clone()
+                        .unwrap_or_else(|| module.rsplit('.').next().unwrap_or(module).to_string());
+                    if !import_bindings.insert(bound_name.clone()) {
+                        return Err(CodegenError {
+                            message: format!("duplicate imported binding '{bound_name}'"),
+                        });
+                    }
+                }
+                Stmt::FromImport { module, names, .. } => {
+                    for (name, alias) in names {
+                        if name.starts_with('_') {
+                            return Err(CodegenError {
+                                message: format!(
+                                    "cannot import private name '{name}' from module '{module}'"
+                                ),
+                            });
+                        }
+                        let bound_name = alias.as_ref().unwrap_or(name).clone();
+                        if !import_bindings.insert(bound_name.clone()) {
+                            return Err(CodegenError {
+                                message: format!("duplicate imported binding '{bound_name}'"),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn validate_declared_member_names(stmt: &Stmt) -> Result<(), CodegenError> {
         match Self::unwrap_export(stmt) {
             Stmt::ClassDef { body, .. } => Self::validate_class_member_names(body),
@@ -1065,6 +1137,7 @@ impl CCodeGenerator {
     }
 
     pub fn generate(&mut self, module: &Module) -> Result<String, CodegenError> {
+        Self::validate_module_boundaries(module)?;
         self.module_aliases.clear();
         self.from_imports.clear();
         self.type_aliases.clear();
@@ -22974,6 +23047,36 @@ print(result[1])
             let _ = fs::remove_file(&output);
             let error = compile_to_native(&module, &output, 0)
                 .expect_err("removed Python decorator must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn native_rejects_invalid_module_boundaries() {
+        for (source, expected) in [
+            ("export _private = 1\n", "cannot export private name"),
+            (
+                "from helpers import _private\n",
+                "cannot import private name '_private'",
+            ),
+            (
+                "import one as shared\nimport two as shared\n",
+                "duplicate imported binding 'shared'",
+            ),
+            (
+                "from one import value as shared\nfrom two import other as shared\n",
+                "duplicate imported binding 'shared'",
+            ),
+        ] {
+            let module = parse(source).expect("module-boundary source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_native_module_boundary_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("invalid module boundary must fail native codegen");
             let _ = fs::remove_file(&output);
             assert!(error.message.contains(expected), "{source}: {error}");
         }
