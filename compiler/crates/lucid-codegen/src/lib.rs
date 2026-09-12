@@ -1570,7 +1570,8 @@ impl CCodeGenerator {
             self.emit_line("}");
         }
         self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0 || strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_BYTES;");
         self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_LIST || (value.type == LUCID_TYPE_PTR && value.ptr && lucid_object_buffer(value.ptr));");
         self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0 || strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;");
         self.emit_line("if (strcmp(capability, \"Set\") == 0) return value.type == LUCID_TYPE_SET;");
@@ -16757,7 +16758,7 @@ print(erased is not Named)
 
     #[test]
     fn native_erased_capability_checks_inspect_runtime_class() {
-        let source = "class Bag without Iterable:\n    def __len__(self) -> int:\n        return 1\nclass Declared(Sized):\n    def __len__(self) -> int:\n        return 1\nclass Retro:\n    pass\nimplement Sized for Retro:\n    def __len__(self) -> int:\n        return 1\ndef identity(value: Any) -> Any:\n    return value\nvalue = identity(Bag())\ndeclared = identity(Declared())\nretro = identity(Retro())\nitems = identity(set([1]))\nshape = identity([1, 2])\nnumber = identity(1)\nprint(value is Sized)\nprint(value is not Iterable)\nprint(declared is Sized)\nprint(retro is Sized)\nprint(items is Set)\nprint(number is not Set)\nprint(shape is Shape)\n";
+        let source = "class Bag without Iterable:\n    def __len__(self) -> int:\n        return 1\nclass Declared(Sized):\n    def __len__(self) -> int:\n        return 1\nclass Retro:\n    pass\nimplement Sized for Retro:\n    def __len__(self) -> int:\n        return 1\ndef identity(value: Any) -> Any:\n    return value\nvalue = identity(Bag())\ndeclared = identity(Declared())\nretro = identity(Retro())\nitems = identity(set([1]))\nshape = identity([1, 2])\nnumber = identity(1)\ntext = identity(\"abc\")\nprint(value is Sized)\nprint(value is not Iterable)\nprint(declared is Sized)\nprint(retro is Sized)\nprint(items is Set)\nprint(number is not Set)\nprint(shape is Shape)\nprint(\"abc\" is Container)\nprint(\"abc\" is Iterable)\nprint(\"abc\" is Sequence)\nprint(text is Container)\nprint(text is Iterable)\nprint(text is Sequence)\n";
         let module = parse(source).expect("erased capability source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_erased_capability_{}",
@@ -16770,7 +16771,7 @@ print(erased is not Named)
         assert!(run.status.success(), "erased capability failed: {run:?}");
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "false\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+            "false\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\n"
         );
     }
 

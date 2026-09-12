@@ -9797,6 +9797,13 @@ fn types_may_overlap(left: &Type, right: &Type, env: &TypeEnvironment) -> bool {
     {
         return true;
     }
+    if matches!(
+        (left, right),
+        (Type::Int | Type::Float | Type::Bool | Type::Str | Type::None, Type::Trait { .. })
+            | (Type::Trait { .. }, Type::Int | Type::Float | Type::Bool | Type::Str | Type::None)
+    ) {
+        return true;
+    }
     matches!(
         (left, right),
         (Type::Trait { .. }, Type::Class { .. })
@@ -12123,7 +12130,7 @@ def reject(value: not int) -> none:
 
         checker
             .check_module(
-                &parse("text = \"abc\"\nfor ch in text.chars:\n    ch.upper()\nfirst: str = text.chars[0]\npart = text.chars[1:]\nhas_b = \"b\" in text.chars\nmissing_pair = \"bc\" in text.chars\nchars: ~Sequence[str] = text.chars\nview_first: str = chars[0]\nview_has_b = \"b\" in chars\n").unwrap(),
+                &parse("text = \"abc\"\nfor ch in text.chars:\n    ch.upper()\nfirst: str = text.chars[0]\npart = text.chars[1:]\nhas_b = \"b\" in text.chars\nmissing_pair = \"bc\" in text.chars\nchars: ~Sequence[str] = text.chars\nview_first: str = chars[0]\nview_has_b = \"b\" in chars\nis_container = text is Container\nis_iterable = text is Iterable\nis_sequence = text is Sequence\n").unwrap(),
             )
             .expect("str.chars should be iterable, indexable, and support membership");
         let error = TypeChecker::new()
