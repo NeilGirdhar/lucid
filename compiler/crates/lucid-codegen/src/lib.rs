@@ -5707,6 +5707,43 @@ static inline void lucid_print_val(LucidVal v) {
             || self.method_owner(class_name, "next").is_some()
     }
 
+    fn expr_may_be_reversible_or_erased(&self, expr: &Expr) -> bool {
+        let ty = self.expr_native_type(expr);
+        if matches!(
+            ty.as_str(),
+            "LucidVal"
+                | "LucidList*"
+                | "LucidSet*"
+                | "LucidRange*"
+                | "LucidBytes*"
+                | "LucidMemoryView*"
+        ) {
+            return true;
+        }
+        let class_name = ty.trim_end_matches('*');
+        self.method_owner(class_name, "__reversed__").is_some()
+    }
+
+    fn expr_may_be_sized_or_erased(&self, expr: &Expr) -> bool {
+        let ty = self.expr_native_type(expr);
+        if matches!(
+            ty.as_str(),
+            "LucidVal"
+                | "const char*"
+                | "char*"
+                | "LucidList*"
+                | "LucidDict*"
+                | "LucidSet*"
+                | "LucidRange*"
+                | "LucidBytes*"
+                | "LucidMemoryView*"
+        ) {
+            return true;
+        }
+        let class_name = ty.trim_end_matches('*');
+        self.method_owner(class_name, "__len__").is_some()
+    }
+
     fn expr_may_be_callable_or_erased(&self, expr: &Expr) -> bool {
         match expr {
             Expr::AnonymousDef { .. } => true,
@@ -12453,6 +12490,11 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         "len" => {
                             if let Some(a) = args.first() {
+                                if !self.expr_may_be_sized_or_erased(&a.value) {
+                                    return Err(CodegenError {
+                                        message: "len() argument is not sized".into(),
+                                    });
+                                }
                                 let arg_str = self.emit_expr(&a.value)?;
                                 let arg_type = self.infer_expr_type(&a.value, &HashMap::new());
                                 if matches!(
@@ -12475,6 +12517,11 @@ static inline void lucid_print_val(LucidVal v) {
                                 });
                             }
                             self.reject_raw_string_iterable_arg("reversed", &args[0].value)?;
+                            if !self.expr_may_be_reversible_or_erased(&args[0].value) {
+                                return Err(CodegenError {
+                                    message: "reversed() argument is not reversible".into(),
+                                });
+                            }
                             let arg_str = self.emit_expr(&args[0].value)?;
                             let arg_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let class_name = arg_type.trim_end_matches('*');
@@ -12564,6 +12611,11 @@ static inline void lucid_print_val(LucidVal v) {
                                 });
                             }
                             self.reject_raw_string_iterable_arg("sorted", &args[0].value)?;
+                            if !self.expr_may_be_iterable_or_erased(&args[0].value) {
+                                return Err(CodegenError {
+                                    message: "sorted() argument must be iterable".into(),
+                                });
+                            }
                             let value = self.emit_expr(&args[0].value)?;
                             if let Some(element_class) = self.indexed_element_class(&args[0].value)
                             {
@@ -12806,6 +12858,11 @@ static inline void lucid_print_val(LucidVal v) {
                             ));
                             for arg in args {
                                 self.reject_raw_string_iterable_arg("zip", &arg.value)?;
+                                if !self.expr_may_be_iterable_or_erased(&arg.value) {
+                                    return Err(CodegenError {
+                                        message: "zip() arguments must be iterable".into(),
+                                    });
+                                }
                                 let value = self.emit_expr(&arg.value)?;
                                 let arg_type = self.infer_expr_type(&arg.value, &HashMap::new());
                                 let class_name = arg_type.trim_end_matches('*');
@@ -13095,9 +13152,24 @@ static inline void lucid_print_val(LucidVal v) {
                             });
                         }
                         "round" => {
+                            if args.is_empty() {
+                                return Err(CodegenError {
+                                    message: "round() takes one or two arguments".to_string(),
+                                });
+                            }
                             if args.len() > 2 {
                                 return Err(CodegenError {
                                     message: "round() takes one or two arguments".to_string(),
+                                });
+                            }
+                            if !self.expr_may_be_numeric_or_erased(&args[0].value) {
+                                return Err(CodegenError {
+                                    message: "round() argument must be numeric".into(),
+                                });
+                            }
+                            if args.len() == 2 && !self.expr_may_be_int_or_erased(&args[1].value) {
+                                return Err(CodegenError {
+                                    message: "round() ndigits must be int".into(),
                                 });
                             }
                             if args.len() == 1 {
@@ -13128,7 +13200,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     ));
                                 }
                                 return Ok(format!(
-                                    "({{ LucidVal _round_value = lucid_wrap({arg0}); LucidVal _round_places = lucid_wrap({arg1}); if (_round_places.type != LUCID_TYPE_INT) {{ fprintf(stderr, \"round() ndigits must be an int\\n\"); exit(1); }} lucid_round_places(lucid_as_float(_round_value), _round_places.i); }})"
+                                    "({{ LucidVal _round_value = lucid_wrap({arg0}); LucidVal _round_places = lucid_wrap({arg1}); if (_round_places.type != LUCID_TYPE_INT) {{ fprintf(stderr, \"round() ndigits must be int\\n\"); exit(1); }} lucid_round_places(lucid_as_float(_round_value), _round_places.i); }})"
                                 ));
                             }
                         }
@@ -13215,6 +13287,16 @@ static inline void lucid_print_val(LucidVal v) {
                                         message: "sum() argument must be iterable".into(),
                                     });
                                 }
+                                if let Expr::List { elements, .. } | Expr::Set { elements, .. } =
+                                    &a.value
+                                    && elements
+                                        .iter()
+                                        .any(|element| !self.expr_may_be_numeric_or_erased(element))
+                                {
+                                    return Err(CodegenError {
+                                        message: "sum() elements must be numeric".into(),
+                                    });
+                                }
                                 let arg_str = self.emit_expr(&a.value)?;
                                 if args.len() > 2 {
                                     return Err(CodegenError {
@@ -13286,9 +13368,19 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                         }
                         "min" | "max" => {
+                            if args.is_empty() {
+                                return Err(CodegenError {
+                                    message: format!("{name}() requires at least 1 argument"),
+                                });
+                            }
                             if let Some(a) = args.first() {
                                 if args.len() == 1 {
                                     self.reject_raw_string_iterable_arg(name, &a.value)?;
+                                    if !self.expr_may_be_iterable_or_erased(&a.value) {
+                                        return Err(CodegenError {
+                                            message: format!("{name}() argument must be iterable"),
+                                        });
+                                    }
                                 }
                                 let arg_str = self.emit_expr(&a.value)?;
                                 let arg_type = self.infer_expr_type(&a.value, &HashMap::new());
@@ -13343,6 +13435,11 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if let Some(a) = args.first() {
                                 self.reject_raw_string_iterable_arg("list", &a.value)?;
+                                if !self.expr_may_be_iterable_or_erased(&a.value) {
+                                    return Err(CodegenError {
+                                        message: "list() argument must be iterable".into(),
+                                    });
+                                }
                                 if let Expr::Call {
                                     func: inner_func,
                                     args: inner_args,
@@ -13406,6 +13503,11 @@ static inline void lucid_print_val(LucidVal v) {
                                 });
                             }
                             self.reject_raw_string_iterable_arg("set", &args[0].value)?;
+                            if !self.expr_may_be_iterable_or_erased(&args[0].value) {
+                                return Err(CodegenError {
+                                    message: "set() argument must be iterable".into(),
+                                });
+                            }
                             let value = self.emit_expr(&args[0].value)?;
                             let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let class_name = value_type.trim_end_matches('*');
@@ -13432,6 +13534,11 @@ static inline void lucid_print_val(LucidVal v) {
                                 });
                             }
                             self.reject_raw_string_iterable_arg("dict", &args[0].value)?;
+                            if !self.expr_may_be_iterable_or_erased(&args[0].value) {
+                                return Err(CodegenError {
+                                    message: "dict() argument must be a mapping or iterable".into(),
+                                });
+                            }
                             let value = self.emit_expr(&args[0].value)?;
                             let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let class_name = value_type.trim_end_matches('*');
@@ -20363,11 +20470,10 @@ print(any("".chars))
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("round ndigits should compile");
-        let run = Command::new(&output).output().expect("run round ndigits");
+        let error =
+            compile_to_native(&module, &output, 0).expect_err("round ndigits should fail codegen");
         let _ = fs::remove_file(&output);
-        assert!(!run.status.success(), "non-integer ndigits should fail");
-        assert!(String::from_utf8_lossy(&run.stderr).contains("ndigits must be an int"));
+        assert!(error.message.contains("ndigits must be int"));
     }
 
     #[test]
@@ -23410,10 +23516,25 @@ print(result[1])
     #[test]
     fn native_rejects_invalid_builtin_contracts() {
         for (source, expected) in [
+            ("hash()\n", "takes exactly one"),
             ("locals(1)\n", "accepts at most 0"),
+            ("getattr(1)\n", "exactly two"),
+            ("setattr(1, \"x\")\n", "exactly three"),
+            ("any()\n", "takes exactly one"),
             ("pow(1)\n", "requires at least 2"),
             ("pow(\"x\", 2)\n", "arguments must be numeric"),
             ("pow(2, 3, 1.0)\n", "modulus must be int"),
+            ("sorted(1)\n", "argument must be iterable"),
+            ("zip(1)\n", "arguments must be iterable"),
+            ("abs()\n", "takes exactly one"),
+            ("round(1, 2, 3)\n", "one or two"),
+            ("sum([\"bad\"])\n", "elements must be numeric"),
+            ("sum([true])\n", "elements must be numeric"),
+            ("sum([1], \"bad\")\n", "start must be numeric"),
+            ("min()\n", "requires at least 1"),
+            ("max(1)\n", "argument must be iterable"),
+            ("read_file()\n", "exactly one"),
+            ("write_file(\"x\")\n", "exactly two"),
             ("range()\n", "requires at least 1"),
             ("range(1, \"bad\")\n", "arguments must be int"),
             ("range(1, 2, 0)\n", "step cannot be zero"),
@@ -23427,13 +23548,20 @@ print(result[1])
                 "iterable argument must be iterable",
             ),
             ("enumerate([1], \"bad\")\n", "start must be int"),
+            ("reversed(1)\n", "not reversible"),
             ("complex(\"x\")\n", "arguments must be numeric"),
             ("complex(1, 2, 3)\n", "at most two"),
             ("list([], [])\n", "accepts at most 1"),
+            ("list(1)\n", "argument must be iterable"),
             ("set([], [])\n", "accepts at most 1"),
+            ("set(1)\n", "argument must be iterable"),
+            ("dict(1)\n", "mapping or iterable"),
             ("help(1, 2)\n", "accepts at most 1"),
             ("fields()\n", "requires at least 1"),
             ("abs(\"bad\")\n", "argument must be numeric"),
+            ("len(1)\n", "not sized"),
+            ("round(1.0, \"bad\")\n", "ndigits must be int"),
+            ("sum(1)\n", "argument must be iterable"),
         ] {
             let module = parse(source).expect("invalid builtin-contract source should parse");
             let output = std::env::temp_dir().join(format!(
@@ -23441,8 +23569,10 @@ print(result[1])
                 std::process::id()
             ));
             let _ = fs::remove_file(&output);
-            let error = compile_to_native(&module, &output, 0)
-                .expect_err("invalid builtin contract must fail native codegen");
+            let error = match compile_to_native(&module, &output, 0) {
+                Ok(()) => panic!("{source}: invalid builtin contract must fail native codegen"),
+                Err(error) => error,
+            };
             let _ = fs::remove_file(&output);
             assert!(error.message.contains(expected), "{source}: {error}");
         }

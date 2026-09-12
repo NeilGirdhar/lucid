@@ -3962,6 +3962,12 @@ impl Interpreter {
             } else {
                 Value::Int(0)
             };
+            if !matches!(start, Value::Int(_) | Value::BigInt(_) | Value::Float(_)) {
+                return Err(RuntimeError {
+                    message: "sum() start must be numeric".into(),
+                    span: Span::default(),
+                });
+            }
             let mut total = start;
             for item in items {
                 total = match (&total, &item) {
@@ -4604,7 +4610,7 @@ impl Interpreter {
                     }
                 }
                 other => Err(RuntimeError {
-                    message: format!("cannot convert {} to list", other.type_name()),
+                    message: format!("list() argument must be iterable: {}", other.type_name()),
                     span: Span::default(),
                 }),
             }
@@ -4695,7 +4701,7 @@ impl Interpreter {
                 }
                 Some(other) => {
                     return Err(RuntimeError {
-                        message: format!("set() argument is not iterable: {}", other.type_name()),
+                        message: format!("set() argument must be iterable: {}", other.type_name()),
                         span: Span::default(),
                     })
                 }
@@ -4845,7 +4851,7 @@ impl Interpreter {
                 Some(other) => {
                     return Err(RuntimeError {
                         message: format!(
-                            "dict() argument is not a mapping or sequence of pairs: {}",
+                            "dict() argument is not a mapping or iterable of pairs: {}",
                             other.type_name()
                         ),
                         span: Span::default(),
@@ -4901,7 +4907,7 @@ impl Interpreter {
                     Value::Int(d) => (&args[0], *d),
                     _ => {
                         return Err(RuntimeError {
-                            message: "round() ndigits must be an int".into(),
+                            message: "round() ndigits must be int".into(),
                             span: Span::default(),
                         })
                     }
@@ -12370,8 +12376,9 @@ s = sum(r)
             assert!(
                 error.message.contains("not iterable")
                     || error.message.contains("not reversible")
+                    || error.message.contains("must be iterable")
                     || error.message.contains("cannot convert")
-                    || error.message.contains("not a mapping or sequence of pairs"),
+                    || error.message.contains("not a mapping or iterable of pairs"),
                 "{source}: {}",
                 error.message
             );
@@ -14362,10 +14369,25 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
     #[test]
     fn runtime_rejects_invalid_builtin_contracts() {
         for (source, expected) in [
+            ("hash()\n", "exactly one"),
             ("locals(1)\n", "accepts at most 0"),
+            ("getattr(1)\n", "two or three"),
+            ("setattr(1, \"x\")\n", "exactly three"),
+            ("any()\n", "exactly one"),
             ("pow(1)\n", "requires at least 2"),
             ("pow(\"x\", 2)\n", "arguments must be numeric"),
             ("pow(2, 3, 1.0)\n", "modulus must be int"),
+            ("sorted(1)\n", "argument is not iterable"),
+            ("zip(1)\n", "not iterable"),
+            ("abs()\n", "exactly 1"),
+            ("round(1, 2, 3)\n", "takes 1 or 2"),
+            ("sum([\"bad\"])\n", "items must be numbers"),
+            ("sum([true])\n", "items must be numbers"),
+            ("sum([1], \"bad\")\n", "start must be numeric"),
+            ("min()\n", "at least 1"),
+            ("max(1)\n", "arg must be iterable"),
+            ("read_file()\n", "exactly 1"),
+            ("write_file(\"x\")\n", "exactly 2"),
             ("range()\n", "requires at least 1"),
             ("range(1, \"bad\")\n", "arguments must be int"),
             ("range(1, 2, 0)\n", "step cannot be zero"),
@@ -14380,13 +14402,20 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
                 "iterable argument must be iterable",
             ),
             ("enumerate([1], \"bad\")\n", "start must be int"),
+            ("reversed(1)\n", "not reversible"),
             ("complex(\"x\")\n", "arguments must be numeric"),
             ("complex(1, 2, 3)\n", "at most two"),
             ("list([], [])\n", "accepts at most 1"),
+            ("list(1)\n", "argument must be iterable"),
             ("set([], [])\n", "accepts at most 1"),
+            ("set(1)\n", "argument must be iterable"),
+            ("dict(1)\n", "mapping or iterable"),
             ("help(1, 2)\n", "accepts at most 1"),
             ("fields()\n", "requires at least 1"),
             ("abs(\"bad\")\n", "argument must be numeric"),
+            ("len(1)\n", "no len"),
+            ("round(1.0, \"bad\")\n", "ndigits must be int"),
+            ("sum(1)\n", "not iterable"),
         ] {
             let module = parse(source).expect("invalid builtin-contract source should parse");
             let mut interp = Interpreter::default();

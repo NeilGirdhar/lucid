@@ -285,6 +285,13 @@ diverged:
   `time()`/`now()` and imported `time.time()`/`time.monotonic()` that native
   codegen already enforced, so unchecked runtime calls cannot silently ignore
   clock arguments.
+* Builtin contract parity is tighter across unchecked backends. Runtime
+  `sum()` now validates a non-numeric start value before processing elements,
+  and collection constructor diagnostics use the same iterable/mapping
+  contract terms as the checker. Native codegen now rejects statically
+  invalid `len`, `reversed`, `sorted`, `zip`, `round`, `sum`, `min`/`max`,
+  `list`, `set`, and `dict` calls at lowering time instead of emitting a
+  program that fails later in generated runtime helpers.
 * Truthiness now agrees across the interpreter and native backend for empty
   lists, dictionaries, sets, strings, and ranges, as well as zero BigInts and
   zero complex values. Native typed collection and string conditions use
