@@ -1732,9 +1732,8 @@ pub fn lower_function_body(
             } => Some(lucid_cir::TypedLiteral::Bool(*value)),
             _ => None,
         };
-        fn match_arm_value(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
-            let mut meaningful = arm
-                .body
+        fn match_statement_value(statements: &[lucid_syntax::Stmt]) -> Option<&lucid_syntax::Expr> {
+            let mut meaningful = statements
                 .iter()
                 .filter(|statement| !branch_noop_statement(statement));
             let first = meaningful.next()?;
@@ -1771,16 +1770,71 @@ pub fn lower_function_body(
                         ..
                     }),
                 ) if name == returned => Some(value),
+                (
+                    lucid_syntax::Stmt::If {
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch,
+                        ..
+                    },
+                    None,
+                ) => match static_branch_selection(
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch.as_ref(),
+                ) {
+                    StaticBranch::Selected(branch) => match_statement_value(branch),
+                    StaticBranch::Empty | StaticBranch::Unknown => None,
+                },
                 _ => None,
             }
         }
-        fn match_arm_is_void(arm: &lucid_syntax::MatchArm) -> bool {
-            let Some((last, prefix)) = arm.body.split_last() else {
+        fn match_arm_value(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
+            match_statement_value(&arm.body)
+        }
+        fn match_statements_are_void(statements: &[lucid_syntax::Stmt]) -> bool {
+            let Some((last, prefix)) = statements.split_last() else {
                 return true;
             };
-            prefix.iter().all(branch_noop_statement)
+            if prefix.iter().all(branch_noop_statement)
                 && matches!(last, lucid_syntax::Stmt::Return { value: None, .. })
-                || arm.body.iter().all(branch_noop_statement)
+            {
+                return true;
+            }
+            if statements.iter().all(branch_noop_statement) {
+                return true;
+            }
+            let mut meaningful = statements
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement));
+            let Some(lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            }) = meaningful.next()
+            else {
+                return false;
+            };
+            if meaningful.next().is_some() {
+                return false;
+            }
+            match static_branch_selection(
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch.as_ref(),
+            ) {
+                StaticBranch::Selected(branch) => match_statements_are_void(branch),
+                StaticBranch::Empty => true,
+                StaticBranch::Unknown => false,
+            }
+        }
+        fn match_arm_is_void(arm: &lucid_syntax::MatchArm) -> bool {
+            match_statements_are_void(&arm.body)
         }
         fn match_arm_void_bindings(
             arm: &lucid_syntax::MatchArm,
@@ -6651,6 +6705,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
 
         let file = db.add_file(
+            "match-static-if-local-return.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if true:\n                selected = 11\n                return selected\n            else:\n                return 0\n        case _:\n            if false:\n                return 0\n            else:\n                return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match local returns should unwrap static conditionals");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
             "middle-wildcard-match.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return value + 100\n        case 2:\n            return 22\n",
         );
@@ -6679,6 +6743,16 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("match void arms should ignore no-op setup");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "match-static-if-void.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            if true:\n                return\n            else:\n                return value\n        case _:\n            if false:\n                return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("match void arms should unwrap static conditionals");
         assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
