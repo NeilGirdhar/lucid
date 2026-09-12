@@ -220,6 +220,7 @@ pub struct CCodeGenerator {
     dispatch_fns: HashMap<String, Vec<(String, String)>>,
     dispatch_signatures: HashMap<String, Vec<(Vec<String>, String)>>,
     var_types: HashMap<String, String>,
+    record_field_orders: HashMap<String, Vec<String>>,
     dynamic_vars: HashSet<String>,
     global_vars: HashMap<String, String>,
     in_setter: bool,
@@ -344,6 +345,7 @@ impl CCodeGenerator {
             dispatch_fns: HashMap::new(),
             dispatch_signatures: HashMap::new(),
             var_types: HashMap::new(),
+            record_field_orders: HashMap::new(),
             dynamic_vars: HashSet::new(),
             global_vars: HashMap::new(),
             in_setter: false,
@@ -4387,6 +4389,26 @@ static inline void lucid_print_val(LucidVal v) {
         self.map_type_expr_inner(te, &mut HashSet::new())
     }
 
+    fn record_field_order_from_type_expr(type_expr: Option<&TypeExpr>) -> Option<Vec<String>> {
+        match type_expr {
+            Some(TypeExpr::Record { fields, .. }) => {
+                let names = fields
+                    .iter()
+                    .filter_map(|field| field.name.clone())
+                    .collect::<Vec<_>>();
+                if names.is_empty() {
+                    None
+                } else {
+                    Some(names)
+                }
+            }
+            Some(TypeExpr::View { inner, .. }) => {
+                Self::record_field_order_from_type_expr(Some(inner))
+            }
+            _ => None,
+        }
+    }
+
     fn map_type_expr_inner(&self, te: Option<&TypeExpr>, seen: &mut HashSet<String>) -> String {
         match te {
             Some(TypeExpr::Named { name, .. }) => match name.as_str() {
@@ -4858,6 +4880,15 @@ static inline void lucid_print_val(LucidVal v) {
                             self.dynamic_vars.insert(name.clone());
                         }
                     }
+                    if let Some(order) =
+                        Self::record_field_order_from_type_expr(type_annotation.as_ref())
+                    {
+                        self.record_field_orders.insert(name.clone(), order);
+                    } else if let Some(Expr::Ident { name: source, .. }) = value {
+                        if let Some(order) = self.record_field_orders.get(source).cloned() {
+                            self.record_field_orders.insert(name.clone(), order);
+                        }
+                    }
                     vars.insert(name.clone(), ty);
                 } else {
                     self.collect_pattern_vars(pattern, vars);
@@ -5148,6 +5179,15 @@ static inline void lucid_print_val(LucidVal v) {
     }
 
     fn emit_pattern_bindings(&mut self, pattern: &Pattern, subject: &str) {
+        self.emit_pattern_bindings_with_record_order(pattern, subject, None);
+    }
+
+    fn emit_pattern_bindings_with_record_order(
+        &mut self,
+        pattern: &Pattern,
+        subject: &str,
+        record_order: Option<&[String]>,
+    ) {
         match pattern {
             Pattern::Ident(name, _)
                 if !matches!(
@@ -5186,6 +5226,21 @@ static inline void lucid_print_val(LucidVal v) {
                 }
             }
             Pattern::Tuple(items, _) => {
+                if let Some(order) = record_order {
+                    for (index, item) in items.iter().enumerate() {
+                        if matches!(item, Pattern::Star(_, _)) {
+                            continue;
+                        }
+                        if let Some(name) = order.get(index) {
+                            let field = format!(
+                                "lucid_dict_get(lucid_as_dict({subject}), lucid_str(\"{}\"), lucid_none())",
+                                name.replace('"', "\\\"")
+                            );
+                            self.emit_pattern_bindings(item, &field);
+                        }
+                    }
+                    return;
+                }
                 let star_index = items.iter().position(|p| matches!(p, Pattern::Star(_, _)));
                 if let Some(star) = star_index {
                     for (index, item) in items[..star].iter().enumerate() {
@@ -7828,10 +7883,29 @@ static inline void lucid_print_val(LucidVal v) {
                         self.emit_line(&format!("lucid_var_{name} = {val_code};"));
                     }
                 } else if let Some(val_expr) = value {
+                    let record_order = match val_expr {
+                        Expr::Ident { name, .. } => self.record_field_orders.get(name).cloned(),
+                        Expr::Record { fields, .. } => {
+                            let names = fields
+                                .iter()
+                                .filter_map(|(name, _)| name.clone())
+                                .collect::<Vec<_>>();
+                            if names.is_empty() {
+                                None
+                            } else {
+                                Some(names)
+                            }
+                        }
+                        _ => None,
+                    };
                     let val_code = self.emit_expr(val_expr)?;
                     let subject = self.new_temp();
                     self.emit_line(&format!("LucidVal {subject} = lucid_wrap({val_code});"));
-                    self.emit_pattern_bindings(pattern, &subject);
+                    self.emit_pattern_bindings_with_record_order(
+                        pattern,
+                        &subject,
+                        record_order.as_deref(),
+                    );
                 }
                 Ok(())
             }
@@ -15818,6 +15892,28 @@ print(point.x + point.y)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "30\n");
+    }
+
+    #[test]
+    fn native_tuple_destructuring_uses_typed_record_field_order() {
+        let source = r#"
+point: (x: int, y: int) = (x=1, y=2)
+let (x, y) = point
+print(x + y)
+"#;
+        let module = parse(source).expect("record destructuring program should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_record_destructure_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("record destructuring should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled record destructuring program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
     }
 
     #[test]
