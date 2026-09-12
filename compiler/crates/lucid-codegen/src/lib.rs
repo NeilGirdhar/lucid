@@ -6464,7 +6464,12 @@ static inline void lucid_print_val(LucidVal v) {
                             .cloned()
                             .unwrap_or_else(|| source.clone());
                         if self.known_fn_params.contains_key(&resolved) {
+                            let adapter_target = resolved.clone();
                             self.function_aliases.insert(name.clone(), resolved);
+                            self.emit_line(&format!(
+                                "lucid_var_{name} = lucid_closure({}, NULL, NULL);",
+                                Self::closure_adapter_name_for_name(&adapter_target)
+                            ));
                             return Ok(());
                         }
                     }
@@ -6573,7 +6578,12 @@ static inline void lucid_print_val(LucidVal v) {
                                 .cloned()
                                 .unwrap_or_else(|| source.clone());
                             if self.known_fn_params.contains_key(&resolved) {
+                                let adapter_target = resolved.clone();
                                 self.function_aliases.insert(name.clone(), resolved);
+                                self.emit_line(&format!(
+                                    "lucid_var_{name} = lucid_closure({}, NULL, NULL);",
+                                    Self::closure_adapter_name_for_name(&adapter_target)
+                                ));
                                 return Ok(());
                             }
                         }
@@ -17633,6 +17643,23 @@ print(result[1])
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "4");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_function_alias_binds_a_runtime_callable_value() {
+        let source = "def double(x: int) -> int:\n    return x * 2\ng = double\nprint(g is Callable)\nprint([g][0](21))\n";
+        let module = parse(source).expect("function alias value source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_function_alias_value_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("function alias value should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run function alias value");
+        let _ = std::fs::remove_file(output);
+        assert!(result.status.success(), "function alias value failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout), "true\n42\n");
     }
 
     #[test]
