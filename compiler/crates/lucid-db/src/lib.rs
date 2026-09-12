@@ -1465,6 +1465,10 @@ pub fn lower_function_body(
         matches!(statement, lucid_syntax::Stmt::Pass(_))
             || matches!(
                 statement,
+                lucid_syntax::Stmt::Expr(expr) if is_pure_expression(expr)
+            )
+            || matches!(
+                statement,
                 lucid_syntax::Stmt::Assert { condition, .. }
                     if static_truth(condition) == Some(true)
             )
@@ -6637,6 +6641,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
 
         let file = db.add_file(
+            "match-pure-expression-local-return.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            value + 1\n            selected = 11\n            return selected\n        case _:\n            value * 2\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match local returns should ignore pure expression setup");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
             "middle-wildcard-match.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return value + 100\n        case 2:\n            return 22\n",
         );
@@ -6771,6 +6785,22 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("constant subject no-op setup before void match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-pure-setup-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            value + 1\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject pure setup before void match should preserve bindings");
         assert_eq!(function.execute_with_args(&[42]), Ok(None));
         assert!(
             function

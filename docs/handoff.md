@@ -536,7 +536,7 @@ diverged:
   extraction, so match arms can contain harmless setup without leaving CIR
   lowering. Selected match arms that preserve setup before void or fall-through
   completion use the same recognizer, while effectful discarded expressions still
-  reject.
+  reject. Pure discarded expressions now count as no-op setup in those paths too.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.
