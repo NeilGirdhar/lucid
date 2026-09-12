@@ -4280,9 +4280,10 @@ pub fn lower_function_body(
                     "constant function branch has no lowerable return",
                 )),
             },
-            _ => Err(Arc::from(
-                "constant function branch has no lowerable return",
-            )),
+            _ => {
+                collect_pre_return_binding(last, bindings)?;
+                Ok(StaticReturn::Void)
+            }
         }
     }
     // A single expression return is the common case.  A constant statement
@@ -5904,6 +5905,47 @@ mod tests {
                 .flat_map(|block| &block.instructions)
                 .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
         );
+
+        let file = db.add_file(
+            "constant-setup-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if true:\n        temporary = value + 1\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("setup-only selected branch should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-nested-setup-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if true:\n            temporary = value + 1\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested setup-only selected branch should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-effectful-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if true:\n        str(value)\n    else:\n        return value\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("effectful fallthrough setup must not be erased");
+        assert!(error.contains("effectful discarded expression"));
 
         let file = db.add_file(
             "dynamic-elif-pass-branch.lucid",
