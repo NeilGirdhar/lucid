@@ -6381,7 +6381,7 @@ impl TypeChecker {
                                     return Err(TypeError {
                                         message: format!(
                                             "instance check between exact class '{exact_class}' and {:?} can never succeed",
-                                            rt
+                                            tested_type
                                         ),
                                         span: right.span(),
                                     });
@@ -6395,7 +6395,7 @@ impl TypeChecker {
                             return Err(TypeError {
                                 message: format!(
                                     "instance check between {:?} and {:?} can never succeed",
-                                    lt, rt
+                                    lt, tested_type
                                 ),
                                 span: right.span(),
                             });
@@ -12396,6 +12396,10 @@ def reject(value: not int) -> none:
             (
                 "class Animal:\n    pass\nclass Dog(Animal):\n    pass\nvalue = Animal()\ncheck = value is Dog\n",
                 "exact class 'Animal'",
+            ),
+            (
+                "class Widget:\n    pass\nvalue = Widget()\ncheck = value is str\n",
+                "and Str can never succeed",
             ),
         ] {
             let error = TypeChecker::new()
