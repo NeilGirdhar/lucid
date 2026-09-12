@@ -1050,6 +1050,52 @@ fn collect_typed_body<'db>(
                                 expr,
                                 ..
                             } => static_truth(expr).map(|value| !value),
+                            lucid_syntax::Expr::Binary {
+                                op: lucid_syntax::BinaryOp::And,
+                                left,
+                                right,
+                                ..
+                            } => match static_truth(left) {
+                                Some(false) => Some(false),
+                                Some(true) => static_truth(right),
+                                None => None,
+                            },
+                            lucid_syntax::Expr::Binary {
+                                op: lucid_syntax::BinaryOp::Or,
+                                left,
+                                right,
+                                ..
+                            } => match static_truth(left) {
+                                Some(true) => Some(true),
+                                Some(false) => static_truth(right),
+                                None => None,
+                            },
+                            lucid_syntax::Expr::Binary {
+                                op, left, right, ..
+                            } => {
+                                let (
+                                    lucid_syntax::Expr::Literal {
+                                        value: lucid_syntax::LiteralValue::Bool(left),
+                                        ..
+                                    },
+                                    lucid_syntax::Expr::Literal {
+                                        value: lucid_syntax::LiteralValue::Bool(right),
+                                        ..
+                                    },
+                                ) = (left.as_ref(), right.as_ref())
+                                else {
+                                    return None;
+                                };
+                                match op {
+                                    lucid_syntax::BinaryOp::Eq
+                                    | lucid_syntax::BinaryOp::Identity
+                                    | lucid_syntax::BinaryOp::Is => Some(left == right),
+                                    lucid_syntax::BinaryOp::NotEq
+                                    | lucid_syntax::BinaryOp::NotIdentity
+                                    | lucid_syntax::BinaryOp::IsNot => Some(left != right),
+                                    _ => None,
+                                }
+                            }
                             _ => None,
                         }
                     }
@@ -6700,6 +6746,17 @@ mod tests {
         }));
 
         let file = db.add_file(
+            "match-bool-expression-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true and not false)\n            return 3\n        case _:\n            while true and false:\n                return 0\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid bool-expression no-op match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
             "try-local-hir.lucid",
             "def choose(value: int):\n    try:\n        selected = value + 1\n        return selected\n    except str as error:\n        fallback = 0\n        return fallback\n",
         );
@@ -7324,6 +7381,26 @@ mod tests {
             typed_module(&db, file)
                 .as_ref()
                 .expect("multi-arm static-bool no-op match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-bool-expression-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true is true)\n            return 11\n        case 2:\n            while true and false:\n                return 0\n            return 22\n        case _:\n            assert(false is not true)\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with bool-expression no-op setup should lower");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm bool-expression no-op match should type check")
                 .functions[0]
                 .body_expressions
                 .iter()
