@@ -366,6 +366,12 @@ impl Type {
             }
         }
 
+        if let Type::TypeVar(name) = self {
+            if let Some(bound) = env.type_var_bounds.get(name) {
+                return bound.is_subtype_of(target, env);
+            }
+        }
+
         // Any is top and bottom (gradual typing)
         if matches!(self, Type::TypeVar(s) if s == "Any")
             || matches!(target, Type::TypeVar(s) if s == "Any")
@@ -1071,6 +1077,8 @@ pub struct TypeEnvironment {
     pub class_bounds: HashMap<String, Vec<Option<Type>>>,
     pub interface_bounds: HashMap<String, Vec<Option<Type>>>,
     pub trait_bounds: HashMap<String, Vec<Option<Type>>>,
+    /// Type-parameter bounds currently in scope while resolving annotations.
+    pub type_var_bounds: HashMap<String, Type>,
     pub obligations: HashMap<String, HashSet<String>>,
     pub final_obligations: HashMap<String, HashSet<String>>,
     pub sealed_subclasses: HashMap<String, Vec<String>>,
@@ -2380,6 +2388,44 @@ impl TypeChecker {
                         .push(name.clone());
                 }
 
+                let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let class_variance = type_params
+                    .iter()
+                    .map(|param| param.variance.clone())
+                    .collect::<Vec<_>>();
+                let class_type_params = type_params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect::<Vec<_>>();
+                let class_bounds = type_params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .bound
+                            .as_ref()
+                            .map(|bound| self.resolve_type_expr(bound))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.env.class_variance.insert(name.clone(), class_variance);
+                self.env
+                    .class_type_params
+                    .insert(name.clone(), class_type_params.clone());
+                self.env
+                    .class_bounds
+                    .insert(name.clone(), class_bounds.clone());
+                for (param_name, bound) in class_type_params.iter().zip(class_bounds.iter()) {
+                    if let Some(bound) = bound {
+                        self.env
+                            .type_var_bounds
+                            .insert(param_name.clone(), bound.clone());
+                    } else {
+                        self.env
+                            .type_var_bounds
+                            .insert(param_name.clone(), Type::TypeVar("Any".into()));
+                    }
+                }
+
                 let mut fields = HashMap::new();
                 let mut final_fields = HashSet::new();
                 let mut final_methods = HashSet::new();
@@ -2591,29 +2637,6 @@ impl TypeChecker {
                         params.iter().map(|param| param.name.clone()).collect(),
                     );
                 }
-                self.env.class_variance.insert(
-                    name.clone(),
-                    type_params
-                        .iter()
-                        .map(|param| param.variance.clone())
-                        .collect(),
-                );
-                self.env.class_type_params.insert(
-                    name.clone(),
-                    type_params.iter().map(|param| param.name.clone()).collect(),
-                );
-                self.env.class_bounds.insert(
-                    name.clone(),
-                    type_params
-                        .iter()
-                        .map(|param| {
-                            param
-                                .bound
-                                .as_ref()
-                                .and_then(|bound| self.resolve_type_expr(bound).ok())
-                        })
-                        .collect(),
-                );
                 if *is_final {
                     self.env.final_classes.insert(name.clone());
                 }
@@ -2629,6 +2652,7 @@ impl TypeChecker {
                 };
 
                 self.env.classes.insert(name.clone(), class_type);
+                self.env.type_var_bounds = saved_type_var_bounds;
                 Ok(())
             }
             Stmt::InterfaceDef {
@@ -4286,6 +4310,7 @@ impl TypeChecker {
                 let saved_exact_vars = self.env.exact_variables.clone();
                 let saved_return = self.env.current_return_type.take();
                 let saved_class = self.env.current_class.take();
+                let saved_type_var_bounds = self.env.type_var_bounds.clone();
                 let mut class_vars = saved_vars.clone();
                 class_vars.insert(
                     "Self".into(),
@@ -4299,6 +4324,16 @@ impl TypeChecker {
                 }
                 self.env.variables = class_vars;
                 self.env.current_class = Some(name.clone());
+                if let (Some(params), Some(bounds)) = (
+                    self.env.class_type_params.get(name).cloned(),
+                    self.env.class_bounds.get(name).cloned(),
+                ) {
+                    for (param, bound) in params.into_iter().zip(bounds.into_iter()) {
+                        self.env
+                            .type_var_bounds
+                            .insert(param, bound.unwrap_or(Type::TypeVar("Any".into())));
+                    }
+                }
                 let result: Result<(), TypeError> = (|| {
                     for member in body {
                         match member {
@@ -4356,6 +4391,7 @@ impl TypeChecker {
                 self.env.exact_variables = saved_exact_vars;
                 self.env.current_return_type = saved_return;
                 self.env.current_class = saved_class;
+                self.env.type_var_bounds = saved_type_var_bounds;
                 result.map_err(|mut error| {
                     if error.span == Span::default() {
                         error.span = *span;
@@ -10112,6 +10148,10 @@ impl TypeChecker {
                                 is_sealed: false,
                             });
                         }
+                        if resolved_args.is_empty() && self.env.type_var_bounds.contains_key(other)
+                        {
+                            return Ok(Type::TypeVar(other.to_string()));
+                        }
                         if other == "class" {
                             if resolved_args.is_empty() {
                                 return Ok(Type::Class {
@@ -11149,6 +11189,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("local function named next should shadow removed builtin next");
+    }
+
+    #[test]
+    fn bounded_type_variables_satisfy_matching_generic_bounds() {
+        let module = parse(
+            "class Arguments[Y, Z: ~dict[str, object]]:\n    vpargs: list[Y]\n    kwargs: Z\n\nclass Parameters[X, Y, Z: ~dict[str, object]](Arguments[Y, Z]):\n    pargs: X\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("a type variable should satisfy a generic bound carried from its declaration");
     }
 
     #[test]
