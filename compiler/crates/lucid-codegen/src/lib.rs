@@ -1727,6 +1727,10 @@ struct LucidClosure {
     LucidClosureDrop drop_env;
     void* env;
 };
+typedef struct {
+    LucidVal base;
+    LucidList* bound;
+} LucidPartialEnv;
 
 struct LucidContext {
     LucidVal value;
@@ -1796,6 +1800,35 @@ static inline LucidVal lucid_call(LucidVal value, LucidList* args) {
     }
     LucidClosure* closure = (LucidClosure*)value.ptr;
     return closure->call(closure->env, args);
+}
+static inline LucidVal lucid_partial_hole(void) {
+    LucidVal value = {0};
+    value.type = LUCID_TYPE_FUNCTION;
+    return value;
+}
+static inline LucidVal lucid_partial_call(void* raw, LucidList* args) {
+    LucidPartialEnv* env = (LucidPartialEnv*)raw;
+    if (!env || !env->bound || !args) { fprintf(stderr, "invalid partial call\n"); exit(1); }
+    LucidList* merged = lucid_list_new(env->bound->len + args->len);
+    int64_t next = 0;
+    for (int64_t index = 0; index < env->bound->len; ++index) {
+        LucidVal value = env->bound->items[index];
+        if (value.type == LUCID_TYPE_FUNCTION && value.ptr == NULL) {
+            if (next >= args->len) { fprintf(stderr, "partial function called with too few arguments\n"); exit(1); }
+            lucid_list_append(merged, args->items[next++]);
+        } else {
+            lucid_list_append(merged, value);
+        }
+    }
+    if (next != args->len) { fprintf(stderr, "partial function called with too many arguments\n"); exit(1); }
+    return lucid_call(env->base, merged);
+}
+static inline LucidVal lucid_partial(LucidVal base, LucidList* bound) {
+    LucidPartialEnv* env = (LucidPartialEnv*)malloc(sizeof(LucidPartialEnv));
+    if (!env) { fprintf(stderr, "out of memory allocating partial function\n"); exit(1); }
+    env->base = base;
+    env->bound = bound;
+    return lucid_closure(lucid_partial_call, env, NULL);
 }
 static inline LucidVal lucid_future(LucidVal (*thunk)(LucidList*), LucidList* args) {
     LucidFuture* future = (LucidFuture*)malloc(sizeof(LucidFuture));
@@ -4064,6 +4097,12 @@ static inline void lucid_print_val(LucidVal v) {
             Expr::Record { .. } => "LucidDict*".to_string(),
             Expr::Set { .. } | Expr::SetComp { .. } => "LucidSet*".to_string(),
             Expr::Call { func, args, .. } => {
+                if args.iter().any(|arg| {
+                    matches!(arg.value, Expr::Skip(_))
+                        || matches!(&arg.value, Expr::Ident { name, .. } if name == "_")
+                }) {
+                    return "LucidVal".to_string();
+                }
                 if let Expr::Ident { name, .. } = &**func {
                     if self.known_classes.contains_key(name) {
                         return format!("{name}*");
@@ -6079,6 +6118,34 @@ static inline void lucid_print_val(LucidVal v) {
         format!("lucid_closure_call_{}", Self::mangle_component(name))
     }
 
+    fn emit_partial_value(
+        &mut self,
+        target: &str,
+        args: &[Arg],
+    ) -> Result<String, CodegenError> {
+        let bound = self.new_temp();
+        let count = args
+            .iter()
+            .filter(|arg| !matches!(arg.value, Expr::Skip(_)))
+            .count();
+        self.emit_line(&format!("LucidList* {bound} = lucid_list_new({count});"));
+        for arg in args {
+            if matches!(arg.value, Expr::Skip(_)) {
+                continue;
+            }
+            let value = if matches!(&arg.value, Expr::Ident { name, .. } if name == "_") {
+                "lucid_partial_hole()".to_string()
+            } else {
+                format!("lucid_wrap({})", self.emit_expr(&arg.value)?)
+            };
+            self.emit_line(&format!("lucid_list_append({bound}, {value});"));
+        }
+        Ok(format!(
+            "lucid_partial(lucid_closure({}, NULL, NULL), {bound})",
+            Self::closure_adapter_name_for_name(target)
+        ))
+    }
+
     /// Emit erased adapters for fixed-arity top-level functions.  The normal
     /// native entry points retain their typed C signatures; these adapters
     /// are the ABI boundary used when a function is stored in a value (for
@@ -6488,7 +6555,9 @@ static inline void lucid_print_val(LucidVal v) {
                             if self.known_fn_params.contains_key(&resolved)
                                 && inner_args.iter().any(|arg| matches!(&arg.value, Expr::Ident { name, .. } if name == "_"))
                             {
+                                let partial = self.emit_partial_value(&resolved, inner_args)?;
                                 self.partial_bindings.insert(name.clone(), (resolved, inner_args.clone()));
+                                self.emit_line(&format!("lucid_var_{name} = {partial};"));
                                 return Ok(());
                             }
                         }
@@ -6602,7 +6671,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 if self.known_fn_params.contains_key(&resolved)
                                     && inner_args.iter().any(|arg| matches!(&arg.value, Expr::Ident { name, .. } if name == "_"))
                                 {
+                                    let partial = self.emit_partial_value(&resolved, inner_args)?;
                                     self.partial_bindings.insert(name.clone(), (resolved, inner_args.clone()));
+                                    self.emit_line(&format!("lucid_var_{name} = {partial};"));
                                     return Ok(());
                                 }
                             }
@@ -17623,6 +17694,23 @@ print(g(21))
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "43");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_partial_function_value_survives_container_storage() {
+        let source = "def combine(a: int, b: int) -> int:\n    return a * 10 + b\npart = combine(4, _)\nprint([part][0](3))\n";
+        let module = parse(source).expect("partial container source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_partial_container_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("partial container should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run partial container");
+        let _ = std::fs::remove_file(output);
+        assert!(result.status.success(), "partial container failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout), "43\n");
     }
 
     #[test]
