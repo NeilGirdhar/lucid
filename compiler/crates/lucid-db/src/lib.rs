@@ -8027,6 +8027,26 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-7]), Ok(None));
 
         let file = db.add_file(
+            "guarded-mixed-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if value > 0:\n            return\n        case _:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded mixed value/void match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(99)));
+
+        let file = db.add_file(
+            "guarded-mixed-optional-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if value > 0:\n            return value + 10\n        case _:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded mixed optional match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
             "all-false-guarded-match.lucid",
             "def choose(value: int):\n    match value:\n        case _ if false:\n            return value + 100\n",
         );
