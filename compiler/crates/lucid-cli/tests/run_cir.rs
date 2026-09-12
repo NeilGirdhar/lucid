@@ -889,6 +889,54 @@ fn run_cir_executes_branch_local_assignment() {
 }
 
 #[test]
+fn run_cir_executes_post_diamond_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_post_diamond_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int):\n    if value > 0:\n        result = value\n    else:\n        result = -value\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let positive = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let negative = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        positive.status.success(),
+        "positive post-diamond function failed: {}",
+        String::from_utf8_lossy(&positive.stderr)
+    );
+    assert!(
+        negative.status.success(),
+        "negative post-diamond function failed: {}",
+        String::from_utf8_lossy(&negative.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&positive.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&negative.stdout).trim(), "42");
+}
+
+#[test]
 fn run_cir_executes_one_sided_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_optional_if_{}.lucid",

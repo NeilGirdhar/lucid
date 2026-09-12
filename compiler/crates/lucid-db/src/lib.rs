@@ -6635,7 +6635,19 @@ pub fn lower_function_body(
                 }
                 let mut bindings = Vec::new();
                 for statement in &statements[..statements.len() - 1] {
-                    collect_pre_return_binding(statement, &mut bindings)?;
+                    if let Err(error) = collect_pre_return_binding(statement, &mut bindings) {
+                        let module = lucid_syntax::Module {
+                            statements: source_function.body.clone(),
+                            span: source_function.span,
+                        };
+                        if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                            &module,
+                            &function.parameter_names,
+                        ) {
+                            return Ok(Arc::new(function));
+                        }
+                        return Err(error);
+                    }
                 }
                 if matches!(
                     last,
@@ -6773,21 +6785,30 @@ pub fn lower_function_body(
     } else {
         root.id
     };
-    lucid_cir::Function::from_typed_function_body_with_locals(
+    match lucid_cir::Function::from_typed_function_body_with_locals(
         &nodes,
         root_id,
         &function.parameter_names,
         &local_bindings,
-    )
-    .map(Arc::new)
-    .map_err(|error| match error {
-        lucid_cir::LowerError::NoLowerableAssignment => {
-            Arc::from("function has no lowerable expression")
+    ) {
+        Ok(function) => Ok(Arc::new(function)),
+        Err(typed_error) => {
+            let module = lucid_syntax::Module {
+                statements: source_function.body.clone(),
+                span: source_function.span,
+            };
+            lucid_cir::Function::from_module_linear_with_params(&module, &function.parameter_names)
+                .map(Arc::new)
+                .map_err(|_| match typed_error {
+                    lucid_cir::LowerError::NoLowerableAssignment => {
+                        Arc::from("function has no lowerable expression")
+                    }
+                    lucid_cir::LowerError::UnsupportedExpression => {
+                        Arc::from("unsupported expression for function CIR lowering")
+                    }
+                })
         }
-        lucid_cir::LowerError::UnsupportedExpression => {
-            Arc::from("unsupported expression for function CIR lowering")
-        }
-    })
+    }
 }
 
 /// Compatibility name for callers that still use the prototype terminology.
