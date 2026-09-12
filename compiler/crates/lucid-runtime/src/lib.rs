@@ -283,6 +283,22 @@ fn materialize_range(start: i64, stop: i64, step: i64) -> Vec<Value> {
     values
 }
 
+fn range_contains(start: i64, stop: i64, step: i64, value: i64) -> bool {
+    if step == 0 {
+        return false;
+    }
+    if step > 0 {
+        if value < start || value >= stop {
+            return false;
+        }
+    } else if value > start || value <= stop {
+        return false;
+    }
+    value
+        .checked_sub(start)
+        .is_some_and(|distance| distance % step == 0)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeError {
     pub message: String,
@@ -2031,6 +2047,10 @@ impl Interpreter {
                         Value::Str(s) => d.borrow().contains_key(s),
                         other => d.borrow().contains_key(&format!("{other:?}")),
                     },
+                    Value::Range { start, stop, step } => match lval {
+                        Value::Int(value) => range_contains(*start, *stop, *step, value),
+                        _ => false,
+                    },
                     Value::Str(s) => match &lval {
                         Value::Str(sub) => s.contains(sub),
                         _ => false,
@@ -2063,6 +2083,10 @@ impl Interpreter {
                     Value::Set(s) => s.borrow().contains(&lval),
                     Value::Dict(d) => match &lval {
                         Value::Str(s) => d.borrow().contains_key(s),
+                        _ => false,
+                    },
+                    Value::Range { start, stop, step } => match lval {
+                        Value::Int(value) => range_contains(*start, *stop, *step, value),
                         _ => false,
                     },
                     Value::Str(s) => match &lval {
@@ -11367,6 +11391,17 @@ s = sum(r)
                 Value::Int(5)
             ]))))
         );
+    }
+
+    #[test]
+    fn range_membership_uses_arithmetic_progression() {
+        let module = parse("a = 4 in range(0, 10, 2)\nb = 5 in range(0, 10, 2)\nc = 3 in range(5, 0, -2)\nd = 4 not in range(5, 0, -2)\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("a"), Some(Value::Bool(true)));
+        assert_eq!(interp.env.borrow().get("b"), Some(Value::Bool(false)));
+        assert_eq!(interp.env.borrow().get("c"), Some(Value::Bool(true)));
+        assert_eq!(interp.env.borrow().get("d"), Some(Value::Bool(true)));
     }
 
     #[test]

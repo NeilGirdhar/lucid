@@ -3908,6 +3908,7 @@ static inline bool lucid_dict_contains(LucidDict* d, LucidVal key) {
     for (int64_t i = 0; i < d->len; i++) if (lucid_eq(d->keys[i], key)) return true;
     return false;
 }
+static inline bool lucid_range_contains(LucidRange* range, LucidVal needle);
 static inline bool lucid_contains_value(LucidVal container, LucidVal needle) {
     if (container.type == LUCID_TYPE_PTR) {
         LucidObjectContains contains = lucid_object_contains(container.ptr);
@@ -3916,6 +3917,7 @@ static inline bool lucid_contains_value(LucidVal container, LucidVal needle) {
     if (container.type == LUCID_TYPE_LIST) return lucid_list_contains(container.list, needle);
     if (container.type == LUCID_TYPE_SET) return lucid_set_contains(container.set, needle);
     if (container.type == LUCID_TYPE_DICT) return lucid_dict_contains(container.dict, needle);
+    if (container.type == LUCID_TYPE_RANGE) return lucid_range_contains(container.range, needle);
     if (container.type == LUCID_TYPE_STR) return lucid_str_contains(container.s, needle);
     if (container.type == LUCID_TYPE_BYTES) {
         if (needle.type != LUCID_TYPE_INT) return false;
@@ -4265,6 +4267,18 @@ static inline int64_t lucid_range_count(int64_t start, int64_t stop, int64_t ste
         : (uint64_t)(-(step + 1)) + 1;
     uint64_t count = distance / magnitude + (distance % magnitude != 0);
     return count > (uint64_t)INT64_MAX ? INT64_MAX : (int64_t)count;
+}
+
+static inline bool lucid_range_contains(LucidRange* range, LucidVal needle) {
+    if (!range || needle.type != LUCID_TYPE_INT || range->step == 0) return false;
+    int64_t value = needle.i;
+    if (range->step > 0) {
+        if (value < range->start || value >= range->stop) return false;
+    } else {
+        if (value > range->start || value <= range->stop) return false;
+    }
+    __int128 distance = (__int128)value - (__int128)range->start;
+    return distance % range->step == 0;
 }
 
 static inline LucidList* lucid_range_to_list(int64_t start, int64_t stop, int64_t step) {
@@ -11100,6 +11114,7 @@ static inline void lucid_print_val(LucidVal v) {
                         let helper = match r_ty.as_str() {
                             "LucidSet*" => "lucid_set_contains",
                             "LucidDict*" => "lucid_dict_contains",
+                            "LucidRange*" => "lucid_range_contains",
                             _ => "lucid_list_contains",
                         };
                         let check = format!("{helper}({r_str}, lucid_wrap({l_str}))");
@@ -19065,6 +19080,27 @@ else:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n3\n1\n5\n");
+    }
+
+    #[test]
+    fn native_range_membership_uses_arithmetic_progression() {
+        let source = "def identity(value: Any) -> Any:\n    return value\nprint(4 in range(0, 10, 2))\nprint(5 in range(0, 10, 2))\nprint(3 in range(5, 0, -2))\nprint(4 not in identity(range(5, 0, -2)))\n";
+        let module = parse(source).expect("range membership should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_range_membership_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("range membership should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled range membership program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "true\nfalse\ntrue\ntrue\n"
+        );
     }
 
     #[test]

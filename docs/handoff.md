@@ -1200,7 +1200,9 @@ diverged:
   and native indexing now treat ranges as sequences: positive and negative
   indices return the corresponding arithmetic range element with normal
   bounds checks, and range slices materialize the selected sequence as a list
-  in both backends.
+  in both backends. Range membership now uses arithmetic progression checks in
+  both backends, including erased native `Any` ranges, so `in`/`not in` no
+  longer reject first-class range values or fall back to list assumptions.
   Native class-like identifier patterns that are not known classes now fail
   codegen instead of compiling as unconditional matches; lowercase binding
   patterns remain the match-all binding form.
