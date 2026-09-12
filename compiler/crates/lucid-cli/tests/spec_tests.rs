@@ -603,6 +603,22 @@ res = f()
     assert_eq!(val, Value::Int(42));
 }
 
+#[test]
+fn test_calls_reject_positional_after_keyword_argument() {
+    let src = r#"
+def f(left: int, right: int, tail: int) -> int:
+    return left + right + tail
+
+res = f(tail=3, *[1, 2])
+"#;
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(
+        chk.unwrap_err()
+            .contains("positional argument follows keyword argument")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 16. Parameters and arguments (docs/parameters.rst)
 // ---------------------------------------------------------------------------

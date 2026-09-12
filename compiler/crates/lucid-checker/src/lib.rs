@@ -1289,14 +1289,14 @@ impl TypeChecker {
             } else if argument.is_gather_spread {
                 if keyword_section_started {
                     return Err(TypeError {
-                        message: "positional argument follows named argument".into(),
+                        message: "positional argument follows keyword argument".into(),
                         span: argument.span,
                     });
                 }
                 keyword_section_started = true;
             } else if keyword_section_started {
                 return Err(TypeError {
-                    message: "positional argument follows named argument".into(),
+                    message: "positional argument follows keyword argument".into(),
                     span: argument.span,
                 });
             }
@@ -8696,7 +8696,7 @@ impl TypeChecker {
                                     } else if saw_named {
                                         return Err(TypeError {
                                             message: format!(
-                                                "positional argument follows named argument in call to '{}'",
+                                                "positional argument follows keyword argument in call to '{}'",
                                                 name
                                             ),
                                             span: argument.value.span(),
@@ -8828,7 +8828,7 @@ impl TypeChecker {
                                 if saw_named {
                                     return Err(TypeError {
                                         message: format!(
-                                            "positional argument follows named argument in constructor '{}'",
+                                            "positional argument follows keyword argument in constructor '{}'",
                                             name
                                         ),
                                         span: argument.value.span(),
@@ -9179,7 +9179,7 @@ impl TypeChecker {
                                 } else {
                                     if saw_named {
                                         return Err(TypeError {
-                                            message: "positional argument follows named argument"
+                                            message: "positional argument follows keyword argument"
                                                 .into(),
                                             span: argument.value.span(),
                                         });
@@ -9331,7 +9331,7 @@ impl TypeChecker {
                                         if saw_named {
                                             return Err(TypeError {
                                                 message:
-                                                    "positional argument follows named argument"
+                                                    "positional argument follows keyword argument"
                                                         .into(),
                                                 span: argument.value.span(),
                                             });
@@ -9400,7 +9400,7 @@ impl TypeChecker {
                                     continue;
                                 }
                                 // Function types currently retain parameter types but not names;
-                                // named arguments therefore follow declaration order here.
+                                // keyword arguments therefore follow declaration order here.
                                 let index =
                                     (positional_index..params.len()).find(|index| !bound[*index]);
                                 positional_index = positional_index.saturating_add(1);
@@ -16129,14 +16129,18 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         let error = TypeChecker::new().check_module(&late).unwrap_err();
-        assert!(error.message.contains("positional argument follows named"));
+        assert!(error
+            .message
+            .contains("positional argument follows keyword"));
 
         let late_spread = parse(
             "def f(left: int, right: int, tail: int) -> int:\n    return left + right + tail\nresult = f(tail=3, *[1, 2])\n",
         )
         .unwrap();
         let error = TypeChecker::new().check_module(&late_spread).unwrap_err();
-        assert!(error.message.contains("positional argument follows named"));
+        assert!(error
+            .message
+            .contains("positional argument follows keyword"));
 
         let spread_before_keyword = parse(
             "def f(left: int, right: int, tail: int) -> int:\n    return left + right + tail\nresult = f(*[1, 2], tail=3)\n",
@@ -16153,7 +16157,9 @@ def reject(value: not int) -> none:
         let error = TypeChecker::new()
             .check_module(&late_gather_spread)
             .unwrap_err();
-        assert!(error.message.contains("positional argument follows named"));
+        assert!(error
+            .message
+            .contains("positional argument follows keyword"));
 
         let positional_only =
             parse("def f(value: int, /) -> int:\n    return value\nresult = f(value=1)\n").unwrap();
