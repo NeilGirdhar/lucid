@@ -657,6 +657,15 @@ slug = "-".join(upper_words)
     assert_eq!(val, Value::Str("LUCID-EXPRESSIVE-FAST".to_string()));
 }
 
+#[test]
+fn test_sum_rejects_nonnumeric_elements() {
+    for source in ["total = sum([\"bad\"])\n", "total = sum([true])\n"] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("elements must be numeric"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 22. Multi-file Module Imports
 // ---------------------------------------------------------------------------

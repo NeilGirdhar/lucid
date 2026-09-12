@@ -5762,6 +5762,23 @@ impl TypeChecker {
                                     span: argument.value.span(),
                                 });
                             }
+                            let element_type = self.iterable_element_type(&argument_type);
+                            let numeric_element = matches!(
+                                element_type,
+                                Type::Int | Type::LiteralInt(_) | Type::Float
+                            ) || matches!(
+                                &element_type,
+                                Type::Class { name, .. } if name == "complex"
+                            );
+                            if !numeric_element {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "sum() elements must be numeric, got {:?}",
+                                        element_type
+                                    ),
+                                    span: argument.value.span(),
+                                });
+                            }
                         }
                         if let Some(argument) = args.get(1) {
                             let start_type = self.type_of_expr(&argument.value)?;
@@ -10901,6 +10918,8 @@ def reject(value: not int) -> none:
             ("zip(1)\n", "arguments must be iterable"),
             ("abs()\n", "requires at least 1"),
             ("round(1, 2, 3)\n", "accepts at most 2"),
+            ("sum([\"bad\"])\n", "elements must be numeric"),
+            ("sum([true])\n", "elements must be numeric"),
             ("sum([1], \"bad\")\n", "start must be numeric"),
             ("min()\n", "requires at least 1"),
             ("max(1)\n", "argument must be iterable"),
