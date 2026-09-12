@@ -1392,12 +1392,24 @@ impl CCodeGenerator {
         let top_function_aliases = self.function_aliases.clone();
         for stmt in &module.statements {
             if let Stmt::Function(f) = Self::unwrap_export(stmt) {
+                self.emit_closure_adapter(f, true);
+            }
+        }
+        self.emit_line("");
+        for stmt in &module.statements {
+            if let Stmt::Function(f) = Self::unwrap_export(stmt) {
                 self.anonymous_bindings.clear();
                 self.partial_bindings.clear();
                 self.function_aliases.clear();
                 self.emit_function(f)?;
             }
         }
+        for stmt in &module.statements {
+            if let Stmt::Function(f) = Self::unwrap_export(stmt) {
+                self.emit_closure_adapter(f, false);
+            }
+        }
+        self.emit_line("");
         self.function_aliases = top_function_aliases;
 
         // 5. Emit main() for top-level code
@@ -6053,6 +6065,74 @@ static inline void lucid_print_val(LucidVal v) {
         Ok(())
     }
 
+    fn closure_adapter_name(f: &FunctionDef) -> String {
+        format!("lucid_closure_call_{}", Self::mangle_component(&f.name))
+    }
+
+    fn closure_adapter_name_for_name(name: &str) -> String {
+        format!("lucid_closure_call_{}", Self::mangle_component(name))
+    }
+
+    /// Emit erased adapters for fixed-arity top-level functions.  The normal
+    /// native entry points retain their typed C signatures; these adapters
+    /// are the ABI boundary used when a function is stored in a value (for
+    /// example in a list) and later invoked through `lucid_call`.
+    fn emit_closure_adapter(&mut self, f: &FunctionDef, prototype: bool) {
+        if f.is_dispatch
+            || f.is_async
+            || f.decorators.iter().any(|decorator| {
+                matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
+            })
+            || f.params.iter().any(|param| {
+                param.default.is_some()
+                    || param.is_variadic_positional
+                    || param.is_variadic_keyword
+                    || param.is_gather
+            })
+        {
+            return;
+        }
+        let adapter = Self::closure_adapter_name(f);
+        if prototype {
+            self.emit_line(&format!("static LucidVal {adapter}(void*, LucidList*);"));
+            return;
+        }
+        let fn_name = self.dispatch_name(f, &f.name);
+        let ret_ty = self.map_type_expr(f.return_type.as_ref());
+        self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args) {{"));
+        self.indent += 1;
+        self.emit_line("(void)_env;");
+        self.emit_line(&format!(
+            "if (!args || args->len != {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
+            f.params.len()
+        ));
+        let mut call_args = Vec::new();
+        for (index, param) in f.params.iter().enumerate() {
+            let ty = self.map_type_expr(param.type_annotation.as_ref());
+            let expression = match ty.as_str() {
+                "int64_t" => format!("lucid_as_int(args->items[{index}])"),
+                "double" => format!("lucid_as_float(args->items[{index}])"),
+                "bool" => format!("lucid_as_bool(args->items[{index}])"),
+                "const char*" => format!("lucid_as_str(args->items[{index}])"),
+                "LucidList*" => format!("lucid_as_list(args->items[{index}])"),
+                "LucidDict*" => format!("lucid_as_dict(args->items[{index}])"),
+                "LucidSet*" => format!("lucid_as_set(args->items[{index}])"),
+                "LucidVal" => format!("args->items[{index}]"),
+                other => format!("({other})lucid_as_ptr(args->items[{index}])"),
+            };
+            call_args.push(expression);
+        }
+        let call = format!("{fn_name}({})", call_args.join(", "));
+        if ret_ty == "void" {
+            self.emit_line(&format!("{call};"));
+            self.emit_line("return lucid_none();");
+        } else {
+            self.emit_line(&format!("return lucid_wrap({call});"));
+        }
+        self.indent -= 1;
+        self.emit_line("}");
+    }
+
     fn emit_contextmanager_function(&mut self, f: &FunctionDef) -> Result<(), CodegenError> {
         if !f
             .body
@@ -7605,6 +7685,12 @@ static inline void lucid_print_val(LucidVal v) {
                         Ok("lucid_str(\"iteration.done\")".to_string())
                     }
                     "self" => Ok("self".to_string()),
+                    _ if self.known_fn_params.contains_key(name)
+                        && !self.var_types.contains_key(name)
+                        && !self.global_vars.contains_key(name) => Ok(format!(
+                        "lucid_closure({}, NULL, NULL)",
+                        Self::closure_adapter_name_for_name(name)
+                    )),
                     _ => Ok(format!("lucid_var_{name}")),
                 }
             }
@@ -11789,6 +11875,31 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         return Ok(format!("{cls_name}_{attr}({})", all_args.join(", ")));
                     }
+                }
+                // Calls through erased/function values use the shared closure
+                // ABI.  This covers values retrieved from containers and
+                // values crossing an `Any` boundary, where a typed C entry
+                // point cannot be selected statically.
+                if self.expr_is_val(func) || self.infer_expr_type(func, &HashMap::new()) == "LucidVal" {
+                    let callable = self.emit_expr(func)?;
+                    let call_args = self.new_temp();
+                    let mut parts = vec![format!(
+                        "LucidList* {call_args} = lucid_list_new({});",
+                        args.iter().filter(|arg| !matches!(arg.value, Expr::Skip(_))).count()
+                    )];
+                    for arg in args {
+                        if matches!(arg.value, Expr::Skip(_)) {
+                            continue;
+                        }
+                        let value = self.emit_expr(&arg.value)?;
+                        parts.push(format!(
+                            "lucid_list_append({call_args}, lucid_wrap({value}));"
+                        ));
+                    }
+                    parts.push(format!(
+                        "LucidVal _call_result = lucid_call(lucid_wrap({callable}), {call_args}); _call_result;"
+                    ));
+                    return Ok(format!("({{ {} }})", parts.join(" ")));
                 }
 
                 // A function alias is lowered to the original typed entry
@@ -17412,6 +17523,22 @@ print(result[1])
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "4");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_calls_function_value_retrieved_from_list() {
+        let source = "def double(x: int) -> int:\n    return x * 2\nfs = [double]\nprint(fs[0](21))\n";
+        let module = parse(source).expect("function value list source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_function_value_list_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("function value list should compile");
+        let run = Command::new(&output).output().expect("run function value list");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "function value list failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
     }
 
     #[test]
