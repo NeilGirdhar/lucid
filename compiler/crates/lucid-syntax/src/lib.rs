@@ -522,6 +522,18 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn discarded_scope_and_lambda_keywords_report_explicit_rejections() {
+        for (source, expected) in [
+            ("global counter\n", "global is not supported"),
+            ("nonlocal counter\n", "nonlocal is not supported"),
+            ("handler = lambda x: x\n", "lambda is not supported"),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
     fn recovering_parser_keeps_later_statements() {
         let (module, errors) = parse_recovering("first = 1\nbad =\nlast = 3\n").unwrap();
         assert_eq!(errors.len(), 1);

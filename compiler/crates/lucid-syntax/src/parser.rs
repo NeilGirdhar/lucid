@@ -393,6 +393,18 @@ impl Parser {
             }
             TokenKind::Import => self.parse_import_stmt(),
             TokenKind::From => self.parse_from_import_stmt(),
+            TokenKind::Global => Err(ParseError {
+                message:
+                    "global is not supported; assignment is local and outer mutation uses explicit objects"
+                        .into(),
+                span: start,
+            }),
+            TokenKind::Nonlocal => Err(ParseError {
+                message:
+                    "nonlocal is not supported; mutate explicit state instead of rebinding an outer name"
+                        .into(),
+                span: start,
+            }),
             _ => self.parse_expr_or_assign_stmt(),
         }
     }
@@ -2472,6 +2484,10 @@ impl Parser {
                     span,
                 })
             }
+            TokenKind::Lambda => Err(ParseError {
+                message: "lambda is not supported; use an anonymous def expression".into(),
+                span: tok.span,
+            }),
             TokenKind::Ident(name) => {
                 let name = name.clone();
                 self.advance();
