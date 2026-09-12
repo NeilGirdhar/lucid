@@ -18696,6 +18696,22 @@ print(result[1])
     }
 
     #[test]
+    fn native_comprehension_closures_capture_fresh_bindings() {
+        let source = "fns = [def() -> int: i for i in [1, 2, 3]]\nfor f in fns:\n    print(f())\n";
+        let module = parse(source).expect("comprehension closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_comprehension_closure_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("comprehension closure should compile");
+        let run = Command::new(&output).output().expect("run comprehension closure");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "comprehension closure failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n2\n3\n");
+    }
+
+    #[test]
     fn native_recursive_anonymous_function_is_callable() {
         let source = "fact = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\nprint(fact(5))\n";
         let module = parse(source).expect("recursive anonymous source should parse");
