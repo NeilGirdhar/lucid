@@ -718,6 +718,37 @@ fn run_cir_executes_constant_step_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_constant_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_constant_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    while n > 1 + 1:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir constant-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+}
+
+#[test]
 fn run_cir_executes_local_step_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_step_while_{}.lucid",
@@ -1239,6 +1270,37 @@ fn run_cir_executes_parameter_bound_while_accumulator() {
     assert!(
         output.status.success(),
         "run-cir parameter-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
+fn run_cir_executes_constant_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_constant_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int):\n    total = 0\n    while n > 1 + 1:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir constant-bound accumulator loop failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");

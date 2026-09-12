@@ -609,8 +609,9 @@ diverged:
   commuted spelling `n = -1 + n`, and the induction step may be a positional
   parameter or a pre-loop local alias of a literal or parameter instead of only
   a signed literal, as in `tick = step; while n > 0: n -= tick`. Checked
-  constant integer step expressions such as `n -= 1 + 1` lower through the same
-  path while overflow or dynamic expressions remain outside it. Plain counted
+  constant integer step expressions such as `n -= 1 + 1` and comparison bounds
+  such as `while n > 1 + 1` lower through the same path while overflow or
+  dynamic expressions remain outside it. Plain counted
   loops can also keep the induction value as a parameter while seeding the
   comparison bound from a local, with or without a local step alias, as in
   `stop = limit; tick = step; while n > stop`.

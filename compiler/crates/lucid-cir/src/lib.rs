@@ -2978,7 +2978,7 @@ impl Function {
                             return None;
                         }
                     }
-                    expr if Function::int_literal_expr(expr).is_some() => {
+                    expr if Function::const_int_expr(expr).is_some() => {
                         if first_name == induction_name && second_name != induction_name {
                             (
                                 Some(first_statement),
@@ -3064,7 +3064,7 @@ impl Function {
                             return None;
                         }
                     }
-                    expr if Function::int_literal_expr(expr).is_some() => {
+                    expr if Function::const_int_expr(expr).is_some() => {
                         if first_name == induction_name && second_name != induction_name {
                             (
                                 Some(first_statement),
@@ -3342,10 +3342,10 @@ impl Function {
             }
         };
         let bound_instruction = match (right.as_ref(), bound_initial) {
-            (expr, None) if Function::int_literal_expr(expr).is_some() => {
+            (expr, None) if Function::const_int_expr(expr).is_some() => {
                 Some(Instruction::ConstInt {
                     result: ValueId(2),
-                    value: Function::int_literal_expr(expr)?,
+                    value: Function::const_int_expr(expr)?,
                 })
             }
             (lucid_syntax::Expr::Ident { .. }, _) => None,
@@ -3353,7 +3353,7 @@ impl Function {
         };
         let mut entry_instructions = vec![initial_instruction];
         match right.as_ref() {
-            expr if Function::int_literal_expr(expr).is_some() => {}
+            expr if Function::const_int_expr(expr).is_some() => {}
             lucid_syntax::Expr::Ident {
                 name: bound_name, ..
             } if bound_name != name => {
@@ -3511,7 +3511,7 @@ impl Function {
             expr: &lucid_syntax::Expr,
             result: ValueId,
         ) -> Option<Instruction> {
-            Function::int_literal_expr(expr).map(|value| Instruction::ConstInt { result, value })
+            Function::const_int_expr(expr).map(|value| Instruction::ConstInt { result, value })
         }
         fn parameter_instruction(
             name: &str,
@@ -3735,7 +3735,7 @@ impl Function {
                             return_name,
                         )
                     }
-                    expr if Function::int_literal_expr(expr).is_some() => {
+                    expr if Function::const_int_expr(expr).is_some() => {
                         let induction_index = initializers
                             .iter()
                             .position(|(name, _)| *name == induction_name)?;
@@ -10123,6 +10123,18 @@ return n
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
 
         let module = lucid_syntax::parse(
+            r#"while n > 1 + 1:
+    n -= 1
+return n
+"#,
+        )
+        .expect("constant-bound counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("constant-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
             r#"stop = limit
 while n > stop:
     n -= 1
@@ -10526,6 +10538,20 @@ return total
                 .expect("parameter-bound while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 1 + 1:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("constant-bound while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("constant-bound while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(0)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
