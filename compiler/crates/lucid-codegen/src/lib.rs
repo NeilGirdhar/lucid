@@ -6196,6 +6196,31 @@ static inline void lucid_print_val(LucidVal v) {
         ))
     }
 
+    fn emit_partial_anonymous_value(
+        &mut self,
+        source: &str,
+        args: &[Arg],
+    ) -> Result<String, CodegenError> {
+        let bound = self.new_temp();
+        let count = args
+            .iter()
+            .filter(|arg| !matches!(arg.value, Expr::Skip(_)))
+            .count();
+        self.emit_line(&format!("LucidList* {bound} = lucid_list_new({count});"));
+        for arg in args {
+            if matches!(arg.value, Expr::Skip(_)) {
+                continue;
+            }
+            let value = if matches!(&arg.value, Expr::Ident { name, .. } if name == "_") {
+                "lucid_partial_hole()".to_string()
+            } else {
+                format!("lucid_wrap({})", self.emit_expr(&arg.value)?)
+            };
+            self.emit_line(&format!("lucid_list_append({bound}, {value});"));
+        }
+        Ok(format!("lucid_partial(lucid_var_{source}, {bound})"))
+    }
+
     fn anonymous_has_unbound_name(&self, expr: &Expr, params: &HashSet<String>) -> bool {
         const BUILTINS: &[&str] = &[
             "abs", "all", "any", "bool", "bytes", "chr", "dict", "float", "int",
@@ -7062,6 +7087,8 @@ static inline void lucid_print_val(LucidVal v) {
                                 .collect();
                             self.anonymous_bindings
                                 .insert(name.clone(), (parameter_specs, body_expr.clone()));
+                            let closure = self.emit_expr(value.as_ref().expect("anonymous value"))?;
+                            self.emit_line(&format!("lucid_var_{name} = {closure};"));
                             return Ok(());
                         }
                         let parameter_specs = params
@@ -7075,6 +7102,8 @@ static inline void lucid_print_val(LucidVal v) {
                             .collect();
                         self.anonymous_block_bindings
                             .insert(name.clone(), (parameter_specs, body.clone()));
+                        let closure = self.emit_expr(value.as_ref().expect("anonymous value"))?;
+                        self.emit_line(&format!("lucid_var_{name} = {closure};"));
                         return Ok(());
                     }
                     if let Some(Expr::Ident { name: source, .. }) = value {
@@ -7118,6 +7147,13 @@ static inline void lucid_print_val(LucidVal v) {
                             {
                                 let partial = self.emit_partial_value(&resolved, inner_args)?;
                                 self.partial_bindings.insert(name.clone(), (resolved, inner_args.clone()));
+                                self.emit_line(&format!("lucid_var_{name} = {partial};"));
+                                return Ok(());
+                            }
+                            if self.anonymous_bindings.contains_key(source)
+                                && inner_args.iter().any(|arg| matches!(&arg.value, Expr::Ident { name, .. } if name == "_"))
+                            {
+                                let partial = self.emit_partial_anonymous_value(source, inner_args)?;
                                 self.emit_line(&format!("lucid_var_{name} = {partial};"));
                                 return Ok(());
                             }
@@ -7181,6 +7217,8 @@ static inline void lucid_print_val(LucidVal v) {
                                     .collect();
                                 self.anonymous_bindings
                                     .insert(name.clone(), (parameter_specs, body_expr.clone()));
+                                let closure = self.emit_expr(value)?;
+                                self.emit_line(&format!("lucid_var_{name} = {closure};"));
                                 return Ok(());
                             }
                             let parameter_specs = params
@@ -7194,6 +7232,8 @@ static inline void lucid_print_val(LucidVal v) {
                                 .collect();
                             self.anonymous_block_bindings
                                 .insert(name.clone(), (parameter_specs, body.clone()));
+                            let closure = self.emit_expr(value)?;
+                            self.emit_line(&format!("lucid_var_{name} = {closure};"));
                             return Ok(());
                         }
                         if let Expr::Ident { name: source, .. } = value {
@@ -7237,6 +7277,13 @@ static inline void lucid_print_val(LucidVal v) {
                                 {
                                     let partial = self.emit_partial_value(&resolved, inner_args)?;
                                     self.partial_bindings.insert(name.clone(), (resolved, inner_args.clone()));
+                                    self.emit_line(&format!("lucid_var_{name} = {partial};"));
+                                    return Ok(());
+                                }
+                                if self.anonymous_bindings.contains_key(source)
+                                    && inner_args.iter().any(|arg| matches!(&arg.value, Expr::Ident { name, .. } if name == "_"))
+                                {
+                                    let partial = self.emit_partial_anonymous_value(source, inner_args)?;
                                     self.emit_line(&format!("lucid_var_{name} = {partial};"));
                                     return Ok(());
                                 }
@@ -18704,6 +18751,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "captured anonymous default failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+    }
+
+    #[test]
+    fn native_partial_application_supports_anonymous_closures() {
+        let source = "f = def(a: int, b: int) -> int: a * 10 + b\npart = f(4, _)\nprint(part(3))\n";
+        let module = parse(source).expect("anonymous partial source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_partial_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("anonymous partial should compile");
+        let run = Command::new(&output).output().expect("run anonymous partial");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "anonymous partial failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "43\n");
     }
 
     #[test]
