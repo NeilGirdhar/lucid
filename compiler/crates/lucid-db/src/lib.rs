@@ -960,6 +960,7 @@ fn collect_typed_body<'db>(
                 // and the lowering stage would have to recover match order
                 // from syntax again.
                 if arms.len() == 2
+                    && arms.iter().all(|arm| arm.guard.is_none())
                     && let (
                         lucid_syntax::Pattern::Literal(_, _),
                         lucid_syntax::Pattern::Wildcard(_),
@@ -1045,6 +1046,7 @@ fn collect_typed_body<'db>(
                     }
                 }
                 if arms.len() >= 3
+                    && arms.iter().all(|arm| arm.guard.is_none())
                     && matches!(
                         arms.last().map(|arm| &arm.pattern),
                         Some(lucid_syntax::Pattern::Wildcard(_))
@@ -1637,6 +1639,108 @@ pub fn lower_function_body(
                 arm.body.as_slice(),
                 [lucid_syntax::Stmt::Return { value: None, .. }] | [lucid_syntax::Stmt::Pass(_)]
             )
+        }
+        let arm_condition = |arm: &lucid_syntax::MatchArm| match &arm.pattern {
+            lucid_syntax::Pattern::Literal(
+                literal
+                @ (lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_)),
+                span,
+            ) => {
+                let pattern_test = lucid_syntax::Expr::Binary {
+                    op: lucid_syntax::BinaryOp::Eq,
+                    left: Box::new(subject.clone()),
+                    right: Box::new(lucid_syntax::Expr::Literal {
+                        value: literal.clone(),
+                        span: *span,
+                    }),
+                    span: *span,
+                };
+                Some(match &arm.guard {
+                    Some(guard) => lucid_syntax::Expr::Binary {
+                        op: lucid_syntax::BinaryOp::And,
+                        left: Box::new(pattern_test),
+                        right: Box::new(guard.clone()),
+                        span: guard.span(),
+                    },
+                    None => pattern_test,
+                })
+            }
+            lucid_syntax::Pattern::Wildcard(_) => arm.guard.clone(),
+            _ => None,
+        };
+        if arms.iter().any(|arm| arm.guard.is_some())
+            && arms.iter().all(|arm| {
+                matches!(
+                    arm.pattern,
+                    lucid_syntax::Pattern::Literal(
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                        _
+                    ) | lucid_syntax::Pattern::Wildcard(_)
+                ) && match_arm_value(arm).is_some()
+            })
+        {
+            let mut conditions = Vec::new();
+            let mut values = Vec::new();
+            let mut else_value = None;
+            for arm in arms {
+                let Some(value) = match_arm_value(arm) else {
+                    return Err(Arc::from("unsupported guarded match arm"));
+                };
+                if let Some(condition) = arm_condition(arm) {
+                    conditions.push(condition);
+                    values.push(value);
+                } else {
+                    else_value = Some(value);
+                    break;
+                }
+            }
+            if let Some((first_condition, elif_conditions)) = conditions.split_first()
+                && let Some((first_value, elif_values)) = values.split_first()
+            {
+                let elif_pairs = elif_conditions
+                    .iter()
+                    .zip(elif_values.iter())
+                    .map(|(condition, value)| (condition, *value))
+                    .collect::<Vec<_>>();
+                if let Some(else_value) = else_value {
+                    if elif_pairs.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_direct(
+                            first_condition,
+                            first_value,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported guarded match expression"));
+                    }
+                    return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                        first_condition,
+                        first_value,
+                        &elif_pairs,
+                        else_value,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported guarded match chain"));
+                }
+                if elif_pairs.is_empty() {
+                    return lucid_cir::Function::from_parameterized_if_optional(
+                        first_condition,
+                        first_value,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported optional guarded match expression"));
+                }
+                return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                    first_condition,
+                    first_value,
+                    &elif_pairs,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported optional guarded match chain"));
+            }
         }
         if arms.len() >= 3
             && let Some(parameter_index) = parameter_index
@@ -5245,6 +5349,26 @@ mod tests {
             .expect("leading wildcard match should preserve arm order");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "guarded-literal-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if false:\n            return 11\n        case _:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded literal match should lower with guard in CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "guarded-wildcard-match.lucid",
+            "def choose(value: int):\n    match value:\n        case _ if value > 0:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded wildcard match should lower as optional CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(None));
 
         let file = db.add_file(
             "leading-wildcard-local-match.lucid",
