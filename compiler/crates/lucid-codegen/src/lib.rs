@@ -6677,14 +6677,15 @@ static inline void lucid_print_val(LucidVal v) {
                         .iter()
                         .filter(|previous| !previous.is_keyword_only && !previous.is_variadic_keyword)
                         .count();
+                    let missing = if param.is_positional_only {
+                        format!("args->len <= {positional_index}")
+                    } else if param.is_keyword_only {
+                        format!("!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\"))", c_escape_string(&param.name))
+                    } else {
+                        format!("args->len <= {positional_index} && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))", c_escape_string(&param.name))
+                    };
                     self.emit_line(&format!(
-                        "if ({} && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}",
-                        if param.is_keyword_only {
-                            "true".to_string()
-                        } else {
-                            format!("args->len <= {positional_index}")
-                        },
-                        c_escape_string(&param.name)
+                        "if ({missing}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
                     ));
                 }
             }
@@ -6752,11 +6753,19 @@ static inline void lucid_print_val(LucidVal v) {
                     .iter()
                     .filter(|previous| !previous.is_keyword_only && !previous.is_variadic_keyword)
                     .count();
+                let keyword_source = if param.is_positional_only {
+                    "false".to_string()
+                } else {
+                    format!(
+                        "kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\"))",
+                        c_escape_string(&param.name)
+                    )
+                };
                 let source = if let Some(default) = &param.default {
                     let default_code = self.emit_expr(default)?;
-                    format!("(kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\")) ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args->len > {positional_index} ? args->items[{positional_index}] : lucid_wrap({default_code})))", c_escape_string(&param.name), c_escape_string(&param.name))
+                    format!("({keyword_source} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args->len > {positional_index} ? args->items[{positional_index}] : lucid_wrap({default_code})))", c_escape_string(&param.name))
                 } else {
-                    format!("(kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\")) ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : args->items[{positional_index}])", c_escape_string(&param.name), c_escape_string(&param.name))
+                    format!("({keyword_source} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : args->items[{positional_index}])", c_escape_string(&param.name))
                 };
                 let value = match ty.as_str() {
                     "int64_t" => format!("lucid_as_int({source})"),
@@ -18664,6 +18673,22 @@ print(result[1])
         let run = Command::new(&output).output().expect("run anonymous keyword-only");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous keyword-only failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
+    }
+
+    #[test]
+    fn native_anonymous_function_supports_positional_only_parameters() {
+        let source = "f = def(x: int, /, y: int) -> int: x + y\nprint(f(2, 3))\n";
+        let module = parse(source).expect("anonymous positional-only source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_positional_only_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("anonymous positional-only should compile");
+        let run = Command::new(&output).output().expect("run anonymous positional-only");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "anonymous positional-only failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
