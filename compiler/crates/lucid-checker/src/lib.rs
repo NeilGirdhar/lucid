@@ -5589,11 +5589,13 @@ impl TypeChecker {
                         }
                     }
                     BinaryOp::FloorDiv => {
-                        if matches!(
-                            (&lt, &rt),
-                            (Type::Int, Type::Int) | (Type::Float, Type::Float)
-                        ) {
+                        if lt == Type::Int && rt == Type::Int {
                             Ok(Type::Int)
+                        } else if matches!(
+                            (&lt, &rt),
+                            (Type::Int | Type::Float, Type::Int | Type::Float)
+                        ) {
+                            Ok(Type::Float)
                         } else {
                             Err(TypeError {
                                 message: format!(
@@ -5607,6 +5609,11 @@ impl TypeChecker {
                     BinaryOp::Mod => {
                         if lt == Type::Int && rt == Type::Int {
                             Ok(Type::Int)
+                        } else if matches!(
+                            (&lt, &rt),
+                            (Type::Int | Type::Float, Type::Int | Type::Float)
+                        ) {
+                            Ok(Type::Float)
                         } else {
                             Err(TypeError {
                                 message: format!(
@@ -9333,6 +9340,38 @@ class Child(Base):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("unsupported operands for /"));
+    }
+
+    #[test]
+    fn floor_division_and_modulo_type_numeric_operands() {
+        let module = parse(
+            "ii_floor = 5 // 2\nff_floor = 5.0 // 2.0\nif_floor = 5 // 2.0\nfi_floor = 5.0 // 2\nii_mod = 5 % 2\nff_mod = 5.0 % 2.0\nif_mod = 5 % 2.0\nfi_mod = 5.0 % 2\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(&module)
+            .expect("numeric floor division and modulo should type check");
+
+        for name in ["ii_floor", "ii_mod"] {
+            assert_eq!(
+                checker.env.variables.get(name).map(|(ty, _)| ty),
+                Some(&Type::Int)
+            );
+        }
+
+        for name in [
+            "ff_floor", "if_floor", "fi_floor", "ff_mod", "if_mod", "fi_mod",
+        ] {
+            assert_eq!(
+                checker.env.variables.get(name).map(|(ty, _)| ty),
+                Some(&Type::Float)
+            );
+        }
+
+        let module = parse("formatted = \"%s\" % \"value\"\n").unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("unsupported operands for %"));
     }
 
     #[test]
