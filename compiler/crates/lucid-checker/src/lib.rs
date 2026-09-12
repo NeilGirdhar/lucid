@@ -2024,7 +2024,7 @@ impl TypeChecker {
                 let mut field_order = Vec::new();
                 for member in body {
                     if let Some((member_name, member_span)) = Self::member_name_and_span(member) {
-                        Self::reject_removed_indexing_member(member_name, member_span)?;
+                        Self::reject_removed_member(member_name, member_span)?;
                     }
                     match member {
                         ClassMember::Field(f) => {
@@ -2216,7 +2216,7 @@ impl TypeChecker {
                     if let Some((member_name, member_span)) =
                         Self::interface_member_name_and_span(member)
                     {
-                        Self::reject_removed_indexing_member(member_name, member_span)?;
+                        Self::reject_removed_member(member_name, member_span)?;
                     }
                     match member {
                         InterfaceMember::MethodSig {
@@ -2369,7 +2369,7 @@ impl TypeChecker {
                     if let Some((member_name, member_span)) =
                         Self::trait_member_name_and_span(member)
                     {
-                        Self::reject_removed_indexing_member(member_name, member_span)?;
+                        Self::reject_removed_member(member_name, member_span)?;
                     }
                     match member {
                         TraitMember::Method(method) | TraitMember::ClassMethod(method)
@@ -2743,15 +2743,23 @@ impl TypeChecker {
         Some(return_types)
     }
 
-    fn reject_removed_indexing_member(name: &str, span: Span) -> Result<(), TypeError> {
-        if name == "__delitem__" {
-            return Err(TypeError {
-                message:
-                    "__delitem__ is not supported; use an explicit removal method instead".into(),
-                span,
-            });
-        }
-        Ok(())
+    fn reject_removed_member(name: &str, span: Span) -> Result<(), TypeError> {
+        let message = match name {
+            "__delitem__" => {
+                "__delitem__ is not supported; use an explicit removal method instead"
+            }
+            "__getattr__" => "__getattr__ is not supported; declare visible members instead",
+            "__getattribute__" => {
+                "__getattribute__ is not supported; attribute reads use visible members"
+            }
+            "__setattr__" => "__setattr__ is not supported; use declared fields or setters",
+            "__del__" => "__del__ is not supported; use context managers for cleanup",
+            _ => return Ok(()),
+        };
+        Err(TypeError {
+            message: message.into(),
+            span,
+        })
     }
 
     fn member_name_and_span(member: &ClassMember) -> Option<(&str, Span)> {
@@ -11112,6 +11120,43 @@ def reject(value: not int) -> none:
                 .check_module(&parse(source).unwrap())
                 .expect_err("__delitem__ member must fail static checking");
             assert!(error.message.contains("__delitem__ is not supported"));
+            assert!(error.span.end > error.span.start);
+        }
+    }
+
+    #[test]
+    fn test_removed_dynamic_attribute_hooks_are_rejected_statically() {
+        for (source, message) in [
+            (
+                "class Hook:\n    def __getattr__(self, name: str) -> int:\n        return 1\n",
+                "__getattr__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __getattribute__(self, name: str) -> int:\n        return 1\n",
+                "__getattribute__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __setattr__(self, name: str, value: int):\n        pass\n",
+                "__setattr__ is not supported",
+            ),
+            (
+                "class Hook:\n    def __del__(self):\n        pass\n",
+                "__del__ is not supported",
+            ),
+            (
+                "interface Hook:\n    def __getattr__(self, name: str) -> int\n",
+                "__getattr__ is not supported",
+            ),
+            (
+                "trait Hook:\n    def __setattr__(self, name: str, value: int):\n        pass\n",
+                "__setattr__ is not supported",
+            ),
+        ] {
+            let mut checker = TypeChecker::new();
+            let error = checker
+                .check_module(&parse(source).unwrap())
+                .expect_err("removed dynamic attribute hook must fail static checking");
+            assert!(error.message.contains(message));
             assert!(error.span.end > error.span.start);
         }
     }

@@ -299,6 +299,20 @@ inst = BaseClass(99)
     }
 }
 
+#[test]
+fn test_classes_reject_dynamic_attribute_hooks() {
+    for source in [
+        "class Hook:\n    def __getattr__(self, name: str) -> int:\n        return 1\n",
+        "class Hook:\n    def __getattribute__(self, name: str) -> int:\n        return 1\n",
+        "class Hook:\n    def __setattr__(self, name: str, value: int):\n        pass\n",
+        "class Hook:\n    def __del__(self):\n        pass\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("not supported"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 11. Multiple dispatch (docs/dispatch.rst)
 // ---------------------------------------------------------------------------
