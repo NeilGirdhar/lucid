@@ -216,7 +216,8 @@ pub struct CCodeGenerator {
     /// escaping activation; keeping them separate from expression bindings
     /// makes the limitation explicit and avoids silently dropping statements.
     anonymous_block_bindings: HashMap<String, (Vec<(String, String)>, Vec<Stmt>)>,
-    pending_anonymous_adapters: Vec<(String, String, Vec<Param>, Expr, Vec<String>)>,
+    pending_anonymous_adapters:
+        Vec<(String, String, Vec<Param>, Expr, Vec<String>, Option<String>)>,
     active_capture_names: HashSet<String>,
     /// Source-level names bound to named functions.  Native functions have
     /// concrete C signatures, so preserving this alias lets `g = f; g(x)`
@@ -4886,9 +4887,9 @@ static inline void lucid_print_val(LucidVal v) {
                     self.known_fns
                         .get(name)
                         .map(|ty| ty == "LucidVal")
-                        .unwrap_or(false)
+                        .unwrap_or_else(|| self.infer_expr_type(expr, &HashMap::new()) == "LucidVal")
                 } else {
-                    false
+                    self.infer_expr_type(expr, &HashMap::new()) == "LucidVal"
                 }
             }
             Expr::Attribute { .. } => true,
@@ -6326,6 +6327,7 @@ static inline void lucid_print_val(LucidVal v) {
         params: &[Param],
         body: &Expr,
         captures: &[String],
+        recursive_name: Option<String>,
     ) -> (String, String) {
         let adapter = format!(
             "lucid_closure_call_anon_{}",
@@ -6333,7 +6335,14 @@ static inline void lucid_print_val(LucidVal v) {
         );
         let env_type = format!("LucidAnonEnv_{}", self.pending_anonymous_adapters.len() + 1);
         self.pending_anonymous_adapters
-            .push((adapter.clone(), env_type.clone(), params.to_vec(), body.clone(), captures.to_vec()));
+            .push((
+                adapter.clone(),
+                env_type.clone(),
+                params.to_vec(),
+                body.clone(),
+                captures.to_vec(),
+                recursive_name,
+            ));
         self.emit_line(&format!("LucidVal {adapter}(void*, LucidList*, LucidDict*);"));
         let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
         let maker_params = captures
@@ -6343,6 +6352,65 @@ static inline void lucid_print_val(LucidVal v) {
             .join(", ");
         self.emit_line(&format!("void* {maker}({maker_params});"));
         (adapter, env_type)
+    }
+
+    fn emit_recursive_anonymous_binding(
+        &mut self,
+        name: &str,
+        params: &[Param],
+        body: &[Stmt],
+    ) -> Result<bool, CodegenError> {
+        let [Stmt::Return {
+            value: Some(body_expr),
+            ..
+        }] = body
+        else {
+            return Ok(false);
+        };
+        let parameter_names = params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<HashSet<_>>();
+        let mut captures = HashSet::new();
+        self.collect_anonymous_captures(body_expr, &parameter_names, &mut captures);
+        if !captures.contains(name) {
+            return Ok(false);
+        }
+        captures.remove(name);
+        let mut captures = captures.into_iter().collect::<Vec<_>>();
+        captures.sort();
+        for capture in &captures {
+            if !self.var_types.contains_key(capture)
+                && !self.global_vars.contains_key(capture)
+            {
+                return Err(CodegenError {
+                    message: format!("unknown anonymous closure capture '{capture}'"),
+                });
+            }
+        }
+        let (adapter, _) = self.register_anonymous_adapter(
+            params,
+            body_expr,
+            &captures,
+            Some(name.to_string()),
+        );
+        let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
+        let env = if captures.is_empty() {
+            "NULL".to_string()
+        } else {
+            format!(
+                "{maker}({})",
+                captures
+                    .iter()
+                    .map(|capture| format!("lucid_wrap(lucid_var_{capture})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        self.emit_line(&format!(
+            "lucid_var_{name} = lucid_closure({adapter}, {env}, NULL);"
+        ));
+        Ok(true)
     }
 
     /// Emit erased adapters for fixed-arity top-level functions.  The normal
@@ -6489,7 +6557,7 @@ static inline void lucid_print_val(LucidVal v) {
 
     fn emit_pending_anonymous_adapters(&mut self) -> Result<(), CodegenError> {
         let pending = std::mem::take(&mut self.pending_anonymous_adapters);
-        for (adapter, env_type, params, body, captures) in pending {
+        for (adapter, env_type, params, body, captures, recursive_name) in pending {
             self.emit_line(&format!("typedef struct {env_type} {{"));
             self.indent += 1;
             for capture in &captures {
@@ -6527,6 +6595,12 @@ static inline void lucid_print_val(LucidVal v) {
             for capture in &captures {
                 self.var_types.insert(capture.clone(), "LucidVal".into());
                 self.emit_line(&format!("LucidVal lucid_var_{capture} = env->{capture};"));
+            }
+            if let Some(name) = &recursive_name {
+                self.var_types.insert(name.clone(), "LucidVal".into());
+                self.emit_line(&format!(
+                    "LucidVal lucid_var_{name} = lucid_closure({adapter}, _env, NULL);"
+                ));
             }
             for (index, param) in params.iter().enumerate() {
                 let ty = self.map_type_expr(param.type_annotation.as_ref());
@@ -6774,6 +6848,9 @@ static inline void lucid_print_val(LucidVal v) {
                         self.emit_line(&format!("lucid_alive_{name} = true;"));
                     }
                     if let Some(Expr::AnonymousDef { params, body, .. }) = value {
+                        if self.emit_recursive_anonymous_binding(name, params, body)? {
+                            return Ok(());
+                        }
                         if let [
                             Stmt::Return {
                                 value: Some(body_expr),
@@ -6890,6 +6967,9 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                         }
                         if let Expr::AnonymousDef { params, body, .. } = value {
+                            if self.emit_recursive_anonymous_binding(name, params, body)? {
+                                return Ok(());
+                            }
                             if let [
                                 Stmt::Return {
                                     value: Some(body_expr),
@@ -8116,7 +8196,8 @@ static inline void lucid_print_val(LucidVal v) {
                         });
                     }
                 }
-                let (adapter, _) = self.register_anonymous_adapter(params, body_expr, &captures);
+                let (adapter, _) =
+                    self.register_anonymous_adapter(params, body_expr, &captures, None);
                 let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
                 let env = if captures.is_empty() {
                     "NULL".to_string()
@@ -18300,6 +18381,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "loop closure failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n2\n3\n");
+    }
+
+    #[test]
+    fn native_recursive_anonymous_function_is_callable() {
+        let source = "fact = def(n: int) -> int: 1 if n == 0 else n * fact(n - 1)\nprint(fact(5))\n";
+        let module = parse(source).expect("recursive anonymous source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_recursive_anonymous_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("recursive anonymous should compile");
+        let run = Command::new(&output).output().expect("run recursive anonymous");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "recursive anonymous failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "120\n");
     }
 
     #[test]
