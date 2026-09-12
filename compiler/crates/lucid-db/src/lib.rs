@@ -4316,6 +4316,20 @@ pub fn lower_function_body(
                         {
                             continue;
                         }
+                        if let lucid_syntax::Stmt::If {
+                            condition,
+                            elif_branches,
+                            else_branch,
+                            ..
+                        } = statement
+                            && static_truth(condition) == Some(false)
+                            && elif_branches
+                                .iter()
+                                .all(|(condition, _)| static_truth(condition) == Some(false))
+                            && else_branch.is_none()
+                        {
+                            continue;
+                        }
                         let (name, value) = match statement {
                             lucid_syntax::Stmt::Assignment {
                                 target: lucid_syntax::Expr::Ident { name, .. },
@@ -6566,7 +6580,7 @@ mod tests {
         let mut db = CompilerDatabase::default();
         let file = db.add_file(
             "selected-branch-noops.lucid",
-            "def answer(value: int):\n    if true:\n        assert(true)\n        while false:\n            value = 0\n        for item in []:\n            value = 0\n        result = value + 1\n    return result\n",
+            "def answer(value: int):\n    if true:\n        assert(true)\n        while false:\n            value = 0\n        for item in []:\n            value = 0\n        if false:\n            value = 0\n        result = value + 1\n    return result\n",
         );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()

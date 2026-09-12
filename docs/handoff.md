@@ -469,7 +469,8 @@ diverged:
   Their rejection now carries a dedicated diagnostic explaining that an
   effectful discarded expression needs a non-typed-CIR lowering path.
   Selected static branches apply the same no-op filter for `assert(true)`,
-  statically false loops, and empty loops before collecting local bindings.
+  statically false loops, empty loops, and nested statically false no-`else`
+  conditionals before collecting local bindings.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking
