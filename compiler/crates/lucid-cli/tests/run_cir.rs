@@ -1067,6 +1067,37 @@ fn run_cir_executes_dynamic_elif_initialized_fallback_continuation() {
 }
 
 #[test]
+fn run_cir_skips_static_false_elif_before_dynamic_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_static_false_elif_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int, other: int):\n    if value > 0:\n        result = value\n    elif false:\n        result = 99\n    elif other > 0:\n        result = other\n    else:\n        result = 0\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "dynamic elif after static false branch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+#[test]
 fn run_cir_executes_one_sided_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_optional_if_{}.lucid",

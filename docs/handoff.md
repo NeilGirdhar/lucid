@@ -1823,6 +1823,8 @@ diverged:
   function-lowering fallback exposes that shape through `run-cir --function`.
   The same single-`elif` continuation path also supports a missing `else`
   when an incoming local supplies the fall-through value.
+  Statically false `elif` arms are skipped before that dynamic-`elif`
+  continuation lowering, so dead branches no longer hide a supported ladder.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
