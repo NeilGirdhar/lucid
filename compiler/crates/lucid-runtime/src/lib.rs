@@ -330,9 +330,11 @@ pub enum Value {
     },
     Module {
         name: String,
+        path: String,
         env: Rc<RefCell<Environment>>,
     },
     ClassRef(String),
+    TraitRef(String),
     Set(Rc<RefCell<Vec<Value>>>),
     Range {
         start: i64,
@@ -370,6 +372,7 @@ impl Value {
             Value::BuiltinFunction { .. } => "builtin_function",
             Value::Module { .. } => "module",
             Value::ClassRef(_) => "class",
+            Value::TraitRef(_) => "trait",
             Value::Sentinel(name) => name.as_str(),
             Value::Return(val) => val.type_name(),
         }
@@ -517,7 +520,8 @@ impl PartialEq for Value {
             (Value::Dict(a), Value::Dict(b)) => *a.borrow() == *b.borrow(),
             (Value::Record(a), Value::Record(b)) => *a.borrow() == *b.borrow(),
             (Value::Partial { .. }, Value::Partial { .. }) => false,
-            (Value::Module { name: n1, .. }, Value::Module { name: n2, .. }) => n1 == n2,
+            (Value::Module { path: p1, .. }, Value::Module { path: p2, .. }) => p1 == p2,
+            (Value::TraitRef(a), Value::TraitRef(b)) => a == b,
             (
                 Value::Object {
                     class_name: n1,
@@ -579,6 +583,7 @@ impl fmt::Debug for Value {
             Value::BuiltinFunction { name, .. } => write!(f, "<builtin {name}>"),
             Value::Module { name, .. } => write!(f, "<module '{name}'>"),
             Value::ClassRef(name) => write!(f, "<class '{name}'>"),
+            Value::TraitRef(name) => write!(f, "<trait '{name}'>"),
             Value::Sentinel(s) => write!(f, "{s}"),
             Value::Return(val) => write!(f, "return {:?}", val),
         }
@@ -5219,6 +5224,9 @@ impl Interpreter {
             }
             Stmt::TraitDef { name, body, .. } => {
                 self.traits.insert(name.clone(), body.clone());
+                self.env
+                    .borrow_mut()
+                    .set(name.clone(), Value::TraitRef(name.clone()));
                 Ok(Value::None)
             }
             // Interfaces and aliases are compile-time declarations.  Keep
@@ -6376,6 +6384,7 @@ impl Interpreter {
                     .unwrap_or_else(|| module.rsplit('.').next().unwrap_or(module).to_string());
                 let mod_val = Value::Module {
                     name: bound_name.clone(),
+                    path: module.clone(),
                     env: mod_env,
                 };
                 self.env.borrow_mut().set(bound_name, mod_val);
@@ -7271,6 +7280,15 @@ impl Interpreter {
                             span: *span,
                         })
                     }
+                    Value::TraitRef(trait_name) => match attr.as_str() {
+                        "__name__" => Ok(Value::Str(trait_name)),
+                        "__doc__" => Ok(Value::None),
+                        "__path__" => Ok(Value::Str(trait_name)),
+                        _ => Err(RuntimeError {
+                            message: format!("trait '{trait_name}' has no attribute '{attr}'"),
+                            span: *span,
+                        }),
+                    },
                     Value::Object {
                         fields,
                         is_frozen,
@@ -7375,8 +7393,15 @@ impl Interpreter {
                     }
                     Value::Module {
                         name: mod_name,
+                        path: mod_path,
                         env,
                     } => {
+                        match attr.as_str() {
+                            "__name__" => return Ok(Value::Str(mod_name)),
+                            "__doc__" => return Ok(Value::None),
+                            "__path__" => return Ok(Value::Str(mod_path)),
+                            _ => {}
+                        }
                         if attr.starts_with('_') {
                             return Err(RuntimeError {
                                 message: format!(
@@ -11279,6 +11304,7 @@ s = sum(r)
                 "fields",
                 &[Value::Module {
                     name: "ordered".into(),
+                    path: "ordered".into(),
                     env: Rc::new(RefCell::new(module_env)),
                 }],
             )
@@ -11300,6 +11326,7 @@ s = sum(r)
                 "fields",
                 &[Value::Module {
                     name: "rebound".into(),
+                    path: "rebound".into(),
                     env: Rc::new(RefCell::new(module_env)),
                 }],
             )
@@ -12669,6 +12696,45 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
         let env = interp.env.borrow();
         assert_eq!(env.get("name"), Some(Value::Str("User".into())));
         assert_eq!(env.get("path"), Some(Value::Str("User".into())));
+        assert_eq!(env.get("doc"), Some(Value::None));
+    }
+
+    #[test]
+    fn traits_expose_identity_metadata() {
+        let module = parse(
+            "trait Named:\n    def name(self) -> str\nname = Named.__name__\npath = Named.__path__\ndoc = Named.__doc__\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::default();
+        interp.eval_module(&module).unwrap();
+        let env = interp.env.borrow();
+        assert_eq!(env.get("name"), Some(Value::Str("Named".into())));
+        assert_eq!(env.get("path"), Some(Value::Str("Named".into())));
+        assert_eq!(env.get("doc"), Some(Value::None));
+    }
+
+    #[test]
+    fn modules_expose_identity_metadata_without_opening_private_members() {
+        let module = parse(
+            "name = helpers.__name__\npath = helpers.__path__\ndoc = helpers.__doc__\nprivate = helpers._internal\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::default();
+        let mut module_env = Environment::new();
+        module_env.set("_internal".into(), Value::Int(1));
+        interp.env.borrow_mut().set(
+            "helpers".into(),
+            Value::Module {
+                name: "util".into(),
+                path: "pkg.helpers".into(),
+                env: Rc::new(RefCell::new(module_env)),
+            },
+        );
+        let error = interp.eval_module(&module).unwrap_err();
+        assert!(error.message.contains("private attribute '_internal'"));
+        let env = interp.env.borrow();
+        assert_eq!(env.get("name"), Some(Value::Str("util".into())));
+        assert_eq!(env.get("path"), Some(Value::Str("pkg.helpers".into())));
         assert_eq!(env.get("doc"), Some(Value::None));
     }
 

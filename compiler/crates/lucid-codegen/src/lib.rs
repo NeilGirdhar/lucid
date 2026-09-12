@@ -187,6 +187,7 @@ pub struct CCodeGenerator {
     current_fn_ret_type: Option<String>,
     current_fn_async: bool,
     known_classes: HashMap<String, Vec<String>>,
+    known_traits: HashSet<String>,
     known_without_traits: HashMap<String, HashSet<String>>,
     known_capabilities: HashMap<String, HashSet<String>>,
     known_class_traits: HashMap<String, HashSet<String>>,
@@ -313,6 +314,7 @@ impl CCodeGenerator {
             current_fn_ret_type: None,
             current_fn_async: false,
             known_classes: HashMap::new(),
+            known_traits: HashSet::new(),
             known_without_traits: HashMap::new(),
             known_capabilities: HashMap::new(),
             known_class_traits: HashMap::new(),
@@ -965,6 +967,8 @@ impl CCodeGenerator {
                 }
                 self.known_classes.insert(name.clone(), fields);
                 self.known_class_members.insert(name.clone(), members);
+            } else if let Stmt::TraitDef { name, .. } = stmt {
+                self.known_traits.insert(name.clone());
             } else if let Stmt::Function(f) = stmt {
                 let is_contextmanager = f.decorators.iter().any(|decorator| {
                     matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
@@ -5030,6 +5034,20 @@ static inline void lucid_print_val(LucidVal v) {
                 }
                 if let Expr::Ident { name, .. } = &**value {
                     if self.known_classes.contains_key(name) {
+                        match attr.as_str() {
+                            "__name__" | "__path__" => return "const char*".to_string(),
+                            "__doc__" => return "LucidVal".to_string(),
+                            _ => {}
+                        }
+                    }
+                    if self.known_traits.contains(name) {
+                        match attr.as_str() {
+                            "__name__" | "__path__" => return "const char*".to_string(),
+                            "__doc__" => return "LucidVal".to_string(),
+                            _ => {}
+                        }
+                    }
+                    if self.module_aliases.contains_key(name) {
                         match attr.as_str() {
                             "__name__" | "__path__" => return "const char*".to_string(),
                             "__doc__" => return "LucidVal".to_string(),
@@ -14434,6 +14452,25 @@ static inline void lucid_print_val(LucidVal v) {
                             _ => {}
                         }
                     }
+                    if self.known_traits.contains(name) {
+                        match attr.as_str() {
+                            "__name__" | "__path__" => {
+                                return Ok(format!("\"{}\"", c_escape_string(name)));
+                            }
+                            "__doc__" => return Ok("lucid_none()".to_string()),
+                            _ => {}
+                        }
+                    }
+                    if let Some(module_path) = self.module_aliases.get(name) {
+                        match attr.as_str() {
+                            "__name__" => return Ok(format!("\"{}\"", c_escape_string(name))),
+                            "__path__" => {
+                                return Ok(format!("\"{}\"", c_escape_string(module_path)));
+                            }
+                            "__doc__" => return Ok("lucid_none()".to_string()),
+                            _ => {}
+                        }
+                    }
                     if let Some(function_name) = self.callable_metadata_name(name) {
                         match attr.as_str() {
                             "__name__" | "__path__" => {
@@ -15348,6 +15385,44 @@ print(" ".join(capitalized))
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
             "User\nUser\nnone"
+        );
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_traits_expose_identity_metadata() {
+        let source = "trait Named:\n    def name(self) -> str\nprint(Named.__name__)\nprint(Named.__path__)\nprint(Named.__doc__)\n";
+        let module = parse(source).expect("trait metadata source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_trait_metadata_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("trait metadata should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout).trim(),
+            "Named\nNamed\nnone"
+        );
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_modules_expose_identity_metadata() {
+        let source = "import math as util\nprint(util.__name__)\nprint(util.__path__)\nprint(util.__doc__)\n";
+        let module = parse(source).expect("module metadata source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_module_metadata_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("module metadata should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout).trim(),
+            "util\nmath\nnone"
         );
         let _ = std::fs::remove_file(output);
     }

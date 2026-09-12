@@ -9791,6 +9791,21 @@ impl TypeChecker {
                 if attr.starts_with('_')
                     && matches!(&obj_type, Type::TypeVar(name) if name == "module")
                 {
+                    match attr.as_str() {
+                        "__name__" => return Ok(Type::Str),
+                        "__doc__" => {
+                            return Ok(Type::Union(vec![Type::Str, Type::None]).canonical());
+                        }
+                        "__path__" => {
+                            return Ok(self
+                                .env
+                                .classes
+                                .get("DottedPath")
+                                .cloned()
+                                .unwrap_or(Type::TypeVar("DottedPath".into())));
+                        }
+                        _ => {}
+                    }
                     return Err(TypeError {
                         message: format!("module attribute '{attr}' is private"),
                         span: expr.span(),
@@ -10107,6 +10122,21 @@ impl TypeChecker {
                         }
                     }
                     Type::Trait { ref name, .. } => {
+                        match attr.as_str() {
+                            "__name__" => return Ok(Type::Str),
+                            "__doc__" => {
+                                return Ok(Type::Union(vec![Type::Str, Type::None]).canonical());
+                            }
+                            "__path__" => {
+                                return Ok(self
+                                    .env
+                                    .classes
+                                    .get("DottedPath")
+                                    .cloned()
+                                    .unwrap_or(Type::TypeVar("DottedPath".into())));
+                            }
+                            _ => {}
+                        }
                         if let Some(getter_type) = self.trait_getter_type(name, attr) {
                             Ok(getter_type)
                         } else if let Some(field_type) = self.trait_field_type(name, attr) {
@@ -16002,6 +16032,30 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn traits_expose_identity_metadata() {
+        let module = parse(
+            "trait Named:\n    def name(self) -> str\ntrait_name: str = Named.__name__\nprint(Named.__path__)\nprint(Named.__doc__)\n",
+        )
+        .unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn modules_expose_identity_metadata_without_opening_private_members() {
+        let module = parse(
+            "import helpers\nmodule_name: str = helpers.__name__\nprint(helpers.__path__)\nprint(helpers.__doc__)\n",
+        )
+        .unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+
+        let private = parse("import helpers\nvalue = helpers._internal\n").unwrap();
+        let error = TypeChecker::new().check_module(&private).unwrap_err();
+        assert!(error
+            .message
+            .contains("module attribute '_internal' is private"));
     }
 
     #[test]
