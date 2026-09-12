@@ -3708,6 +3708,26 @@ impl TypeChecker {
         names
     }
 
+    fn class_replace_signature(&self, class_name: &str) -> Option<(Type, Vec<String>)> {
+        let class_type = self.env.classes.get(class_name)?.clone();
+        let field_names = self.class_constructor_field_names(class_name);
+        let mut params = Vec::with_capacity(field_names.len() + 1);
+        params.push(class_type.clone());
+        for field_name in &field_names {
+            params.push(self.class_field_type(class_name, field_name)?);
+        }
+        let mut names = Vec::with_capacity(field_names.len() + 1);
+        names.push("value".into());
+        names.extend(field_names);
+        Some((
+            Type::Function {
+                params,
+                return_type: Box::new(class_type),
+            },
+            names,
+        ))
+    }
+
     pub fn check_statement(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         if let Stmt::Export(inner) = stmt {
             let private_name = match inner.as_ref() {
@@ -6964,6 +6984,17 @@ impl TypeChecker {
                 }
                 if let Expr::Attribute { value, attr, .. } = &**func {
                     let receiver_type = self.type_of_expr(value)?;
+                    if attr == "replace"
+                        && matches!(&**value, Expr::Ident { name, .. } if self.env.classes.contains_key(name))
+                        && !args
+                            .first()
+                            .is_some_and(|argument| argument.name.is_none())
+                    {
+                        return Err(TypeError {
+                            message: "replace() requires an instance argument".into(),
+                            span: func.span(),
+                        });
+                    }
                     if let Type::View { mutability, inner } = &receiver_type {
                         let is_mutating_collection_method = matches!(
                             inner.as_ref(),
@@ -7075,6 +7106,13 @@ impl TypeChecker {
                 let called_member_params = if let Expr::Attribute { value, attr, .. } = &**func {
                     let receiver_type = self.type_of_expr(value)?;
                     match receiver_type {
+                        Type::Class { name, .. }
+                            if attr == "replace"
+                                && matches!(&**value, Expr::Ident { name: value_name, .. } if value_name == &name && self.env.classes.contains_key(value_name)) =>
+                        {
+                            self.class_replace_signature(&name)
+                                .map(|(_, param_names)| param_names)
+                        }
                         Type::Class { name, .. } => self.class_method_params(&name, attr),
                         Type::Interface { name, .. } => self.interface_method_params(&name, attr),
                         Type::Trait { name, .. } => self.trait_method_params(&name, attr),
@@ -8323,6 +8361,13 @@ impl TypeChecker {
                                 params: vec![Type::Int],
                                 return_type: Box::new(Type::Str),
                             });
+                        }
+                        if attr == "replace"
+                            && matches!(&**value, Expr::Ident { name: value_name, .. } if value_name == name && self.env.classes.contains_key(value_name))
+                        {
+                            if let Some((signature, _)) = self.class_replace_signature(name) {
+                                return Ok(signature);
+                            }
                         }
                         if attr.starts_with('_') && self.env.current_class.as_deref() != Some(name)
                         {
@@ -12358,6 +12403,38 @@ def reject(value: not int) -> none:
                 .unwrap(),
             )
             .expect("immutable dict literals should type as frozendict");
+    }
+
+    #[test]
+    fn test_generated_replace_factory_is_checked_statically() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Point:\n    x: float\n    y: float\np = Point(1.0, 2.0)\nq = Point.replace(p, y=3.0)\n",
+                )
+                .unwrap(),
+            )
+            .expect("generated replace factory should accept field overrides");
+
+        for (source, message) in [
+            (
+                "class Point:\n    x: float\n    y: float\np = Point(1.0, 2.0)\nq = Point.replace(p, z=3.0)\n",
+                "no parameter named 'z'",
+            ),
+            (
+                "class Point:\n    x: float\n    y: float\np = Point(1.0, 2.0)\nq = Point.replace(p, y=\"bad\")\n",
+                "incompatible type",
+            ),
+            (
+                "class Point:\n    x: float\n    y: float\nq = Point.replace(y=3.0)\n",
+                "requires an instance",
+            ),
+        ] {
+            let error = TypeChecker::new()
+                .check_module(&parse(source).unwrap())
+                .expect_err("invalid replace call should fail");
+            assert!(error.message.contains(message), "{}", error.message);
+        }
     }
 
     #[test]
