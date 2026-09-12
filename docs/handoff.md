@@ -433,6 +433,7 @@ diverged:
   Straight-line augmented assignments, including updates inside statically
   selected branches, now route through the shared linear CIR builder as well,
   so read-modify-write updates no longer bounce off the typed-local adapter.
+  Coverage now includes nested statically selected augmented assignments.
 * The typed conditional fast path now requires the conditional to be the
   function's actual root, so an earlier statement-level `if` cannot swallow a
   later return expression.

@@ -6669,6 +6669,15 @@ mod tests {
             .as_ref()
             .expect("selected-branch augmented assignment should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "nested-selected-branch-augassign.lucid",
+            "def answer(value: int):\n    total = value\n    if true:\n        if true:\n            total += 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested selected-branch augmented assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
     }
 
     #[test]
