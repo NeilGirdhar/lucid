@@ -5687,6 +5687,12 @@ impl TypeChecker {
                                         span: index.span(),
                                     });
                                 }
+                                if type_args.is_empty() {
+                                    return Err(TypeError {
+                                        message: "cannot assign into bare list with unspecified invariant element type".into(),
+                                        span: *span,
+                                    });
+                                }
                                 if let Some(element) = type_args.first() {
                                     if !val_type.is_subtype_of(element, &self.env) {
                                         return Err(TypeError {
@@ -10809,6 +10815,16 @@ impl TypeChecker {
                             return Ok(alias.clone());
                         }
                         if let Some(c) = self.env.classes.get(other) {
+                            if other == "list" && resolved_args.is_empty() {
+                                let mut c_clone = c.clone();
+                                if let Type::Class {
+                                    ref mut type_args, ..
+                                } = c_clone
+                                {
+                                    type_args.clear();
+                                }
+                                return Ok(c_clone);
+                            }
                             if let Some(parameters) = self.env.class_variance.get(other) {
                                 if parameters.len() != resolved_args.len() {
                                     return Err(TypeError {
@@ -11478,6 +11494,23 @@ class Child(Reusable, Base1, Base2):
         TypeChecker::new()
             .check_module(&module)
             .expect("shared state should go through an explicit mutable object");
+    }
+
+    #[test]
+    fn bare_list_allows_reads_but_rejects_writes() {
+        let module = parse("def read(items: list) -> str:\n    return str(items[0])\n").unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("bare list reads should use the unknown element type");
+
+        let module = parse("def write(items: list) -> none:\n    items[0] = 1\n").unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("cannot assign into bare list"));
+
+        let module = parse("def write(items: list[int]) -> none:\n    items[0] = 1\n").unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("fully specified mutable lists should remain writable");
     }
 
     #[test]
