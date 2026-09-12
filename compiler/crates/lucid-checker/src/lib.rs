@@ -4529,6 +4529,23 @@ impl TypeChecker {
         body: &[Stmt],
         span: Span,
     ) -> Result<(), TypeError> {
+        if let Some((gather_index, gather)) = params
+            .iter()
+            .enumerate()
+            .find(|(_, param)| param.is_gather)
+        {
+            if gather_index + 1 != params.len()
+                || params.iter().skip(gather_index + 1).any(|param| param.is_gather)
+            {
+                return Err(TypeError {
+                    message: format!(
+                        "gather parameter '{}' must be the method's final parameter",
+                        gather.name
+                    ),
+                    span: gather.span,
+                });
+            }
+        }
         let saved_vars = self.env.variables.clone();
         let saved_return = self.env.current_return_type.take();
         let mut vars = saved_vars.clone();
@@ -10599,5 +10616,15 @@ def reject(value: not int) -> none:
         .unwrap();
         let error = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(error.message.contains("must be the function's final parameter"));
+    }
+
+    #[test]
+    fn method_gather_parameter_must_be_final() {
+        let module = parse(
+            "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\nclass Worker:\n    def invalid(self, ***rest: Arguments, tail: int) -> int:\n        return tail\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(error.message.contains("must be the method's final parameter"));
     }
 }
