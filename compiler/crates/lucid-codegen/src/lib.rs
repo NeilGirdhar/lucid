@@ -6414,7 +6414,10 @@ static inline void lucid_print_val(LucidVal v) {
             .collect::<HashSet<_>>();
         let mut captures = HashSet::new();
         self.collect_anonymous_captures(body_expr, &parameter_names, &mut captures);
-        if captures.is_empty() {
+        let has_variadic = params
+            .iter()
+            .any(|param| param.is_variadic_positional || param.is_variadic_keyword);
+        if captures.is_empty() && !has_variadic {
             return Ok(false);
         }
         let recursive = captures.remove(name);
@@ -6643,10 +6646,24 @@ static inline void lucid_print_val(LucidVal v) {
             ));
             self.indent += 1;
             self.emit_line(&format!("{env_type}* env = ({env_type}*)_env; (void)kwargs;"));
-            self.emit_line(&format!(
-                "if (!args || args->len != {}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}",
-                params.len()
-            ));
+            let fixed_count = params
+                .iter()
+                .filter(|param| !param.is_variadic_positional && !param.is_variadic_keyword)
+                .count();
+            let has_positional_variadic = params.iter().any(|param| param.is_variadic_positional);
+            let has_keyword_variadic = params.iter().any(|param| param.is_variadic_keyword);
+            if has_positional_variadic {
+                self.emit_line(&format!(
+                    "if (!args || args->len < {fixed_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
+                ));
+            } else {
+                self.emit_line(&format!(
+                    "if (!args || args->len != {fixed_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
+                ));
+            }
+            if has_keyword_variadic {
+                self.emit_line("LucidDict* _anonymous_kwargs = kwargs ? kwargs : lucid_dict_new(0);");
+            }
             self.var_types.clear();
             self.active_capture_names = captures.iter().cloned().collect();
             for capture in &captures {
@@ -6683,6 +6700,26 @@ static inline void lucid_print_val(LucidVal v) {
                 ));
             }
             for (index, param) in params.iter().enumerate() {
+                if param.is_variadic_positional {
+                    self.var_types.insert(param.name.clone(), "LucidList*".into());
+                    self.emit_line(&format!(
+                        "LucidList* lucid_var_{} = lucid_list_new(args->len - {index});",
+                        param.name
+                    ));
+                    self.emit_line(&format!(
+                        "for (int64_t _anonymous_i = {index}; _anonymous_i < args->len; ++_anonymous_i) lucid_list_append(lucid_var_{}, args->items[_anonymous_i]);",
+                        param.name
+                    ));
+                    continue;
+                }
+                if param.is_variadic_keyword {
+                    self.var_types.insert(param.name.clone(), "LucidDict*".into());
+                    self.emit_line(&format!(
+                        "LucidDict* lucid_var_{} = _anonymous_kwargs;",
+                        param.name
+                    ));
+                    continue;
+                }
                 let ty = self.map_type_expr(param.type_annotation.as_ref());
                 let value = match ty.as_str() {
                     "int64_t" => format!("lucid_as_int(args->items[{index}])"),
@@ -18511,6 +18548,38 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "mutual recursion failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
+    }
+
+    #[test]
+    fn native_anonymous_function_supports_positional_variadic_tail() {
+        let source = "f = def(x: int, *rest: int) -> int: x + len(rest)\nprint(f(3, 4, 5))\n";
+        let module = parse(source).expect("anonymous variadic source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_variadic_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("anonymous variadic should compile");
+        let run = Command::new(&output).output().expect("run anonymous variadic");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "anonymous variadic failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
+    }
+
+    #[test]
+    fn native_anonymous_function_supports_keyword_variadic_tail() {
+        let source = "f = def(**rest: int) -> int: len(rest)\nprint(f(a=1, b=2))\n";
+        let module = parse(source).expect("anonymous keyword variadic source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_keyword_variadic_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("anonymous keyword variadic should compile");
+        let run = Command::new(&output).output().expect("run anonymous keyword variadic");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "anonymous keyword variadic failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
     }
 
     #[test]
