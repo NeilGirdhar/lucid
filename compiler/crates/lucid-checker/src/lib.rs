@@ -3040,7 +3040,10 @@ impl TypeChecker {
                     type_args: Vec::new(),
                     methods: HashSet::new(),
                 };
-                self.env.traits.insert(name.clone(), trait_type);
+                self.env.traits.insert(name.clone(), trait_type.clone());
+                self.env
+                    .variables
+                    .insert(name.clone(), (trait_type, MutabilityView::ReadOnly));
                 Ok(())
             }
             Stmt::TypeAlias {
@@ -3513,6 +3516,20 @@ impl TypeChecker {
                         _ => None,
                     })
                     .unwrap_or_default();
+                let trait_defaults = bases
+                    .iter()
+                    .filter_map(|base| match base {
+                        TypeExpr::Named {
+                            name: base_name, ..
+                        } if self.env.traits.contains_key(base_name) => {
+                            Some(self.trait_default_member_names(base_name))
+                        }
+                        _ => None,
+                    })
+                    .fold(HashSet::new(), |mut acc, members| {
+                        acc.extend(members);
+                        acc
+                    });
                 // The modifier lives on the member declaration, so inspect
                 // the original AST rather than reducing it to names.
                 for member in body {
@@ -3547,7 +3564,10 @@ impl TypeChecker {
                             span: *span,
                         });
                     }
-                    if explicitly_override && !inherited.contains(member_name) {
+                    if explicitly_override
+                        && !inherited.contains(member_name)
+                        && !trait_defaults.contains(member_name)
+                    {
                         return Err(TypeError {
                             message: format!(
                                 "member '{member_name}' is marked 'override' but no inherited member exists"
@@ -3696,6 +3716,25 @@ impl TypeChecker {
             for base in bases {
                 names.extend(self.trait_obligation_names(base));
             }
+        }
+        names
+    }
+
+    fn trait_default_member_names(&self, trait_name: &str) -> HashSet<String> {
+        let mut names = HashSet::new();
+        if let Some(bases) = self.env.trait_bases.get(trait_name) {
+            for base in bases {
+                names.extend(self.trait_default_member_names(base));
+            }
+        }
+        if let Some(members) = self.env.class_members.get(trait_name) {
+            let obligations = self.env.obligations.get(trait_name);
+            names.extend(
+                members
+                    .iter()
+                    .filter(|member| obligations.is_none_or(|required| !required.contains(*member)))
+                    .cloned(),
+            );
         }
         names
     }
@@ -9450,7 +9489,24 @@ impl TypeChecker {
                         } else if let Some(field_type) = self.trait_field_type(name, attr) {
                             Ok(field_type)
                         } else if let Some(method_type) = self.trait_method_type(name, attr) {
-                            Ok(method_type)
+                            if matches!(&**value, Expr::Ident { name: value_name, .. } if value_name == name)
+                            {
+                                if let Type::Function {
+                                    mut params,
+                                    return_type,
+                                } = method_type
+                                {
+                                    params.insert(0, Type::TypeVar("Any".into()));
+                                    Ok(Type::Function {
+                                        params,
+                                        return_type,
+                                    })
+                                } else {
+                                    Ok(method_type)
+                                }
+                            } else {
+                                Ok(method_type)
+                            }
                         } else {
                             Err(TypeError {
                                 message: format!("trait '{name}' has no member '{attr}'"),
@@ -11161,6 +11217,17 @@ class Child(Reusable, Base1, Base2):
         TypeChecker::new()
             .check_module(&module)
             .expect("implementing a trait obligation should not require override");
+    }
+
+    #[test]
+    fn trait_default_overrides_are_valid_override_targets() {
+        let module = parse(
+            "trait A:\n    def greet(self: ~Self) -> str:\n        return \"hello from A\"\n\ntrait B:\n    def greet(self: ~Self) -> str:\n        return \"hello from B\"\n\nclass C(A, B):\n    override def greet(self: ~Self) -> str:\n        return A.greet(self)\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("overriding a trait default should accept override");
     }
 
     #[test]
