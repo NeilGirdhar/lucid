@@ -10372,6 +10372,19 @@ return total
         assert_eq!(function.execute_with_args(&[3, 7]), Ok(Some(13)));
 
         let module = lucid_syntax::parse(
+            r#"total = 1 + 2
+while n > 0:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("constant-seeded while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("constant-seeded while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
             r#"total = 0
 while n > 0:
     total += step

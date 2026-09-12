@@ -2682,6 +2682,26 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_constant_seed_while_induction_accumulation_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 1 + 2
+while n > 0:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("constant-seed while induction accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("constant-seed while induction accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile constant-seed while accumulation CFG");
+        let result = unsafe { compiled.call_result_with_args(&[3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 9);
+    }
+
+    #[test]
     fn result_abi_executes_signed_update_while_induction_accumulation_cfg() {
         let module = lucid_syntax::parse(
             r#"total = -1
