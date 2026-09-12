@@ -4482,6 +4482,16 @@ impl TypeChecker {
                             }
                         }
                         if let Some(class_name) = class_name.as_deref() {
+                            if attr.starts_with('_')
+                                && self.env.current_class.as_deref() != Some(class_name)
+                            {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "member '{attr}' is private to class '{class_name}'"
+                                    ),
+                                    span: *span,
+                                });
+                            }
                             if let Some(field_type) = self
                                 .class_field_type(class_name, attr)
                                 .or_else(|| self.class_var_type(class_name, attr))
@@ -9409,6 +9419,17 @@ dispatch def area(c: Circle) -> int:
         let mut checker = TypeChecker::new();
         let error = checker.check_module(&module).unwrap_err();
         assert!(error.message.contains("no writable member 'missing'"));
+        let module =
+            parse("class Cache:\n    _entries: dict[str, int]\ncache = Cache({\"x\": 1})\ncache._entries = {\"y\": 2}\n").unwrap();
+        let mut checker = TypeChecker::new();
+        let error = checker.check_module(&module).unwrap_err();
+        assert!(error.message.contains("member '_entries' is private"));
+        let module =
+            parse("class Cache:\n    _entries: dict[str, int]\n    def reset(self):\n        self._entries = {\"x\": 1}\ncache = Cache({\"x\": 1})\ncache.reset()\n").unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(&module)
+            .expect("private field writes inside the declaring class should type check");
         let module = parse("value = 1\nresult = value.missing\n").unwrap();
         let mut checker = TypeChecker::new();
         let error = checker.check_module(&module).unwrap_err();
