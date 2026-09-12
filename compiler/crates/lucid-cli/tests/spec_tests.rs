@@ -328,6 +328,20 @@ fn test_classes_reject_dynamic_attribute_hooks() {
 }
 
 #[test]
+fn test_classes_reject_descriptor_hooks() {
+    for source in [
+        "class Descriptor:\n    def __get__(self, obj: object, owner: object) -> int:\n        return 1\n",
+        "class Descriptor:\n    def __set__(self, obj: object, value: int):\n        pass\n",
+        "class Descriptor:\n    def __delete__(self, obj: object):\n        pass\n",
+        "class Descriptor:\n    def __set_name__(self, owner: object, name: str):\n        pass\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("not supported"));
+    }
+}
+
+#[test]
 fn test_classes_reject_removed_python_decorators() {
     for source in [
         "class Tools:\n    @staticmethod\n    def answer() -> int:\n        return 42\n",

@@ -2749,6 +2749,12 @@ impl TypeChecker {
             "__subclasscheck__" => {
                 "__subclasscheck__ is not supported; type checks are not programmable"
             }
+            "__get__" => "__get__ is not supported; Lucid does not include descriptors",
+            "__set__" => "__set__ is not supported; use declared fields or setters",
+            "__delete__" => "__delete__ is not supported; Lucid does not include descriptors",
+            "__set_name__" => {
+                "__set_name__ is not supported; use caller-captured values for assignment names"
+            }
             _ => return Ok(()),
         };
         Err(TypeError {
@@ -11207,6 +11213,43 @@ def reject(value: not int) -> none:
             let error = checker
                 .check_module(&parse(source).unwrap())
                 .expect_err("removed inheritance hook must fail static checking");
+            assert!(error.message.contains(message));
+            assert!(error.span.end > error.span.start);
+        }
+    }
+
+    #[test]
+    fn test_removed_descriptor_hooks_are_rejected_statically() {
+        for (source, message) in [
+            (
+                "class Descriptor:\n    def __get__(self, obj: object, owner: object) -> int:\n        return 1\n",
+                "__get__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __set__(self, obj: object, value: int):\n        pass\n",
+                "__set__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __delete__(self, obj: object):\n        pass\n",
+                "__delete__ is not supported",
+            ),
+            (
+                "class Descriptor:\n    def __set_name__(self, owner: object, name: str):\n        pass\n",
+                "__set_name__ is not supported",
+            ),
+            (
+                "interface Descriptor:\n    def __get__(self, obj: object, owner: object) -> int\n",
+                "__get__ is not supported",
+            ),
+            (
+                "trait Descriptor:\n    def __set__(self, obj: object, value: int):\n        pass\n",
+                "__set__ is not supported",
+            ),
+        ] {
+            let mut checker = TypeChecker::new();
+            let error = checker
+                .check_module(&parse(source).unwrap())
+                .expect_err("removed descriptor hook must fail static checking");
             assert!(error.message.contains(message));
             assert!(error.span.end > error.span.start);
         }
