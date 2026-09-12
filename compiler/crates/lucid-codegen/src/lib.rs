@@ -243,6 +243,7 @@ pub struct CCodeGenerator {
     /// use the same checked entry point without inventing an untyped C value.
     function_aliases: HashMap<String, String>,
     partial_bindings: HashMap<String, (String, Vec<Arg>)>,
+    type_aliases: HashMap<String, TypeExpr>,
     module_aliases: HashMap<String, String>,
     from_imports: HashMap<String, String>,
     bigint_names: HashSet<String>,
@@ -359,6 +360,7 @@ impl CCodeGenerator {
             anonymous_capture_types: HashMap::new(),
             function_aliases: HashMap::new(),
             partial_bindings: HashMap::new(),
+            type_aliases: HashMap::new(),
             module_aliases: HashMap::new(),
             from_imports: HashMap::new(),
             bigint_names: HashSet::new(),
@@ -696,9 +698,10 @@ impl CCodeGenerator {
     pub fn generate(&mut self, module: &Module) -> Result<String, CodegenError> {
         self.module_aliases.clear();
         self.from_imports.clear();
+        self.type_aliases.clear();
         self.known_list_element_classes.clear();
         for stmt in &module.statements {
-            match stmt {
+            match Self::unwrap_export(stmt) {
                 Stmt::Import { module, alias, .. } => {
                     let bound = alias.clone().unwrap_or_else(|| {
                         module
@@ -717,6 +720,13 @@ impl CCodeGenerator {
                             module.clone(),
                         );
                     }
+                }
+                Stmt::TypeAlias {
+                    name,
+                    value: TypeAliasValue::Direct(value),
+                    ..
+                } => {
+                    self.type_aliases.insert(name.clone(), value.clone());
                 }
                 _ => {}
             }
@@ -1269,6 +1279,7 @@ impl CCodeGenerator {
                         | Stmt::ImplementDef { .. }
                         | Stmt::InterfaceDef { .. }
                         | Stmt::TraitDef { .. }
+                        | Stmt::TypeAlias { .. }
                 )
             })
             .collect();
@@ -4370,6 +4381,10 @@ static inline void lucid_print_val(LucidVal v) {
     }
 
     fn map_type_expr(&self, te: Option<&TypeExpr>) -> String {
+        self.map_type_expr_inner(te, &mut HashSet::new())
+    }
+
+    fn map_type_expr_inner(&self, te: Option<&TypeExpr>, seen: &mut HashSet<String>) -> String {
         match te {
             Some(TypeExpr::Named { name, .. }) => match name.as_str() {
                 "int" => "int64_t".to_string(),
@@ -4388,8 +4403,19 @@ static inline void lucid_print_val(LucidVal v) {
                 "Bytes" | "MemoryView" => "LucidVal".to_string(),
                 "ByteArray" => "LucidList*".to_string(),
                 "SourceLocation" | "VarName" => "const char*".to_string(),
-                other => format!("{other}*"),
+                other => {
+                    if let Some(alias) = self.type_aliases.get(other) {
+                        if !seen.insert(other.to_string()) {
+                            return "LucidVal".to_string();
+                        }
+                        self.map_type_expr_inner(Some(alias), seen)
+                    } else {
+                        format!("{other}*")
+                    }
+                }
             },
+            Some(TypeExpr::Record { .. }) => "LucidDict*".to_string(),
+            Some(TypeExpr::View { inner, .. }) => self.map_type_expr_inner(Some(inner), seen),
             // A union has no single C layout.  Preserve the full Lucid value
             // tag rather than borrowing the first arm's spelling (which can
             // produce invalid signatures such as `int*` for `int | none`).
@@ -7996,6 +8022,13 @@ static inline void lucid_print_val(LucidVal v) {
                             ));
                             return Ok(());
                         }
+                        if receiver_type == "LucidDict*" {
+                            let arr_code = self.emit_expr(arr_expr)?;
+                            self.emit_line(&format!(
+                                "lucid_set_index_value(lucid_wrap({arr_code}), lucid_wrap({idx_code}), lucid_wrap({val_code}));"
+                            ));
+                            return Ok(());
+                        }
                         // Check for 2D index assignment: a[i][j] = val
                         if let Expr::Index {
                             value: inner_arr,
@@ -8157,6 +8190,29 @@ static inline void lucid_print_val(LucidVal v) {
                     } => {
                         let idx_code = self.emit_expr(index)?;
                         let val_code = self.emit_expr(value)?;
+                        let arr_type = self.infer_expr_type(arr_expr, &HashMap::new());
+                        if arr_type == "LucidDict*" || arr_type == "LucidVal" {
+                            let arr_code = self.emit_expr(arr_expr)?;
+                            let updated = match op {
+                                BinaryOp::Add => format!(
+                                    "lucid_add_value(lucid_get_index_value(lucid_wrap({arr_code}), lucid_wrap({idx_code})), lucid_wrap({val_code}))"
+                                ),
+                                BinaryOp::Sub => format!(
+                                    "lucid_setop_value(lucid_get_index_value(lucid_wrap({arr_code}), lucid_wrap({idx_code})), lucid_wrap({val_code}), '-')"
+                                ),
+                                BinaryOp::Mul => format!(
+                                    "lucid_mul_value(lucid_get_index_value(lucid_wrap({arr_code}), lucid_wrap({idx_code})), lucid_wrap({val_code}))"
+                                ),
+                                BinaryOp::Div => format!(
+                                    "lucid_div_value(lucid_get_index_value(lucid_wrap({arr_code}), lucid_wrap({idx_code})), lucid_wrap({val_code}))"
+                                ),
+                                _ => format!("lucid_wrap({val_code})"),
+                            };
+                            self.emit_line(&format!(
+                                "lucid_set_index_value(lucid_wrap({arr_code}), lucid_wrap({idx_code}), {updated});"
+                            ));
+                            return Ok(());
+                        }
                         if let Expr::Index {
                             value: inner_arr,
                             index: inner_idx,
@@ -8885,7 +8941,10 @@ static inline void lucid_print_val(LucidVal v) {
             // code generation.  The merged definitions remain in the AST so
             // source locations and declaration order stay intact, but the
             // import statements themselves have no C-side operation.
-            Stmt::Import { .. } | Stmt::FromImport { .. } | Stmt::Pass(_) => Ok(()),
+            Stmt::Import { .. }
+            | Stmt::FromImport { .. }
+            | Stmt::TypeAlias { .. }
+            | Stmt::Pass(_) => Ok(()),
             other => Err(CodegenError {
                 message: format!("native backend does not support statement form: {other:?}"),
             }),
@@ -18633,6 +18692,27 @@ print(all({1, 2}))
             "dynamic dictionary assignment failed: {run:?}"
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+    }
+
+    #[test]
+    fn native_typed_dict_record_alias_mutates_by_key() {
+        let source = "type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths of Glory\", \"year\": 1957}\nmovie[\"year\"] += 1\nmovie[\"name\"] = \"Paths\"\nprint(movie[\"name\"])\nprint(movie[\"year\"])\n";
+        let module = parse(source).expect("typed dict record source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_typed_dict_record_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("typed dict record should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled typed dict record should run");
+        let _ = fs::remove_file(&output);
+        assert!(
+            run.status.success(),
+            "typed dict record execution failed: {run:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "Paths\n1958\n");
     }
 
     #[test]
