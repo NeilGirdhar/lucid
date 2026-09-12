@@ -428,6 +428,7 @@ impl Parser {
         let type_params = self.parse_optional_type_params()?;
 
         let mut bases = Vec::new();
+        let mut option_without_traits = Vec::new();
         if self.match_tok(&TokenKind::LParen) {
             if !self.check(&TokenKind::RParen) {
                 loop {
@@ -438,12 +439,34 @@ impl Parser {
                             .unwrap_or(false)
                     {
                         let keyword = self.expect_ident()?;
-                        return Err(ParseError {
-                            message: format!(
-                                "keyword class base '{keyword}=' is not supported; Lucid has no metaclasses or programmable class headers"
-                            ),
-                            span: self.peek().span,
-                        });
+                        self.expect(&TokenKind::Eq)?;
+                        let declined = match keyword.as_str() {
+                            "eq" => Some("Eq"),
+                            "order" => Some("Ord"),
+                            "hash" => Some("Hashable"),
+                            _ => None,
+                        };
+                        let Some(trait_name) = declined else {
+                            return Err(ParseError {
+                                message: format!(
+                                    "unsupported class option '{keyword}='; supported options are eq, order, and hash"
+                                ),
+                                span: self.peek().span,
+                            });
+                        };
+                        let enabled = if self.match_tok(&TokenKind::True) {
+                            true
+                        } else if self.match_tok(&TokenKind::False) {
+                            false
+                        } else {
+                            return Err(ParseError {
+                                message: format!("class option '{keyword}' expects true or false"),
+                                span: self.peek().span,
+                            });
+                        };
+                        if !enabled {
+                            option_without_traits.push(trait_name.to_string());
+                        }
                     } else {
                         bases.push(self.parse_type_expr()?);
                     }
@@ -458,7 +481,7 @@ impl Parser {
             self.expect(&TokenKind::RParen)?;
         }
 
-        let mut without_traits = Vec::new();
+        let mut without_traits = option_without_traits;
         if self.match_tok(&TokenKind::Without) {
             loop {
                 without_traits.push(self.expect_ident()?);

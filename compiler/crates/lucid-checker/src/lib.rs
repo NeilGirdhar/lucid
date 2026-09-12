@@ -11991,6 +11991,30 @@ def reject(value: not int) -> none:
     }
 
     #[test]
+    fn class_value_semantics_options_drive_capabilities() {
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(
+                &parse(
+                    "class Point(eq=true, order=true, hash=true):\n    x: int\n    y: int\np = Point(1, 2)\nq = Point(1, 3)\nequal = p == q\nless = p < q\ncode = hash(p)\n",
+                )
+                .unwrap(),
+            )
+            .expect("enabled value semantics options should check");
+
+        let mut checker = TypeChecker::new();
+        let error = checker
+            .check_module(
+                &parse(
+                    "class Point(order=false):\n    x: int\np = Point(1)\nq = Point(2)\nless = p < q\n",
+                )
+                .unwrap(),
+            )
+            .unwrap_err();
+        assert!(error.message.contains("ordering requires Ord"));
+    }
+
+    #[test]
     fn test_builtin_contracts_reject_wrong_arity() {
         for (source, message) in [
             ("hash()\n", "requires at least 1"),

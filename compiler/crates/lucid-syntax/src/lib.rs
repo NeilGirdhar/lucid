@@ -267,7 +267,20 @@ contextmanager def locked(lock: Lock):
     fn test_parse_rejects_keyword_class_bases() {
         let src = "class Meta:\n    pass\nclass Model(metaclass=Meta):\n    pass\n";
         let error = parse(src).expect_err("keyword class bases must fail in parsing");
-        assert!(error.contains("keyword class base 'metaclass=' is not supported"));
+        assert!(error.contains("unsupported class option 'metaclass='"));
+    }
+
+    #[test]
+    fn test_parse_class_value_semantics_options() {
+        let module =
+            parse("class Point(eq=true, order=false, hash=false):\n    pass\n").unwrap();
+        let Stmt::ClassDef {
+            without_traits, ..
+        } = &module.statements[0]
+        else {
+            panic!("expected class definition");
+        };
+        assert_eq!(without_traits, &vec!["Ord".to_string(), "Hashable".to_string()]);
     }
 
     #[test]
