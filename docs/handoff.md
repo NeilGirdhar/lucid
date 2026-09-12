@@ -481,6 +481,9 @@ diverged:
   Single-statement static branches whose selected arm is `pass`, including
   selected `elif` and `else` arms, now lower to verified void CIR; dynamic
   `elif` guards still block this fold.
+  A single static branch whose selected arm binds locals before `return value`
+  now reuses the same typed-local CIR path for selected `then`, `elif`, and
+  `else` arms.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking

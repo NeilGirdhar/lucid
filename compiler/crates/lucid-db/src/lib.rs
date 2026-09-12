@@ -4300,7 +4300,22 @@ pub fn lower_function_body(
                     ) {
                         StaticBranch::Selected([lucid_syntax::Stmt::Pass(_)])
                         | StaticBranch::Empty => return void_function(),
-                        StaticBranch::Selected(_) | StaticBranch::Unknown => {
+                        StaticBranch::Selected(branch) => {
+                            let Some(lucid_syntax::Stmt::Return {
+                                value: Some(value), ..
+                            }) = branch.last()
+                            else {
+                                return Err(Arc::from(
+                                    "constant function branch has no lowerable return",
+                                ));
+                            };
+                            let mut bindings = Vec::new();
+                            for statement in &branch[..branch.len().saturating_sub(1)] {
+                                collect_pre_return_binding(statement, &mut bindings)?;
+                            }
+                            (value.span(), bindings)
+                        }
+                        StaticBranch::Unknown => {
                             return Err(Arc::from(
                                 "constant function branch has no lowerable return",
                             ));
@@ -5775,6 +5790,33 @@ mod tests {
             .as_ref()
             .expect("constant comparison branch should lower through typed HIR");
         assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-branch-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        selected = value + 1\n        return selected\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant branch locals before return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-elif-local-return.lucid",
+            "def answer(value: int):\n    if false:\n        return 0\n    elif true:\n        selected = value + 1\n        return selected\n    else:\n        return 9\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant elif locals before return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-else-local-return.lucid",
+            "def answer(value: int):\n    if false:\n        return 0\n    else:\n        selected = value + 1\n        return selected\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant else locals before return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
 
         let file = db.add_file(
             "constant-string-branch.lucid",
