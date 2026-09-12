@@ -333,6 +333,39 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
     })
 }
 
+fn emit_database_diagnostics(
+    database: &lucid_db::CompilerDatabase,
+    file: lucid_db::SourceFile,
+    label: &str,
+    diagnostics: &[lucid_db::Diagnostic],
+) {
+    for diagnostic in diagnostics {
+        eprintln!(
+            "{}:{}:{}: {}: {}",
+            label,
+            diagnostic.span.line,
+            diagnostic.span.column,
+            diagnostic.code,
+            diagnostic.message
+        );
+        let line = lucid_db::source_line(database, file, diagnostic.span.line as u32);
+        if line.is_empty() {
+            continue;
+        }
+        eprintln!("  {}", line);
+        let column = diagnostic.span.column.max(1);
+        let (end_line, end_column) =
+            *lucid_db::source_position(database, file, diagnostic.span.end as u32);
+        let underline_len = if end_line == diagnostic.span.line as u32 && end_column > column as u32
+        {
+            end_column.saturating_sub(column as u32).max(1) as usize
+        } else {
+            1
+        };
+        eprintln!("  {}{}", " ".repeat(column - 1), "^".repeat(underline_len));
+    }
+}
+
 fn run_file(path_str: &str, entry: Option<&str>) {
     let path = Path::new(path_str);
     let project = load_project_manifest(path);
@@ -355,16 +388,7 @@ fn run_file(path_str: &str, entry: Option<&str>) {
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        for diagnostic in diagnostics.iter() {
-            eprintln!(
-                "{}:{}:{}: {}: {}",
-                path_str,
-                diagnostic.span.line,
-                diagnostic.span.column,
-                diagnostic.code,
-                diagnostic.message
-            );
-        }
+        emit_database_diagnostics(&database, file, path_str, &diagnostics);
         exit(1);
     }
     let module = match lucid_db::parse_ast(&database, file).as_ref() {
@@ -736,16 +760,7 @@ fn check_file(path_str: &str) {
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        for diagnostic in diagnostics.iter() {
-            eprintln!(
-                "{}:{}:{}: {}: {}",
-                path_str,
-                diagnostic.span.line,
-                diagnostic.span.column,
-                diagnostic.code,
-                diagnostic.message
-            );
-        }
+        emit_database_diagnostics(&database, file, path_str, &diagnostics);
         exit(1);
     }
     println!("✓ Type check passed: no errors found in {path_str}");
@@ -767,16 +782,7 @@ fn validate_file_with_database(path: &Path) {
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        for diagnostic in diagnostics.iter() {
-            eprintln!(
-                "{}:{}:{}: {}: {}",
-                path.display(),
-                diagnostic.span.line,
-                diagnostic.span.column,
-                diagnostic.code,
-                diagnostic.message
-            );
-        }
+        emit_database_diagnostics(&database, file, &path.display().to_string(), &diagnostics);
         exit(1);
     }
 }
@@ -831,12 +837,7 @@ fn eval_string(source: &str) {
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        for diagnostic in diagnostics.iter() {
-            eprintln!(
-                "<eval>:{}:{}: {}: {}",
-                diagnostic.span.line, diagnostic.span.column, diagnostic.code, diagnostic.message
-            );
-        }
+        emit_database_diagnostics(&database, file, "<eval>", &diagnostics);
         exit(1);
     }
     let module = match lucid_db::parse_ast(&database, file).as_ref() {
