@@ -209,6 +209,29 @@ def process(x: float) -> int:
     }
 
     #[test]
+    fn test_parse_complex_literal_match_pattern() {
+        let src = r#"
+def process(x: complex) -> int:
+    match x:
+        case 1j:
+            return 1
+        case _:
+            return 0
+"#;
+        let module = parse(src).unwrap();
+        let Stmt::Function(function) = &module.statements[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Match { arms, .. } = &function.body[0] else {
+            panic!("expected match");
+        };
+        assert!(matches!(
+            arms[0].pattern,
+            Pattern::Literal(LiteralValue::Complex(value), _) if (value - 1.0).abs() < f64::EPSILON
+        ));
+    }
+
+    #[test]
     fn test_parse_readme_example() {
         let src = r#"
 export interface Scorable[+K]:

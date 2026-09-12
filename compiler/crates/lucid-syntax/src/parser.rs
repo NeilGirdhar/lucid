@@ -3609,6 +3609,10 @@ impl Parser {
                 self.advance();
                 Ok(Pattern::Literal(LiteralValue::Float(*value), tok.span))
             }
+            TokenKind::Complex(value) => {
+                self.advance();
+                Ok(Pattern::Literal(LiteralValue::Complex(*value), tok.span))
+            }
             TokenKind::Str(s) => {
                 self.advance();
                 Ok(Pattern::Literal(LiteralValue::Str(s.clone()), tok.span))

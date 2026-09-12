@@ -2077,6 +2077,7 @@ pub fn lower_function_body(
                         | lucid_syntax::LiteralValue::BigInt(_)
                         | lucid_syntax::LiteralValue::Bool(_)
                         | lucid_syntax::LiteralValue::Float(_)
+                        | lucid_syntax::LiteralValue::Complex(_)
                         | lucid_syntax::LiteralValue::Str(_)
                         | lucid_syntax::LiteralValue::Bytes(_)
                         | lucid_syntax::LiteralValue::None,
@@ -2122,6 +2123,7 @@ pub fn lower_function_body(
             BigInt(&'a str),
             Bool(bool),
             Float(u64),
+            Complex(u64),
             Str(&'a str),
             Bytes(&'a [u8]),
             None,
@@ -2144,6 +2146,10 @@ pub fn lower_function_body(
                     value: lucid_syntax::LiteralValue::Float(value),
                     ..
                 } => Some(PrimitiveMatchLiteral::Float(value.to_bits())),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Complex(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Complex(value.to_bits())),
                 lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Str(value),
                     ..
@@ -2425,6 +2431,9 @@ pub fn lower_function_body(
                 }
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Float(value), _) => {
                     Some(PrimitiveMatchLiteral::Float(value.to_bits()))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Complex(value), _) => {
+                    Some(PrimitiveMatchLiteral::Complex(value.to_bits()))
                 }
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Str(value), _) => {
                     Some(PrimitiveMatchLiteral::Str(value))
@@ -7933,6 +7942,24 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("constant bytes subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-complex-subject-match.lucid",
+            "def choose():\n    match 1j as value:\n        case 1j:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant complex subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-complex-subject-fallback-match.lucid",
+            "def choose():\n    match 1j as value:\n        case 2j:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant complex subject mismatch should fold to wildcard arm");
         assert_eq!(function.execute(), Ok(Some(42)));
 
         let file = db.add_file(
