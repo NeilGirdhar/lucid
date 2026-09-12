@@ -521,7 +521,8 @@ diverged:
   typed-local path as direct selected arms; dynamic nested branch guards still
   reject instead of being folded. A statically selected branch containing one
   nested dynamic value-returning `if` now lowers through the ordinary dynamic
-  CIR branch path, including optional no-`else` fall-through.
+  CIR branch path, including optional no-`else` fall-through, void-only
+  branches, and a void-then/value-else optional form.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.

@@ -2598,41 +2598,71 @@ pub fn lower_function_body(
             && inner_elifs.is_empty()
             && static_truth(inner_condition).is_none()
             && has_identifier(inner_condition)
-            && let Some(then_value) = single_value_return(inner_then)
         {
             if function.is_async {
                 return Err(Arc::from(
                     "async function bodies are not yet supported by CIR lowering",
                 ));
             }
-            let lowered = match inner_else.as_deref() {
-                Some(else_branch) => {
-                    if let Some(else_value) = single_value_return(else_branch) {
-                        lucid_cir::Function::from_parameterized_if_direct(
-                            inner_condition,
-                            then_value,
-                            else_value,
-                            &function.parameter_names,
-                        )
-                    } else if branch_is_single_void(else_branch) {
-                        lucid_cir::Function::from_parameterized_if_optional(
-                            inner_condition,
-                            then_value,
-                            &function.parameter_names,
-                        )
-                    } else {
-                        Err(lucid_cir::LowerError::UnsupportedExpression)
+            if let Some(then_value) = single_value_return(inner_then) {
+                let lowered = match inner_else.as_deref() {
+                    Some(else_branch) => {
+                        if let Some(else_value) = single_value_return(else_branch) {
+                            lucid_cir::Function::from_parameterized_if_direct(
+                                inner_condition,
+                                then_value,
+                                else_value,
+                                &function.parameter_names,
+                            )
+                        } else if branch_is_single_void(else_branch) {
+                            lucid_cir::Function::from_parameterized_if_optional(
+                                inner_condition,
+                                then_value,
+                                &function.parameter_names,
+                            )
+                        } else {
+                            Err(lucid_cir::LowerError::UnsupportedExpression)
+                        }
                     }
-                }
-                None => lucid_cir::Function::from_parameterized_if_optional(
+                    None => lucid_cir::Function::from_parameterized_if_optional(
+                        inner_condition,
+                        then_value,
+                        &function.parameter_names,
+                    ),
+                };
+                return lowered
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported selected nested dynamic branch"));
+            }
+            if branch_is_single_void(inner_then)
+                && inner_else
+                    .as_ref()
+                    .is_none_or(|branch| branch_is_single_void(branch))
+            {
+                return lucid_cir::Function::from_parameterized_if_void(
                     inner_condition,
-                    then_value,
                     &function.parameter_names,
-                ),
-            };
-            return lowered
+                )
                 .map(Arc::new)
-                .map_err(|_| Arc::from("unsupported selected nested dynamic branch"));
+                .map_err(|_| Arc::from("unsupported selected nested dynamic void branch"));
+            }
+            if let Some(else_branch) = inner_else.as_deref()
+                && branch_is_single_void(inner_then)
+                && let Some(else_value) = single_value_return(else_branch)
+            {
+                let inverted = lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Not,
+                    expr: Box::new(inner_condition.clone()),
+                    span: inner_condition.span(),
+                };
+                return lucid_cir::Function::from_parameterized_if_optional(
+                    &inverted,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported selected nested mixed branch"));
+            }
         }
     }
     if let [
@@ -6948,6 +6978,26 @@ mod tests {
             .as_ref()
             .expect("selected dynamic nested branch else return should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            return\n        else:\n            pass\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-void-then-value-else.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            pass\n        else:\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested void/value branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
 
         let file = db.add_file(
