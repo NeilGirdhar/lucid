@@ -95,6 +95,20 @@ fn container_is_frozen(identity: usize) -> bool {
     FROZEN_CONTAINERS.with(|containers| containers.borrow().contains(&identity))
 }
 
+fn dotted_path(value: &str) -> Value {
+    Value::DottedPath(
+        value
+            .split('.')
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+fn dotted_path_string(parts: &[String]) -> String {
+    parts.join(".")
+}
+
 fn hash_runtime_value(value: &Value) -> Option<i64> {
     match value {
         Value::Int(value) => Some(*value),
@@ -335,6 +349,7 @@ pub enum Value {
     },
     ClassRef(String),
     TraitRef(String),
+    DottedPath(Vec<String>),
     Set(Rc<RefCell<Vec<Value>>>),
     Range {
         start: i64,
@@ -373,6 +388,7 @@ impl Value {
             Value::Module { .. } => "module",
             Value::ClassRef(_) => "class",
             Value::TraitRef(_) => "trait",
+            Value::DottedPath(_) => "DottedPath",
             Value::Sentinel(name) => name.as_str(),
             Value::Return(val) => val.type_name(),
         }
@@ -519,6 +535,7 @@ impl PartialEq for Value {
             }
             (Value::Dict(a), Value::Dict(b)) => *a.borrow() == *b.borrow(),
             (Value::Record(a), Value::Record(b)) => *a.borrow() == *b.borrow(),
+            (Value::DottedPath(a), Value::DottedPath(b)) => a == b,
             (Value::Partial { .. }, Value::Partial { .. }) => false,
             (Value::Module { path: p1, .. }, Value::Module { path: p2, .. }) => p1 == p2,
             (Value::TraitRef(a), Value::TraitRef(b)) => a == b,
@@ -584,6 +601,7 @@ impl fmt::Debug for Value {
             Value::Module { name, .. } => write!(f, "<module '{name}'>"),
             Value::ClassRef(name) => write!(f, "<class '{name}'>"),
             Value::TraitRef(name) => write!(f, "<trait '{name}'>"),
+            Value::DottedPath(parts) => write!(f, "{}", parts.join(".")),
             Value::Sentinel(s) => write!(f, "{s}"),
             Value::Return(val) => write!(f, "return {:?}", val),
         }
@@ -593,18 +611,20 @@ impl fmt::Debug for Value {
 fn identity_metadata_attr(value: &Value, attr: &str) -> Option<Value> {
     match value {
         Value::Function { name, .. } | Value::BuiltinFunction { name, .. } => match attr {
-            "__name__" | "__path__" => Some(Value::Str(name.clone())),
+            "__name__" => Some(Value::Str(name.clone())),
+            "__path__" => Some(dotted_path(name)),
             "__doc__" => Some(Value::None),
             _ => None,
         },
         Value::ClassRef(name) | Value::TraitRef(name) => match attr {
-            "__name__" | "__path__" => Some(Value::Str(name.clone())),
+            "__name__" => Some(Value::Str(name.clone())),
+            "__path__" => Some(dotted_path(name)),
             "__doc__" => Some(Value::None),
             _ => None,
         },
         Value::Module { name, path, .. } => match attr {
             "__name__" => Some(Value::Str(name.clone())),
-            "__path__" => Some(Value::Str(path.clone())),
+            "__path__" => Some(dotted_path(path)),
             "__doc__" => Some(Value::None),
             _ => None,
         },
@@ -2257,6 +2277,7 @@ impl Interpreter {
                 Value::Dict(d) => Ok(Value::Int(d.borrow().len() as i64)),
                 Value::Set(s) => Ok(Value::Int(s.borrow().len() as i64)),
                 Value::Record(r) => Ok(Value::Int(r.borrow().len() as i64)),
+                Value::DottedPath(parts) => Ok(Value::Int(parts.len() as i64)),
                 Value::Range { start, stop, step } => {
                     let count = if *step > 0 {
                         if *stop > *start {
@@ -3527,6 +3548,7 @@ impl Interpreter {
                 Value::Float(f) => Ok(Value::Str(f.to_string())),
                 Value::Bool(b) => Ok(Value::Str(b.to_string())),
                 Value::None => Ok(Value::Str("none".to_string())),
+                Value::DottedPath(parts) => Ok(Value::Str(dotted_path_string(parts))),
                 other => Ok(Value::Str(format!("{other:?}"))),
             }
         });
@@ -7215,7 +7237,7 @@ impl Interpreter {
                     Value::Function { name, .. } => match attr.as_str() {
                         "__name__" => Ok(Value::Str(name)),
                         "__doc__" => Ok(Value::None),
-                        "__path__" => Ok(Value::Str(name)),
+                        "__path__" => Ok(dotted_path(&name)),
                         _ => Err(RuntimeError {
                             message: format!("function has no attribute '{attr}'"),
                             span: *span,
@@ -7225,7 +7247,7 @@ impl Interpreter {
                         match attr.as_str() {
                             "__name__" => return Ok(Value::Str(class_name)),
                             "__doc__" => return Ok(Value::None),
-                            "__path__" => return Ok(Value::Str(class_name)),
+                            "__path__" => return Ok(dotted_path(&class_name)),
                             _ => {}
                         }
                         self.check_private_access(&class_name, attr, *span)?;
@@ -7317,7 +7339,7 @@ impl Interpreter {
                     Value::TraitRef(trait_name) => match attr.as_str() {
                         "__name__" => Ok(Value::Str(trait_name)),
                         "__doc__" => Ok(Value::None),
-                        "__path__" => Ok(Value::Str(trait_name)),
+                        "__path__" => Ok(dotted_path(&trait_name)),
                         _ => Err(RuntimeError {
                             message: format!("trait '{trait_name}' has no attribute '{attr}'"),
                             span: *span,
@@ -7433,7 +7455,7 @@ impl Interpreter {
                         match attr.as_str() {
                             "__name__" => return Ok(Value::Str(mod_name)),
                             "__doc__" => return Ok(Value::None),
-                            "__path__" => return Ok(Value::Str(mod_path)),
+                            "__path__" => return Ok(dotted_path(&mod_path)),
                             _ => {}
                         }
                         if attr.starts_with('_') {
@@ -7490,7 +7512,7 @@ impl Interpreter {
                     Value::BuiltinFunction { name, .. } => match attr.as_str() {
                         "__name__" => Ok(Value::Str(name)),
                         "__doc__" => Ok(Value::None),
-                        "__path__" => Ok(Value::Str(name)),
+                        "__path__" => Ok(dotted_path(&name)),
                         _ => Err(RuntimeError {
                             message: format!("function has no attribute '{attr}'"),
                             span: *span,
@@ -8576,6 +8598,16 @@ impl Interpreter {
                             });
                         }
                         Ok(Value::Str(chars[actual_idx as usize].to_string()))
+                    }
+                    (Value::DottedPath(parts), Value::Int(i)) => {
+                        let actual_idx = if i < 0 { parts.len() as i64 + i } else { i };
+                        if actual_idx < 0 || actual_idx as usize >= parts.len() {
+                            return Err(RuntimeError {
+                                message: format!("index {i} out of range"),
+                                span: *span,
+                            });
+                        }
+                        Ok(Value::Str(parts[actual_idx as usize].clone()))
                     }
                     (Value::Bytes(bytes), Value::Int(i)) => {
                         let actual_idx = if i < 0 { bytes.len() as i64 + i } else { i };
@@ -12366,6 +12398,8 @@ def original() -> int:
 plain = wrap(original)
 decorated_name = original.__name__
 decorated_path = original.__path__
+decorated_path_text = str(original.__path__)
+decorated_path_last = original.__path__[-1]
 plain_name = plain.__name__
 result = original()
 "#;
@@ -12380,6 +12414,14 @@ result = original()
         );
         assert_eq!(
             env.get("decorated_path"),
+            Some(Value::DottedPath(vec!["original".into()]))
+        );
+        assert_eq!(
+            env.get("decorated_path_text"),
+            Some(Value::Str("original".into()))
+        );
+        assert_eq!(
+            env.get("decorated_path_last"),
             Some(Value::Str("original".into()))
         );
         assert_eq!(env.get("plain_name"), Some(Value::Str("<def>".into())));
@@ -12775,7 +12817,10 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
         interp.eval_module(&module).unwrap();
         let env = interp.env.borrow();
         assert_eq!(env.get("name"), Some(Value::Str("User".into())));
-        assert_eq!(env.get("path"), Some(Value::Str("User".into())));
+        assert_eq!(
+            env.get("path"),
+            Some(Value::DottedPath(vec!["User".into()]))
+        );
         assert_eq!(env.get("doc"), Some(Value::None));
     }
 
@@ -12789,7 +12834,10 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
         interp.eval_module(&module).unwrap();
         let env = interp.env.borrow();
         assert_eq!(env.get("name"), Some(Value::Str("Named".into())));
-        assert_eq!(env.get("path"), Some(Value::Str("Named".into())));
+        assert_eq!(
+            env.get("path"),
+            Some(Value::DottedPath(vec!["Named".into()]))
+        );
         assert_eq!(env.get("doc"), Some(Value::None));
     }
 
@@ -12814,7 +12862,10 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
         assert!(error.message.contains("private attribute '_internal'"));
         let env = interp.env.borrow();
         assert_eq!(env.get("name"), Some(Value::Str("util".into())));
-        assert_eq!(env.get("path"), Some(Value::Str("pkg.helpers".into())));
+        assert_eq!(
+            env.get("path"),
+            Some(Value::DottedPath(vec!["pkg".into(), "helpers".into()]))
+        );
         assert_eq!(env.get("doc"), Some(Value::None));
     }
 

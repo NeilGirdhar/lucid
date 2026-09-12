@@ -1278,7 +1278,7 @@ impl CCodeGenerator {
         self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr, LucidVal fallback, bool has_default) {");
         self.indent += 1;
         self.emit_line("if (value.type == LUCID_TYPE_COMPLEX) { if (strcmp(attr, \"real\") == 0) return lucid_float(value.real); if (strcmp(attr, \"imag\") == 0) return lucid_float(value.imag); }");
-        self.emit_line("if (value.type == LUCID_TYPE_FUNCTION) { if (strcmp(attr, \"__name__\") == 0 || strcmp(attr, \"__path__\") == 0) return lucid_str(lucid_function_name(value)); if (strcmp(attr, \"__doc__\") == 0) return lucid_none(); if (has_default) return fallback; fprintf(stderr, \"function has no requested attribute\\n\"); exit(1); }");
+        self.emit_line("if (value.type == LUCID_TYPE_FUNCTION) { if (strcmp(attr, \"__name__\") == 0) return lucid_str(lucid_function_name(value)); if (strcmp(attr, \"__path__\") == 0) return lucid_dotted_path(lucid_function_name(value)); if (strcmp(attr, \"__doc__\") == 0) return lucid_none(); if (has_default) return fallback; fprintf(stderr, \"function has no requested attribute\\n\"); exit(1); }");
         self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) { if (has_default) return fallback; fprintf(stderr, \"attribute access requires an object\\n\"); exit(1); }");
         self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
         self.emit_line("if (!class_name) { if (has_default) return fallback; fprintf(stderr, \"unknown object in attribute access\\n\"); exit(1); }");
@@ -1756,8 +1756,8 @@ impl CCodeGenerator {
             self.indent -= 1;
             self.emit_line("}");
         }
-        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
         self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_BYTES;");
         self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_LIST || (value.type == LUCID_TYPE_PTR && value.ptr && lucid_object_buffer(value.ptr));");
         self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0 || strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;");
@@ -2071,6 +2071,7 @@ typedef enum {
     LUCID_TYPE_BIGINT,
     LUCID_TYPE_BOOL,
     LUCID_TYPE_STR,
+    LUCID_TYPE_DOTTED_PATH,
     LUCID_TYPE_BYTES,
     LUCID_TYPE_MEMORYVIEW,
     LUCID_TYPE_LIST,
@@ -2530,6 +2531,33 @@ static inline LucidVal lucid_bool(bool b) {
 static inline LucidVal lucid_str(const char* s) {
     LucidVal v = {0}; v.type = LUCID_TYPE_STR; v.s = s; v.ptr = (void*)s; return v;
 }
+static inline LucidVal lucid_dotted_path(const char* s) {
+    LucidVal v = {0}; v.type = LUCID_TYPE_DOTTED_PATH; v.s = s; v.ptr = (void*)s; return v;
+}
+static inline int64_t lucid_dotted_path_len(const char* s) {
+    if (!s || !*s) return 0;
+    int64_t n = 1;
+    for (const char* p = s; *p; ++p) if (*p == '.') ++n;
+    return n;
+}
+static inline const char* lucid_dotted_path_index(const char* s, int64_t idx) {
+    int64_t len = lucid_dotted_path_len(s);
+    if (idx < 0) idx += len;
+    if (idx < 0 || idx >= len) { fprintf(stderr, "index %lld out of range\n", (long long)idx); exit(1); }
+    const char* start = s ? s : "";
+    for (int64_t i = 0; i < idx; ++i) {
+        start = strchr(start, '.');
+        if (!start) { fprintf(stderr, "index %lld out of range\n", (long long)idx); exit(1); }
+        ++start;
+    }
+    const char* end = strchr(start, '.');
+    size_t width = end ? (size_t)(end - start) : strlen(start);
+    char* out = (char*)malloc(width + 1);
+    if (!out) { fprintf(stderr, "out of memory indexing dotted path\n"); exit(1); }
+    memcpy(out, start, width);
+    out[width] = '\0';
+    return out;
+}
 static inline LucidVal lucid_bytes_from_data(const unsigned char* data, int64_t len) {
     if (len < 0) len = 0;
     LucidBytes* bytes = (LucidBytes*)malloc(sizeof(LucidBytes));
@@ -2935,7 +2963,7 @@ static inline bool lucid_as_bool(LucidVal v) {
         return *digits != '\0';
     }
     if (v.type == LUCID_TYPE_COMPLEX) return v.real != 0.0 || v.imag != 0.0;
-    if (v.type == LUCID_TYPE_STR) return v.s && v.s[0] != '\0';
+    if (v.type == LUCID_TYPE_STR || v.type == LUCID_TYPE_DOTTED_PATH) return v.s && v.s[0] != '\0';
     if (v.type == LUCID_TYPE_BYTES) return v.bytes && v.bytes->len > 0;
     if (v.type == LUCID_TYPE_MEMORYVIEW) return v.view && v.view->len > 0;
     if (v.type == LUCID_TYPE_LIST) return v.list && v.list->len > 0;
@@ -2945,13 +2973,13 @@ static inline bool lucid_as_bool(LucidVal v) {
     return v.type != LUCID_TYPE_NONE;
 }
 static inline const char* lucid_as_str(LucidVal v) {
-    if (v.type == LUCID_TYPE_STR) return v.s ? v.s : "";
+    if (v.type == LUCID_TYPE_STR || v.type == LUCID_TYPE_DOTTED_PATH) return v.s ? v.s : "";
     if (v.type == LUCID_TYPE_BYTES) return lucid_bytes_text(v);
     if (v.type == LUCID_TYPE_BIGINT) return v.bigint ? v.bigint : "0";
     return "";
 }
 static inline const char* lucid_to_str(LucidVal v) {
-    if (v.type == LUCID_TYPE_STR) return v.s ? v.s : "";
+    if (v.type == LUCID_TYPE_STR || v.type == LUCID_TYPE_DOTTED_PATH) return v.s ? v.s : "";
     if (v.type == LUCID_TYPE_BYTES) return lucid_bytes_text(v);
     char* buf = (char*)malloc(64);
     if (!buf) return "";
@@ -3948,6 +3976,9 @@ static inline LucidVal lucid_get_index(LucidVal container, int64_t idx) {
     if (container.type == LUCID_TYPE_STR) {
         return lucid_str(lucid_str_index(container.s, idx));
     }
+    if (container.type == LUCID_TYPE_DOTTED_PATH) {
+        return lucid_str(lucid_dotted_path_index(container.s, idx));
+    }
     if (container.type == LUCID_TYPE_BYTES) {
         int64_t len = container.bytes ? container.bytes->len : 0;
         if (idx < 0) idx += len;
@@ -3977,7 +4008,7 @@ static inline LucidVal lucid_get_index_value(LucidVal container, LucidVal index)
     }
     if (container.type == LUCID_TYPE_DICT)
         return lucid_get_key(container, index);
-    if (container.type == LUCID_TYPE_LIST || container.type == LUCID_TYPE_MEMORYVIEW || container.type == LUCID_TYPE_STR || container.type == LUCID_TYPE_BYTES) {
+    if (container.type == LUCID_TYPE_LIST || container.type == LUCID_TYPE_MEMORYVIEW || container.type == LUCID_TYPE_STR || container.type == LUCID_TYPE_DOTTED_PATH || container.type == LUCID_TYPE_BYTES) {
         if (index.type != LUCID_TYPE_INT) {
             fprintf(stderr, "indices must be integers\n");
             exit(1);
@@ -4520,6 +4551,7 @@ static inline int64_t _len_str(const char* s) {
 static inline int64_t _len_val(LucidVal v) {
     if (v.type == LUCID_TYPE_LIST) return v.list ? v.list->len : 0;
     if (v.type == LUCID_TYPE_STR) return _len_str(v.s);
+    if (v.type == LUCID_TYPE_DOTTED_PATH) return lucid_dotted_path_len(v.s);
     if (v.type == LUCID_TYPE_BYTES) return v.bytes ? v.bytes->len : 0;
     if (v.type == LUCID_TYPE_MEMORYVIEW) return v.view ? v.view->len : 0;
     if (v.type == LUCID_TYPE_DICT) return v.dict ? v.dict->len : 0;
@@ -4619,6 +4651,7 @@ static inline void lucid_print_val(LucidVal v) {
         case LUCID_TYPE_BIGINT: printf("%s", v.bigint ? v.bigint : "0"); break;
         case LUCID_TYPE_BOOL: printf("%s", v.b ? "true" : "false"); break;
         case LUCID_TYPE_STR: printf("%s", v.s ? v.s : ""); break;
+        case LUCID_TYPE_DOTTED_PATH: printf("%s", v.s ? v.s : ""); break;
         case LUCID_TYPE_BYTES:
             if (v.bytes && v.bytes->len > 0) fwrite(v.bytes->data, 1, (size_t)v.bytes->len, stdout);
             break;
@@ -5070,7 +5103,8 @@ static inline void lucid_print_val(LucidVal v) {
             Expr::Attribute { value, attr, .. } => {
                 if Self::str_base_metadata_name(value).is_some() {
                     match attr.as_str() {
-                        "__name__" | "__path__" => return "const char*".to_string(),
+                        "__name__" => return "const char*".to_string(),
+                        "__path__" => return "LucidVal".to_string(),
                         "__doc__" => return "LucidVal".to_string(),
                         _ => {}
                     }
@@ -5078,28 +5112,32 @@ static inline void lucid_print_val(LucidVal v) {
                 if let Expr::Ident { name, .. } = &**value {
                     if self.known_classes.contains_key(name) {
                         match attr.as_str() {
-                            "__name__" | "__path__" => return "const char*".to_string(),
+                            "__name__" => return "const char*".to_string(),
+                            "__path__" => return "LucidVal".to_string(),
                             "__doc__" => return "LucidVal".to_string(),
                             _ => {}
                         }
                     }
                     if self.known_traits.contains(name) {
                         match attr.as_str() {
-                            "__name__" | "__path__" => return "const char*".to_string(),
+                            "__name__" => return "const char*".to_string(),
+                            "__path__" => return "LucidVal".to_string(),
                             "__doc__" => return "LucidVal".to_string(),
                             _ => {}
                         }
                     }
                     if self.module_aliases.contains_key(name) {
                         match attr.as_str() {
-                            "__name__" | "__path__" => return "const char*".to_string(),
+                            "__name__" => return "const char*".to_string(),
+                            "__path__" => return "LucidVal".to_string(),
                             "__doc__" => return "LucidVal".to_string(),
                             _ => {}
                         }
                     }
                     if self.callable_metadata_name(name).is_some() {
                         match attr.as_str() {
-                            "__name__" | "__path__" => return "const char*".to_string(),
+                            "__name__" => return "const char*".to_string(),
+                            "__path__" => return "LucidVal".to_string(),
                             "__doc__" => return "LucidVal".to_string(),
                             _ => {}
                         }
@@ -14552,8 +14590,14 @@ static inline void lucid_print_val(LucidVal v) {
             Expr::Attribute { value, attr, .. } => {
                 if let Some(function_name) = Self::str_base_metadata_name(value) {
                     match attr.as_str() {
-                        "__name__" | "__path__" => {
+                        "__name__" => {
                             return Ok(format!("\"{}\"", c_escape_string(&function_name)));
+                        }
+                        "__path__" => {
+                            return Ok(format!(
+                                "lucid_dotted_path(\"{}\")",
+                                c_escape_string(&function_name)
+                            ));
                         }
                         "__doc__" => return Ok("lucid_none()".to_string()),
                         _ => {}
@@ -14562,8 +14606,14 @@ static inline void lucid_print_val(LucidVal v) {
                 if let Expr::Ident { name, .. } = &**value {
                     if self.known_classes.contains_key(name) {
                         match attr.as_str() {
-                            "__name__" | "__path__" => {
+                            "__name__" => {
                                 return Ok(format!("\"{}\"", c_escape_string(name)));
+                            }
+                            "__path__" => {
+                                return Ok(format!(
+                                    "lucid_dotted_path(\"{}\")",
+                                    c_escape_string(name)
+                                ));
                             }
                             "__doc__" => return Ok("lucid_none()".to_string()),
                             _ => {}
@@ -14571,8 +14621,14 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                     if self.known_traits.contains(name) {
                         match attr.as_str() {
-                            "__name__" | "__path__" => {
+                            "__name__" => {
                                 return Ok(format!("\"{}\"", c_escape_string(name)));
+                            }
+                            "__path__" => {
+                                return Ok(format!(
+                                    "lucid_dotted_path(\"{}\")",
+                                    c_escape_string(name)
+                                ));
                             }
                             "__doc__" => return Ok("lucid_none()".to_string()),
                             _ => {}
@@ -14582,7 +14638,10 @@ static inline void lucid_print_val(LucidVal v) {
                         match attr.as_str() {
                             "__name__" => return Ok(format!("\"{}\"", c_escape_string(name))),
                             "__path__" => {
-                                return Ok(format!("\"{}\"", c_escape_string(module_path)));
+                                return Ok(format!(
+                                    "lucid_dotted_path(\"{}\")",
+                                    c_escape_string(module_path)
+                                ));
                             }
                             "__doc__" => return Ok("lucid_none()".to_string()),
                             _ => {}
@@ -14590,8 +14649,14 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                     if let Some(function_name) = self.callable_metadata_name(name) {
                         match attr.as_str() {
-                            "__name__" | "__path__" => {
+                            "__name__" => {
                                 return Ok(format!("\"{}\"", c_escape_string(&function_name)));
+                            }
+                            "__path__" => {
+                                return Ok(format!(
+                                    "lucid_dotted_path(\"{}\")",
+                                    c_escape_string(&function_name)
+                                ));
                             }
                             "__doc__" => return Ok("lucid_none()".to_string()),
                             _ => {}
@@ -15470,7 +15535,7 @@ print(" ".join(capitalized))
 
     #[test]
     fn native_function_values_expose_identity_metadata() {
-        let source = "def answer(value: int) -> int:\n    return value + 1\nalias = answer\nformatter = str.hex\nitems = [answer]\nprint(answer.__name__)\nprint(alias.__name__)\nprint(items[0].__name__)\nprint(len.__name__)\nprint(str.hex.__name__)\nprint(formatter.__name__)\nprint(str.hex(31))\nprint(answer.__doc__)\n";
+        let source = "def answer(value: int) -> int:\n    return value + 1\nalias = answer\nformatter = str.hex\nitems = [answer]\nprint(answer.__name__)\nprint(alias.__name__)\nprint(items[0].__name__)\nprint(len.__name__)\nprint(str.hex.__name__)\nprint(formatter.__name__)\nprint(str.hex(31))\nprint(answer.__path__)\nprint(answer.__path__[-1])\nprint(len(answer.__path__))\nprint(formatter.__path__)\nprint(formatter.__path__[-1])\nprint(len(formatter.__path__))\nprint(answer.__doc__)\n";
         let module = parse(source).expect("function metadata source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_function_metadata_{}",
@@ -15482,14 +15547,14 @@ print(" ".join(capitalized))
             .expect("run native binary");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
-            "answer\nanswer\nanswer\nlen\nstr.hex\nstr.hex\n0x1f\nnone"
+            "answer\nanswer\nanswer\nlen\nstr.hex\nstr.hex\n0x1f\nanswer\nanswer\n1\nstr.hex\nhex\n2\nnone"
         );
         let _ = std::fs::remove_file(output);
     }
 
     #[test]
     fn native_decorators_rebind_and_preserve_replaced_function_metadata() {
-        let source = "def wrap(f):\n    return def() -> int: 2\n@wrap\ndef original() -> int:\n    return 1\nplain = wrap(original)\nprint(original())\nprint(original.__name__)\nprint(original.__path__)\nprint(plain.__name__)\n";
+        let source = "def wrap(f):\n    return def() -> int: 2\n@wrap\ndef original() -> int:\n    return 1\nplain = wrap(original)\nprint(original())\nprint(original.__name__)\nprint(original.__path__)\nprint(original.__path__[-1])\nprint(plain.__name__)\n";
         let module = parse(source).expect("decorator metadata source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_decorator_metadata_{}",
@@ -15501,7 +15566,7 @@ print(" ".join(capitalized))
             .expect("run native binary");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
-            "2\noriginal\noriginal\n<def>"
+            "2\noriginal\noriginal\noriginal\n<def>"
         );
         let _ = std::fs::remove_file(output);
     }
@@ -15565,7 +15630,7 @@ print(" ".join(capitalized))
 
     #[test]
     fn native_modules_expose_identity_metadata() {
-        let source = "import math as util\nprint(util.__name__)\nprint(util.__path__)\nprint(util.__doc__)\n";
+        let source = "import math as util\nprint(util.__name__)\nprint(util.__path__)\nprint(util.__path__[-1])\nprint(len(util.__path__))\nprint(util.__doc__)\n";
         let module = parse(source).expect("module metadata source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_module_metadata_{}",
@@ -15577,7 +15642,7 @@ print(" ".join(capitalized))
             .expect("run native binary");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
-            "util\nmath\nnone"
+            "util\nmath\nmath\n1\nnone"
         );
         let _ = std::fs::remove_file(output);
     }

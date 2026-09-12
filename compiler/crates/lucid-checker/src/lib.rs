@@ -8222,7 +8222,7 @@ impl TypeChecker {
                             let sized = matches!(&argument_type, Type::Str | Type::Shape(_))
                                 || matches!(&argument_type, Type::TypeVar(name) if name == "Any")
                                 || matches!(&argument_type, Type::Class { name, .. }
-                                    if matches!(name.as_str(), "list" | "set" | "dict" | "range" | "str")
+                                    if matches!(name.as_str(), "list" | "set" | "dict" | "range" | "str" | "DottedPath")
                                         || self.env.class_members.get(name).is_some_and(|members| members.contains("__len__")));
                             if !sized {
                                 return Err(TypeError {
