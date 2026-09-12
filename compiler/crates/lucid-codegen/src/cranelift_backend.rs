@@ -2714,6 +2714,34 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_local_division_step_cfg() {
+        let module = lucid_syntax::parse(
+            r#"stride = step // scale
+total = 0
+for i in range(start, stop, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("local division-step range accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into(), "scale".into()],
+        )
+        .expect("local division-step range accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile local division-step range loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[0, 12, 4, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 30);
+        let zero = unsafe { compiled.call_result_with_args(&[0, 12, 4, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::DivisionByZero
+        );
+    }
+
+    #[test]
     fn result_abi_executes_range_accumulation_with_unary_dynamic_step_cfg() {
         let module = lucid_syntax::parse(
             r#"stride = -step

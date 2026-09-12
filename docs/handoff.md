@@ -585,7 +585,12 @@ diverged:
   CIR/native path. Three-argument ranges may spell a statically known step
   through a local alias, as in `stride = -1; range(n, 0, stride)`, or use a
   dynamic expression, as in `range(start + 1, stop + 1, step + 1)` or
-  `stride = -step; range(start, stop, stride)`. The dynamic-step CFG selects
+  `stride = -step; range(start, stop, stride)`. A local step alias may also
+  hold checked arithmetic, as in
+  `stride = step // scale; range(start, stop, stride)`; division by zero
+  there reports the recoverable division error through the interpreter,
+  `run-cir`, and native result ABI before the range step-zero check can mask
+  it. The dynamic-step CFG selects
   the positive-step or negative-step condition at runtime, so the same lowered
   function handles both positive and negative computed steps. A zero dynamic
   step is checked before the loop enters and reports the shared

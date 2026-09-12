@@ -2740,6 +2740,57 @@ fn run_cir_executes_range_accumulator_with_division_bound_expressions() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_local_division_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_local_division_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_scaled_step(start: int, stop: int, step: int, scale: int):\n    stride = step // scale\n    total = 0\n    for i in range(start, stop, stride):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_scaled_step",
+            "--args",
+            "0,12,4,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir range local division-step accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "30");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_scaled_step",
+            "--args",
+            "0,12,4,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir range local division-step zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn run_cir_executes_range_accumulator_with_unary_dynamic_step() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_range_unary_dynamic_step_{}.lucid",
