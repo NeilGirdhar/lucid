@@ -7718,6 +7718,28 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
 
         let file = db.add_file(
+            "bool-match-chain-expression.lucid",
+            "def choose(flag: bool):\n    match flag:\n        case true:\n            return 11\n        case false:\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("bool literal match chain should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("bool literal match chain should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| {
+                    node.kind == "match-chain"
+                        && node.detail.as_deref() == Some("literal-chain:btrue,bfalse")
+                })
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
             "multi-match-local-expression.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            selected = value + 10\n            return selected\n        case 2:\n            doubled = value * 10\n            return doubled\n        case _:\n            fallback = -value\n            return fallback\n",
         );

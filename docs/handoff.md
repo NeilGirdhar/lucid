@@ -471,6 +471,8 @@ diverged:
   lowering.
   A wildcard in the middle of a value-returning literal chain now becomes the
   typed fallback arm, so later unreachable arms are ignored before CIR lowering.
+  Boolean literal chains use the same typed path as integer chains, including
+  the `btrue`/`bfalse` discriminator detail.
   Literal void matches now also have a typed-HIR node and lower to a CIR
   decision ladder whose selected and fall-through blocks return `None`,
   including when a no-op wildcard makes later void arms unreachable.
