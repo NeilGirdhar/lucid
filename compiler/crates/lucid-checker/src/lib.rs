@@ -618,6 +618,15 @@ impl Type {
         // Mutability View Subtyping:
         // T  <: &T (mutable subtype of read-only view)
         // !T <: &T (immutable subtype of read-only view)
+        if let Type::View {
+            mutability: MutabilityView::Immutable,
+            inner,
+        } = target
+        {
+            if matches!(inner.as_ref(), Type::Trait { name, .. } if name == "Hashable") {
+                return type_is_hashable_key(self, env);
+            }
+        }
         match (self, target) {
             (
                 Type::View {
@@ -14804,6 +14813,22 @@ def reject(value: not int) -> none:
             )
             .expect_err("immutable lists with mutable class elements should not be hashable keys");
         assert!(error.message.contains("dictionary key type"));
+    }
+
+    #[test]
+    fn immutable_hashable_bounds_accept_hashable_value_types() {
+        TypeChecker::new()
+            .check_module(
+                &parse("trait Hashable:\n    def __hash__(self: !Self) -> int\nclass Box[K: !Hashable]:\n    value: K\nitem = Box[str](\"x\")\n").unwrap(),
+            )
+            .expect("str should satisfy an immutable Hashable type parameter bound");
+
+        let error = TypeChecker::new()
+            .check_module(
+                &parse("trait Hashable:\n    def __hash__(self: !Self) -> int\nclass Mutable:\n    value: int\nclass Box[K: !Hashable]:\n    value: K\nitem = Box[Mutable](Mutable(1))\n").unwrap(),
+            )
+            .expect_err("mutable user classes should not satisfy !Hashable bounds");
+        assert!(error.message.contains("does not satisfy its bound"));
     }
 
     #[test]
