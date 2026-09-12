@@ -1201,6 +1201,30 @@ impl TypeChecker {
         env.classes.insert("bool".to_string(), Type::Bool);
         env.classes.insert("str".to_string(), Type::Str);
         env.classes.insert(
+            "DataType".to_string(),
+            Type::Class {
+                name: "DataType".into(),
+                type_args: Vec::new(),
+                parent: None,
+                traits: Vec::new(),
+                interfaces: Vec::new(),
+                fields: HashMap::new(),
+                is_sealed: true,
+            },
+        );
+        env.classes.insert(
+            "Float32".to_string(),
+            Type::Class {
+                name: "Float32".into(),
+                type_args: Vec::new(),
+                parent: Some("DataType".into()),
+                traits: Vec::new(),
+                interfaces: Vec::new(),
+                fields: HashMap::new(),
+                is_sealed: true,
+            },
+        );
+        env.classes.insert(
             "complex".to_string(),
             Type::Class {
                 name: "complex".into(),
@@ -10181,6 +10205,14 @@ impl TypeChecker {
                                     .unwrap_or(Type::TypeVar("Any".into())),
                             )));
                         }
+                        if other == "typing.Shape" {
+                            return self.env.traits.get("Shape").cloned().ok_or_else(|| {
+                                TypeError {
+                                    message: "unknown typing.Shape trait".into(),
+                                    span: texpr.span(),
+                                }
+                            });
+                        }
                         if other.starts_with("__shape_") {
                             return Ok(Type::TypeVar(other.to_string()));
                         }
@@ -11281,6 +11313,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("integer-bounded function type variables should be valid shape dimensions");
+    }
+
+    #[test]
+    fn builtin_dtype_names_satisfy_datatype_bounds() {
+        let module = parse(
+            "class Array[D: DataType, S: typing.Shape | none]:\n    pass\n\nchecked: Array[Float32, typing.shape[2, 3, 4]]\nunchecked: Array[Float32, none]\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("Float32 should satisfy DataType-bounded array dtype parameters");
     }
 
     #[test]
