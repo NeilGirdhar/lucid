@@ -6733,6 +6733,56 @@ impl TypeChecker {
         }
     }
 
+    fn frozen_type(inner: Type) -> Type {
+        if let Type::Class {
+            name,
+            type_args,
+            parent,
+            traits,
+            interfaces,
+            fields,
+            is_sealed,
+        } = &inner
+        {
+            if name == "set" {
+                return Type::Class {
+                    name: "frozenset".into(),
+                    type_args: type_args.clone(),
+                    parent: parent.clone(),
+                    traits: traits.clone(),
+                    interfaces: interfaces.clone(),
+                    fields: fields.clone(),
+                    is_sealed: *is_sealed,
+                };
+            }
+            if name == "dict" {
+                return Type::Class {
+                    name: "frozendict".into(),
+                    type_args: type_args.clone(),
+                    parent: parent.clone(),
+                    traits: traits.clone(),
+                    interfaces: interfaces.clone(),
+                    fields: fields.clone(),
+                    is_sealed: *is_sealed,
+                };
+            }
+        }
+        match inner {
+            Type::View {
+                mutability: MutabilityView::Immutable,
+                ..
+            } => inner,
+            Type::View { inner, .. } => Type::View {
+                mutability: MutabilityView::Immutable,
+                inner,
+            },
+            other => Type::View {
+                mutability: MutabilityView::Immutable,
+                inner: Box::new(other),
+            },
+        }
+    }
+
     fn argument_type_against_parameter(
         &self,
         argument: &Arg,
@@ -8775,6 +8825,7 @@ impl TypeChecker {
                                             Some(Type::Class { name: "dict".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
                                         } else { None }
                                     }
+                                    "freeze" => Some(Self::frozen_type(argument_type)),
                                     "abs" => match argument_type {
                                         Type::Int | Type::LiteralInt(_) => Some(Type::Int),
                                         Type::Float => Some(Type::Float),
@@ -8902,43 +8953,7 @@ impl TypeChecker {
             }
             Expr::Freeze { expr, .. } => {
                 let inner = self.type_of_expr(expr)?;
-                if let Type::Class {
-                    name,
-                    type_args,
-                    parent,
-                    traits,
-                    interfaces,
-                    fields,
-                    is_sealed,
-                } = &inner
-                {
-                    if name == "set" {
-                        return Ok(Type::Class {
-                            name: "frozenset".into(),
-                            type_args: type_args.clone(),
-                            parent: parent.clone(),
-                            traits: traits.clone(),
-                            interfaces: interfaces.clone(),
-                            fields: fields.clone(),
-                            is_sealed: *is_sealed,
-                        });
-                    }
-                    if name == "dict" {
-                        return Ok(Type::Class {
-                            name: "frozendict".into(),
-                            type_args: type_args.clone(),
-                            parent: parent.clone(),
-                            traits: traits.clone(),
-                            interfaces: interfaces.clone(),
-                            fields: fields.clone(),
-                            is_sealed: *is_sealed,
-                        });
-                    }
-                }
-                Ok(Type::View {
-                    mutability: MutabilityView::Immutable,
-                    inner: Box::new(inner),
-                })
+                Ok(Self::frozen_type(inner))
             }
             Expr::Trust {
                 target_type,
@@ -11087,6 +11102,28 @@ class Child(Reusable, Base1, Base2):
         assert!(point_immutable.is_subtype_of(&point_read_only, &checker.env));
         // &Point is NOT a subtype of Point (read-only cannot be passed where mutation is required)
         assert!(!point_read_only.is_subtype_of(&point_mutable, &checker.env));
+    }
+
+    #[test]
+    fn freeze_call_returns_immutable_view_of_argument_type() {
+        let module = parse(
+            "class InferenceModel[T]:\n    value: T\n\ntype Config = !InferenceModel[str]\nmodel = InferenceModel(\"fast\")\nvalue: Config = freeze(model)\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("freeze(value) should return an immutable view of the argument type");
+    }
+
+    #[test]
+    fn freeze_call_uses_frozen_collection_types() {
+        let module = parse(
+            "names: frozenset[str] = freeze({\"Ada\"})\nscores: frozendict[str, int] = freeze({\"Ada\": 10})\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("freeze(value) should preserve dedicated frozen collection types");
     }
 
     #[test]
