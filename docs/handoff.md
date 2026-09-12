@@ -574,7 +574,9 @@ diverged:
   Phi-backed CFG instead of falling back at the multi-statement boundary. The
   accumulator and local induction initializers may appear in either order; the
   returned accumulator name identifies which initializer is loop-carried as the
-  result.
+  result. The comparison bound may also be a local initialized from a literal
+  or parameter before the loop, so the entry block can seed induction,
+  accumulator, and bound values before entering the shared header.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable
@@ -856,7 +858,8 @@ diverged:
   this CFG path. A preceding local induction initializer is also accepted for
   accumulator loops when it is an integer literal or parameter copy, regardless
   of whether that initializer appears before or after the accumulator
-  initializer.
+  initializer. A local bound initializer is accepted as the third pre-loop
+  initializer when the loop condition compares against that local.
   The induction recognizer also accepts `!=` conditions and lowers them to
   the same checked back-edge shape.
   It rejects empty or multi-statement bodies without indexing assumptions and

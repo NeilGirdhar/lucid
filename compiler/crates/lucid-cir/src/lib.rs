@@ -3083,84 +3083,169 @@ impl Function {
             }
         }
         let statements = module.statements.as_slice();
-        let (acc_name, initial_expr, induction_initial, condition, body, if_broken, return_name) =
-            match statements {
-                [acc_statement, while_statement, return_statement] => {
-                    let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
-                    let lucid_syntax::Stmt::While {
-                        condition,
-                        body,
-                        if_broken,
-                        ..
-                    } = while_statement
-                    else {
-                        return None;
-                    };
-                    let lucid_syntax::Stmt::Return {
-                        value:
-                            Some(lucid_syntax::Expr::Ident {
-                                name: return_name, ..
-                            }),
-                        ..
-                    } = return_statement
-                    else {
-                        return None;
-                    };
-                    (
-                        acc_name,
-                        initial_expr,
-                        None,
-                        condition,
-                        body,
-                        if_broken,
-                        return_name,
-                    )
+        let (
+            acc_name,
+            initial_expr,
+            induction_initial,
+            bound_initial,
+            condition,
+            body,
+            if_broken,
+            return_name,
+        ) = match statements {
+            [acc_statement, while_statement, return_statement] => {
+                let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
+                let lucid_syntax::Stmt::While {
+                    condition,
+                    body,
+                    if_broken,
+                    ..
+                } = while_statement
+                else {
+                    return None;
+                };
+                let lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: return_name, ..
+                        }),
+                    ..
+                } = return_statement
+                else {
+                    return None;
+                };
+                (
+                    acc_name,
+                    initial_expr,
+                    None,
+                    None,
+                    condition,
+                    body,
+                    if_broken,
+                    return_name,
+                )
+            }
+            [first_statement, second_statement, while_statement, return_statement] => {
+                let lucid_syntax::Stmt::While {
+                    condition,
+                    body,
+                    if_broken,
+                    ..
+                } = while_statement
+                else {
+                    return None;
+                };
+                let lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: return_name, ..
+                        }),
+                    ..
+                } = return_statement
+                else {
+                    return None;
+                };
+                let (first_name, first_expr) = initialized_ident(first_statement)?;
+                let (second_name, second_expr) = initialized_ident(second_statement)?;
+                let (acc_name, initial_expr, induction_statement) = if first_name == return_name {
+                    (first_name, first_expr, second_statement)
+                } else if second_name == return_name {
+                    (second_name, second_expr, first_statement)
+                } else {
+                    return None;
+                };
+                (
+                    acc_name,
+                    initial_expr,
+                    Some(induction_statement),
+                    None,
+                    condition,
+                    body,
+                    if_broken,
+                    return_name,
+                )
+            }
+            [first_statement, second_statement, third_statement, while_statement, return_statement] =>
+            {
+                let lucid_syntax::Stmt::While {
+                    condition,
+                    body,
+                    if_broken,
+                    ..
+                } = while_statement
+                else {
+                    return None;
+                };
+                let lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: return_name, ..
+                        }),
+                    ..
+                } = return_statement
+                else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Binary { left, right, .. } = condition else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Ident {
+                    name: induction_name,
+                    ..
+                } = left.as_ref()
+                else {
+                    return None;
+                };
+                let lucid_syntax::Expr::Ident {
+                    name: bound_name, ..
+                } = right.as_ref()
+                else {
+                    return None;
+                };
+                if bound_name == induction_name {
+                    return None;
                 }
-                [first_statement, second_statement, while_statement, return_statement] => {
-                    let lucid_syntax::Stmt::While {
-                        condition,
-                        body,
-                        if_broken,
-                        ..
-                    } = while_statement
-                    else {
-                        return None;
-                    };
-                    let lucid_syntax::Stmt::Return {
-                        value:
-                            Some(lucid_syntax::Expr::Ident {
-                                name: return_name, ..
-                            }),
-                        ..
-                    } = return_statement
-                    else {
-                        return None;
-                    };
-                    let (first_name, first_expr) = initialized_ident(first_statement)?;
-                    let (second_name, second_expr) = initialized_ident(second_statement)?;
-                    let (acc_name, initial_expr, induction_statement) = if first_name == return_name
-                    {
-                        (first_name, first_expr, second_statement)
-                    } else if second_name == return_name {
-                        (second_name, second_expr, first_statement)
-                    } else {
-                        return None;
-                    };
-                    (
-                        acc_name,
-                        initial_expr,
-                        Some(induction_statement),
-                        condition,
-                        body,
-                        if_broken,
-                        return_name,
-                    )
+                let initializers = [
+                    initialized_ident(first_statement)?,
+                    initialized_ident(second_statement)?,
+                    initialized_ident(third_statement)?,
+                ];
+                let acc_index = initializers
+                    .iter()
+                    .position(|(name, _)| *name == return_name)?;
+                let induction_index = initializers
+                    .iter()
+                    .position(|(name, _)| *name == induction_name)?;
+                let bound_index = initializers
+                    .iter()
+                    .position(|(name, _)| *name == bound_name)?;
+                if acc_index == induction_index
+                    || acc_index == bound_index
+                    || induction_index == bound_index
+                {
+                    return None;
                 }
-                _ => return None,
-            };
+                let initializer_statements = [first_statement, second_statement, third_statement];
+                let (acc_name, initial_expr) = initializers[acc_index];
+                (
+                    acc_name,
+                    initial_expr,
+                    Some(initializer_statements[induction_index]),
+                    Some(initializer_statements[bound_index]),
+                    condition,
+                    body,
+                    if_broken,
+                    return_name,
+                )
+            }
+            _ => return None,
+        };
         if induction_initial
             .and_then(initialized_ident)
             .is_some_and(|(name, _)| name == acc_name)
+            || bound_initial
+                .and_then(initialized_ident)
+                .is_some_and(|(name, _)| name == acc_name)
         {
             return None;
         };
@@ -3207,17 +3292,35 @@ impl Function {
                     as u32,
             },
         };
-        let bound_instruction = match right.as_ref() {
-            lucid_syntax::Expr::Literal {
-                value: lucid_syntax::LiteralValue::Int(value),
-                ..
-            } => Some(Instruction::ConstInt {
+        let bound_instruction = match (right.as_ref(), bound_initial) {
+            (
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(value),
+                    ..
+                },
+                None,
+            ) => Some(Instruction::ConstInt {
                 result: ValueId(4),
                 value: *value,
             }),
-            lucid_syntax::Expr::Ident {
-                name: bound_name, ..
-            } if bound_name != induction_name => None,
+            (
+                lucid_syntax::Expr::Ident {
+                    name: bound_name, ..
+                },
+                None,
+            ) if bound_name != induction_name => None,
+            (
+                lucid_syntax::Expr::Ident {
+                    name: bound_name, ..
+                },
+                Some(statement),
+            ) if bound_name != induction_name => {
+                let (target_name, _) = initialized_ident(statement)?;
+                if target_name != bound_name {
+                    return None;
+                }
+                None
+            }
             _ => return None,
         };
         let mut entry_instructions = vec![induction_instruction, accumulator_instruction];
@@ -3225,12 +3328,22 @@ impl Function {
             name: bound_name, ..
         } = right.as_ref()
         {
-            entry_instructions.push(Instruction::Param {
-                result: ValueId(4),
-                index: parameter_names
-                    .iter()
-                    .position(|parameter| parameter == bound_name)? as u32,
-            });
+            if let Some(statement) = bound_initial {
+                let (_, initial_expr) = initialized_ident(statement)?;
+                entry_instructions.push(initializer_instruction(
+                    initial_expr,
+                    ValueId(4),
+                    parameter_names,
+                )?);
+            } else {
+                entry_instructions.push(Instruction::Param {
+                    result: ValueId(4),
+                    index: parameter_names
+                        .iter()
+                        .position(|parameter| parameter == bound_name)?
+                        as u32,
+                });
+            }
         }
         #[derive(Clone, Copy)]
         enum AccumulatorOperand {
@@ -3243,9 +3356,9 @@ impl Function {
         ) -> Option<AccumulatorOperand> {
             match expr {
                 lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(step),
+                    value: lucid_syntax::LiteralValue::Int(value),
                     ..
-                } => Some(AccumulatorOperand::Literal(*step)),
+                } => Some(AccumulatorOperand::Literal(*value)),
                 lucid_syntax::Expr::Ident { name, .. } if name == induction_name => {
                     Some(AccumulatorOperand::Induction)
                 }
@@ -9049,6 +9162,22 @@ return total
         )
         .expect("parameter-bound local-induction accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[5, 2, 10]), Ok(Some(22)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+value = n
+stop = limit
+while value > stop:
+    total += value
+    value -= 1
+return total
+"#,
+        )
+        .expect("local-bound while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("local-bound while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
