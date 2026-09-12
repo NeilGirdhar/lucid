@@ -457,6 +457,8 @@ diverged:
   Dynamic void conditionals now accept `pass` and bare `return` in either arm,
   including mixed `elif` chains, because both forms lower to the same verified
   void branch terminator.
+  Statically false void `elif` arms inside dynamic void ladders are also
+  skipped before lowering, preserving the live dynamic conditions.
 * Primitive literal `match` functions now lower through verified CIR decision
   chains: two-arm matches support expression results, while larger matches
   support literal results followed by a wildcard. More complex patterns remain

@@ -4040,6 +4040,66 @@ pub fn lower_function_body(
         && !elif_branches.is_empty()
         && static_truth(condition).is_none()
         && has_identifier(condition)
+        && branch_is_single_void(then_branch)
+        && else_branch
+            .as_ref()
+            .is_none_or(|branch| branch_is_single_void(branch))
+    {
+        let mut dynamic_conditions = Vec::new();
+        let mut saw_static_false = false;
+        let mut unsupported = false;
+        for (elif_condition, branch) in elif_branches {
+            if !branch_is_single_void(branch) {
+                unsupported = true;
+                break;
+            }
+            match static_truth(elif_condition) {
+                Some(false) => saw_static_false = true,
+                Some(true) => break,
+                None => {
+                    if !has_identifier(elif_condition) {
+                        unsupported = true;
+                        break;
+                    }
+                    dynamic_conditions.push(elif_condition);
+                }
+            }
+        }
+        if saw_static_false && !unsupported {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let lowered = if dynamic_conditions.is_empty() {
+                lucid_cir::Function::from_parameterized_if_void(
+                    condition,
+                    &function.parameter_names,
+                )
+            } else {
+                lucid_cir::Function::from_parameterized_if_elif_void_chain(
+                    condition,
+                    &dynamic_conditions,
+                    &function.parameter_names,
+                )
+            };
+            return lowered
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported mixed dynamic void elif chain"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
         && let [
             lucid_syntax::Stmt::Return {
                 value: Some(then_value),
@@ -7391,6 +7451,27 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5]), Ok(None));
         assert_eq!(function.execute_with_args(&[-5]), Ok(None));
         assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-static-false-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        return\n    elif false:\n        return\n    elif value > 0:\n        pass\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("static false void elif inside dynamic chain should be skipped");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-static-false-optional-void-elif.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return\n    elif false:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("static false optional void elif inside dynamic chain should be skipped");
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
 
         let file = db.add_file(
             "parameterized-mixed-pass-void-elif.lucid",
