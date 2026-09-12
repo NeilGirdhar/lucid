@@ -267,6 +267,55 @@ impl Default for CCodeGenerator {
 }
 
 impl CCodeGenerator {
+    fn removed_builtin_message(name: &str) -> Option<&'static str> {
+        match name {
+            "tuple" => Some("tuple is not supported; use a class or !list instead"),
+            "property" => {
+                Some("property is not supported; use getter/setter member syntax instead")
+            }
+            "staticmethod" => Some(
+                "staticmethod is not supported; a function that needs no self or cls stays a function",
+            ),
+            "classmethod" => {
+                Some("classmethod is a declaration modifier, not a decorator or builtin")
+            }
+            "NotImplemented" => Some(
+                "NotImplemented is not supported; multiple dispatch replaces reflected operator negotiation",
+            ),
+            "isinstance" => Some("isinstance() is not supported; use `value is Type` instead"),
+            "issubclass" => {
+                Some("issubclass() is not supported; use declaration-kind `is` checks instead")
+            }
+            "frozenset" => {
+                Some("frozenset() is not supported; use an immutable set literal !{...} instead")
+            }
+            "eval" => Some("eval() is not supported; Lucid only runs code the checker can see"),
+            "exec" => Some("exec() is not supported; Lucid only runs code the checker can see"),
+            "__import__" => {
+                Some("__import__() is not supported; use static import declarations instead")
+            }
+            "vars" => Some("vars() is not supported; use fields(...) for documented reflection"),
+            "dir" => Some("dir() is not supported; use fields(...) for documented reflection"),
+            "next" => {
+                Some("next() is not a bare builtin; call cursor.next() on an iterator instead")
+            }
+            "ascii" => Some("ascii() is not a bare builtin; use string.ascii(...) instead"),
+            "filter" => {
+                Some("filter() is not supported; use a comprehension with an if clause instead")
+            }
+            "globals" => Some("globals() is not supported; use locals() for the visible bindings"),
+            "compile" => Some("compile() is not a bare builtin"),
+            "delattr" => Some("delattr() is not supported; declared fields are fixed"),
+            "open" => Some("open() is not a bare builtin; use Path.open(...) instead"),
+            "bin" => Some("bin() is not a bare builtin; use str.bin(...) instead"),
+            "oct" => Some("oct() is not a bare builtin; use str.oct(...) instead"),
+            "hex" => Some("hex() is not a bare builtin; use str.hex(...) instead"),
+            "chr" => Some("chr() is not a bare builtin; use string.chr(...) instead"),
+            "ord" => Some("ord() is not a bare builtin; use string.ord(...) instead"),
+            _ => None,
+        }
+    }
+
     fn pattern_identifier_binds(name: &str) -> bool {
         !matches!(
             name,
@@ -10166,6 +10215,18 @@ static inline void lucid_print_val(LucidVal v) {
                             .into(),
                     });
                 }
+                if let Some(message) = Self::removed_builtin_message(name)
+                    && !self.var_types.contains_key(name)
+                    && !self.global_vars.contains_key(name)
+                    && !self.known_fn_params.contains_key(name)
+                    && !self.function_aliases.contains_key(name)
+                    && !self.anonymous_bindings.contains_key(name)
+                    && !self.partial_bindings.contains_key(name)
+                {
+                    return Err(CodegenError {
+                        message: message.into(),
+                    });
+                }
                 if self
                     .from_imports
                     .get(name)
@@ -13086,6 +13147,11 @@ static inline void lucid_print_val(LucidVal v) {
                         || self.dispatch_signatures.contains_key(name)
                         || self.function_aliases.contains_key(name);
                     if !has_named_callable {
+                        if let Some(message) = Self::removed_builtin_message(name) {
+                            return Err(CodegenError {
+                                message: message.into(),
+                            });
+                        }
                         return Err(CodegenError {
                             message: format!("unknown callable '{name}'"),
                         });
@@ -20061,7 +20127,7 @@ print(any("".chars))
                 .expect_err("removed bare builtin should not compile to native code");
             let _ = fs::remove_file(&output);
             assert!(
-                error.message.contains("unknown callable"),
+                error.message.contains("is not a bare builtin"),
                 "{name}: {}",
                 error.message
             );
@@ -21349,10 +21415,40 @@ print(any("".chars))
             compile_to_native(&module, &output, 0).expect_err("bare next should not compile");
         let _ = fs::remove_file(&output);
         assert!(
-            error.message.contains("unknown callable"),
+            error.message.contains("next() is not a bare builtin"),
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn native_removed_builtins_have_specific_diagnostics() {
+        for (source, expected) in [
+            ("print(NotImplemented)\n", "NotImplemented is not supported"),
+            ("print(frozenset([1, 2]))\n", "immutable set literal"),
+            ("print(globals())\n", "locals"),
+            (
+                "print(compile(\"1\", \"<x>\", \"eval\"))\n",
+                "compile() is not a bare builtin",
+            ),
+            ("print(open(\"a.txt\"))\n", "Path.open"),
+        ] {
+            let module = parse(source).expect("removed builtin source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_codegen_removed_builtin_{}_{}",
+                expected.len(),
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("removed builtin should not compile");
+            let _ = fs::remove_file(&output);
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

@@ -1002,6 +1002,41 @@ impl Default for Interpreter {
 }
 
 impl Interpreter {
+    fn removed_builtin_message(name: &str) -> Option<&'static str> {
+        match name {
+            "tuple" => Some("tuple is not supported; use a class or !list instead"),
+            "property" => Some("property is not supported; use getter/setter member syntax instead"),
+            "staticmethod" => Some(
+                "staticmethod is not supported; a function that needs no self or cls stays a function",
+            ),
+            "classmethod" => Some("classmethod is a declaration modifier, not a decorator or builtin"),
+            "NotImplemented" => Some(
+                "NotImplemented is not supported; multiple dispatch replaces reflected operator negotiation",
+            ),
+            "isinstance" => Some("isinstance() is not supported; use `value is Type` instead"),
+            "issubclass" => Some("issubclass() is not supported; use declaration-kind `is` checks instead"),
+            "frozenset" => Some("frozenset() is not supported; use an immutable set literal !{...} instead"),
+            "eval" => Some("eval() is not supported; Lucid only runs code the checker can see"),
+            "exec" => Some("exec() is not supported; Lucid only runs code the checker can see"),
+            "__import__" => Some("__import__() is not supported; use static import declarations instead"),
+            "vars" => Some("vars() is not supported; use fields(...) for documented reflection"),
+            "dir" => Some("dir() is not supported; use fields(...) for documented reflection"),
+            "next" => Some("next() is not a bare builtin; call cursor.next() on an iterator instead"),
+            "ascii" => Some("ascii() is not a bare builtin; use string.ascii(...) instead"),
+            "filter" => Some("filter() is not supported; use a comprehension with an if clause instead"),
+            "globals" => Some("globals() is not supported; use locals() for the visible bindings"),
+            "compile" => Some("compile() is not a bare builtin"),
+            "delattr" => Some("delattr() is not supported; declared fields are fixed"),
+            "open" => Some("open() is not a bare builtin; use Path.open(...) instead"),
+            "bin" => Some("bin() is not a bare builtin; use str.bin(...) instead"),
+            "oct" => Some("oct() is not a bare builtin; use str.oct(...) instead"),
+            "hex" => Some("hex() is not a bare builtin; use str.hex(...) instead"),
+            "chr" => Some("chr() is not a bare builtin; use string.chr(...) instead"),
+            "ord" => Some("ord() is not a bare builtin; use string.ord(...) instead"),
+            _ => None,
+        }
+    }
+
     fn pattern_identifier_binds(name: &str) -> bool {
         !matches!(
             name,
@@ -6733,7 +6768,16 @@ impl Interpreter {
                         span: *span,
                     });
                 }
-                self.env.borrow().get(name).ok_or_else(|| RuntimeError {
+                if let Some(value) = self.env.borrow().get(name) {
+                    return Ok(value);
+                }
+                if let Some(message) = Self::removed_builtin_message(name) {
+                    return Err(RuntimeError {
+                        message: message.into(),
+                        span: *span,
+                    });
+                }
+                Err(RuntimeError {
                     message: format!("undefined variable '{name}'"),
                     span: *span,
                 })
@@ -10342,6 +10386,30 @@ mod tests {
         assert_eq!(env.get("c"), Some(Value::Bool(false)));
         assert_eq!(env.get("d"), Some(Value::Str("ok".into())));
         assert_eq!(env.get("e"), Some(Value::Int(2)));
+    }
+
+    #[test]
+    fn runtime_reports_removed_builtins_explicitly() {
+        for (source, expected) in [
+            (
+                "value = NotImplemented\n",
+                "NotImplemented is not supported",
+            ),
+            ("value = frozenset([1, 2])\n", "immutable set literal"),
+            ("value = globals()\n", "locals"),
+            (
+                "value = compile(\"1\", \"<x>\", \"eval\")\n",
+                "compile() is not a bare builtin",
+            ),
+            ("value = open(\"a.txt\")\n", "Path.open"),
+        ] {
+            let module = parse(source).unwrap();
+            let mut interp = Interpreter::new();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("removed builtin must fail explicitly");
+            assert!(error.message.contains(expected), "{source}: {error:?}");
+        }
     }
 
     #[test]
