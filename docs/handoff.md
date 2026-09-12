@@ -527,8 +527,8 @@ diverged:
   statically false `elif` arms and stop at a statically true `elif`, matching the
   top-level ladder lowering rules. Value-returning nested branches also accept
   the simple local SSA form `name = expr; return name`. These nested value and
-  void arm recognizers now ignore `pass` as a true no-op instead of treating it
-  as an unsupported extra statement.
+  void arm recognizers now ignore `pass` and `assert(true)` as true no-ops
+  instead of treating them as unsupported extra statements.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.

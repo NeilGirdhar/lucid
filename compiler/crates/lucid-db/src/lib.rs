@@ -1461,17 +1461,21 @@ pub fn lower_function_body(
             "dispatch overload set bodies require a selected overload for CIR lowering",
         ));
     }
+    fn branch_noop_statement(statement: &lucid_syntax::Stmt) -> bool {
+        matches!(statement, lucid_syntax::Stmt::Pass(_))
+            || matches!(
+                statement,
+                lucid_syntax::Stmt::Assert { condition, .. }
+                    if static_truth(condition) == Some(true)
+            )
+    }
     let branch_is_single_void = |branch: &[lucid_syntax::Stmt]| {
         let Some((last, prefix)) = branch.split_last() else {
             return false;
         };
-        prefix
-            .iter()
-            .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
-            && matches!(
-                last,
-                lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)
-            )
+        prefix.iter().all(branch_noop_statement)
+            && matches!(last, lucid_syntax::Stmt::Return { value: None, .. })
+            || branch.iter().all(branch_noop_statement)
     };
     // Route the canonical parameter-backed induction loop through CIR before
     // considering the older linear/function-body adapters. This emits a real
@@ -2547,7 +2551,7 @@ pub fn lower_function_body(
     fn single_value_return(branch: &[lucid_syntax::Stmt]) -> Option<&lucid_syntax::Expr> {
         let mut meaningful = branch
             .iter()
-            .filter(|statement| !matches!(statement, lucid_syntax::Stmt::Pass(_)));
+            .filter(|statement| !branch_noop_statement(statement));
         let first = meaningful.next()?;
         let second = meaningful.next();
         if meaningful.next().is_some() {
@@ -7186,6 +7190,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
 
         let file = db.add_file(
+            "dynamic-nested-branch-assert-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            assert(true)\n            selected = value + 1\n            return selected\n        else:\n            assert(true)\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested assert-padded local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
             "dynamic-nested-elif-branch-else-return.lucid",
             "def answer(value: int):\n    if true:\n        if value > 10:\n            return 100\n        elif value > 0:\n            return 1\n        else:\n            return -1\n    else:\n        return 0\n",
         );
@@ -7246,6 +7260,16 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("selected dynamic nested pass-padded void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-assert-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            assert(true)\n            return\n        else:\n            assert(true)\n            pass\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested assert-padded void branch should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(None));
         assert_eq!(function.execute_with_args(&[-41]), Ok(None));
 
