@@ -442,9 +442,9 @@ diverged:
   adapter, preserving the same branch and merge semantics for both backends.
   The typed API also supports a value-returning branch with a void fall-through
   and verifies both outcomes before backend lowering.
-  Statement conditionals with a `pass` fall-through now use that optional
-  typed builder as well, including one-sided conditionals with an implicit
-  void fall-through.
+  Statement conditionals with a `pass` or bare-`return` fall-through now use
+  that optional typed builder as well, including one-sided conditionals with an
+  implicit void fall-through.
   A no-`else` conditional whose `elif` guards are all statically false now
   follows the same typed optional path.
   Dynamic void conditionals now accept `pass` and bare `return` in either arm,

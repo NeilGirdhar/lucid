@@ -3340,7 +3340,7 @@ pub fn lower_function_body(
         && elif_branches.is_empty()
         && static_truth(condition).is_none()
         && has_identifier(condition)
-        && matches!(else_branch.as_slice(), [lucid_syntax::Stmt::Pass(_)])
+        && branch_is_single_void(else_branch)
         && let [
             lucid_syntax::Stmt::Return {
                 value: Some(then_value),
@@ -3715,7 +3715,7 @@ pub fn lower_function_body(
         && elif_branches
             .iter()
             .all(|(elif_condition, _)| has_identifier(elif_condition))
-        && matches!(else_branch.as_slice(), [lucid_syntax::Stmt::Pass(_)])
+        && branch_is_single_void(else_branch)
         && let [
             lucid_syntax::Stmt::Return {
                 value: Some(then_value),
@@ -6762,12 +6762,34 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-41]), Ok(None));
 
         let file = db.add_file(
+            "parameterized-bare-return-conditional.lucid",
+            "def maybe(value: int):\n    if value > 0:\n        return value + 1\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("bare return branch should lower through the mixed result ABI");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
             "parameterized-pass-elif.lucid",
             "def maybe(value: int):\n    if value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    elif value < 0:\n        return -1\n    else:\n        pass\n",
         );
         let function = lower_function_body(&db, file, "maybe".into())
             .as_ref()
             .expect("pass fallback after dynamic elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-bare-return-elif.lucid",
+            "def maybe(value: int):\n    if value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    elif value < 0:\n        return -1\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("bare return fallback after dynamic elif chain should lower through CIR");
         assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
