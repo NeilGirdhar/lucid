@@ -519,11 +519,11 @@ diverged:
   indexing, slicing, iteration, length, hashing, printing, and erased type
   checks. Native bytes use an explicit pointer-and-length payload, so embedded
   zero bytes are preserved instead of truncating through C string semantics.
-* `MemoryView` now has an actual no-copy runtime representation for
-  bytearray-backed buffers in both interpreter and native output. Indexing,
-  slicing, length, list conversion, erased `is MemoryView`, and indexed
-  mutation route through the shared underlying byte storage instead of copying
-  a list.
+* `MemoryView` now has an actual no-copy runtime representation in both
+  interpreter and native output. Mutable bytearray-backed views share indexed
+  mutation with the original storage, while `Bytes`-backed views are read-only;
+  indexing, slicing, length, list conversion, and erased `is MemoryView` all
+  use the view rather than copying a list.
 * Recovering syntax parses now preserve valid prefixes and report lexical
   failures as structured `ParseError` values with source spans, matching
   grammar-error recovery and giving diagnostic consumers one error shape.

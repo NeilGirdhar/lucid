@@ -1781,9 +1781,11 @@ struct LucidBytes {
 
 struct LucidMemoryView {
     LucidList* list;
+    LucidBytes* bytes;
     int64_t start;
     int64_t len;
     int64_t stride;
+    bool read_only;
 };
 
 struct LucidFuture {
@@ -2376,15 +2378,17 @@ static inline LucidVal lucid_list_get(LucidList* l, int64_t idx);
 static inline void lucid_list_set(LucidList* l, int64_t idx, LucidVal v);
 static inline LucidVal lucid_memoryview(LucidVal value) {
     if (value.type == LUCID_TYPE_MEMORYVIEW) return value;
-    if (value.type != LUCID_TYPE_LIST || !value.list) {
+    if ((value.type != LUCID_TYPE_LIST || !value.list) && (value.type != LUCID_TYPE_BYTES || !value.bytes)) {
         fprintf(stderr, "memoryview() cannot convert value\n"); exit(1);
     }
     LucidMemoryView* view = (LucidMemoryView*)malloc(sizeof(LucidMemoryView));
     if (!view) { fprintf(stderr, "out of memory allocating memoryview\n"); exit(1); }
-    view->list = value.list;
+    view->list = value.type == LUCID_TYPE_LIST ? value.list : NULL;
+    view->bytes = value.type == LUCID_TYPE_BYTES ? value.bytes : NULL;
     view->start = 0;
-    view->len = value.list->len;
+    view->len = value.type == LUCID_TYPE_LIST ? value.list->len : value.bytes->len;
     view->stride = 1;
+    view->read_only = value.type == LUCID_TYPE_BYTES;
     LucidVal out = {0};
     out.type = LUCID_TYPE_MEMORYVIEW;
     out.view = view;
@@ -2402,9 +2406,13 @@ static inline int64_t lucid_memoryview_offset(LucidMemoryView* view, int64_t idx
 }
 static inline LucidVal lucid_memoryview_get(LucidMemoryView* view, int64_t idx) {
     int64_t offset = lucid_memoryview_offset(view, idx);
+    if (view->bytes) return lucid_int((int64_t)view->bytes->data[offset]);
     return lucid_list_get(view->list, offset);
 }
 static inline void lucid_memoryview_set(LucidMemoryView* view, int64_t idx, LucidVal value) {
+    if (view && view->read_only) {
+        fprintf(stderr, "cannot mutate read-only memoryview\n"); exit(1);
+    }
     int64_t offset = lucid_memoryview_offset(view, idx);
     lucid_list_set(view->list, offset, value);
 }
@@ -4064,9 +4072,11 @@ static inline LucidVal lucid_memoryview_slice_value(LucidVal source, int64_t sta
     LucidMemoryView* view = (LucidMemoryView*)malloc(sizeof(LucidMemoryView));
     if (!view) { fprintf(stderr, "out of memory allocating memoryview\n"); exit(1); }
     view->list = parent->list;
+    view->bytes = parent->bytes;
     view->start = parent->start + start * parent->stride;
     view->len = count;
     view->stride = parent->stride * step;
+    view->read_only = parent->read_only;
     LucidVal out = {0};
     out.type = LUCID_TYPE_MEMORYVIEW;
     out.view = view;
@@ -15796,6 +15806,10 @@ view[1] = 73
 print(buffer[1])
 value: Any = window
 print(value is MemoryView)
+readonly = memoryview(bytes([0, 65]))
+print(len(readonly))
+print(readonly[0])
+print(readonly[1:][0])
 "#;
         let module = parse(source).expect("binary program should parse");
         let output =
@@ -15807,7 +15821,29 @@ print(value is MemoryView)
             .expect("compiled program should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "104\n105\n72\n73\ntrue\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "104\n105\n72\n73\ntrue\n2\n0\n65\n"
+        );
+    }
+
+    #[test]
+    fn native_memoryview_rejects_mutating_bytes_view() {
+        let source = "view = memoryview(bytes([65]))\nview[0] = 66\n";
+        let module = parse(source).expect("source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_readonly_memoryview_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("source should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(
+            !run.status.success(),
+            "read-only memoryview mutation should fail"
+        );
+        assert!(String::from_utf8_lossy(&run.stderr).contains("read-only memoryview"));
     }
 
     #[test]

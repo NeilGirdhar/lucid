@@ -11801,6 +11801,10 @@ first = view[0]
 second = window[1]
 view[1] = 73
 mutated = buffer[1]
+readonly = memoryview(bytes([0, 65]))
+readonly_len = len(readonly)
+readonly_first = readonly[0]
+readonly_tail_first = readonly[1:][0]
 "#;
         let module = parse(src).unwrap();
         let mut interp = Interpreter::new();
@@ -11808,10 +11812,23 @@ mutated = buffer[1]
         assert_eq!(interp.env.borrow().get("first"), Some(Value::Int(72)));
         assert_eq!(interp.env.borrow().get("second"), Some(Value::Int(105)));
         assert_eq!(interp.env.borrow().get("mutated"), Some(Value::Int(73)));
+        assert_eq!(interp.env.borrow().get("readonly_len"), Some(Value::Int(2)));
+        assert_eq!(interp.env.borrow().get("readonly_first"), Some(Value::Int(0)));
+        assert_eq!(
+            interp.env.borrow().get("readonly_tail_first"),
+            Some(Value::Int(65))
+        );
         assert!(matches!(
             interp.env.borrow().get("window"),
             Some(Value::MemoryView { len: 2, .. })
         ));
+
+        let module = parse("view = memoryview(bytes([65]))\nview[0] = 66\n").unwrap();
+        let mut interp = Interpreter::new();
+        let error = interp
+            .eval_module(&module)
+            .expect_err("read-only memoryview mutation should fail");
+        assert!(error.message.contains("read-only memoryview"));
     }
 
     #[test]
