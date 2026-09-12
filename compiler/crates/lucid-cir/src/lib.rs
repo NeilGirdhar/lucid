@@ -4618,27 +4618,37 @@ impl Function {
                         if is_const_empty_iterable(iterable)
                 )
         }
+        struct LinearLoweringState<'a> {
+            bindings: &'a mut HashMap<String, ValueId>,
+            instructions: &'a mut Vec<Instruction>,
+            next: &'a mut u32,
+        }
         fn lower_dynamic_if(
             prefix: &[lucid_syntax::Stmt],
             condition: &lucid_syntax::Expr,
             then_branch: &[lucid_syntax::Stmt],
             else_branch: Option<&[lucid_syntax::Stmt]>,
-            bindings: &mut HashMap<String, ValueId>,
-            instructions: &mut Vec<Instruction>,
-            next: &mut u32,
+            suffix: &[lucid_syntax::Stmt],
+            state: &mut LinearLoweringState<'_>,
         ) -> Result<Function, LowerError> {
             let mut last = None;
             for statement in prefix {
-                visit(statement, bindings, instructions, next, &mut last)?;
+                visit(
+                    statement,
+                    state.bindings,
+                    state.instructions,
+                    state.next,
+                    &mut last,
+                )?;
             }
             let fallthrough_value = last;
-            let condition_value = lower(condition, bindings, instructions, next)?;
-            let mut then_bindings = bindings.clone();
+            let condition_value = lower(condition, state.bindings, state.instructions, state.next)?;
+            let mut then_bindings = state.bindings.clone();
             let mut then_instructions = Vec::new();
             let mut then_last = fallthrough_value;
             let mut then_produced_value = false;
             for statement in then_branch {
-                if statement_static_noop(statement, bindings, instructions) {
+                if statement_static_noop(statement, state.bindings, state.instructions) {
                     continue;
                 }
                 if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
@@ -4650,18 +4660,18 @@ impl Function {
                     statement,
                     &mut then_bindings,
                     &mut then_instructions,
-                    next,
+                    state.next,
                     &mut then_last,
                 )?;
                 then_produced_value |= then_last.is_some();
             }
-            let mut else_bindings = bindings.clone();
+            let mut else_bindings = state.bindings.clone();
             let mut else_instructions = Vec::new();
             let mut else_last = fallthrough_value;
             let mut else_produced_value = false;
             if let Some(else_branch) = else_branch {
                 for statement in else_branch {
-                    if statement_static_noop(statement, bindings, instructions) {
+                    if statement_static_noop(statement, state.bindings, state.instructions) {
                         continue;
                     }
                     if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
@@ -4673,7 +4683,7 @@ impl Function {
                         statement,
                         &mut else_bindings,
                         &mut else_instructions,
-                        next,
+                        state.next,
                         &mut else_last,
                     )?;
                     else_produced_value |= else_last.is_some();
@@ -4681,14 +4691,47 @@ impl Function {
             }
             let then_value = then_last.ok_or(LowerError::NoLowerableAssignment)?;
             let else_value = else_last.ok_or(LowerError::NoLowerableAssignment)?;
-            let result = ValueId(*next);
-            *next += 1;
+            let result = ValueId(*state.next);
+            *state.next += 1;
+            let (merge_instructions, terminator) = if suffix.is_empty() {
+                (
+                    vec![Instruction::Phi {
+                        result,
+                        incomings: vec![(BlockId(1), then_value), (BlockId(2), else_value)],
+                    }],
+                    Terminator::Return(Some(result)),
+                )
+            } else {
+                let merged_name = then_bindings
+                    .iter()
+                    .find_map(|(name, value)| {
+                        (*value == then_value
+                            && else_bindings.get(name).copied() == Some(else_value))
+                        .then(|| name.clone())
+                    })
+                    .ok_or(LowerError::UnsupportedExpression)?;
+                let mut merge_bindings = state.bindings.clone();
+                merge_bindings.insert(merged_name, result);
+                let mut merge_instructions = vec![Instruction::Phi {
+                    result,
+                    incomings: vec![(BlockId(1), then_value), (BlockId(2), else_value)],
+                }];
+                let mut merge_last = Some(result);
+                visit_all(
+                    suffix,
+                    &mut merge_bindings,
+                    &mut merge_instructions,
+                    state.next,
+                    &mut merge_last,
+                )?;
+                (merge_instructions, Terminator::Return(merge_last))
+            };
             let function = Function {
                 entry: BlockId(0),
                 blocks: vec![
                     Block {
                         id: BlockId(0),
-                        instructions: std::mem::take(instructions),
+                        instructions: std::mem::take(state.instructions),
                         terminator: Terminator::Branch {
                             condition: condition_value,
                             then_block: BlockId(1),
@@ -4707,11 +4750,8 @@ impl Function {
                     },
                     Block {
                         id: BlockId(3),
-                        instructions: vec![Instruction::Phi {
-                            result,
-                            incomings: vec![(BlockId(1), then_value), (BlockId(2), else_value)],
-                        }],
-                        terminator: Terminator::Return(Some(result)),
+                        instructions: merge_instructions,
+                        terminator,
                     },
                 ],
             };
@@ -4719,6 +4759,81 @@ impl Function {
                 .verify()
                 .map_err(|_| LowerError::UnsupportedExpression)?;
             Ok(function)
+        }
+
+        for (index, statement) in module.statements.iter().enumerate() {
+            if index + 1 == module.statements.len() {
+                break;
+            }
+            let lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+                elif_branches,
+                ..
+            } = statement
+            else {
+                continue;
+            };
+            if constant_truth(condition).is_some() {
+                continue;
+            }
+            let prefix = &module.statements[..index];
+            let mut probe_bindings = bindings.clone();
+            let mut probe_instructions = instructions.clone();
+            let mut probe_next = next;
+            let mut probe_last = None;
+            for statement in prefix {
+                visit(
+                    statement,
+                    &mut probe_bindings,
+                    &mut probe_instructions,
+                    &mut probe_next,
+                    &mut probe_last,
+                )?;
+            }
+            let selected_else = if elif_branches.is_empty() {
+                Some(else_branch.as_deref())
+            } else {
+                let mut selected = None;
+                let mut statically_known = true;
+                for (elif_condition, branch) in elif_branches {
+                    match statement_static_truth(
+                        elif_condition,
+                        &probe_bindings,
+                        &probe_instructions,
+                    ) {
+                        Some(true) => {
+                            selected = Some(Some(branch.as_slice()));
+                            break;
+                        }
+                        Some(false) => continue,
+                        None => {
+                            statically_known = false;
+                            break;
+                        }
+                    }
+                }
+                if statically_known {
+                    Some(selected.unwrap_or(else_branch.as_deref()))
+                } else {
+                    None
+                }
+            };
+            if let Some(selected_else) = selected_else {
+                return lower_dynamic_if(
+                    prefix,
+                    condition,
+                    then_branch,
+                    selected_else,
+                    &module.statements[index + 1..],
+                    &mut LinearLoweringState {
+                        bindings: &mut bindings,
+                        instructions: &mut instructions,
+                        next: &mut next,
+                    },
+                );
+            }
         }
 
         if let Some(lucid_syntax::Stmt::If {
@@ -4778,9 +4893,12 @@ impl Function {
                         condition,
                         then_branch,
                         selected_else,
-                        &mut bindings,
-                        &mut instructions,
-                        &mut next,
+                        &[],
+                        &mut LinearLoweringState {
+                            bindings: &mut bindings,
+                            instructions: &mut instructions,
+                            next: &mut next,
+                        },
                     );
                 }
             }
@@ -9878,6 +9996,22 @@ return total
             .expect("binding-known false elif should select else branch");
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+        let module = lucid_syntax::parse(
+            "if flag:\n    value = 1\nelse:\n    value = 2\nvalue = value + 1\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("post-diamond continuation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(2)));
+        let module = lucid_syntax::parse(
+            "seed = 10\nif flag:\n    value = seed + 1\nelse:\n    value = seed + 2\nvalue = value * 2\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("post-diamond continuation should preserve prefix bindings");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(24)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(22)));
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
         )

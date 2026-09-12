@@ -1805,6 +1805,9 @@ diverged:
   That final selection also sees primitive truth already proven by the lowered
   prefix, so a parameter-driven `if` can still select an `elif` arm guarded by
   an earlier constant local.
+  Simple dynamic diamonds no longer have to be the final statement: when both
+  arms assign the same local, the Phi result rebinds that local and later
+  straight-line statements lower in the merge block.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
