@@ -1782,6 +1782,8 @@ gaps are architectural rather than isolated syntax features:
    out-of-range lines to end-of-file.
    A tracked `source_line` query provides newline-normalized line text for
    diagnostic and editor rendering.
+   Complex-ordering checker errors now report the source expression span
+   instead of a default placeholder span.
    Statement-span extraction now covers every AST statement form that carries
    a parser span, including functions, structural control flow, returns, and
    augmented assignments, instead of falling back to a default span outside

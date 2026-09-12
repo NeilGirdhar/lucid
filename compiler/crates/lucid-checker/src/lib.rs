@@ -7844,7 +7844,7 @@ impl TypeChecker {
                         {
                             return Err(TypeError {
                                 message: "complex values are not orderable".into(),
-                                span: Span::default(),
+                                span: left.span(),
                             });
                         }
                         Ok(Type::Bool)
@@ -14514,6 +14514,7 @@ def reject(value: not int) -> none:
         let mut checker = TypeChecker::new();
         let error = checker.check_module(&module).unwrap_err();
         assert!(error.message.contains("complex values are not orderable"));
+        assert_ne!(error.span, Span::default());
     }
 
     #[test]
