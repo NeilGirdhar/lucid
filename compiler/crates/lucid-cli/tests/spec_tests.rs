@@ -73,6 +73,18 @@ is_trait = value is trait
 }
 
 #[test]
+fn test_identity_checks_reject_dead_exact_class_tests() {
+    for source in [
+        "class HasLen:\n    def __len__(self) -> int:\n        return 1\nvalue = HasLen()\ncheck = value is Sized\n",
+        "class Animal:\n    pass\nclass Dog(Animal):\n    pass\nvalue = Animal()\ncheck = value is Dog\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("exact class"));
+    }
+}
+
+#[test]
 fn test_principles_recoverable_errors_with_question_mark() {
     let src = r#"
 def step_one(x: int):

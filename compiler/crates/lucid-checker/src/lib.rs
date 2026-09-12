@@ -947,6 +947,10 @@ pub struct TypeEnvironment {
     /// describes the yielded value rather than the desugared wrapper.
     pub contextmanager_functions: HashSet<String>,
     pub variables: HashMap<String, (Type, MutabilityView)>,
+    /// Local bindings known to hold an exact freshly constructed class value.
+    /// This lets `is` reject dead subclass/trait tests without treating every
+    /// class-typed value as exact.
+    pub exact_variables: HashMap<String, String>,
     /// Names declared with `final`; a later assignment is a static error.
     pub final_variables: HashSet<String>,
     /// Final instance fields, keyed by declaring class name.
@@ -3549,6 +3553,7 @@ impl TypeChecker {
                     .cloned()
                     .unwrap_or(Type::TypeVar(name.clone()));
                 let saved_vars = self.env.variables.clone();
+                let saved_exact_vars = self.env.exact_variables.clone();
                 let saved_return = self.env.current_return_type.take();
                 let saved_class = self.env.current_class.take();
                 let mut class_vars = saved_vars.clone();
@@ -3618,6 +3623,7 @@ impl TypeChecker {
                     Ok(())
                 })();
                 self.env.variables = saved_vars;
+                self.env.exact_variables = saved_exact_vars;
                 self.env.current_return_type = saved_return;
                 self.env.current_class = saved_class;
                 result.map_err(|mut error| {
@@ -3687,6 +3693,7 @@ impl TypeChecker {
                     .extend(implementation_names);
                 let saved_class = self.env.current_class.take();
                 let saved_vars = self.env.variables.clone();
+                let saved_exact_vars = self.env.exact_variables.clone();
                 self.env.current_class = Some(target_name.clone());
                 if let Some(class_type) = self.env.classes.get(target_name).cloned() {
                     self.env
@@ -3784,6 +3791,7 @@ impl TypeChecker {
                 }
                 self.env.current_class = saved_class;
                 self.env.variables = saved_vars;
+                self.env.exact_variables = saved_exact_vars;
                 result
             }
             Stmt::Function(func) => {
@@ -3820,6 +3828,7 @@ impl TypeChecker {
                     Some(ret_type.unwrap_or_else(|| Type::TypeVar("Any".into())));
 
                 let mut local_vars = self.env.variables.clone();
+                let mut local_exact_vars = self.env.exact_variables.clone();
                 let mut seen_positional_default = false;
                 let mut parameter_names = HashSet::new();
                 for param in &func.params {
@@ -3868,20 +3877,26 @@ impl TypeChecker {
                         }
                     }
                     local_vars.insert(param.name.clone(), (pt.clone(), MutabilityView::Mutable));
+                    local_exact_vars.remove(&param.name);
                     if let Some(pattern) = &param.pattern {
                         self.env.variables = local_vars.clone();
+                        self.env.exact_variables = local_exact_vars.clone();
                         self.bind_match_pattern_types(pattern, &pt);
                         local_vars = self.env.variables.clone();
+                        local_exact_vars = self.env.exact_variables.clone();
                     }
                 }
 
                 let old_vars = std::mem::replace(&mut self.env.variables, local_vars);
+                let old_exact_vars =
+                    std::mem::replace(&mut self.env.exact_variables, local_exact_vars);
 
                 for s in &func.body {
                     self.check_statement(s)?;
                 }
 
                 self.env.variables = old_vars;
+                self.env.exact_variables = old_exact_vars;
                 self.env.current_return_type = prev_ret;
                 Ok(())
             }
@@ -3974,6 +3989,7 @@ impl TypeChecker {
                 }
                 for name in names {
                     self.env.variables.remove(name);
+                    self.env.exact_variables.remove(name);
                     self.env.final_variables.remove(name);
                 }
                 Ok(())
@@ -4102,6 +4118,15 @@ impl TypeChecker {
                     self.env
                         .variables
                         .insert(name.clone(), (target_type, MutabilityView::Mutable));
+                    if let Some(value) = value {
+                        if let Some(class_name) = self.exact_class_of_expr(value) {
+                            self.env.exact_variables.insert(name.clone(), class_name);
+                        } else {
+                            self.env.exact_variables.remove(name);
+                        }
+                    } else {
+                        self.env.exact_variables.remove(name);
+                    }
                     if *is_final {
                         self.env.final_variables.insert(name.clone());
                     }
@@ -4119,6 +4144,7 @@ impl TypeChecker {
                 span,
             } => {
                 Self::reject_bare_skip_value(value, "assignment value")?;
+                let exact_value_class = self.exact_class_of_expr(value);
                 let provisional = match target {
                     Expr::Ident { name, .. } => match value {
                         Expr::AnonymousDef {
@@ -4195,6 +4221,11 @@ impl TypeChecker {
                             self.env
                                 .variables
                                 .insert(name.clone(), (inferred_type, MutabilityView::Mutable));
+                        }
+                        if let Some(class_name) = exact_value_class.clone() {
+                            self.env.exact_variables.insert(name.clone(), class_name);
+                        } else {
+                            self.env.exact_variables.remove(name);
                         }
                     }
                     Expr::Record { fields, .. } => {
@@ -4465,11 +4496,13 @@ impl TypeChecker {
                 let subject_type = self.type_of_expr(subject)?;
                 self.check_match_exhaustiveness(&subject_type, arms, *span)?;
                 let saved_match_vars = self.env.variables.clone();
+                let saved_match_exact_vars = self.env.exact_variables.clone();
                 if let Some(alias) = subject_alias {
                     self.env.variables.insert(
                         alias.clone(),
                         (subject_type.clone(), MutabilityView::ReadOnly),
                     );
+                    self.env.exact_variables.remove(alias);
                 }
                 for arm in arms {
                     if let Some(guard) = &arm.guard {
@@ -4482,6 +4515,7 @@ impl TypeChecker {
                         }
                     }
                     let saved_vars = self.env.variables.clone();
+                    let saved_exact_vars = self.env.exact_variables.clone();
                     self.bind_match_pattern_types(&arm.pattern, &subject_type);
                     if let Some(alias) = subject_alias {
                         let narrowed = match &arm.pattern {
@@ -4513,13 +4547,16 @@ impl TypeChecker {
                         self.env
                             .variables
                             .insert(alias.clone(), (narrowed, MutabilityView::ReadOnly));
+                        self.env.exact_variables.remove(alias);
                     }
                     for s in &arm.body {
                         self.check_statement(s)?;
                     }
                     self.env.variables = saved_vars;
+                    self.env.exact_variables = saved_exact_vars;
                 }
                 self.env.variables = saved_match_vars;
+                self.env.exact_variables = saved_match_exact_vars;
                 Ok(())
             }
             Stmt::If {
@@ -4589,6 +4626,7 @@ impl TypeChecker {
                 let elem_type = self.iterable_element_type(&iter_type);
 
                 let old_vars = self.env.variables.clone();
+                let old_exact_vars = self.env.exact_variables.clone();
                 self.bind_match_pattern_types(target, &elem_type);
 
                 self.env.loop_depth += 1;
@@ -4597,6 +4635,7 @@ impl TypeChecker {
                 }
                 self.env.loop_depth -= 1;
                 self.env.variables = old_vars;
+                self.env.exact_variables = old_exact_vars;
 
                 if let Some(ref ib) = if_broken {
                     for s in ib {
@@ -4941,8 +4980,10 @@ impl TypeChecker {
             }
         }
         let saved_vars = self.env.variables.clone();
+        let saved_exact_vars = self.env.exact_variables.clone();
         let saved_return = self.env.current_return_type.take();
         let mut vars = saved_vars.clone();
+        let mut exact_vars = saved_exact_vars.clone();
         for param in params {
             let ty = if param.type_annotation.is_none()
                 && matches!(param.name.as_str(), "self" | "cls")
@@ -4962,13 +5003,17 @@ impl TypeChecker {
                     .unwrap_or(Type::TypeVar("Any".into()))
             };
             vars.insert(param.name.clone(), (ty.clone(), MutabilityView::Mutable));
+            exact_vars.remove(&param.name);
             if let Some(pattern) = &param.pattern {
                 self.env.variables = vars.clone();
+                self.env.exact_variables = exact_vars.clone();
                 self.bind_match_pattern_types(pattern, &ty);
                 vars = self.env.variables.clone();
+                exact_vars = self.env.exact_variables.clone();
             }
         }
         self.env.variables = vars;
+        self.env.exact_variables = exact_vars;
         self.env.current_return_type = Some(
             return_expr
                 .map(|expr| self.resolve_type_expr(expr))
@@ -4982,6 +5027,7 @@ impl TypeChecker {
             Ok(())
         })();
         self.env.variables = saved_vars;
+        self.env.exact_variables = saved_exact_vars;
         self.env.current_return_type = saved_return;
         result.map_err(|mut error: TypeError| {
             if error.span == Span::default() {
@@ -5095,6 +5141,7 @@ impl TypeChecker {
                     name.clone(),
                     (subject_type.clone(), MutabilityView::Mutable),
                 );
+                self.env.exact_variables.remove(name);
             }
             Pattern::Tuple(items, _) => {
                 let element_types = match subject_type {
@@ -5293,6 +5340,29 @@ impl TypeChecker {
             params,
             return_type: Box::new(return_type),
         })
+    }
+
+    fn exact_class_of_expr(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident { name, .. } => self.env.exact_variables.get(name).cloned(),
+            Expr::Call { func, .. } => match &**func {
+                Expr::Ident { name, .. }
+                    if self.env.classes.contains_key(name)
+                        && self.env.class_constructor_arity.contains_key(name) =>
+                {
+                    Some(name.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn exact_class_may_satisfy(&self, class_name: &str, target: &Type) -> bool {
+        self.env
+            .classes
+            .get(class_name)
+            .is_some_and(|class_type| class_type.is_subtype_of(target, &self.env))
     }
 
     pub fn type_of_expr(&self, expr: &Expr) -> Result<Type, TypeError> {
@@ -5678,6 +5748,19 @@ impl TypeChecker {
                         } else {
                             rt.clone()
                         };
+                        if matches!(op, BinaryOp::Is) && !declaration_kind_check {
+                            if let Some(exact_class) = self.exact_class_of_expr(left) {
+                                if !self.exact_class_may_satisfy(&exact_class, &tested_type) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "instance check between exact class '{exact_class}' and {:?} can never succeed",
+                                            rt
+                                        ),
+                                        span: right.span(),
+                                    });
+                                }
+                            }
+                        }
                         if matches!(op, BinaryOp::Is)
                             && !declaration_kind_check
                             && !types_may_overlap(&lt, &tested_type, &self.env)
@@ -6989,9 +7072,6 @@ impl TypeChecker {
                                     "list" if matches!(&argument_type, Type::Shape(_)) => {
                                         Some(Type::Class { name: "list".into(), type_args: vec![Type::Int], parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
                                     }
-                                    "list" if matches!(&argument_type, Type::Str) => {
-                                        Some(Type::Class { name: "list".into(), type_args: vec![Type::Str], parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
-                                    }
                                     "list" if matches!(&argument_type, Type::Class { type_args, .. } if type_args.len() == 1) => {
                                         if let Type::Class { type_args, .. } = argument_type {
                                             Some(Type::Class { name: "list".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
@@ -6999,9 +7079,6 @@ impl TypeChecker {
                                     }
                                     "set" if matches!(&argument_type, Type::Shape(_)) => {
                                         Some(Type::Class { name: "set".into(), type_args: vec![Type::Int], parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
-                                    }
-                                    "set" if matches!(&argument_type, Type::Str) => {
-                                        Some(Type::Class { name: "set".into(), type_args: vec![Type::Str], parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
                                     }
                                     "set" if matches!(&argument_type, Type::Class { type_args, .. } if type_args.len() == 1) => {
                                         if let Type::Class { type_args, .. } = argument_type {
@@ -11292,6 +11369,34 @@ def reject(value: not int) -> none:
                 .unwrap(),
             )
             .expect("skip should remain valid in call and collection elision contexts");
+    }
+
+    #[test]
+    fn test_exact_class_instance_checks_reject_dead_trait_and_subclass_tests() {
+        for (source, message) in [
+            (
+                "class HasLen:\n    def __len__(self) -> int:\n        return 1\nvalue = HasLen()\ncheck = value is Sized\n",
+                "exact class 'HasLen'",
+            ),
+            (
+                "class Animal:\n    pass\nclass Dog(Animal):\n    pass\nvalue = Animal()\ncheck = value is Dog\n",
+                "exact class 'Animal'",
+            ),
+        ] {
+            let error = TypeChecker::new()
+                .check_module(&parse(source).unwrap())
+                .expect_err("dead exact-class instance check must fail");
+            assert!(error.message.contains(message), "{}", error.message);
+        }
+
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Declared(Sized):\n    def __len__(self) -> int:\n        return 1\nclass Retro:\n    pass\nimplement Sized for Retro:\n    def __len__(self) -> int:\n        return 1\ndeclared = Declared() is Sized\nretro = Retro() is Sized\n",
+                )
+                .unwrap(),
+            )
+            .expect("nominal and implemented trait checks should still type-check");
     }
 
     #[test]
