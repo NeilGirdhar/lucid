@@ -19778,6 +19778,25 @@ print(result[1])
     }
 
     #[test]
+    fn native_named_parameters_value_accepts_gather_spread() {
+        let source = "class Parameters:\n    pargs: list[int]\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef count(a: int, b: int, c: int, ***rest: Parameters) -> int:\n    return a + b + c + len(rest.pargs) + len(rest.vpargs) + len(rest.kwargs)\nfs = [count]\nparams = Parameters([1], [2], {\"c\": 3})\nprint(fs[0](***params))\n";
+        let module = parse(source).expect("parameters spread value source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_named_parameters_spread_value_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("parameters spread value should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run parameters spread value");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "parameters spread value failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
+    }
+
+    #[test]
     fn native_gather_call_aggregates_leftover_arguments() {
         let source = "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef query(path: int, ***rest: Arguments) -> int:\n    return path + len(rest.vpargs) + len(rest.kwargs)\nprint(query(10, 1, 2, mode=3))\n";
         let module = parse(source).expect("gather call source should parse");
