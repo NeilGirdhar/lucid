@@ -76,6 +76,8 @@ the interpreter.
 Complex values expose typed `.real` and `.imag` attributes in the checker,
 interpreter, and native backend; each returns the corresponding `float`
 component.
+Native erased complex values route those same attributes through the dynamic
+attribute and `hasattr` paths.
 Native `repr` now uses generated per-class callbacks for object values,
 including field names and representations after an `Any` erasure.
 Native `str` uses the same generated object representation for class instances,

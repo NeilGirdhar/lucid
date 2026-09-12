@@ -1013,6 +1013,7 @@ impl CCodeGenerator {
         dynamic_classes.sort();
         self.emit_line("static LucidVal lucid_dynamic_attr(LucidVal value, const char* attr, LucidVal fallback, bool has_default) {");
         self.indent += 1;
+        self.emit_line("if (value.type == LUCID_TYPE_COMPLEX) { if (strcmp(attr, \"real\") == 0) return lucid_float(value.real); if (strcmp(attr, \"imag\") == 0) return lucid_float(value.imag); }");
         self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) { if (has_default) return fallback; fprintf(stderr, \"attribute access requires an object\\n\"); exit(1); }");
         self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
         self.emit_line("if (!class_name) { if (has_default) return fallback; fprintf(stderr, \"unknown object in attribute access\\n\"); exit(1); }");
@@ -1049,6 +1050,7 @@ impl CCodeGenerator {
         self.emit_line("}");
         self.emit_line("static bool lucid_dynamic_has_attr(LucidVal value, const char* attr) {");
         self.indent += 1;
+        self.emit_line("if (value.type == LUCID_TYPE_COMPLEX) return strcmp(attr, \"real\") == 0 || strcmp(attr, \"imag\") == 0;");
         self.emit_line("if (value.type != LUCID_TYPE_PTR || !value.ptr) return false;");
         self.emit_line("const char* class_name = lucid_object_class_name(value.ptr);");
         self.emit_line("if (!class_name) return false;");
@@ -18508,6 +18510,24 @@ print(all({1, 2}))
             String::from_utf8_lossy(&run.stdout),
             "(-5+10j)\n(-1-2j)\n(-0-2j)\n1\n2\ntrue\n"
         );
+    }
+
+    #[test]
+    fn native_erased_complex_attributes_dispatch_dynamically() {
+        let source = "z: Any = 1 + 2j\nprint(getattr(z, \"real\"))\nprint(getattr(z, \"imag\"))\nprint(hasattr(z, \"real\"))\n";
+        let module = parse(source).expect("erased complex source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_erased_complex_attr_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("erased complex source should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n2\ntrue\n");
     }
 
     #[test]
