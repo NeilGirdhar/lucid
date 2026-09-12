@@ -2895,6 +2895,22 @@ impl Function {
                                 while_statement,
                                 None,
                             )
+                        } else if first_name == bound_name && second_name != induction_name {
+                            (
+                                None,
+                                Some(first_statement),
+                                Some(second_statement),
+                                while_statement,
+                                None,
+                            )
+                        } else if second_name == bound_name && first_name != induction_name {
+                            (
+                                None,
+                                Some(second_statement),
+                                Some(first_statement),
+                                while_statement,
+                                None,
+                            )
                         } else {
                             return None;
                         }
@@ -2962,6 +2978,22 @@ impl Function {
                                 Some(second_statement),
                                 Some(first_statement),
                                 None,
+                                while_statement,
+                                Some(name),
+                            )
+                        } else if first_name == bound_name && second_name != induction_name {
+                            (
+                                None,
+                                Some(first_statement),
+                                Some(second_statement),
+                                while_statement,
+                                Some(name),
+                            )
+                        } else if second_name == bound_name && first_name != induction_name {
+                            (
+                                None,
+                                Some(second_statement),
+                                Some(first_statement),
                                 while_statement,
                                 Some(name),
                             )
@@ -9772,6 +9804,23 @@ return n
                 .expect("local-bound parameter-induction counted loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(2)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
+            r#"stop = limit
+tick = step
+while n > stop:
+    n -= tick
+return n
+"#,
+        )
+        .expect("local-bound local-step parameter-induction counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local-bound local-step parameter-induction counted loop should lower");
+        assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[1, 2, 3]), Ok(Some(1)));
 
         let module = lucid_syntax::parse(
             r#"while n > 0:

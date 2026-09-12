@@ -2785,6 +2785,30 @@ return n
     }
 
     #[test]
+    fn result_abi_executes_local_bound_local_step_parameter_induction_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"stop = limit
+tick = step
+while n > stop:
+    n -= tick
+return n
+"#,
+        )
+        .expect("local-bound local-step parameter-induction counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local-bound local-step parameter-induction counted while should lower");
+        let compiled = compile_integer_result_function(&function).expect(
+            "result ABI should compile local-bound local-step parameter-induction counted loop CFG",
+        );
+        let result = unsafe { compiled.call_result_with_args(&[10, 2, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 1);
+    }
+
+    #[test]
     fn result_abi_executes_local_bound_local_step_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"value = n
