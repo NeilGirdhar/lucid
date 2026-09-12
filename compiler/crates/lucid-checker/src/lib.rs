@@ -11942,7 +11942,7 @@ fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
             if !matches!(
                 name.as_str(),
                 "_" | "int" | "float" | "bool" | "str" | "none" | "None"
-            ) =>
+            ) && !looks_like_class_name(name) =>
         {
             names.insert(name.clone());
         }
@@ -12381,6 +12381,26 @@ fn yield_guaranteed(statements: &[Stmt]) -> bool {
 mod tests {
     use super::*;
     use lucid_syntax::parse;
+
+    #[test]
+    fn pattern_bound_names_skips_type_like_identifiers() {
+        let mut names = HashSet::new();
+        pattern_bound_names(
+            &Pattern::Tuple(
+                vec![
+                    Pattern::Ident("Cat".into(), Span::default()),
+                    Pattern::Ident("value".into(), Span::default()),
+                    Pattern::Ident("int".into(), Span::default()),
+                ],
+                Span::default(),
+            ),
+            &mut names,
+        );
+
+        assert!(!names.contains("Cat"));
+        assert!(!names.contains("int"));
+        assert!(names.contains("value"));
+    }
 
     #[test]
     fn test_single_inheritance_rule_enforced() {

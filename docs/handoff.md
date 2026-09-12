@@ -1177,6 +1177,9 @@ diverged:
   the exact literal type.
   Named and explicit type patterns are checked against the subject type as
   well, while union subjects accept a pattern that can match any variant.
+  The local-binding pre-scan now follows the same rule: uppercase
+  identifier patterns are treated as type/class patterns, not new local
+  bindings, so predeclared locals stay aligned with match checking.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
