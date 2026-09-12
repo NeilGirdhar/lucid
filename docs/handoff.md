@@ -574,10 +574,12 @@ diverged:
   additive spelling `x = y + x`. An unused pre-loop alias is still rejected
   instead of being treated as loop setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
-  initialized from an integer literal or parameter, then updated before the
-  induction update. The accumulator step can be a signed literal or the current
-  induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
-  commuted additive spelling `x = y + x`. The source and CLI
+  initialized from a signed integer literal or parameter, then updated before
+  the induction update. Literal comparison bounds and induction update steps
+  use the same signed integer recognition, so `while n > -3` and `n += -1`
+  lower through the counted path. The accumulator step can be a signed literal
+  or the current induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`,
+  or the commuted additive spelling `x = y + x`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
   and accumulator Phis. Cranelift result-ABI coverage now executes the same
   countdown-sum CFG natively. Plain counted loops and accumulator loops now

@@ -3187,22 +3187,37 @@ impl Function {
             result: ValueId,
             parameter_names: &[String],
         ) -> Option<Instruction> {
-            match expr {
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                } => Some(Instruction::ConstInt {
-                    result,
-                    value: *value,
-                }),
-                lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
-                    result,
-                    index: parameter_names
-                        .iter()
-                        .position(|parameter| parameter == name)? as u32,
-                }),
-                _ => None,
+            match Function::int_literal_expr(expr) {
+                Some(value) => Some(Instruction::ConstInt { result, value }),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
+                        result,
+                        index: parameter_names
+                            .iter()
+                            .position(|parameter| parameter == name)?
+                            as u32,
+                    }),
+                    _ => None,
+                },
             }
+        }
+        fn bound_literal_instruction(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+        ) -> Option<Instruction> {
+            Function::int_literal_expr(expr).map(|value| Instruction::ConstInt { result, value })
+        }
+        fn parameter_instruction(
+            name: &str,
+            result: ValueId,
+            parameter_names: &[String],
+        ) -> Option<Instruction> {
+            Some(Instruction::Param {
+                result,
+                index: parameter_names
+                    .iter()
+                    .position(|parameter| parameter == name)? as u32,
+            })
         }
         let statements = module.statements.as_slice();
         let (
@@ -3402,25 +3417,12 @@ impl Function {
                 }
                 initializer_instruction(initial_expr, ValueId(0), parameter_names)?
             }
-            None => Instruction::Param {
-                result: ValueId(0),
-                index: parameter_names
-                    .iter()
-                    .position(|parameter| parameter == induction_name)?
-                    as u32,
-            },
+            None => parameter_instruction(induction_name, ValueId(0), parameter_names)?,
         };
         let bound_instruction = match (right.as_ref(), bound_initial) {
-            (
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                },
-                None,
-            ) => Some(Instruction::ConstInt {
-                result: ValueId(4),
-                value: *value,
-            }),
+            (expr, None) if bound_literal_instruction(expr, ValueId(4)).is_some() => {
+                bound_literal_instruction(expr, ValueId(4))
+            }
             (
                 lucid_syntax::Expr::Ident {
                     name: bound_name, ..
@@ -3454,13 +3456,11 @@ impl Function {
                     parameter_names,
                 )?);
             } else {
-                entry_instructions.push(Instruction::Param {
-                    result: ValueId(4),
-                    index: parameter_names
-                        .iter()
-                        .position(|parameter| parameter == bound_name)?
-                        as u32,
-                });
+                entry_instructions.push(parameter_instruction(
+                    bound_name,
+                    ValueId(4),
+                    parameter_names,
+                )?);
             }
         }
         #[derive(Clone, Copy)]
@@ -3554,13 +3554,11 @@ impl Function {
                             name: update_name, ..
                         },
                     op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
-                    value:
-                        lucid_syntax::Expr::Literal {
-                            value: lucid_syntax::LiteralValue::Int(step),
-                            ..
-                        },
+                    value,
                     ..
-                } if update_name == target => Some((update_op.clone(), *step)),
+                } if update_name == target => {
+                    Some((update_op.clone(), Function::int_literal_expr(value)?))
+                }
                 lucid_syntax::Stmt::Assignment {
                     target:
                         lucid_syntax::Expr::Ident {
@@ -3578,14 +3576,10 @@ impl Function {
                 } if update_name == target
                     && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
                 {
-                    let lucid_syntax::Expr::Literal {
-                        value: lucid_syntax::LiteralValue::Int(step),
-                        ..
-                    } = right.as_ref()
-                    else {
-                        return None;
-                    };
-                    Some((update_op.clone(), *step))
+                    Some((
+                        update_op.clone(),
+                        Function::int_literal_expr(right.as_ref())?,
+                    ))
                 }
                 _ => None,
             }
@@ -9416,6 +9410,32 @@ return total
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("signed-literal while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(-4)));
+
+        let module = lucid_syntax::parse(
+            r#"total = -1
+while n > 0:
+    total += n
+    n += -1
+return total
+"#,
+        )
+        .expect("signed-update while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("signed-update while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > -3:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("signed-bound while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("signed-bound while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-3)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
