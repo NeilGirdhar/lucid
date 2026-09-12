@@ -11517,6 +11517,17 @@ mod tests {
     }
 
     #[test]
+    fn syntax_diagnostics_do_not_leak_malformed_block_bodies() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("broken.lucid", "if :\n    leaked =\nkept = 2\n");
+        let diagnostics = file_diagnostics(&db, file);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "E0001");
+        assert_eq!(diagnostics[0].span.line, 1);
+        assert!(!diagnostics[0].message.contains("leaked"));
+    }
+
+    #[test]
     fn project_diagnostics_report_unresolved_imports() {
         let mut db = CompilerDatabase::default();
         let file = db.add_file("main.lucid", "import missing\nvalue = 1\n");

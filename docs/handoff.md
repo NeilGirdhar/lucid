@@ -1181,6 +1181,9 @@ diverged:
   span, falling back to the lossless CST lexical span only for lexer failures.
   Recoverable grammar and finite lexical errors are all surfaced instead of
   truncating diagnostics at the first parser or lexer failure.
+  Database diagnostics also cover malformed block-owner recovery, ensuring
+  abandoned indented body tokens do not surface as extra top-level grammar
+  errors after a bad header.
 * A new `lucid-db` crate provides the first Salsa-backed compiler database,
   with stable source-file inputs and memoized lossless parsing.
 * The database also exposes strict AST parsing and interned top-level symbol
