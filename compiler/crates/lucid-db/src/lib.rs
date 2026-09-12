@@ -2080,7 +2080,8 @@ pub fn lower_function_body(
                         | lucid_syntax::LiteralValue::Complex(_)
                         | lucid_syntax::LiteralValue::Str(_)
                         | lucid_syntax::LiteralValue::Bytes(_)
-                        | lucid_syntax::LiteralValue::None,
+                        | lucid_syntax::LiteralValue::None
+                        | lucid_syntax::LiteralValue::Ellipsis,
                     ..
                 }
         )
@@ -2127,6 +2128,7 @@ pub fn lower_function_body(
             Str(&'a str),
             Bytes(&'a [u8]),
             None,
+            Ellipsis,
         }
         fn primitive_literal(expr: &lucid_syntax::Expr) -> Option<PrimitiveMatchLiteral<'_>> {
             match expr {
@@ -2162,6 +2164,10 @@ pub fn lower_function_body(
                     value: lucid_syntax::LiteralValue::None,
                     ..
                 } => Some(PrimitiveMatchLiteral::None),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Ellipsis,
+                    ..
+                } => Some(PrimitiveMatchLiteral::Ellipsis),
                 _ => None,
             }
         }
@@ -2443,6 +2449,9 @@ pub fn lower_function_body(
                 }
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::None, _) => {
                     Some(PrimitiveMatchLiteral::None)
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Ellipsis, _) => {
+                    Some(PrimitiveMatchLiteral::Ellipsis)
                 }
                 _ => None,
             }
@@ -7960,6 +7969,24 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("constant complex subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-ellipsis-subject-match.lucid",
+            "def choose():\n    match ... as value:\n        case ...:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant ellipsis subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-ellipsis-subject-fallback-match.lucid",
+            "def choose():\n    match ... as value:\n        case none:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant ellipsis subject mismatch should fold to wildcard arm");
         assert_eq!(function.execute(), Ok(Some(42)));
 
         let file = db.add_file(

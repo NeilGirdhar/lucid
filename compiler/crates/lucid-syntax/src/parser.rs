@@ -3546,6 +3546,10 @@ impl Parser {
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
         let tok = self.peek().clone();
         match &tok.kind {
+            TokenKind::Ellipsis => {
+                self.advance();
+                Ok(Pattern::Literal(LiteralValue::Ellipsis, tok.span))
+            }
             TokenKind::Star => {
                 self.advance();
                 let nested = self.parse_pattern()?;

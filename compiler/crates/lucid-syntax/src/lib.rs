@@ -232,6 +232,29 @@ def process(x: complex) -> int:
     }
 
     #[test]
+    fn test_parse_ellipsis_literal_match_pattern() {
+        let src = r#"
+def process(x) -> int:
+    match x:
+        case ...:
+            return 1
+        case _:
+            return 0
+"#;
+        let module = parse(src).unwrap();
+        let Stmt::Function(function) = &module.statements[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Match { arms, .. } = &function.body[0] else {
+            panic!("expected match");
+        };
+        assert!(matches!(
+            arms[0].pattern,
+            Pattern::Literal(LiteralValue::Ellipsis, _)
+        ));
+    }
+
+    #[test]
     fn test_parse_readme_example() {
         let src = r#"
 export interface Scorable[+K]:
