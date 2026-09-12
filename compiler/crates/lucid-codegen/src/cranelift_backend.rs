@@ -2754,6 +2754,34 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_unary_dynamic_step_cfg() {
+        let module = lucid_syntax::parse(
+            r#"stride = -step
+total = 0
+for i in range(start, stop, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("unary dynamic-step range accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("unary dynamic-step range accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile unary dynamic-step range loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 0, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 9);
+        let zero = unsafe { compiled.call_result_with_args(&[5, 0, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::RangeStepZero
+        );
+    }
+
+    #[test]
     fn result_abi_executes_void_range_with_local_aliases_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit
@@ -2794,6 +2822,31 @@ for i in range(n, stop, stride):
         assert!(result.is_ok());
         assert_eq!(result.value, 0);
         let zero = unsafe { compiled.call_result_with_args(&[0, 6, -1]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::RangeStepZero
+        );
+    }
+
+    #[test]
+    fn result_abi_executes_void_range_with_unary_dynamic_step_cfg() {
+        let module = lucid_syntax::parse(
+            r#"for i in range(start, stop, -step):
+    pass
+"#,
+        )
+        .expect("void unary dynamic-step range fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("void unary dynamic-step range loop should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile void unary dynamic-step range loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 0, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 0);
+        let zero = unsafe { compiled.call_result_with_args(&[5, 0, 0]) };
         assert_eq!(
             zero.error,
             crate::native_abi::NativeErrorCode::RangeStepZero

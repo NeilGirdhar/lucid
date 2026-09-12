@@ -4824,6 +4824,41 @@ impl Function {
                             }])
                         }
                     }
+                    lucid_syntax::Expr::Unary { op, expr, .. }
+                        if matches!(
+                            op,
+                            lucid_syntax::UnaryOp::Pos | lucid_syntax::UnaryOp::Neg
+                        ) =>
+                    {
+                        match op {
+                            lucid_syntax::UnaryOp::Pos => operand(
+                                expr,
+                                result,
+                                bound_aliases,
+                                parameter_names,
+                                depth,
+                                next_value,
+                            ),
+                            lucid_syntax::UnaryOp::Neg => {
+                                let operand_value = ValueId(*next_value);
+                                *next_value = next_value.checked_add(1)?;
+                                let mut instructions = operand(
+                                    expr,
+                                    operand_value,
+                                    bound_aliases,
+                                    parameter_names,
+                                    depth,
+                                    next_value,
+                                )?;
+                                instructions.push(Instruction::Neg {
+                                    result,
+                                    operand: operand_value,
+                                });
+                                Some(instructions)
+                            }
+                            _ => None,
+                        }
+                    }
                     lucid_syntax::Expr::Binary {
                         op, left, right, ..
                     } if matches!(
@@ -5352,6 +5387,41 @@ impl Function {
                                     .position(|parameter| parameter == name)?
                                     as u32,
                             }])
+                        }
+                    }
+                    lucid_syntax::Expr::Unary { op, expr, .. }
+                        if matches!(
+                            op,
+                            lucid_syntax::UnaryOp::Pos | lucid_syntax::UnaryOp::Neg
+                        ) =>
+                    {
+                        match op {
+                            lucid_syntax::UnaryOp::Pos => operand(
+                                expr,
+                                result,
+                                bound_aliases,
+                                parameter_names,
+                                depth,
+                                next_value,
+                            ),
+                            lucid_syntax::UnaryOp::Neg => {
+                                let operand_value = ValueId(*next_value);
+                                *next_value = next_value.checked_add(1)?;
+                                let mut instructions = operand(
+                                    expr,
+                                    operand_value,
+                                    bound_aliases,
+                                    parameter_names,
+                                    depth,
+                                    next_value,
+                                )?;
+                                instructions.push(Instruction::Neg {
+                                    result,
+                                    operand: operand_value,
+                                });
+                                Some(instructions)
+                            }
+                            _ => None,
                         }
                     }
                     lucid_syntax::Expr::Binary {
@@ -11952,6 +12022,25 @@ return total
         );
 
         let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(start, stop, -step):
+    total += i
+return total
+"#,
+        )
+        .expect("unary dynamic-step range accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("unary dynamic-step range accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5, 0, 2]), Ok(Some(9)));
+        assert_eq!(
+            function.execute_with_args(&[5, 0, 0]),
+            Err(ExecuteError::RangeStepZero)
+        );
+
+        let module = lucid_syntax::parse(
             r#"stride = step
 total = 0
 for i in range(start, stop, stride):
@@ -11969,6 +12058,26 @@ return total
         assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(Some(9)));
         assert_eq!(
             function.execute_with_args(&[0, 6, 0]),
+            Err(ExecuteError::RangeStepZero)
+        );
+
+        let module = lucid_syntax::parse(
+            r#"stride = -step
+total = 0
+for i in range(start, stop, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("local unary dynamic-step range accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("local unary dynamic-step range accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5, 0, 2]), Ok(Some(9)));
+        assert_eq!(
+            function.execute_with_args(&[5, 0, 0]),
             Err(ExecuteError::RangeStepZero)
         );
 
@@ -12097,6 +12206,23 @@ for i in range(n, stop, stride):
         assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(None));
         assert_eq!(
             function.execute_with_args(&[0, 6, 0]),
+            Err(ExecuteError::RangeStepZero)
+        );
+
+        let module = lucid_syntax::parse(
+            r#"for i in range(start, stop, -step):
+    pass
+"#,
+        )
+        .expect("void unary dynamic-step range fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("void unary dynamic-step range loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 0, 2]), Ok(None));
+        assert_eq!(
+            function.execute_with_args(&[5, 0, 0]),
             Err(ExecuteError::RangeStepZero)
         );
 

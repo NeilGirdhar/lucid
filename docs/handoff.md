@@ -568,8 +568,9 @@ diverged:
   matching the public checker boundary. The repeated-`pass` counted-`while`
   form also has Cranelift result-ABI coverage.
   Range accumulator loops now also accept checked constant, parameter, local
-  alias, and `+`, `-`, or `*` integer expressions for range start, stop, and
-  dynamic step operands. Local aliases may be used as the start or stop
+  alias, unary `+`/`-`, and binary `+`, `-`, or `*` integer expressions for
+  range start, stop, and dynamic step operands. Local aliases may be used as
+  the start or stop
   operand in one-, two-, or three-argument ranges. This
   keeps `limit = n; for i in range(limit)`,
   `for i in range(n + 1)`,
@@ -579,12 +580,13 @@ diverged:
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
   CIR/native path. Three-argument ranges may spell a statically known step
   through a local alias, as in `stride = -1; range(n, 0, stride)`, or use a
-  dynamic expression, as in `range(start + 1, stop + 1, step + 1)`. The
-  dynamic-step CFG selects the positive-step or negative-step condition at
-  runtime, so the same lowered function handles both positive and negative
-  computed steps. A zero dynamic step is checked before the loop enters and
-  reports the shared `range step cannot be zero` recoverable error through the
-  interpreter, `run-cir`, and native result ABI.
+  dynamic expression, as in `range(start + 1, stop + 1, step + 1)` or
+  `stride = -step; range(start, stop, stride)`. The dynamic-step CFG selects
+  the positive-step or negative-step condition at runtime, so the same lowered
+  function handles both positive and negative computed steps. A zero dynamic
+  step is checked before the loop enters and reports the shared
+  `range step cannot be zero` recoverable error through the interpreter,
+  `run-cir`, and native result ABI.
   Static step aliases may themselves point at another local literal alias,
   matching the existing chained range-bound alias behavior. The step resolver
   also folds checked constant integer expressions in that local alias, so
