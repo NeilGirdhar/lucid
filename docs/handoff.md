@@ -205,26 +205,14 @@ execution paths while retaining the checked overflow behavior for `int.nan`.
 
 ## Verified baseline
 
-The last full workspace run completed successfully in both debug and release
-profiles:
+The current debug workspace run completes successfully:
 
 ```text
 cargo test --workspace --all-targets --quiet
-69 checker tests
-65 CIR tests
-4 shared-ABI tests
-34 CLI/CIR integration tests
-1 CLI unit test
-31 CLI/spec tests
-352 native-codegen tests
-153 runtime tests
-22 syntax tests
-50 compiler-database tests
-17 configuration tests
-798 tests passed
+1008 tests passed across the workspace crates
 ```
 
-The same 792 tests also pass with:
+The same workspace test matrix also passes with:
 
 ```bash
 cargo test --workspace --all-targets --release --quiet
@@ -253,10 +241,8 @@ The specification-snippet harness now exits nonzero unless every positive
 snippet parses and type-checks and every expected-failure snippet is rejected;
 partial percentages are no longer treated as a successful validation run.
 
-`git diff --check` is clean. The implementation is backed up on the active
-development branch. A repository-wide `cargo fmt --check` currently reports
-large formatting differences in the existing codebase, so do not apply a
-whole-tree formatter as part of an unrelated change.
+`cargo fmt --all`, `git diff --check`, and the strict specification harness
+are clean. The implementation is backed up on the active development branch.
 
 ## Recent implementation work
 
@@ -1714,9 +1700,9 @@ gaps are architectural rather than isolated syntax features:
    empty environment. Native anonymous closures now satisfy the escaping
    environment requirement, but recursive cells, reclamation, and CIR/Cranelift
    integration still need to replace the AST-directed implementation.
-6. Shape semantics are open in [Shapes](shape.md): type-level `stack` shape
-   inference now has a concrete implementation, and dispatch by rank or shape
-   is explicitly rejected because runtime dispatch erases phantom shape
+6. Shape semantics now have a concrete dispatch boundary in [Shapes](shape.md):
+   type-level `stack` shape inference is implemented, and dispatch by rank or
+   shape is explicitly rejected because runtime dispatch erases phantom shape
    parameters. Broader source-to-native shape propagation remains incomplete.
 7. The typed project/configuration loaders cover core `project.yaml`,
    `development.yaml`, and `lucid.lock` semantics, but installation,
@@ -1767,6 +1753,5 @@ architecture and coverage contract above is the completion bar.
 
 The next implementation milestone is the front-end foundation described in
 [Implementation architecture](architecture.md), starting with source files,
-symbols, and diagnostics. The shape rules in [Shapes](shape.md) should be
-resolved alongside that work so later dispatch and lowering decisions have a
-stable type model.
+symbols, diagnostics, and the remaining source-to-native shape propagation
+needed by later lowering decisions.
