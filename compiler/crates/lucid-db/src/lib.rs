@@ -2073,7 +2073,9 @@ pub fn lower_function_body(
             subject,
             lucid_syntax::Expr::Ident { .. }
                 | lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                    value: lucid_syntax::LiteralValue::Int(_)
+                        | lucid_syntax::LiteralValue::Bool(_)
+                        | lucid_syntax::LiteralValue::Str(_),
                     ..
                 }
         )
@@ -2110,7 +2112,30 @@ pub fn lower_function_body(
                 .position(|parameter| parameter == name),
             _ => None,
         };
-        let primitive_literal = |expr: &lucid_syntax::Expr| match expr {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum PrimitiveMatchLiteral<'a> {
+            Int(i64),
+            Bool(bool),
+            Str(&'a str),
+        }
+        fn primitive_literal(expr: &lucid_syntax::Expr) -> Option<PrimitiveMatchLiteral<'_>> {
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Int(*value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bool(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Bool(*value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Str(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Str(value)),
+                _ => None,
+            }
+        }
+        let cir_typed_literal = |expr: &lucid_syntax::Expr| match expr {
             lucid_syntax::Expr::Literal {
                 value: lucid_syntax::LiteralValue::Int(value),
                 ..
@@ -2363,15 +2388,20 @@ pub fn lower_function_body(
                     .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
                 Ok(Arc::new(lowered))
             };
-        let pattern_literal = |pattern: &lucid_syntax::Pattern| match pattern {
-            lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(value), _) => {
-                Some(lucid_cir::TypedLiteral::Int(*value))
+        fn pattern_literal(pattern: &lucid_syntax::Pattern) -> Option<PrimitiveMatchLiteral<'_>> {
+            match pattern {
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(value), _) => {
+                    Some(PrimitiveMatchLiteral::Int(*value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bool(value), _) => {
+                    Some(PrimitiveMatchLiteral::Bool(*value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Str(value), _) => {
+                    Some(PrimitiveMatchLiteral::Str(value))
+                }
+                _ => None,
             }
-            lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bool(value), _) => {
-                Some(lucid_cir::TypedLiteral::Bool(*value))
-            }
-            _ => None,
-        };
+        }
         let constant_selected_arm = primitive_literal(subject).and_then(|subject_literal| {
             let mut selected = None;
             for arm in arms {
@@ -2718,12 +2748,12 @@ pub fn lower_function_body(
                         }
                         _ => return None,
                     };
-                    Some((pattern, primitive_literal(match_arm_value(arm)?)?))
+                    Some((pattern, cir_typed_literal(match_arm_value(arm)?)?))
                 })
                 .collect::<Option<Vec<_>>>();
             let wildcard = arms
                 .last()
-                .and_then(|arm| primitive_literal(match_arm_value(arm)?));
+                .and_then(|arm| cir_typed_literal(match_arm_value(arm)?));
             if let (Some(explicit), Some(wildcard)) = (explicit, wildcard) {
                 return lucid_cir::Function::from_parameterized_literal_match(
                     function.parameter_names.len(),
@@ -7730,6 +7760,40 @@ mod tests {
             .as_ref()
             .expect("constant subject match must not evaluate dead fallback arm");
         assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-string-subject-match.lucid",
+            "def choose():\n    match \"ready\" as state:\n        case \"ready\":\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant string subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-string-subject-fallback-match.lucid",
+            "def choose():\n    match \"ready\" as state:\n        case \"waiting\":\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant string subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-string-subject-void-match.lucid",
+            "def answer(value: int):\n    match \"ready\" as state:\n        case \"ready\":\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant string subject void match should fold to selected arm");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
 
         let file = db.add_file(
             "guarded-constant-subject-match.lucid",
