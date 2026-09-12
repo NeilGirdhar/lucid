@@ -2223,6 +2223,13 @@ impl Parser {
                     span: tok.span,
                 })
             }
+            TokenKind::Bytes(s) => {
+                self.advance();
+                Ok(Expr::Literal {
+                    value: LiteralValue::Bytes(s.as_bytes().to_vec()),
+                    span: tok.span,
+                })
+            }
             TokenKind::True => {
                 self.advance();
                 Ok(Expr::Literal {
@@ -3042,6 +3049,14 @@ impl Parser {
                 span: tok.span,
             });
         }
+        if let TokenKind::Bytes(s) = &tok.kind {
+            let s = s.clone();
+            self.advance();
+            return Ok(TypeExpr::Literal {
+                value: LiteralValue::Bytes(s.as_bytes().to_vec()),
+                span: tok.span,
+            });
+        }
         if let TokenKind::Int(n) = &tok.kind {
             let n = *n;
             self.advance();
@@ -3507,6 +3522,13 @@ impl Parser {
             TokenKind::Str(s) => {
                 self.advance();
                 Ok(Pattern::Literal(LiteralValue::Str(s.clone()), tok.span))
+            }
+            TokenKind::Bytes(s) => {
+                self.advance();
+                Ok(Pattern::Literal(
+                    LiteralValue::Bytes(s.as_bytes().to_vec()),
+                    tok.span,
+                ))
             }
             TokenKind::True => {
                 self.advance();

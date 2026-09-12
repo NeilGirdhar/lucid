@@ -6163,6 +6163,9 @@ impl Interpreter {
                 LiteralValue::Complex(imag) => Value::Complex(0.0, *imag),
                 LiteralValue::Bool(b) => Value::Bool(*b),
                 LiteralValue::Str(s) => Value::Str(s.clone()),
+                LiteralValue::Bytes(bytes) => {
+                    Value::Str(String::from_utf8_lossy(bytes).into_owned())
+                }
                 LiteralValue::None => Value::None,
                 LiteralValue::Sentinel(s) => Value::Sentinel(s.clone()),
                 LiteralValue::Ellipsis => Value::None,

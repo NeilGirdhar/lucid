@@ -8626,6 +8626,10 @@ static inline void lucid_print_val(LucidVal v) {
                 }
                 LiteralValue::Complex(f) => format!("lucid_complex(0.0, {f})"),
                 LiteralValue::Str(s) => format!("\"{}\"", c_escape_string(s)),
+                LiteralValue::Bytes(bytes) => {
+                    let value = String::from_utf8_lossy(bytes);
+                    format!("\"{}\"", c_escape_string(&value))
+                }
                 LiteralValue::Bool(b) => {
                     if *b {
                         "true".to_string()

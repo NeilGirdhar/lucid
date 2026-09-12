@@ -509,6 +509,8 @@ diverged:
   exposing a builtin name after user code rebinds it.
 * The checker now treats `Bytes` as a distinct immutable buffer type rather
   than silently aliasing it to `str`; byte indexing is typed as `int`.
+  The lexer and parser now recognize `b"..."` literals, and both execution
+  paths emit the same immutable payload representation.
 * Recovering syntax parses now preserve valid prefixes and report lexical
   failures as structured `ParseError` values with source spans, matching
   grammar-error recovery and giving diagnostic consumers one error shape.

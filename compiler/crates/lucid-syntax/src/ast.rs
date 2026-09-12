@@ -104,6 +104,7 @@ pub enum LiteralValue {
     Float(f64),
     Complex(f64),
     Str(String),
+    Bytes(Vec<u8>),
     Bool(bool),
     None,
     Sentinel(String),

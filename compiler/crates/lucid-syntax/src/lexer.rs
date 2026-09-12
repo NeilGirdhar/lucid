@@ -563,12 +563,22 @@ impl<'a> Lexer<'a> {
 
         // Identifiers and keywords (including r"...", f"..." prefixes)
         if c.is_alphabetic() || c == '_' {
-            // Check for f"..." or r"..."
-            if (c == 'r' || c == 'f')
+            // Check for f"...", r"...", or b"..." prefixes.
+            if (c == 'r' || c == 'f' || c == 'b')
                 && let Some(quote @ ('"' | '\'')) = self.peek_next_char()
             {
                 self.advance_char(); // advance prefix
-                return self.lex_string(quote, start_pos, start_line, start_col);
+                let token = self.lex_string(quote, start_pos, start_line, start_col)?;
+                if c == 'b' {
+                    return Ok(token.map(|token| {
+                        let value = match token.kind {
+                            TokenKind::Str(value) => value,
+                            _ => String::new(),
+                        };
+                        Token::new(TokenKind::Bytes(value), token.span)
+                    }));
+                }
+                return Ok(token);
             }
 
             return self.lex_ident_or_keyword(start_pos, start_line, start_col);

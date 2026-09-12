@@ -4898,6 +4898,15 @@ impl TypeChecker {
                     .unwrap_or(Type::Float),
                 LiteralValue::Bool(value) => Type::LiteralBool(*value),
                 LiteralValue::Str(_) => Type::Str,
+                LiteralValue::Bytes(_) => Type::Class {
+                    name: "Bytes".into(),
+                    type_args: Vec::new(),
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: vec!["Buffer".into(), "Sized".into(), "Container".into()],
+                    fields: HashMap::new(),
+                    is_sealed: true,
+                },
                 LiteralValue::None => Type::None,
                 LiteralValue::Sentinel(s) => Type::TypeVar(s.clone()),
                 LiteralValue::Ellipsis => Type::None,
@@ -8339,6 +8348,15 @@ impl TypeChecker {
                     .cloned()
                     .unwrap_or(Type::Float)),
                 LiteralValue::Str(value) => Ok(Type::LiteralStr(value.clone())),
+                LiteralValue::Bytes(_) => Ok(Type::Class {
+                    name: "Bytes".into(),
+                    type_args: Vec::new(),
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: vec!["Buffer".into(), "Sized".into(), "Container".into()],
+                    fields: HashMap::new(),
+                    is_sealed: true,
+                }),
                 LiteralValue::Bool(value) => Ok(Type::LiteralBool(*value)),
                 LiteralValue::None => Ok(Type::None),
                 LiteralValue::Sentinel(_) => Ok(Type::TypeVar("Sentinel".into())),
@@ -8933,7 +8951,7 @@ u.id = 2
 
     #[test]
     fn bytes_have_distinct_immutable_type_and_integer_indexing() {
-        let module = parse("data: Bytes = bytes([65, 66])\nfirst: int = data[0]\n").unwrap();
+        let module = parse("data: Bytes = b\"AB\"\nfirst: int = data[0]\n").unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&module).is_ok());
         let expr = match &module.statements[0] {
