@@ -1607,6 +1607,38 @@ pub fn lower_function_body(
             } => Some(lucid_cir::TypedLiteral::Bool(*value)),
             _ => None,
         };
+        fn match_arm_value(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
+            match arm.body.as_slice() {
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] => Some(value),
+                [
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    },
+                    lucid_syntax::Stmt::Return {
+                        value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                        ..
+                    },
+                ] if name == returned => Some(value),
+                [
+                    lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    },
+                    lucid_syntax::Stmt::Return {
+                        value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                        ..
+                    },
+                ] if name == returned => Some(value),
+                _ => None,
+            }
+        }
         if arms.len() >= 3
             && let Some(parameter_index) = parameter_index
             && arms[..arms.len() - 1]
@@ -1632,28 +1664,12 @@ pub fn lower_function_body(
                         }
                         _ => return None,
                     };
-                    let [
-                        lucid_syntax::Stmt::Return {
-                            value: Some(value), ..
-                        },
-                    ] = arm.body.as_slice()
-                    else {
-                        return None;
-                    };
-                    Some((pattern, primitive_literal(value)?))
+                    Some((pattern, primitive_literal(match_arm_value(arm)?)?))
                 })
                 .collect::<Option<Vec<_>>>();
-            let wildcard = arms.last().and_then(|arm| {
-                let [
-                    lucid_syntax::Stmt::Return {
-                        value: Some(value), ..
-                    },
-                ] = arm.body.as_slice()
-                else {
-                    return None;
-                };
-                primitive_literal(value)
-            });
+            let wildcard = arms
+                .last()
+                .and_then(|arm| primitive_literal(match_arm_value(arm)?));
             if let (Some(explicit), Some(wildcard)) = (explicit, wildcard) {
                 return lucid_cir::Function::from_parameterized_literal_match(
                     function.parameter_names.len(),
@@ -1676,23 +1692,9 @@ pub fn lower_function_body(
         {
             let explicit_values = arms[..arms.len() - 1]
                 .iter()
-                .map(|arm| match arm.body.as_slice() {
-                    [
-                        lucid_syntax::Stmt::Return {
-                            value: Some(value), ..
-                        },
-                    ] => Some(value),
-                    _ => None,
-                })
+                .map(match_arm_value)
                 .collect::<Option<Vec<_>>>();
-            let wildcard_value = arms.last().and_then(|arm| match arm.body.as_slice() {
-                [
-                    lucid_syntax::Stmt::Return {
-                        value: Some(value), ..
-                    },
-                ] => Some(value),
-                _ => None,
-            });
+            let wildcard_value = arms.last().and_then(match_arm_value);
             if let (Some(explicit_values), Some(wildcard_value)) = (explicit_values, wildcard_value)
             {
                 let conditions = arms[..arms.len() - 1]
@@ -1757,21 +1759,11 @@ pub fn lower_function_body(
                 ));
             }
         };
-        let then_value = match literal_arm.body.as_slice() {
-            [
-                lucid_syntax::Stmt::Return {
-                    value: Some(value), ..
-                },
-            ] => value,
-            _ => return Err(Arc::from("unsupported match arm for function CIR lowering")),
+        let Some(then_value) = match_arm_value(literal_arm) else {
+            return Err(Arc::from("unsupported match arm for function CIR lowering"));
         };
-        let else_value = match wildcard_arm.body.as_slice() {
-            [
-                lucid_syntax::Stmt::Return {
-                    value: Some(value), ..
-                },
-            ] => value,
-            _ => return Err(Arc::from("unsupported match arm for function CIR lowering")),
+        let Some(else_value) = match_arm_value(wildcard_arm) else {
+            return Err(Arc::from("unsupported match arm for function CIR lowering"));
         };
         let lucid_syntax::Pattern::Literal(literal, span) = &literal_arm.pattern else {
             return Err(Arc::from("unsupported match literal pattern"));
@@ -5044,6 +5036,17 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("multi-arm expression match should lower through a CIR ladder");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
+
+        let file = db.add_file(
+            "multi-match-local-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = value + 10\n            return selected\n        case 2:\n            doubled = value * 10\n            return doubled\n        case _:\n            fallback = -value\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm local expression match should lower through a CIR ladder");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
