@@ -5661,6 +5661,84 @@ impl TypeChecker {
         }
     }
 
+    fn dispatch_return_for_types(
+        &self,
+        name: &str,
+        argument_types: &[Type],
+        span: Span,
+    ) -> Result<Option<Type>, TypeError> {
+        if !self.env.overloaded_functions.contains(name) {
+            return Ok(None);
+        }
+        let candidates = self
+            .env
+            .function_overloads
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter_map(|candidate| match candidate {
+                Type::Function {
+                    params,
+                    return_type,
+                } if params.len() == argument_types.len()
+                    && params
+                        .iter()
+                        .zip(argument_types.iter())
+                        .all(|(parameter, argument)| argument.is_subtype_of(parameter, &self.env)) =>
+                {
+                    Some((params.clone(), return_type.as_ref().clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        let maximal = candidates
+            .iter()
+            .filter(|(params, _)| {
+                !candidates.iter().any(|(other, _)| {
+                    other != params
+                        && other
+                            .iter()
+                            .zip(params.iter())
+                            .all(|(a, b)| a.is_subtype_of(b, &self.env))
+                        && other.iter().zip(params.iter()).any(|(a, b)| a != b)
+                })
+            })
+            .collect::<Vec<_>>();
+        if maximal.len() != 1 {
+            return Err(TypeError {
+                message: format!(
+                    "ambiguous dispatch call to '{}' ({} applicable overloads)",
+                    name,
+                    maximal.len()
+                ),
+                span,
+            });
+        }
+        Ok(maximal.first().map(|(_, return_type)| return_type.clone()))
+    }
+
+    fn binary_dispatch_name(op: BinaryOp) -> Option<&'static str> {
+        match op {
+            BinaryOp::Add => Some("__add__"),
+            BinaryOp::Sub => Some("__sub__"),
+            BinaryOp::Mul => Some("__mul__"),
+            BinaryOp::Div => Some("__truediv__"),
+            BinaryOp::FloorDiv => Some("__floordiv__"),
+            BinaryOp::Mod => Some("__mod__"),
+            BinaryOp::Pow => Some("__pow__"),
+            BinaryOp::Lt => Some("__lt__"),
+            BinaryOp::LtEq => Some("__le__"),
+            BinaryOp::Gt => Some("__gt__"),
+            BinaryOp::GtEq => Some("__ge__"),
+            BinaryOp::Eq => Some("__eq__"),
+            BinaryOp::NotEq => Some("__ne__"),
+            _ => None,
+        }
+    }
+
     fn exact_class_of_expr(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident { name, .. } => self.env.exact_variables.get(name).cloned(),
@@ -5829,6 +5907,13 @@ impl TypeChecker {
                         || matches!(ty, Type::Never)
                         || matches!(ty, Type::TypeVar(name) if name == "Any")
                 };
+                if let Some(dispatch_name) = Self::binary_dispatch_name(op.clone()) {
+                    if let Some(return_type) =
+                        self.dispatch_return_for_types(dispatch_name, &[lt.clone(), rt.clone()], left.span())?
+                    {
+                        return Ok(return_type);
+                    }
+                }
                 match op {
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
                         let unknown = |ty: &Type| {
@@ -10894,6 +10979,27 @@ def reject(value: not int) -> none:
         let mut ambiguous_checker = TypeChecker::new();
         let error = ambiguous_checker.check_module(&ambiguous).unwrap_err();
         assert!(error.message.contains("ambiguous dispatch"));
+        let ambiguous_operator = parse(
+            "class Animal:\n    pass\nclass Cat(Animal):\n    pass\nclass Dog(Animal):\n    pass\ndispatch def __add__(lhs: Cat, rhs: Animal) -> str:\n    return \"cat\"\ndispatch def __add__(lhs: Animal, rhs: Dog) -> str:\n    return \"dog\"\nresult = Cat() + Dog()\n",
+        )
+        .unwrap();
+        let mut ambiguous_operator_checker = TypeChecker::new();
+        let error = ambiguous_operator_checker
+            .check_module(&ambiguous_operator)
+            .unwrap_err();
+        assert!(error.message.contains("ambiguous dispatch"));
+        let specific_operator = parse(
+            "class Animal:\n    pass\nclass Cat(Animal):\n    pass\nclass Dog(Animal):\n    pass\ndispatch def __add__(lhs: Cat, rhs: Animal) -> str:\n    return \"cat\"\ndispatch def __add__(lhs: Cat, rhs: Dog) -> str:\n    return \"both\"\nresult = Cat() + Dog()\n",
+        )
+        .unwrap();
+        let mut specific_operator_checker = TypeChecker::new();
+        specific_operator_checker
+            .check_module(&specific_operator)
+            .unwrap();
+        assert!(matches!(
+            specific_operator_checker.env.variables.get("result"),
+            Some((Type::Str, _))
+        ));
         let invalid_overload = parse(
             "dispatch def choose(value: int) -> int:\n    return value\ndispatch def choose(value: str) -> str:\n    return value\nresult = choose(true)\n",
         )

@@ -72,6 +72,7 @@ pub enum DeclKind {
 pub struct ResolvedDecl<'db> {
     pub symbol: Symbol<'db>,
     pub kind: DeclKind,
+    pub is_dispatch: bool,
     pub exported: bool,
     pub span: lucid_syntax::Span,
 }
@@ -351,23 +352,29 @@ pub fn resolved_declarations<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<[Res
             lucid_syntax::Stmt::Export(inner) => (inner.as_ref(), true),
             other => (other, false),
         };
-        let (name, kind) = match statement {
-            lucid_syntax::Stmt::ClassDef { name, .. } => (Some(name), DeclKind::Class),
-            lucid_syntax::Stmt::InterfaceDef { name, .. } => (Some(name), DeclKind::Interface),
-            lucid_syntax::Stmt::TraitDef { name, .. } => (Some(name), DeclKind::Trait),
-            lucid_syntax::Stmt::TypeAlias { name, .. } => (Some(name), DeclKind::TypeAlias),
-            lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef { name, .. }) => {
-                (Some(name), DeclKind::Function)
+        let (name, kind, is_dispatch) = match statement {
+            lucid_syntax::Stmt::ClassDef { name, .. } => (Some(name), DeclKind::Class, false),
+            lucid_syntax::Stmt::InterfaceDef { name, .. } => {
+                (Some(name), DeclKind::Interface, false)
             }
+            lucid_syntax::Stmt::TraitDef { name, .. } => (Some(name), DeclKind::Trait, false),
+            lucid_syntax::Stmt::TypeAlias { name, .. } => {
+                (Some(name), DeclKind::TypeAlias, false)
+            }
+            lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef {
+                name,
+                is_dispatch,
+                ..
+            }) => (Some(name), DeclKind::Function, *is_dispatch),
             lucid_syntax::Stmt::VarDef {
                 pattern: lucid_syntax::Pattern::Ident(name, _),
                 ..
-            } => (Some(name), DeclKind::Value),
+            } => (Some(name), DeclKind::Value, false),
             lucid_syntax::Stmt::Assignment {
                 target: lucid_syntax::Expr::Ident { name, .. },
                 ..
-            } => (Some(name), DeclKind::Value),
-            _ => (None, DeclKind::Value),
+            } => (Some(name), DeclKind::Value, false),
+            _ => (None, DeclKind::Value, false),
         };
         let span = match statement {
             lucid_syntax::Stmt::ClassDef { span, .. }
@@ -383,6 +390,7 @@ pub fn resolved_declarations<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<[Res
             declarations.push(ResolvedDecl {
                 symbol: Symbol::new(db, file, name.clone()),
                 kind,
+                is_dispatch,
                 exported: !name.starts_with('_'),
                 span,
             });
@@ -3260,14 +3268,25 @@ pub fn resolve_visible<'db>(
 #[salsa::tracked]
 pub fn declaration_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Arc<str>]> {
     let declarations = resolved_declarations(db, file);
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = std::collections::BTreeMap::new();
     let mut errors = Vec::new();
     for declaration in declarations.iter() {
         let name = declaration.symbol.name(db);
-        if !seen.insert(name.clone()) {
+        if let Some(previous) = seen.get(name.as_str()) {
+            let dispatch_overload = *previous
+                && declaration.kind == DeclKind::Function
+                && declaration.is_dispatch;
+            if dispatch_overload {
+                continue;
+            }
             errors.push(Arc::<str>::from(format!(
                 "duplicate top-level declaration '{name}'"
             )));
+        } else {
+            seen.insert(
+                name.to_string(),
+                declaration.kind == DeclKind::Function && declaration.is_dispatch,
+            );
         }
     }
     Arc::from(errors)
@@ -3315,10 +3334,16 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
         return Arc::from(diagnostics);
     }
     let declarations = resolved_declarations(db, file);
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = std::collections::BTreeMap::new();
     for declaration in declarations.iter() {
         let name = declaration.symbol.name(db);
-        if !seen.insert(name.clone()) {
+        if let Some(previous) = seen.get(name.as_str()) {
+            let dispatch_overload = *previous
+                && declaration.kind == DeclKind::Function
+                && declaration.is_dispatch;
+            if dispatch_overload {
+                continue;
+            }
             diagnostics.push(Diagnostic {
                 file,
                 severity: Severity::Error,
@@ -3326,6 +3351,11 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
                 message: format!("duplicate top-level declaration '{name}'"),
                 span: declaration.span,
             });
+        } else {
+            seen.insert(
+                name.to_string(),
+                declaration.kind == DeclKind::Function && declaration.is_dispatch,
+            );
         }
     }
     let module_result = parse_ast(db, file);
@@ -4789,6 +4819,7 @@ mod tests {
         assert_eq!(declarations[0].kind, DeclKind::Class);
         assert!(declarations[0].exported);
         assert_eq!(declarations[1].kind, DeclKind::Function);
+        assert!(!declarations[1].is_dispatch);
         assert!(declarations[1].exported);
     }
 
@@ -5032,6 +5063,22 @@ mod tests {
         let diagnostics = declaration_diagnostics(&db, file);
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].contains("duplicate"));
+    }
+
+    #[test]
+    fn dispatch_overloads_are_not_duplicate_declarations() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "main.lucid",
+            "dispatch def choose(value: int) -> int:\n    return value\ndispatch def choose(value: str) -> str:\n    return value\n",
+        );
+        let declarations = resolved_declarations(&db, file);
+        assert_eq!(declarations.len(), 2);
+        assert!(declarations.iter().all(|declaration| declaration.is_dispatch));
+        assert!(declaration_diagnostics(&db, file).is_empty());
+        assert!(file_diagnostics(&db, file)
+            .iter()
+            .all(|diagnostic| diagnostic.code != "E0100"));
     }
 
     #[test]
