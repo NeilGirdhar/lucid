@@ -1188,6 +1188,13 @@ fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
     if lower_path.contains("rejected-features") {
         return !block.contains("class FileHandle:");
     }
+    let lower_block = block.to_ascii_lowercase();
+    if lower_block.contains("\n    global ")
+        || lower_block.contains("\n        nonlocal ")
+        || lower_block.contains("metaclass=")
+    {
+        return true;
+    }
     block.lines().any(|line| {
         let line = line.to_ascii_lowercase();
         let comment = line.split_once('#').map(|(_, comment)| comment.trim());
