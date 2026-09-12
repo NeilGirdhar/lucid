@@ -494,6 +494,9 @@ diverged:
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.
+  Constant branch lowering also preserves arm selection when dead arms contain
+  invalid arithmetic such as division by zero; unselected arms are not folded or
+  executed.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking

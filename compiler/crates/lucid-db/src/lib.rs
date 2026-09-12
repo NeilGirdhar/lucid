@@ -6232,6 +6232,24 @@ mod tests {
         assert!(error.contains("constant function branch"));
 
         let file = db.add_file(
+            "constant-unselected-invalid-else.lucid",
+            "def answer():\n    if true:\n        return 42\n    else:\n        return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("unselected invalid else branch must not be evaluated");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-unselected-invalid-then.lucid",
+            "def answer():\n    if false:\n        return 1 // 0\n    else:\n        return 42\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("unselected invalid then branch must not be evaluated");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
             "parameterized.lucid",
             "def answer(value: int):\n    return value + 1\n",
         );
