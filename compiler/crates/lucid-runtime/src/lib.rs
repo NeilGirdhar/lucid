@@ -8660,6 +8660,17 @@ impl Interpreter {
                         }
                         Ok(Value::Int(bytes[actual_idx as usize] as i64))
                     }
+                    (Value::Range { start, stop, step }, Value::Int(i)) => {
+                        let values = materialize_range(start, stop, step);
+                        let actual_idx = if i < 0 { values.len() as i64 + i } else { i };
+                        if actual_idx < 0 || actual_idx as usize >= values.len() {
+                            return Err(RuntimeError {
+                                message: format!("index {i} out of range"),
+                                span: *span,
+                            });
+                        }
+                        Ok(values[actual_idx as usize].clone())
+                    }
                     (Value::Dict(dict), Value::Str(k)) => {
                         dict.borrow().get(&k).cloned().ok_or_else(|| RuntimeError {
                             message: format!("key '{k}' not found"),
@@ -11290,6 +11301,15 @@ s = sum(r)
             interp.env.borrow().get("maximal"),
             Some(Value::Int(i64::MIN + 2))
         );
+    }
+
+    #[test]
+    fn range_indexing_uses_sequence_positions() {
+        let module = parse("a = range(1, 6, 2)[1]\nb = range(5, 0, -2)[-1]\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("a"), Some(Value::Int(3)));
+        assert_eq!(interp.env.borrow().get("b"), Some(Value::Int(1)));
     }
 
     #[test]

@@ -1196,7 +1196,10 @@ diverged:
   first-class `LUCID_TYPE_RANGE` value, so `case range` tests the range tag
   instead of treating a range expression as a list. Native condition lowering
   also dispatches statically typed `LucidRange*` expressions through range
-  truthiness, so empty ranges are false even before value erasure.
+  truthiness, so empty ranges are false even before value erasure. Interpreter
+  and native indexing now treat ranges as sequences: positive and negative
+  indices return the corresponding arithmetic range element with normal
+  bounds checks.
   Native class-like identifier patterns that are not known classes now fail
   codegen instead of compiling as unconditional matches; lowercase binding
   patterns remain the match-all binding form.

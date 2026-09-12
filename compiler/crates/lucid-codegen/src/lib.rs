@@ -4019,6 +4019,7 @@ static inline void lucid_list_set(LucidList* l, int64_t idx, LucidVal v) {
 }
 
 static inline bool lucid_dict_contains(LucidDict* d, LucidVal key);
+static inline LucidVal lucid_range_get(LucidRange* range, int64_t idx);
 
 static inline LucidVal lucid_get_index(LucidVal container, int64_t idx) {
     if (container.type == LUCID_TYPE_LIST) {
@@ -4026,6 +4027,9 @@ static inline LucidVal lucid_get_index(LucidVal container, int64_t idx) {
     }
     if (container.type == LUCID_TYPE_MEMORYVIEW) {
         return lucid_memoryview_get(container.view, idx);
+    }
+    if (container.type == LUCID_TYPE_RANGE) {
+        return lucid_range_get(container.range, idx);
     }
     if (container.type == LUCID_TYPE_STR) {
         return lucid_str(lucid_str_index(container.s, idx));
@@ -4274,6 +4278,21 @@ static inline LucidList* lucid_range_to_list(int64_t start, int64_t stop, int64_
         i = next;
     }
     return l;
+}
+
+static inline LucidVal lucid_range_get(LucidRange* range, int64_t idx) {
+    if (!range) { fprintf(stderr, "index %lld out of range\n", (long long)idx); exit(1); }
+    int64_t count = lucid_range_count(range->start, range->stop, range->step);
+    if (idx < 0) idx += count;
+    if (idx < 0 || idx >= count) {
+        fprintf(stderr, "index %lld out of range\n", (long long)idx);
+        exit(1);
+    }
+    __int128 value = (__int128)range->start + (__int128)idx * (__int128)range->step;
+    if (value < INT64_MIN || value > INT64_MAX) {
+        fprintf(stderr, "range index overflow\n"); exit(1);
+    }
+    return lucid_int((int64_t)value);
 }
 
 static inline LucidRange* lucid_range_new(int64_t start, int64_t stop, int64_t step) {
@@ -19003,6 +19022,24 @@ else:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n2\n1\n0\n");
+    }
+
+    #[test]
+    fn native_range_indexing_uses_sequence_positions() {
+        let source = "print(range(1, 6, 2)[1])\nprint(range(5, 0, -2)[-1])\n";
+        let module = parse(source).expect("range indexing should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_range_indexing_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("range indexing should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled range indexing program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n1\n");
     }
 
     #[test]
