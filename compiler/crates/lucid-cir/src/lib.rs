@@ -725,11 +725,296 @@ impl Function {
                     if patterns.len() + 2 != node.children.len() {
                         return Err(LowerError::UnsupportedExpression);
                     }
-                    let mut expanded = nodes.to_vec();
-                    let mut fallback = node.children[patterns.len() + 1];
-                    for (pattern, result) in
-                        patterns.into_iter().zip(node.children[1..].iter()).rev()
-                    {
+                    fn remap_instruction(instruction: &Instruction, offset: u32) -> Instruction {
+                        let value = |value: ValueId| ValueId(value.0 + offset);
+                        match instruction {
+                            Instruction::Param { result, index } => Instruction::Param {
+                                result: value(*result),
+                                index: *index,
+                            },
+                            Instruction::ConstInt {
+                                result,
+                                value: literal,
+                            } => Instruction::ConstInt {
+                                result: value(*result),
+                                value: *literal,
+                            },
+                            Instruction::ConstBool {
+                                result,
+                                value: literal,
+                            } => Instruction::ConstBool {
+                                result: value(*result),
+                                value: *literal,
+                            },
+                            Instruction::Add {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Add {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Sub {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Sub {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Mul {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Mul {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Pow {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Pow {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Div {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Div {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::FloorDiv {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::FloorDiv {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Mod {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Mod {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::BitAnd {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::BitAnd {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::BitOr {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::BitOr {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::BitXor {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::BitXor {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Shl {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Shl {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Shr {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Shr {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::CmpEq {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::CmpEq {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::CmpNe {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::CmpNe {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::CmpLe {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::CmpLe {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::CmpGt {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::CmpGt {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::CmpGe {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::CmpGe {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::CmpLt {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::CmpLt {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Neg { result, operand } => Instruction::Neg {
+                                result: value(*result),
+                                operand: value(*operand),
+                            },
+                            Instruction::BitNot { result, operand } => Instruction::BitNot {
+                                result: value(*result),
+                                operand: value(*operand),
+                            },
+                            Instruction::Not { result, operand } => Instruction::Not {
+                                result: value(*result),
+                                operand: value(*operand),
+                            },
+                            Instruction::And {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::And {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Or {
+                                result,
+                                left,
+                                right,
+                            } => Instruction::Or {
+                                result: value(*result),
+                                left: value(*left),
+                                right: value(*right),
+                            },
+                            Instruction::Phi { result, incomings } => Instruction::Phi {
+                                result: value(*result),
+                                incomings: incomings
+                                    .iter()
+                                    .map(|(block, incoming)| (*block, value(*incoming)))
+                                    .collect(),
+                            },
+                        }
+                    }
+                    fn result_id(instruction: &Instruction) -> ValueId {
+                        match instruction {
+                            Instruction::Param { result, .. }
+                            | Instruction::ConstInt { result, .. }
+                            | Instruction::ConstBool { result, .. }
+                            | Instruction::Add { result, .. }
+                            | Instruction::Sub { result, .. }
+                            | Instruction::Mul { result, .. }
+                            | Instruction::Pow { result, .. }
+                            | Instruction::Div { result, .. }
+                            | Instruction::FloorDiv { result, .. }
+                            | Instruction::Mod { result, .. }
+                            | Instruction::BitAnd { result, .. }
+                            | Instruction::BitOr { result, .. }
+                            | Instruction::BitXor { result, .. }
+                            | Instruction::Shl { result, .. }
+                            | Instruction::Shr { result, .. }
+                            | Instruction::CmpEq { result, .. }
+                            | Instruction::CmpNe { result, .. }
+                            | Instruction::CmpLe { result, .. }
+                            | Instruction::CmpGt { result, .. }
+                            | Instruction::CmpGe { result, .. }
+                            | Instruction::CmpLt { result, .. }
+                            | Instruction::Neg { result, .. }
+                            | Instruction::BitNot { result, .. }
+                            | Instruction::Not { result, .. }
+                            | Instruction::And { result, .. }
+                            | Instruction::Or { result, .. }
+                            | Instruction::Phi { result, .. } => *result,
+                        }
+                    }
+                    fn single_block(
+                        function: Function,
+                    ) -> Result<(Vec<Instruction>, ValueId), LowerError> {
+                        let [block] = function.blocks.as_slice() else {
+                            return Err(LowerError::UnsupportedExpression);
+                        };
+                        let Terminator::Return(Some(value)) = block.terminator else {
+                            return Err(LowerError::UnsupportedExpression);
+                        };
+                        Ok((block.instructions.clone(), value))
+                    }
+                    fn remap_block(
+                        instructions: Vec<Instruction>,
+                        value: ValueId,
+                        offset: &mut u32,
+                    ) -> (Vec<Instruction>, ValueId) {
+                        let current = *offset;
+                        let max_value = instructions
+                            .iter()
+                            .map(result_id)
+                            .chain(std::iter::once(value))
+                            .map(|value| value.0 + 1)
+                            .max()
+                            .unwrap_or(0);
+                        *offset += max_value;
+                        (
+                            instructions
+                                .iter()
+                                .map(|instruction| remap_instruction(instruction, current))
+                                .collect(),
+                            ValueId(value.0 + current),
+                        )
+                    }
+
+                    let mut conditions = Vec::with_capacity(patterns.len());
+                    for pattern in &patterns {
+                        let mut expanded = nodes.to_vec();
                         let literal_id = u32::try_from(expanded.len())
                             .map_err(|_| LowerError::UnsupportedExpression)?;
                         expanded.push(TypedExprNode {
@@ -737,7 +1022,7 @@ impl Function {
                             kind: "literal".into(),
                             detail: None,
                             children: Vec::new(),
-                            literal: Some(pattern),
+                            literal: Some(*pattern),
                         });
                         let comparison_id = u32::try_from(expanded.len())
                             .map_err(|_| LowerError::UnsupportedExpression)?;
@@ -748,23 +1033,104 @@ impl Function {
                             children: vec![node.children[0], literal_id],
                             literal: None,
                         });
-                        let if_id = u32::try_from(expanded.len())
-                            .map_err(|_| LowerError::UnsupportedExpression)?;
-                        expanded.push(TypedExprNode {
-                            id: if_id,
-                            kind: "if".into(),
-                            detail: None,
-                            children: vec![comparison_id, *result, fallback],
-                            literal: None,
-                        });
-                        fallback = if_id;
+                        conditions.push(single_block(Self::from_typed_graph(
+                            &expanded,
+                            &[comparison_id],
+                            parameter_names,
+                            local_bindings,
+                        )?)?);
                     }
-                    return Self::from_typed_graph(
-                        &expanded,
-                        &[fallback],
-                        parameter_names,
-                        local_bindings,
+                    let mut results = Vec::with_capacity(patterns.len() + 1);
+                    for result in &node.children[1..] {
+                        results.push(single_block(Self::from_typed_graph(
+                            nodes,
+                            &[*result],
+                            parameter_names,
+                            local_bindings,
+                        )?)?);
+                    }
+                    let mut next_value_offset = 0;
+                    let mut blocks = Vec::with_capacity(patterns.len() * 2 + 2);
+                    let merge_block = BlockId(
+                        u32::try_from(patterns.len() * 2 + 1)
+                            .map_err(|_| LowerError::UnsupportedExpression)?,
                     );
+                    let mut phi_incomings = Vec::with_capacity(results.len());
+                    for (index, (instructions, condition_value)) in
+                        conditions.into_iter().enumerate()
+                    {
+                        let condition_block = BlockId(
+                            u32::try_from(index * 2)
+                                .map_err(|_| LowerError::UnsupportedExpression)?,
+                        );
+                        let result_block = BlockId(
+                            u32::try_from(index * 2 + 1)
+                                .map_err(|_| LowerError::UnsupportedExpression)?,
+                        );
+                        let else_block = if index + 1 == patterns.len() {
+                            BlockId(
+                                u32::try_from(patterns.len() * 2)
+                                    .map_err(|_| LowerError::UnsupportedExpression)?,
+                            )
+                        } else {
+                            BlockId(
+                                u32::try_from((index + 1) * 2)
+                                    .map_err(|_| LowerError::UnsupportedExpression)?,
+                            )
+                        };
+                        let (instructions, condition_value) =
+                            remap_block(instructions, condition_value, &mut next_value_offset);
+                        blocks.push(Block {
+                            id: condition_block,
+                            instructions,
+                            terminator: Terminator::Branch {
+                                condition: condition_value,
+                                then_block: result_block,
+                                else_block,
+                            },
+                        });
+                        let (result_instructions, result_value) = remap_block(
+                            results[index].0.clone(),
+                            results[index].1,
+                            &mut next_value_offset,
+                        );
+                        phi_incomings.push((result_block, result_value));
+                        blocks.push(Block {
+                            id: result_block,
+                            instructions: result_instructions,
+                            terminator: Terminator::Jump(merge_block),
+                        });
+                    }
+                    let fallback_block = BlockId(
+                        u32::try_from(patterns.len() * 2)
+                            .map_err(|_| LowerError::UnsupportedExpression)?,
+                    );
+                    let fallback = results.last().ok_or(LowerError::UnsupportedExpression)?;
+                    let (fallback_instructions, fallback_value) =
+                        remap_block(fallback.0.clone(), fallback.1, &mut next_value_offset);
+                    phi_incomings.push((fallback_block, fallback_value));
+                    blocks.push(Block {
+                        id: fallback_block,
+                        instructions: fallback_instructions,
+                        terminator: Terminator::Jump(merge_block),
+                    });
+                    let merge_value = ValueId(next_value_offset);
+                    blocks.push(Block {
+                        id: merge_block,
+                        instructions: vec![Instruction::Phi {
+                            result: merge_value,
+                            incomings: phi_incomings,
+                        }],
+                        terminator: Terminator::Return(Some(merge_value)),
+                    });
+                    let function = Self {
+                        entry: BlockId(0),
+                        blocks,
+                    };
+                    function
+                        .verify()
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    return Ok(function);
                 }
                 if node.id == roots[0]
                     && node.kind == "if"
@@ -7369,6 +7735,66 @@ return total
         assert_eq!(function.blocks.len(), 4);
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+    }
+
+    #[test]
+    fn lowers_typed_match_chain_with_expression_results() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("Mul".into()),
+                children: vec![0, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "unary".into(),
+                detail: Some("Neg".into()),
+                children: vec![0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "match-chain".into(),
+                detail: Some("literal-chain:i1,i2".into()),
+                children: vec![0, 2, 4, 5],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 6, &["value".into()])
+            .expect("typed match-chain should lower nonliteral arm results");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
     }
 
     #[test]
