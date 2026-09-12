@@ -4729,6 +4729,20 @@ impl Function {
             ..
         }) = module.statements.last()
         {
+            let prefix = &module.statements[..module.statements.len() - 1];
+            let mut probe_bindings = bindings.clone();
+            let mut probe_instructions = instructions.clone();
+            let mut probe_next = next;
+            let mut probe_last = None;
+            for statement in prefix {
+                visit(
+                    statement,
+                    &mut probe_bindings,
+                    &mut probe_instructions,
+                    &mut probe_next,
+                    &mut probe_last,
+                )?;
+            }
             if constant_truth(condition).is_none() {
                 let selected_else = if elif_branches.is_empty() {
                     Some(else_branch.as_deref())
@@ -4736,7 +4750,11 @@ impl Function {
                     let mut selected = None;
                     let mut statically_known = true;
                     for (elif_condition, branch) in elif_branches {
-                        match constant_truth(elif_condition) {
+                        match statement_static_truth(
+                            elif_condition,
+                            &probe_bindings,
+                            &probe_instructions,
+                        ) {
                             Some(true) => {
                                 selected = Some(Some(branch.as_slice()));
                                 break;
@@ -4755,7 +4773,6 @@ impl Function {
                     }
                 };
                 if let Some(selected_else) = selected_else {
-                    let prefix = &module.statements[..module.statements.len() - 1];
                     return lower_dynamic_if(
                         prefix,
                         condition,
@@ -9845,6 +9862,22 @@ return total
             Function::from_module_linear(&module).unwrap().execute(),
             Ok(Some(1))
         );
+        let module = lucid_syntax::parse(
+            "other = true\nif flag:\n    value = 1\nelif other:\n    value = 2\nelse:\n    value = 3\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("binding-known elif should select the false-side branch");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+        let module = lucid_syntax::parse(
+            "other = false\nif flag:\n    value = 1\nelif other:\n    value = 2\nelse:\n    value = 3\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("binding-known false elif should select else branch");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
         )

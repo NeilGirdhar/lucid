@@ -1802,6 +1802,9 @@ diverged:
   Final dynamic diamonds now use the same static-`elif` selection for their
   false side, including no-`else` fall-through to the incoming value when all
   `elif` guards are statically false.
+  That final selection also sees primitive truth already proven by the lowered
+  prefix, so a parameter-driven `if` can still select an `elif` arm guarded by
+  an earlier constant local.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
