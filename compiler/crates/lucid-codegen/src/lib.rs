@@ -6556,6 +6556,23 @@ static inline void lucid_print_val(LucidVal v) {
                 ));
             }
         }
+        for (index, param) in f.params.iter().enumerate() {
+            if param.is_positional_only {
+                self.emit_line(&format!(
+                    "if (kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\"))) {{ fprintf(stderr, \"positional-only argument passed by keyword\\n\"); exit(1); }}",
+                    c_escape_string(&param.name)
+                ));
+            }
+            if param.is_keyword_only {
+                let positional_index = f.params[..index]
+                    .iter()
+                    .filter(|previous| !previous.is_keyword_only && !previous.is_variadic_keyword)
+                    .count();
+                self.emit_line(&format!(
+                    "if (args && args->len > {positional_index}) {{ fprintf(stderr, \"keyword-only argument passed positionally\\n\"); exit(1); }}"
+                ));
+            }
+        }
         let mut call_args = Vec::new();
         for (index, param) in f.params.iter().enumerate() {
             if Some(index) == gather_index {
@@ -19809,6 +19826,7 @@ print(result[1])
         assert!(run.status.success(), "parameters spread value failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
     }
+
 
     #[test]
     fn native_named_class_gather_value_accepts_gather_spread() {
