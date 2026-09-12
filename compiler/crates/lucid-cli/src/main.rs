@@ -1082,7 +1082,10 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
 
     let mut total_blocks = 0;
     let mut parsed_blocks = 0;
+    let mut positive_parsed_blocks = 0;
     let mut typechecked_blocks = 0;
+    let mut expected_failure_blocks = 0;
+    let mut expected_failures_matched = 0;
 
     for doc_file in &doc_files {
         let content = match fs::read_to_string(doc_file) {
@@ -1097,13 +1100,32 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
         };
         for (idx, block) in blocks.into_iter().enumerate() {
             total_blocks += 1;
+            let expect_failure = spec_block_expects_failure(doc_file, &block);
+            if expect_failure {
+                expected_failure_blocks += 1;
+            }
             match lucid_syntax::parse(&block) {
                 Ok(module) => {
                     parsed_blocks += 1;
+                    if !expect_failure {
+                        positive_parsed_blocks += 1;
+                    }
                     let mut checker = lucid_checker::TypeChecker::new();
                     match checker.check_module(&module) {
+                        Ok(()) if expect_failure => {
+                            if verbose {
+                                println!(
+                                    "! Expected failure passed in {} block #{}",
+                                    doc_file.display(),
+                                    idx + 1,
+                                );
+                            }
+                        }
                         Ok(()) => {
                             typechecked_blocks += 1;
+                        }
+                        Err(_) if expect_failure => {
+                            expected_failures_matched += 1;
                         }
                         Err(err) if verbose => {
                             println!(
@@ -1115,6 +1137,9 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
                         }
                         Err(_) => {}
                     }
+                }
+                Err(_) if expect_failure => {
+                    expected_failures_matched += 1;
                 }
                 Err(err) => {
                     if verbose {
@@ -1143,14 +1168,36 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
     println!(
         "  Valid Lucid modules parsed: {parsed_blocks} / {total_blocks} ({parse_percent:.1}%)"
     );
-    let check_percent = if parsed_blocks == 0 {
+    let check_percent = if positive_parsed_blocks == 0 {
         100.0
     } else {
-        (typechecked_blocks as f64 / parsed_blocks as f64) * 100.0
+        (typechecked_blocks as f64 / positive_parsed_blocks as f64) * 100.0
     };
     println!(
-        "  Type checked without errors: {typechecked_blocks} / {parsed_blocks} ({check_percent:.1}%)"
+        "  Positive snippets type checked: {typechecked_blocks} / {positive_parsed_blocks} ({check_percent:.1}%)"
     );
+    if expected_failure_blocks > 0 {
+        println!(
+            "  Expected failures accepted: {expected_failures_matched} / {expected_failure_blocks}"
+        );
+    }
+}
+
+fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
+    let lower_path = path.to_string_lossy().to_ascii_lowercase();
+    if lower_path.contains("rejected-features") {
+        return true;
+    }
+    block.lines().any(|line| {
+        let line = line.to_ascii_lowercase();
+        let comment = line.split_once('#').map(|(_, comment)| comment.trim());
+        comment.is_some_and(|comment| {
+            comment.contains("error")
+                || comment.contains("not part of lucid")
+                || comment.contains("discarded in lucid")
+                || comment.contains("not supported")
+        })
+    })
 }
 
 fn extract_markdown_code_blocks(markdown: &str) -> Vec<String> {
