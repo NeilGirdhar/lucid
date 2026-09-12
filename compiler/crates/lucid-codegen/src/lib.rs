@@ -211,6 +211,11 @@ pub struct CCodeGenerator {
     context_stack: Vec<Vec<String>>,
     complex_names: HashSet<String>,
     anonymous_bindings: HashMap<String, (Vec<(String, String)>, Expr)>,
+    /// Nested named functions whose body is a statement block.  These are
+    /// lowered at the call site until the native closure ABI can represent an
+    /// escaping activation; keeping them separate from expression bindings
+    /// makes the limitation explicit and avoids silently dropping statements.
+    anonymous_block_bindings: HashMap<String, (Vec<(String, String)>, Vec<Stmt>)>,
     /// Source-level names bound to named functions.  Native functions have
     /// concrete C signatures, so preserving this alias lets `g = f; g(x)`
     /// use the same checked entry point without inventing an untyped C value.
@@ -323,6 +328,7 @@ impl CCodeGenerator {
             context_stack: Vec::new(),
             complex_names: HashSet::new(),
             anonymous_bindings: HashMap::new(),
+            anonymous_block_bindings: HashMap::new(),
             function_aliases: HashMap::new(),
             partial_bindings: HashMap::new(),
             module_aliases: HashMap::new(),
@@ -5924,6 +5930,7 @@ static inline void lucid_print_val(LucidVal v) {
         self.current_fn_async = false;
         self.var_types.clear();
         self.deleted_bindings.clear();
+        self.anonymous_block_bindings.clear();
 
         // Register params
         for p in &f.params {
@@ -6286,10 +6293,26 @@ static inline void lucid_print_val(LucidVal v) {
                                 .insert(name.clone(), (parameter_specs, body_expr.clone()));
                             return Ok(());
                         }
+                        let parameter_specs = params
+                            .iter()
+                            .map(|param| {
+                                (
+                                    param.name.clone(),
+                                    self.map_type_expr(param.type_annotation.as_ref()),
+                                )
+                            })
+                            .collect();
+                        self.anonymous_block_bindings
+                            .insert(name.clone(), (parameter_specs, body.clone()));
+                        return Ok(());
                     }
                     if let Some(Expr::Ident { name: source, .. }) = value {
                         if let Some(binding) = self.anonymous_bindings.get(source).cloned() {
                             self.anonymous_bindings.insert(name.clone(), binding);
+                            return Ok(());
+                        }
+                        if let Some(binding) = self.anonymous_block_bindings.get(source).cloned() {
+                            self.anonymous_block_bindings.insert(name.clone(), binding);
                             return Ok(());
                         }
                         let resolved = self
@@ -6379,10 +6402,26 @@ static inline void lucid_print_val(LucidVal v) {
                                     .insert(name.clone(), (parameter_specs, body_expr.clone()));
                                 return Ok(());
                             }
+                            let parameter_specs = params
+                                .iter()
+                                .map(|param| {
+                                    (
+                                        param.name.clone(),
+                                        self.map_type_expr(param.type_annotation.as_ref()),
+                                    )
+                                })
+                                .collect();
+                            self.anonymous_block_bindings
+                                .insert(name.clone(), (parameter_specs, body.clone()));
+                            return Ok(());
                         }
                         if let Expr::Ident { name: source, .. } = value {
                             if let Some(binding) = self.anonymous_bindings.get(source).cloned() {
                                 self.anonymous_bindings.insert(name.clone(), binding);
+                                return Ok(());
+                            }
+                            if let Some(binding) = self.anonymous_block_bindings.get(source).cloned() {
+                                self.anonymous_block_bindings.insert(name.clone(), binding);
                                 return Ok(());
                             }
                             let resolved = self
@@ -7343,12 +7382,19 @@ static inline void lucid_print_val(LucidVal v) {
                     );
                     return Ok(());
                 }
-                Err(CodegenError {
-                    message: format!(
-                        "native nested function '{}' requires an expression-bodied return",
-                        function.name
-                    ),
-                })
+                let parameter_specs = function
+                    .params
+                    .iter()
+                    .map(|param| {
+                        (
+                            param.name.clone(),
+                            self.map_type_expr(param.type_annotation.as_ref()),
+                        )
+                    })
+                    .collect();
+                self.anonymous_block_bindings
+                    .insert(function.name.clone(), (parameter_specs, function.body.clone()));
+                Ok(())
             }
             Stmt::Expr(expr) => {
                 let code = self.emit_expr(expr)?;
@@ -7364,6 +7410,113 @@ static inline void lucid_print_val(LucidVal v) {
                 message: format!("native backend does not support statement form: {other:?}"),
             }),
         }
+    }
+
+    /// Inline a named nested function with a statement body.  Native code
+    /// still has no general escaping closure representation, but this keeps
+    /// ordinary local calls semantically complete: parameters and locals get
+    /// a real C scope and every preceding statement executes in source order.
+    fn emit_nested_block_call(
+        &mut self,
+        parameter_specs: &[(String, String)],
+        body: &[Stmt],
+        args: &[Arg],
+    ) -> Result<String, CodegenError> {
+        let effective_args: Vec<&Arg> = args
+            .iter()
+            .filter(|arg| !matches!(arg.value, Expr::Skip(_)))
+            .collect();
+        if effective_args.len() != parameter_specs.len() {
+            return Err(CodegenError {
+                message: format!(
+                    "nested function expects {} arguments, got {}",
+                    parameter_specs.len(),
+                    effective_args.len()
+                ),
+            });
+        }
+
+        let old_buffer = std::mem::take(&mut self.buffer);
+        let old_indent = self.indent;
+        let old_types = self.var_types.clone();
+        let old_alive = self.alive_declarations.clone();
+        self.buffer = String::new();
+        self.indent = 0;
+
+        for ((name, ty), arg) in parameter_specs.iter().zip(effective_args.iter()) {
+            let argument = self.emit_expr(&arg.value)?;
+            let converted = match ty.as_str() {
+                "int64_t" => format!("lucid_as_int(lucid_wrap({argument}))"),
+                "double" => format!("lucid_as_float(lucid_wrap({argument}))"),
+                "bool" => format!("(bool)lucid_as_bool(lucid_wrap({argument}))"),
+                "const char*" => format!("lucid_as_str(lucid_wrap({argument}))"),
+                "LucidList*" => format!("lucid_as_list(lucid_wrap({argument}))"),
+                "LucidDict*" => format!("lucid_as_dict(lucid_wrap({argument}))"),
+                "LucidSet*" => format!("lucid_as_set(lucid_wrap({argument}))"),
+                _ => format!("lucid_wrap({argument})"),
+            };
+            self.var_types.insert(name.clone(), ty.clone());
+            self.emit_line(&format!("{ty} lucid_var_{name} = {converted};"));
+        }
+
+        let mut locals = HashMap::new();
+        for statement in body {
+            self.collect_vars_from_stmt(statement, &mut locals);
+        }
+        for (name, ty) in locals {
+            if parameter_specs.iter().any(|(param, _)| param == &name) {
+                continue;
+            }
+            self.var_types.insert(name.clone(), ty.clone());
+            let init = match ty.as_str() {
+                "int64_t" => "0",
+                "double" => "0.0",
+                "bool" => "false",
+                "const char*" => "\"\"",
+                "LucidList*" => "NULL",
+                "LucidVal" => "lucid_none()",
+                _ => "NULL",
+            };
+            self.emit_line(&format!("{ty} lucid_var_{name} = {init};"));
+        }
+
+        let result = (|| {
+            let (tail, return_expr) = match body.split_last() {
+                Some((Stmt::Return { value, .. }, prefix)) => (prefix, value.clone()),
+                Some(_) => {
+                    return Err(CodegenError {
+                        message: "nested native function must end with return".into(),
+                    })
+                }
+                None => (&[][..], None),
+            };
+            for statement in tail {
+                if matches!(statement, Stmt::Return { .. }) {
+                    return Err(CodegenError {
+                        message: "nested native function has an early return".into(),
+                    });
+                }
+                self.emit_stmt(statement)?;
+            }
+            let result_ty = return_expr
+                .as_ref()
+                .map(|expr| self.infer_expr_type(expr, &HashMap::new()))
+                .unwrap_or_else(|| "LucidVal".into());
+            let result_expr = match return_expr {
+                Some(expr) => self.emit_expr(&expr)?,
+                None => "lucid_none()".into(),
+            };
+            self.emit_line(&format!("{result_ty} _nested_result = {result_expr};"));
+            self.emit_line("_nested_result;");
+            Ok(std::mem::take(&mut self.buffer))
+        })();
+
+        self.buffer = old_buffer;
+        self.indent = old_indent;
+        self.var_types = old_types;
+        self.alive_declarations = old_alive;
+        let inner = result?;
+        Ok(format!("({{ {inner} }})"))
     }
 
     fn emit_expr(&mut self, expr: &Expr) -> Result<String, CodegenError> {
@@ -8596,6 +8749,13 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                         }
                         return Ok(format!("({{ {} {}; }})", declarations.join(" "), rendered));
+                    }
+                }
+                if let Expr::Ident { name, .. } = &**func {
+                    if let Some((parameter_specs, body)) =
+                        self.anonymous_block_bindings.get(name).cloned()
+                    {
+                        return self.emit_nested_block_call(&parameter_specs, &body, args);
                     }
                 }
                 let anonymous = match &**func {
@@ -17317,6 +17477,24 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "nested closure map failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+    }
+
+    #[test]
+    fn native_named_nested_block_function_executes_locals_and_capture() {
+        let source = "def run(offset: int) -> int:\n    def add(x: int) -> int:\n        let y = x + offset\n        return y * 2\n    return add(3)\nprint(run(4))\n";
+        let module = parse(source).expect("nested block function source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_nested_block_function_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("nested block function should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run nested block function");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "nested block function failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "14\n");
     }
 
     #[test]
