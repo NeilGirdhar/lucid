@@ -1519,6 +1519,27 @@ pub fn lower_function_body(
     // linear CIR builder. Route it there before the typed-local adapter, whose
     // local binding map records initializer expressions but not read-modify-
     // write updates yet.
+    fn statement_contains_augassign(statement: &lucid_syntax::Stmt) -> bool {
+        match statement {
+            lucid_syntax::Stmt::AugAssign { .. } => true,
+            lucid_syntax::Stmt::Export(inner) => statement_contains_augassign(inner),
+            lucid_syntax::Stmt::If {
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => {
+                then_branch.iter().any(statement_contains_augassign)
+                    || elif_branches
+                        .iter()
+                        .any(|(_, branch)| branch.iter().any(statement_contains_augassign))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|branch| branch.iter().any(statement_contains_augassign))
+            }
+            _ => false,
+        }
+    }
     if !function.is_async
         && !function.is_dispatch
         && matches!(
@@ -1528,7 +1549,7 @@ pub fn lower_function_body(
         && source_function
             .body
             .iter()
-            .any(|statement| matches!(statement, lucid_syntax::Stmt::AugAssign { .. }))
+            .any(statement_contains_augassign)
     {
         let module = lucid_syntax::Module {
             statements: source_function.body.clone(),
@@ -6600,6 +6621,15 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("straight-line augmented assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "selected-branch-augassign.lucid",
+            "def answer(value: int):\n    total = value\n    if true:\n        total += 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected-branch augmented assignment should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
     }
 
