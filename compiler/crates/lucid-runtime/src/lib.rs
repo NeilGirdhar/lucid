@@ -651,6 +651,7 @@ fn identity_metadata_attr(value: &Value, attr: &str) -> Option<Value> {
 #[derive(Default, Clone)]
 pub struct Environment {
     pub bindings: HashMap<String, Value>,
+    pub type_bindings: HashMap<String, Option<String>>,
     /// Insertion order for module reflection. Local lookup remains hash-based,
     /// while `fields(module)` must expose declarations deterministically.
     pub binding_order: Vec<String>,
@@ -666,6 +667,7 @@ impl Environment {
     pub fn with_parent(parent: Rc<RefCell<Environment>>) -> Self {
         Self {
             bindings: HashMap::new(),
+            type_bindings: HashMap::new(),
             binding_order: Vec::new(),
             parent: Some(parent),
             final_bindings: HashSet::new(),
@@ -686,7 +688,22 @@ impl Environment {
         if !self.bindings.contains_key(&name) {
             self.binding_order.push(name.clone());
         }
+        self.type_bindings.entry(name.clone()).or_insert(None);
         self.bindings.insert(name, value);
+    }
+
+    pub fn set_declared_type(&mut self, name: String, type_name: Option<String>) {
+        self.type_bindings.insert(name, type_name);
+    }
+
+    pub fn declared_type(&self, name: &str) -> Option<String> {
+        if let Some(local) = self.type_bindings.get(name) {
+            local.clone()
+        } else if let Some(ref p) = self.parent {
+            p.borrow().declared_type(name)
+        } else {
+            None
+        }
     }
 
     pub fn mark_final(&mut self, name: String) {
@@ -703,6 +720,7 @@ impl Environment {
 
     pub fn delete_local(&mut self, name: &str) -> bool {
         self.final_bindings.remove(name);
+        self.type_bindings.remove(name);
         let removed = self.bindings.remove(name).is_some();
         if removed {
             self.binding_order.retain(|bound| bound != name);
@@ -5137,6 +5155,32 @@ impl Interpreter {
         Ok(())
     }
 
+    fn exact_primitive_type_name(type_expr: &TypeExpr) -> Option<&str> {
+        match type_expr {
+            TypeExpr::Named { name, args, .. } if args.is_empty() => match name.as_str() {
+                "int" | "float" | "bool" | "str" => Some(name.as_str()),
+                _ => None,
+            },
+            TypeExpr::View { inner, .. } => Self::exact_primitive_type_name(inner),
+            _ => None,
+        }
+    }
+
+    fn reject_primitive_type_mismatch(
+        expected: &str,
+        value: &Value,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        let actual = value.type_name();
+        if actual != expected {
+            return Err(RuntimeError {
+                message: format!("{actual} is not {expected}"),
+                span,
+            });
+        }
+        Ok(())
+    }
+
     /// Invoke an entry point inside a configured library context manager.
     /// The synthetic `with` statement deliberately reuses the ordinary
     /// context-manager implementation, including reverse-order teardown and
@@ -5480,6 +5524,7 @@ impl Interpreter {
             }
             Stmt::VarDef {
                 pattern,
+                type_annotation,
                 value,
                 span,
                 is_final,
@@ -5496,7 +5541,22 @@ impl Interpreter {
                     Value::None
                 };
 
+                let declared_type = type_annotation
+                    .as_ref()
+                    .and_then(Self::exact_primitive_type_name);
+                if value.is_some() {
+                    if let Some(expected) = declared_type {
+                        Self::reject_primitive_type_mismatch(expected, &val, *span)?;
+                    }
+                }
                 self.bind_pattern(pattern, val.clone(), *span)?;
+                if let Pattern::Ident(name, _) = pattern {
+                    if Self::pattern_identifier_binds(name) {
+                        self.env
+                            .borrow_mut()
+                            .set_declared_type(name.clone(), declared_type.map(str::to_string));
+                    }
+                }
                 if *is_final {
                     self.mark_final_pattern(pattern);
                 }
@@ -5525,6 +5585,9 @@ impl Interpreter {
                                 message: format!("cannot reassign final variable '{name}'"),
                                 span: *span,
                             });
+                        }
+                        if let Some(expected) = self.env.borrow().declared_type(name) {
+                            Self::reject_primitive_type_mismatch(&expected, &val, *span)?;
                         }
                         if !self.env.borrow_mut().mutate(name, val.clone()) {
                             self.env.borrow_mut().set(name.clone(), val.clone());
@@ -10254,6 +10317,39 @@ mod tests {
         assert!(
             matches!(interp.env.borrow().get("mapping"), Some(Value::Dict(items)) if items.borrow().len() == 1)
         );
+    }
+
+    #[test]
+    fn runtime_rejects_exact_primitive_annotation_mismatches() {
+        for (source, expected) in [
+            ("value: int = true\n", "bool is not int"),
+            ("value: float = 2\n", "int is not float"),
+            ("value: bool = 1\n", "int is not bool"),
+            ("value: str = 1\n", "int is not str"),
+            ("value: int\nvalue = false\n", "bool is not int"),
+        ] {
+            let module = parse(source).unwrap();
+            let mut interp = Interpreter::new();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("primitive annotation mismatch must fail");
+            assert!(error.message.contains(expected), "{source}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn runtime_accepts_matching_exact_primitive_annotations() {
+        let module =
+            parse("a: int = 1\nb: float = 1.5\nc: bool = false\nd: str = \"ok\"\ne: int\ne = 2\n")
+                .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        let env = interp.env.borrow();
+        assert_eq!(env.get("a"), Some(Value::Int(1)));
+        assert_eq!(env.get("b"), Some(Value::Float(1.5)));
+        assert_eq!(env.get("c"), Some(Value::Bool(false)));
+        assert_eq!(env.get("d"), Some(Value::Str("ok".into())));
+        assert_eq!(env.get("e"), Some(Value::Int(2)));
     }
 
     #[test]
