@@ -67,6 +67,12 @@ impl std::fmt::Display for CodegenError {
 
 impl std::error::Error for CodegenError {}
 
+#[derive(Clone)]
+enum AnonymousAdapterBody {
+    Expression(Expr),
+    Block(Vec<Stmt>),
+}
+
 fn is_none_expr(expr: &Expr) -> bool {
     match expr {
         Expr::Literal {
@@ -217,7 +223,14 @@ pub struct CCodeGenerator {
     /// makes the limitation explicit and avoids silently dropping statements.
     anonymous_block_bindings: HashMap<String, (Vec<(String, String)>, Vec<Stmt>)>,
     pending_anonymous_adapters:
-        Vec<(String, String, Vec<Param>, Expr, Vec<String>, Option<String>)>,
+        Vec<(
+            String,
+            String,
+            Vec<Param>,
+            AnonymousAdapterBody,
+            Vec<String>,
+            Option<String>,
+        )>,
     active_capture_names: HashSet<String>,
     anonymous_global_names: HashSet<String>,
     anonymous_capture_types: HashMap<String, Vec<(String, String)>>,
@@ -6347,7 +6360,7 @@ static inline void lucid_print_val(LucidVal v) {
     fn register_anonymous_adapter(
         &mut self,
         params: &[Param],
-        body: &Expr,
+        body: AnonymousAdapterBody,
         captures: &[String],
         recursive_name: Option<String>,
     ) -> (String, String) {
@@ -6361,7 +6374,7 @@ static inline void lucid_print_val(LucidVal v) {
                 adapter.clone(),
                 env_type.clone(),
                 params.to_vec(),
-                body.clone(),
+                body,
                 captures.to_vec(),
                 recursive_name,
             ));
@@ -6435,7 +6448,7 @@ static inline void lucid_print_val(LucidVal v) {
         }
         let (adapter, _) = self.register_anonymous_adapter(
             params,
-            body_expr,
+            AnonymousAdapterBody::Expression(body_expr.clone()),
             &captures,
             recursive.then(|| name.to_string()),
         );
@@ -6781,8 +6794,20 @@ static inline void lucid_print_val(LucidVal v) {
                 self.var_types.insert(param.name.clone(), ty.clone());
                 self.emit_line(&format!("{ty} lucid_var_{} = {value};", param.name));
             }
-            let result = self.emit_expr(&body)?;
-            self.emit_line(&format!("return lucid_wrap({result});"));
+            match body {
+                AnonymousAdapterBody::Expression(body) => {
+                    let result = self.emit_expr(&body)?;
+                    self.emit_line(&format!("return lucid_wrap({result});"));
+                }
+                AnonymousAdapterBody::Block(statements) => {
+                    self.current_fn_ret_type = Some("LucidVal".into());
+                    for statement in &statements {
+                        self.emit_stmt(statement)?;
+                    }
+                    self.emit_line("return lucid_none();");
+                    self.current_fn_ret_type = None;
+                }
+            }
             self.indent -= 1;
             self.emit_line("}");
         }
@@ -8333,21 +8358,29 @@ static inline void lucid_print_val(LucidVal v) {
             )),
             Expr::Skip(_) => Ok("lucid_none()".to_string()),
             Expr::AnonymousDef { params, body, .. } => {
-                let [Stmt::Return {
-                    value: Some(body_expr),
-                    ..
-                }] = body.as_slice()
-                else {
-                    return Err(CodegenError {
-                        message: "native anonymous values require an expression body".into(),
-                    });
+                let expression_body = match body.as_slice() {
+                    [Stmt::Return { value: Some(expr), .. }] => Some(expr),
+                    _ => None,
                 };
                 let parameter_names = params
                     .iter()
                     .map(|param| param.name.clone())
                     .collect::<HashSet<_>>();
                 let mut captures = HashSet::new();
-                self.collect_anonymous_captures(body_expr, &parameter_names, &mut captures);
+                for statement in body {
+                    match statement {
+                        Stmt::Return { value: Some(value), .. }
+                        | Stmt::Expr(value) => {
+                            self.collect_anonymous_captures(value, &parameter_names, &mut captures);
+                        }
+                        Stmt::VarDef { value: Some(value), .. }
+                        | Stmt::Assignment { value, .. }
+                        | Stmt::AugAssign { value, .. } => {
+                            self.collect_anonymous_captures(value, &parameter_names, &mut captures);
+                        }
+                        _ => {}
+                    }
+                }
                 let mut captures = captures.into_iter().collect::<Vec<_>>();
                 captures.sort();
                 for capture in &captures {
@@ -8359,8 +8392,11 @@ static inline void lucid_print_val(LucidVal v) {
                         });
                     }
                 }
+                let adapter_body = expression_body
+                    .map(|expr| AnonymousAdapterBody::Expression(expr.clone()))
+                    .unwrap_or_else(|| AnonymousAdapterBody::Block(body.clone()));
                 let (adapter, _) =
-                    self.register_anonymous_adapter(params, body_expr, &captures, None);
+                    self.register_anonymous_adapter(params, adapter_body, &captures, None);
                 let maker = adapter.replace("lucid_closure_call_", "lucid_make_");
                 let env = if captures.is_empty() {
                     "NULL".to_string()
