@@ -3100,9 +3100,13 @@ pub fn lower_function_body(
             _ => None,
         };
         if let Some(initial_value) = initial_value {
-            let then_value = assigned_value(then_branch).and_then(|(name, value)| {
-                (name == returned && !mentions_name(value, returned)).then_some(value)
-            });
+            let then_value = match assigned_value(then_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if pass_only(then_branch) => Some(initial_value),
+                _ => None,
+            };
             let else_value = match assigned_value(else_branch) {
                 Some((name, value)) if name == returned && !mentions_name(value, returned) => {
                     Some(value)
@@ -3113,11 +3117,14 @@ pub fn lower_function_body(
             if let (Some(then_value), Some(else_value)) = (then_value, else_value)
                 && let Some(elif_values) = elif_branches
                     .iter()
-                    .map(|(condition, branch)| {
-                        assigned_value(branch).and_then(|(name, value)| {
-                            (name == returned && !mentions_name(value, returned))
-                                .then_some((condition, value))
-                        })
+                    .map(|(condition, branch)| match assigned_value(branch) {
+                        Some((name, value))
+                            if name == returned && !mentions_name(value, returned) =>
+                        {
+                            Some((condition, value))
+                        }
+                        None if pass_only(branch) => Some((condition, initial_value)),
+                        _ => None,
                     })
                     .collect::<Option<Vec<_>>>()
             {
@@ -3189,6 +3196,11 @@ pub fn lower_function_body(
             }
             assignment
         }
+        fn pass_only(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements
+                .iter()
+                .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
+        }
         fn mentions_name(expr: &lucid_syntax::Expr, target: &str) -> bool {
             match expr {
                 lucid_syntax::Expr::Ident { name, .. } => name == target,
@@ -3222,17 +3234,22 @@ pub fn lower_function_body(
             } if name == returned && !mentions_name(value, returned) => Some(value),
             _ => None,
         };
-        if let (Some(initial_value), Some((then_name, then_value))) =
-            (initial_value, assigned_value(then_branch))
-            && then_name == returned
-            && !mentions_name(then_value, returned)
+        if let Some(initial_value) = initial_value
+            && let Some(then_value) = match assigned_value(then_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if pass_only(then_branch) => Some(initial_value),
+                _ => None,
+            }
             && let Some(elif_values) = elif_branches
                 .iter()
-                .map(|(condition, branch)| {
-                    assigned_value(branch).and_then(|(name, value)| {
-                        (name == returned && !mentions_name(value, returned))
-                            .then_some((condition, value))
-                    })
+                .map(|(condition, branch)| match assigned_value(branch) {
+                    Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                        Some((condition, value))
+                    }
+                    None if pass_only(branch) => Some((condition, initial_value)),
+                    _ => None,
                 })
                 .collect::<Option<Vec<_>>>()
         {
@@ -6580,6 +6597,30 @@ mod tests {
         assert_eq!(function.execute_with_args(&[0]), Ok(None));
 
         let file = db.add_file(
+            "parameterized-initialized-local-pass-then-no-else-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        pass\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass then no-else elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-middle-no-else-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        pass\n    elif value < 0:\n        result = -1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass middle no-else elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
             "parameterized-local-conditional.lucid",
             "def choose(value: int):\n    if value > 0:\n        result = value + 1\n    else:\n        result = -value\n    return result\n",
         );
@@ -6632,6 +6673,30 @@ mod tests {
             .expect("initialized branch-local else elif assignment should lower through CIR");
         assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-100)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-then-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        pass\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    else:\n        result = -100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass then elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-100)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-middle-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        pass\n    elif value < 0:\n        result = -1\n    else:\n        result = -100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass middle elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(0)));
         assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(-100)));
 

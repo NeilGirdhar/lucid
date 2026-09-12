@@ -487,6 +487,9 @@ diverged:
   all known, while a dynamic `elif` stops selection instead of falling through
   to a later `else`. The same recursive collection feeds bare-return lowering,
   so void functions keep validated setup expressions before returning no value.
+  Dynamic initialized-local `elif` lowering now treats pass-only `then` and
+  `elif` arms as preserving the initialized value, matching the existing
+  pass-only `else` behavior.
   Single-statement static branches whose selected arm is `pass`, including
   selected `elif` and `else` arms, now lower to verified void CIR; dynamic
   `elif` guards still block this fold.
