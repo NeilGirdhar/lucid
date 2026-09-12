@@ -4478,14 +4478,26 @@ impl Function {
             value: lucid_syntax::LiteralValue::Int(0),
             span: func.span(),
         };
+        #[derive(Clone)]
+        enum RangeStep {
+            Static(i64),
+            Dynamic(Instruction),
+        }
         let (start_expr, stop_expr, step_expr, step) = match args.as_slice() {
-            [stop] => (&zero, &stop.value, None, 1),
-            [start, stop] => (&start.value, &stop.value, None, 1),
+            [stop] => (&zero, &stop.value, None, RangeStep::Static(1)),
+            [start, stop] => (&start.value, &stop.value, None, RangeStep::Static(1)),
             [start, stop, step_arg] => {
-                let step = int_literal_operand(&step_arg.value, &bound_aliases, 0)?;
-                if step == 0 {
-                    return None;
-                }
+                let step = match int_literal_operand(&step_arg.value, &bound_aliases, 0) {
+                    Some(0) => return None,
+                    Some(step) => RangeStep::Static(step),
+                    None => RangeStep::Dynamic(operand(
+                        &step_arg.value,
+                        ValueId(8),
+                        &bound_aliases,
+                        parameter_names,
+                        0,
+                    )?),
+                };
                 (&start.value, &stop.value, Some(&step_arg.value), step)
             }
             _ => return None,
@@ -4530,54 +4542,109 @@ impl Function {
             body_instructions.push(instruction);
         }
         body_instructions.push(accumulator_update_instruction);
-        body_instructions.push(Instruction::ConstInt {
-            result: ValueId(8),
-            value: step,
-        });
+        if let RangeStep::Static(step) = step {
+            body_instructions.push(Instruction::ConstInt {
+                result: ValueId(8),
+                value: step,
+            });
+        }
         body_instructions.push(Instruction::Add {
             result: ValueId(7),
             left: ValueId(3),
             right: ValueId(8),
         });
+        let step_instruction = match &step {
+            RangeStep::Static(_) => None,
+            RangeStep::Dynamic(instruction) => Some(instruction.clone()),
+        };
+        let header_condition_instructions = match step {
+            RangeStep::Static(step) if step > 0 => vec![Instruction::CmpLt {
+                result: ValueId(5),
+                left: ValueId(3),
+                right: ValueId(0),
+            }],
+            RangeStep::Static(_) => vec![Instruction::CmpGt {
+                result: ValueId(5),
+                left: ValueId(3),
+                right: ValueId(0),
+            }],
+            RangeStep::Dynamic(_) => vec![
+                Instruction::ConstInt {
+                    result: ValueId(10),
+                    value: 0,
+                },
+                Instruction::CmpGt {
+                    result: ValueId(5),
+                    left: ValueId(8),
+                    right: ValueId(10),
+                },
+                Instruction::CmpLt {
+                    result: ValueId(11),
+                    left: ValueId(3),
+                    right: ValueId(0),
+                },
+                Instruction::And {
+                    result: ValueId(12),
+                    left: ValueId(5),
+                    right: ValueId(11),
+                },
+                Instruction::CmpLt {
+                    result: ValueId(13),
+                    left: ValueId(8),
+                    right: ValueId(10),
+                },
+                Instruction::CmpGt {
+                    result: ValueId(14),
+                    left: ValueId(3),
+                    right: ValueId(0),
+                },
+                Instruction::And {
+                    result: ValueId(15),
+                    left: ValueId(13),
+                    right: ValueId(14),
+                },
+                Instruction::Or {
+                    result: ValueId(16),
+                    left: ValueId(12),
+                    right: ValueId(15),
+                },
+            ],
+        };
+        let branch_condition = match step {
+            RangeStep::Dynamic(_) => ValueId(16),
+            RangeStep::Static(_) => ValueId(5),
+        };
+        let mut entry_instructions =
+            vec![stop_instruction, start_instruction, accumulator_instruction];
+        if let Some(instruction) = step_instruction {
+            entry_instructions.push(instruction);
+        }
         let function = Self {
             entry: BlockId(0),
             blocks: vec![
                 Block {
                     id: BlockId(0),
-                    instructions: vec![
-                        stop_instruction,
-                        start_instruction,
-                        accumulator_instruction,
-                    ],
+                    instructions: entry_instructions,
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
                     id: BlockId(1),
-                    instructions: vec![
-                        Instruction::Phi {
-                            result: ValueId(3),
-                            incomings: vec![(BlockId(0), ValueId(1)), (BlockId(2), ValueId(7))],
-                        },
-                        Instruction::Phi {
-                            result: ValueId(4),
-                            incomings: vec![(BlockId(0), ValueId(2)), (BlockId(2), ValueId(6))],
-                        },
-                        if step > 0 {
-                            Instruction::CmpLt {
-                                result: ValueId(5),
-                                left: ValueId(3),
-                                right: ValueId(0),
-                            }
-                        } else {
-                            Instruction::CmpGt {
-                                result: ValueId(5),
-                                left: ValueId(3),
-                                right: ValueId(0),
-                            }
-                        },
-                    ],
+                    instructions: [
+                        vec![
+                            Instruction::Phi {
+                                result: ValueId(3),
+                                incomings: vec![(BlockId(0), ValueId(1)), (BlockId(2), ValueId(7))],
+                            },
+                            Instruction::Phi {
+                                result: ValueId(4),
+                                incomings: vec![(BlockId(0), ValueId(2)), (BlockId(2), ValueId(6))],
+                            },
+                        ],
+                        header_condition_instructions,
+                    ]
+                    .concat(),
                     terminator: Terminator::Branch {
-                        condition: ValueId(5),
+                        condition: branch_condition,
                         then_block: BlockId(2),
                         else_block: BlockId(3),
                     },
@@ -4753,14 +4820,26 @@ impl Function {
             value: lucid_syntax::LiteralValue::Int(0),
             span: func.span(),
         };
+        #[derive(Clone)]
+        enum RangeStep {
+            Static(i64),
+            Dynamic(Instruction),
+        }
         let (start_expr, stop_expr, step_expr, step) = match args.as_slice() {
-            [stop] => (&zero, &stop.value, None, 1),
-            [start, stop] => (&start.value, &stop.value, None, 1),
+            [stop] => (&zero, &stop.value, None, RangeStep::Static(1)),
+            [start, stop] => (&start.value, &stop.value, None, RangeStep::Static(1)),
             [start, stop, step_arg] => {
-                let step = int_literal_operand(&step_arg.value, &bound_aliases, 0)?;
-                if step == 0 {
-                    return None;
-                }
+                let step = match int_literal_operand(&step_arg.value, &bound_aliases, 0) {
+                    Some(0) => return None,
+                    Some(step) => RangeStep::Static(step),
+                    None => RangeStep::Dynamic(operand(
+                        &step_arg.value,
+                        ValueId(5),
+                        &bound_aliases,
+                        parameter_names,
+                        0,
+                    )?),
+                };
                 (&start.value, &stop.value, Some(&step_arg.value), step)
             }
             _ => return None,
@@ -4779,55 +4858,122 @@ impl Function {
         let start_instruction =
             operand(start_expr, ValueId(1), &bound_aliases, parameter_names, 0)?;
         let stop_instruction = operand(stop_expr, ValueId(0), &bound_aliases, parameter_names, 0)?;
-        let comparison = if step > 0 {
-            Instruction::CmpLt {
-                result: ValueId(3),
-                left: ValueId(2),
-                right: ValueId(0),
-            }
-        } else {
-            Instruction::CmpGt {
-                result: ValueId(3),
-                left: ValueId(2),
-                right: ValueId(0),
-            }
+        let (comparison_instructions, branch_condition) = match step {
+            RangeStep::Static(step) if step > 0 => (
+                vec![Instruction::CmpLt {
+                    result: ValueId(3),
+                    left: ValueId(2),
+                    right: ValueId(0),
+                }],
+                ValueId(3),
+            ),
+            RangeStep::Static(_) => (
+                vec![Instruction::CmpGt {
+                    result: ValueId(3),
+                    left: ValueId(2),
+                    right: ValueId(0),
+                }],
+                ValueId(3),
+            ),
+            RangeStep::Dynamic(_) => (
+                vec![
+                    Instruction::ConstInt {
+                        result: ValueId(6),
+                        value: 0,
+                    },
+                    Instruction::CmpGt {
+                        result: ValueId(3),
+                        left: ValueId(5),
+                        right: ValueId(6),
+                    },
+                    Instruction::CmpLt {
+                        result: ValueId(7),
+                        left: ValueId(2),
+                        right: ValueId(0),
+                    },
+                    Instruction::And {
+                        result: ValueId(8),
+                        left: ValueId(3),
+                        right: ValueId(7),
+                    },
+                    Instruction::CmpLt {
+                        result: ValueId(9),
+                        left: ValueId(5),
+                        right: ValueId(6),
+                    },
+                    Instruction::CmpGt {
+                        result: ValueId(10),
+                        left: ValueId(2),
+                        right: ValueId(0),
+                    },
+                    Instruction::And {
+                        result: ValueId(11),
+                        left: ValueId(9),
+                        right: ValueId(10),
+                    },
+                    Instruction::Or {
+                        result: ValueId(12),
+                        left: ValueId(8),
+                        right: ValueId(11),
+                    },
+                ],
+                ValueId(12),
+            ),
+        };
+        let step_instruction = match &step {
+            RangeStep::Static(_) => None,
+            RangeStep::Dynamic(instruction) => Some(instruction.clone()),
+        };
+        let mut entry_instructions = vec![stop_instruction, start_instruction];
+        if let Some(instruction) = step_instruction {
+            entry_instructions.push(instruction);
+        }
+        let step_value = match step {
+            RangeStep::Static(_) => ValueId(5),
+            RangeStep::Dynamic(_) => ValueId(5),
+        };
+        let body_step_instruction = match step {
+            RangeStep::Static(step) => Some(Instruction::ConstInt {
+                result: ValueId(5),
+                value: step,
+            }),
+            RangeStep::Dynamic(_) => None,
         };
         let function = Self {
             entry: BlockId(0),
             blocks: vec![
                 Block {
                     id: BlockId(0),
-                    instructions: vec![stop_instruction, start_instruction],
+                    instructions: entry_instructions,
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
                     id: BlockId(1),
-                    instructions: vec![
-                        Instruction::Phi {
+                    instructions: [
+                        vec![Instruction::Phi {
                             result: ValueId(2),
                             incomings: vec![(BlockId(0), ValueId(1)), (BlockId(2), ValueId(4))],
-                        },
-                        comparison,
-                    ],
+                        }],
+                        comparison_instructions,
+                    ]
+                    .concat(),
                     terminator: Terminator::Branch {
-                        condition: ValueId(3),
+                        condition: branch_condition,
                         then_block: BlockId(2),
                         else_block: BlockId(3),
                     },
                 },
                 Block {
                     id: BlockId(2),
-                    instructions: vec![
-                        Instruction::ConstInt {
-                            result: ValueId(5),
-                            value: step,
-                        },
-                        Instruction::Add {
+                    instructions: [
+                        body_step_instruction.into_iter().collect::<Vec<_>>(),
+                        vec![Instruction::Add {
                             result: ValueId(4),
                             left: ValueId(2),
-                            right: ValueId(5),
-                        },
-                    ],
+                            right: step_value,
+                        }],
+                    ]
+                    .concat(),
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
@@ -11032,6 +11178,39 @@ return total
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(start, stop, step):
+    total += i
+return total
+"#,
+        )
+        .expect("dynamic-step range accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("dynamic-step range accumulation should lower");
+        assert_eq!(function.execute_with_args(&[0, 6, 2]), Ok(Some(6)));
+        assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"stride = step
+total = 0
+for i in range(start, stop, stride):
+    total += i
+return total
+"#,
+        )
+        .expect("local dynamic-step range accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("local dynamic-step range accumulation should lower");
+        assert_eq!(function.execute_with_args(&[0, 6, 2]), Ok(Some(6)));
+        assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
             r#"for i in range(n):
     pass
 "#,
@@ -11081,6 +11260,20 @@ for i in range(n, stop, stride):
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("void descending range chained constant step alias loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(None));
+
+        let module = lucid_syntax::parse(
+            r#"for i in range(start, stop, step):
+    pass
+"#,
+        )
+        .expect("void dynamic-step range fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("void dynamic-step range loop should lower");
+        assert_eq!(function.execute_with_args(&[0, 6, 2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(None));
 
         let module = lucid_syntax::parse(
             r#"total = 0

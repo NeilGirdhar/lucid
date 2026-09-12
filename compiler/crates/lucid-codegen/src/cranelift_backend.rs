@@ -2660,6 +2660,31 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_dynamic_step_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(start, stop, step):
+    total += i
+return total
+"#,
+        )
+        .expect("dynamic-step range accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("dynamic-step range accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile dynamic-step range loop CFG");
+        let positive = unsafe { compiled.call_result_with_args(&[0, 6, 2]) };
+        assert!(positive.is_ok());
+        assert_eq!(positive.value, 6);
+        let negative = unsafe { compiled.call_result_with_args(&[5, 0, -2]) };
+        assert!(negative.is_ok());
+        assert_eq!(negative.value, 9);
+    }
+
+    #[test]
     fn result_abi_executes_void_range_with_local_aliases_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit
@@ -2679,6 +2704,29 @@ for i in range(n, stop, stride):
         let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
         assert!(result.is_ok());
         assert_eq!(result.value, 0);
+    }
+
+    #[test]
+    fn result_abi_executes_void_range_with_dynamic_step_cfg() {
+        let module = lucid_syntax::parse(
+            r#"for i in range(start, stop, step):
+    pass
+"#,
+        )
+        .expect("void dynamic-step range fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("void dynamic-step range loop should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile void dynamic-step range loop CFG");
+        let positive = unsafe { compiled.call_result_with_args(&[0, 6, 2]) };
+        assert!(positive.is_ok());
+        assert_eq!(positive.value, 0);
+        let negative = unsafe { compiled.call_result_with_args(&[5, 0, -2]) };
+        assert!(negative.is_ok());
+        assert_eq!(negative.value, 0);
     }
 
     #[test]

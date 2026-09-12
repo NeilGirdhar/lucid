@@ -2231,6 +2231,54 @@ fn run_cir_executes_range_accumulator_with_constant_local_step_alias() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_dynamic_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_dynamic_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_stride(start: int, stop: int, step: int):\n    total = 0\n    for i in range(start, stop, step):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_stride",
+            "--args",
+            "0,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir range dynamic positive step accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_stride",
+            "--args",
+            "5,0,-2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range dynamic negative step accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
 fn run_cir_executes_void_range_with_local_aliases() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_void_range_aliases_{}.lucid",
@@ -2256,6 +2304,54 @@ fn run_cir_executes_void_range_with_local_aliases() {
     assert!(
         output.status.success(),
         "run-cir void range alias loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn run_cir_executes_void_range_with_dynamic_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_void_range_dynamic_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(start: int, stop: int, step: int):\n    for i in range(start, stop, step):\n        continue\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "0,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir void dynamic positive-step range loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,0,-2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir void dynamic negative-step range loop failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());

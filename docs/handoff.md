@@ -570,22 +570,26 @@ diverged:
   Range accumulator loops now also accept pre-loop local aliases for literal,
   checked constant-expression, or parameter-backed range bounds, whether an
   alias is used as the start or stop
-  operand in one-, two-, or three-argument ranges with a literal step. This
+  operand in one-, two-, or three-argument ranges. This
   keeps `limit = n; for i in range(limit)`,
   `begin = seed; for i in range(begin, n)`,
   `begin = 1 + 1; for i in range(begin, n)`,
   `begin = seed; stop = limit; for i in range(begin, stop)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
-  CIR/native path. Three-argument ranges may also spell a statically known
-  literal step through a local alias, as in `stride = -1; range(n, 0, stride)`.
-  That step alias may itself point at another local literal alias, matching
-  the existing chained range-bound alias behavior.
-  The step resolver now folds checked constant integer expressions in that
-  local alias as well, so `stride = 0 - 1` is accepted while dynamic or
-  parameter-backed steps remain outside this static-direction range lowering.
+  CIR/native path. Three-argument ranges may spell a statically known step
+  through a local alias, as in `stride = -1; range(n, 0, stride)`, or use a
+  parameter-backed step, as in `range(start, stop, step)`. The dynamic-step
+  CFG selects the positive-step or negative-step condition at runtime, so the
+  same lowered function handles both `step = 2` and `step = -2`. A zero
+  dynamic step currently takes the empty-loop path until the runtime ABI grows
+  a dedicated range-step error.
+  Static step aliases may themselves point at another local literal alias,
+  matching the existing chained range-bound alias behavior. The step resolver
+  also folds checked constant integer expressions in that local alias, so
+  `stride = 0 - 1` is accepted.
   Void no-op range loops now lower to the same counted CFG shape and return
-  `None`; they accept the same local bound aliases and statically known literal
-  step aliases as the accumulator form.
+  `None`; they accept the same local bound aliases and dynamic or static step
+  aliases as the accumulator form.
   Typed-HIR expression collection now preserves loop context while replaying
   `for` and `while` bodies, so `break` and `continue` remain valid during the
   database collection pass instead of failing after the main checker accepts
