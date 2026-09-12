@@ -5327,17 +5327,19 @@ impl Function {
         Ok(function)
     }
 
-    /// Lower `if`/single-`elif`/`else` returns as direct-returning branch
-    /// blocks. This avoids manufacturing a nested value expression while
-    /// preserving the source control-flow boundary in CIR.
-    pub fn from_parameterized_if_elif_direct(
+    /// Lower `if`/`elif`/`else` returns as direct-returning branch blocks.
+    /// Each false edge falls through to the next condition block, preserving
+    /// the source ladder without manufacturing a nested value expression.
+    pub fn from_parameterized_if_elif_chain_direct(
         condition: &lucid_syntax::Expr,
         then_expr: &lucid_syntax::Expr,
-        elif_condition: &lucid_syntax::Expr,
-        elif_expr: &lucid_syntax::Expr,
+        elif_branches: &[(&lucid_syntax::Expr, &lucid_syntax::Expr)],
         else_expr: &lucid_syntax::Expr,
         parameter_names: &[String],
     ) -> Result<Self, LowerError> {
+        if elif_branches.is_empty() {
+            return Err(LowerError::UnsupportedExpression);
+        }
         let mut entry_instructions = parameter_names
             .iter()
             .enumerate()
@@ -5360,64 +5362,73 @@ impl Function {
             &mut then_instructions,
             &mut next,
         )?;
-        let mut elif_condition_instructions = Vec::new();
-        let elif_condition_value = Self::lower_parameter_expr(
-            elif_condition,
-            parameter_names,
-            &mut elif_condition_instructions,
-            &mut next,
-        )?;
-        let mut elif_instructions = Vec::new();
-        let elif_value = Self::lower_parameter_expr(
-            elif_expr,
-            parameter_names,
-            &mut elif_instructions,
-            &mut next,
-        )?;
-        let mut else_instructions = Vec::new();
-        let else_value = Self::lower_parameter_expr(
-            else_expr,
-            parameter_names,
-            &mut else_instructions,
-            &mut next,
-        )?;
-        let function = Self {
-            entry: BlockId(0),
-            blocks: vec![
-                Block {
-                    id: BlockId(0),
-                    instructions: entry_instructions,
-                    terminator: Terminator::Branch {
-                        condition: condition_value,
-                        then_block: BlockId(1),
-                        else_block: BlockId(2),
-                    },
+        let mut blocks = vec![
+            Block {
+                id: BlockId(0),
+                instructions: entry_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: BlockId(1),
+                    else_block: BlockId(2),
                 },
-                Block {
-                    id: BlockId(1),
-                    instructions: then_instructions,
-                    terminator: Terminator::Return(Some(then_value)),
+            },
+            Block {
+                id: BlockId(1),
+                instructions: then_instructions,
+                terminator: Terminator::Return(Some(then_value)),
+            },
+        ];
+        let mut condition_block = 2_u32;
+        for (index, (elif_condition, elif_expr)) in elif_branches.iter().enumerate() {
+            let then_block = condition_block + 1;
+            let false_block = condition_block + 2;
+            let mut condition_instructions = Vec::new();
+            let condition_value = Self::lower_parameter_expr(
+                elif_condition,
+                parameter_names,
+                &mut condition_instructions,
+                &mut next,
+            )?;
+            let mut then_instructions = Vec::new();
+            let then_value = Self::lower_parameter_expr(
+                elif_expr,
+                parameter_names,
+                &mut then_instructions,
+                &mut next,
+            )?;
+            blocks.push(Block {
+                id: BlockId(condition_block),
+                instructions: condition_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: BlockId(then_block),
+                    else_block: BlockId(false_block),
                 },
-                Block {
-                    id: BlockId(2),
-                    instructions: elif_condition_instructions,
-                    terminator: Terminator::Branch {
-                        condition: elif_condition_value,
-                        then_block: BlockId(3),
-                        else_block: BlockId(4),
-                    },
-                },
-                Block {
-                    id: BlockId(3),
-                    instructions: elif_instructions,
-                    terminator: Terminator::Return(Some(elif_value)),
-                },
-                Block {
-                    id: BlockId(4),
+            });
+            blocks.push(Block {
+                id: BlockId(then_block),
+                instructions: then_instructions,
+                terminator: Terminator::Return(Some(then_value)),
+            });
+            if index == elif_branches.len() - 1 {
+                let mut else_instructions = Vec::new();
+                let else_value = Self::lower_parameter_expr(
+                    else_expr,
+                    parameter_names,
+                    &mut else_instructions,
+                    &mut next,
+                )?;
+                blocks.push(Block {
+                    id: BlockId(false_block),
                     instructions: else_instructions,
                     terminator: Terminator::Return(Some(else_value)),
-                },
-            ],
+                });
+            }
+            condition_block = false_block;
+        }
+        let function = Self {
+            entry: BlockId(0),
+            blocks,
         };
         function
             .verify()
