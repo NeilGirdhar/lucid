@@ -73,6 +73,16 @@ enum AnonymousAdapterBody {
     Block(Vec<Stmt>),
 }
 
+type AnonymousBlockBinding = (Vec<(String, String)>, Vec<Stmt>);
+type PendingAnonymousAdapter = (
+    String,
+    String,
+    Vec<Param>,
+    AnonymousAdapterBody,
+    Vec<String>,
+    Option<String>,
+);
+
 fn is_none_expr(expr: &Expr) -> bool {
     match expr {
         Expr::Literal {
@@ -221,16 +231,8 @@ pub struct CCodeGenerator {
     /// lowered at the call site until the native closure ABI can represent an
     /// escaping activation; keeping them separate from expression bindings
     /// makes the limitation explicit and avoids silently dropping statements.
-    anonymous_block_bindings: HashMap<String, (Vec<(String, String)>, Vec<Stmt>)>,
-    pending_anonymous_adapters:
-        Vec<(
-            String,
-            String,
-            Vec<Param>,
-            AnonymousAdapterBody,
-            Vec<String>,
-            Option<String>,
-        )>,
+    anonymous_block_bindings: HashMap<String, AnonymousBlockBinding>,
+    pending_anonymous_adapters: Vec<PendingAnonymousAdapter>,
     active_capture_names: HashSet<String>,
     anonymous_global_names: HashSet<String>,
     anonymous_capture_types: HashMap<String, Vec<(String, String)>>,
@@ -10875,7 +10877,11 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 body
                             } else if let MapBody::Block(specs, body) = &call_body {
-                                self.emit_nested_block_call_values(specs, body, &[argument.clone()])?
+                                self.emit_nested_block_call_values(
+                                    specs,
+                                    body,
+                                    std::slice::from_ref(&argument),
+                                )?
                             } else {
                                 let MapBody::Named(function_name) = &call_body else {
                                     return Err(CodegenError {

@@ -3137,6 +3137,7 @@ pub fn module_order(db: &dyn Db, project: Project) -> Result<Arc<[SourceFile]>, 
         module.statements.iter().all(statement_is_declaration)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn visit(
         db: &dyn Db,
         project: Project,
