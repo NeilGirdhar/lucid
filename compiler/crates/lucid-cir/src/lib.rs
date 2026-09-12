@@ -4989,6 +4989,187 @@ impl Function {
         Ok(function)
     }
 
+    fn lower_parameter_expr(
+        expr: &lucid_syntax::Expr,
+        parameters: &[String],
+        instructions: &mut Vec<Instruction>,
+        next: &mut u32,
+    ) -> Result<ValueId, LowerError> {
+        let result = |next: &mut u32| {
+            let value = ValueId(*next);
+            *next += 1;
+            value
+        };
+        match expr {
+            lucid_syntax::Expr::Ident { name, .. } => parameters
+                .iter()
+                .position(|parameter| parameter == name)
+                .map(|index| ValueId(index as u32))
+                .ok_or(LowerError::UnsupportedExpression),
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => {
+                let value_id = result(next);
+                instructions.push(Instruction::ConstInt {
+                    result: value_id,
+                    value: *value,
+                });
+                Ok(value_id)
+            }
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Bool(value),
+                ..
+            } => {
+                let value_id = result(next);
+                instructions.push(Instruction::ConstBool {
+                    result: value_id,
+                    value: *value,
+                });
+                Ok(value_id)
+            }
+            lucid_syntax::Expr::Unary { op, expr, .. } => {
+                let operand = Self::lower_parameter_expr(expr, parameters, instructions, next)?;
+                let value_id = result(next);
+                let instruction = match op {
+                    lucid_syntax::UnaryOp::Neg => Instruction::Neg {
+                        result: value_id,
+                        operand,
+                    },
+                    lucid_syntax::UnaryOp::Invert => Instruction::BitNot {
+                        result: value_id,
+                        operand,
+                    },
+                    lucid_syntax::UnaryOp::Not => Instruction::Not {
+                        result: value_id,
+                        operand,
+                    },
+                    lucid_syntax::UnaryOp::Pos => return Ok(operand),
+                    lucid_syntax::UnaryOp::Spread | lucid_syntax::UnaryOp::GatherSpread => {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                };
+                instructions.push(instruction);
+                Ok(value_id)
+            }
+            lucid_syntax::Expr::Binary {
+                left, op, right, ..
+            } => {
+                let left = Self::lower_parameter_expr(left, parameters, instructions, next)?;
+                let right = Self::lower_parameter_expr(right, parameters, instructions, next)?;
+                let value_id = result(next);
+                let instruction = match op {
+                    lucid_syntax::BinaryOp::Add => Instruction::Add {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Pow => Instruction::Pow {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Div => Instruction::Div {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::FloorDiv => Instruction::FloorDiv {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Mod => Instruction::Mod {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::BitAnd => Instruction::BitAnd {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::BitOr => Instruction::BitOr {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::BitXor => Instruction::BitXor {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Shl => Instruction::Shl {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Shr => Instruction::Shr {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
+                        Instruction::CmpNe {
+                            result: value_id,
+                            left,
+                            right,
+                        }
+                    }
+                    lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::And => Instruction::And {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    lucid_syntax::BinaryOp::Or => Instruction::Or {
+                        result: value_id,
+                        left,
+                        right,
+                    },
+                    _ => return Err(LowerError::UnsupportedExpression),
+                };
+                instructions.push(instruction);
+                Ok(value_id)
+            }
+            _ => Err(LowerError::UnsupportedExpression),
+        }
+    }
+
     /// Lower a function-shaped conditional whose expressions may read
     /// positional parameters. Parameters are materialized once in the entry
     /// block; both branch expressions then reference those stable values.
@@ -4998,189 +5179,6 @@ impl Function {
         else_expr: &lucid_syntax::Expr,
         parameter_names: &[String],
     ) -> Result<Self, LowerError> {
-        fn lower(
-            expr: &lucid_syntax::Expr,
-            parameters: &[String],
-            instructions: &mut Vec<Instruction>,
-            next: &mut u32,
-        ) -> Result<ValueId, LowerError> {
-            let result = |next: &mut u32| {
-                let value = ValueId(*next);
-                *next += 1;
-                value
-            };
-            match expr {
-                lucid_syntax::Expr::Ident { name, .. } => parameters
-                    .iter()
-                    .position(|parameter| parameter == name)
-                    .map(|index| ValueId(index as u32))
-                    .ok_or(LowerError::UnsupportedExpression),
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                } => {
-                    let value_id = result(next);
-                    instructions.push(Instruction::ConstInt {
-                        result: value_id,
-                        value: *value,
-                    });
-                    Ok(value_id)
-                }
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Bool(value),
-                    ..
-                } => {
-                    let value_id = result(next);
-                    instructions.push(Instruction::ConstBool {
-                        result: value_id,
-                        value: *value,
-                    });
-                    Ok(value_id)
-                }
-                lucid_syntax::Expr::Unary { op, expr, .. } => {
-                    let operand = lower(expr, parameters, instructions, next)?;
-                    let value_id = result(next);
-                    let instruction = match op {
-                        lucid_syntax::UnaryOp::Neg => Instruction::Neg {
-                            result: value_id,
-                            operand,
-                        },
-                        lucid_syntax::UnaryOp::Invert => Instruction::BitNot {
-                            result: value_id,
-                            operand,
-                        },
-                        lucid_syntax::UnaryOp::Not => Instruction::Not {
-                            result: value_id,
-                            operand,
-                        },
-                        lucid_syntax::UnaryOp::Pos => return Ok(operand),
-                        lucid_syntax::UnaryOp::Spread | lucid_syntax::UnaryOp::GatherSpread => {
-                            return Err(LowerError::UnsupportedExpression)
-                        }
-                    };
-                    instructions.push(instruction);
-                    Ok(value_id)
-                }
-                lucid_syntax::Expr::Binary {
-                    left, op, right, ..
-                } => {
-                    let left = lower(left, parameters, instructions, next)?;
-                    let right = lower(right, parameters, instructions, next)?;
-                    let value_id = result(next);
-                    let instruction = match op {
-                        lucid_syntax::BinaryOp::Add => Instruction::Add {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Sub => Instruction::Sub {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Mul => Instruction::Mul {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Pow => Instruction::Pow {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Div => Instruction::Div {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::FloorDiv => Instruction::FloorDiv {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Mod => Instruction::Mod {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::BitAnd => Instruction::BitAnd {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::BitOr => Instruction::BitOr {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::BitXor => Instruction::BitXor {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Shl => Instruction::Shl {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Shr => Instruction::Shr {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                            Instruction::CmpEq {
-                                result: value_id,
-                                left,
-                                right,
-                            }
-                        }
-                        lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                            Instruction::CmpNe {
-                                result: value_id,
-                                left,
-                                right,
-                            }
-                        }
-                        lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::And => Instruction::And {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        lucid_syntax::BinaryOp::Or => Instruction::Or {
-                            result: value_id,
-                            left,
-                            right,
-                        },
-                        _ => return Err(LowerError::UnsupportedExpression),
-                    };
-                    instructions.push(instruction);
-                    Ok(value_id)
-                }
-                _ => Err(LowerError::UnsupportedExpression),
-            }
-        }
-
         let mut entry_instructions = parameter_names
             .iter()
             .enumerate()
@@ -5190,21 +5188,21 @@ impl Function {
             })
             .collect::<Vec<_>>();
         let mut next = parameter_names.len() as u32;
-        let condition_value = lower(
+        let condition_value = Self::lower_parameter_expr(
             condition,
             parameter_names,
             &mut entry_instructions,
             &mut next,
         )?;
         let mut then_instructions = Vec::new();
-        let then_value = lower(
+        let then_value = Self::lower_parameter_expr(
             then_expr,
             parameter_names,
             &mut then_instructions,
             &mut next,
         )?;
         let mut else_instructions = Vec::new();
-        let else_value = lower(
+        let else_value = Self::lower_parameter_expr(
             else_expr,
             parameter_names,
             &mut else_instructions,
@@ -5320,6 +5318,104 @@ impl Function {
                     id: BlockId(2),
                     instructions: Vec::new(),
                     terminator: Terminator::Return(None),
+                },
+            ],
+        };
+        function
+            .verify()
+            .map_err(|_| LowerError::UnsupportedExpression)?;
+        Ok(function)
+    }
+
+    /// Lower `if`/single-`elif`/`else` returns as direct-returning branch
+    /// blocks. This avoids manufacturing a nested value expression while
+    /// preserving the source control-flow boundary in CIR.
+    pub fn from_parameterized_if_elif_direct(
+        condition: &lucid_syntax::Expr,
+        then_expr: &lucid_syntax::Expr,
+        elif_condition: &lucid_syntax::Expr,
+        elif_expr: &lucid_syntax::Expr,
+        else_expr: &lucid_syntax::Expr,
+        parameter_names: &[String],
+    ) -> Result<Self, LowerError> {
+        let mut entry_instructions = parameter_names
+            .iter()
+            .enumerate()
+            .map(|(index, _)| Instruction::Param {
+                result: ValueId(index as u32),
+                index: index as u32,
+            })
+            .collect::<Vec<_>>();
+        let mut next = parameter_names.len() as u32;
+        let condition_value = Self::lower_parameter_expr(
+            condition,
+            parameter_names,
+            &mut entry_instructions,
+            &mut next,
+        )?;
+        let mut then_instructions = Vec::new();
+        let then_value = Self::lower_parameter_expr(
+            then_expr,
+            parameter_names,
+            &mut then_instructions,
+            &mut next,
+        )?;
+        let mut elif_condition_instructions = Vec::new();
+        let elif_condition_value = Self::lower_parameter_expr(
+            elif_condition,
+            parameter_names,
+            &mut elif_condition_instructions,
+            &mut next,
+        )?;
+        let mut elif_instructions = Vec::new();
+        let elif_value = Self::lower_parameter_expr(
+            elif_expr,
+            parameter_names,
+            &mut elif_instructions,
+            &mut next,
+        )?;
+        let mut else_instructions = Vec::new();
+        let else_value = Self::lower_parameter_expr(
+            else_expr,
+            parameter_names,
+            &mut else_instructions,
+            &mut next,
+        )?;
+        let function = Self {
+            entry: BlockId(0),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    instructions: entry_instructions,
+                    terminator: Terminator::Branch {
+                        condition: condition_value,
+                        then_block: BlockId(1),
+                        else_block: BlockId(2),
+                    },
+                },
+                Block {
+                    id: BlockId(1),
+                    instructions: then_instructions,
+                    terminator: Terminator::Return(Some(then_value)),
+                },
+                Block {
+                    id: BlockId(2),
+                    instructions: elif_condition_instructions,
+                    terminator: Terminator::Branch {
+                        condition: elif_condition_value,
+                        then_block: BlockId(3),
+                        else_block: BlockId(4),
+                    },
+                },
+                Block {
+                    id: BlockId(3),
+                    instructions: elif_instructions,
+                    terminator: Terminator::Return(Some(elif_value)),
+                },
+                Block {
+                    id: BlockId(4),
+                    instructions: else_instructions,
+                    terminator: Terminator::Return(Some(else_value)),
                 },
             ],
         };

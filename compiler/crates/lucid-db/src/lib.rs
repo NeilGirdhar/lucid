@@ -2299,6 +2299,60 @@ pub fn lower_function_body(
         .map(Arc::new)
         .map_err(|_| Arc::from("unsupported dynamic void branch"));
     }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && let [(elif_condition, elif_branch)] = elif_branches.as_slice()
+        && static_truth(condition).is_none()
+        && static_truth(elif_condition).is_none()
+        && has_identifier(condition)
+        && has_identifier(elif_condition)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(elif_value),
+                ..
+            },
+        ] = elif_branch.as_slice()
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(else_value),
+                ..
+            },
+        ] = else_branch.as_slice()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        if function.is_dispatch {
+            return Err(Arc::from(
+                "dispatch function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_direct(
+            condition,
+            then_value,
+            elif_condition,
+            elif_value,
+            else_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic elif chain"));
+    }
     if matches!(
         source_function.body.as_slice(),
         [lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)]
@@ -4355,6 +4409,17 @@ mod tests {
             .expect("multiple static elif branches should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(7)));
+
+        let file = db.add_file(
+            "parameterized-dynamic-elif.lucid",
+            "def choose(value: int):\n    if value > 0:\n        return 1\n    elif value < 0:\n        return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("single dynamic elif chain should lower through direct CIR branches");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
 
         let file = db.add_file(
             "parameterized-false-elif-fallthrough.lucid",
