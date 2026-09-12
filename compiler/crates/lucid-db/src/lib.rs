@@ -2538,6 +2538,103 @@ pub fn lower_function_body(
             _ => false,
         }
     }
+    fn single_value_return(branch: &[lucid_syntax::Stmt]) -> Option<&lucid_syntax::Expr> {
+        match branch {
+            [
+                lucid_syntax::Stmt::Return {
+                    value: Some(value), ..
+                },
+            ] => Some(value),
+            _ => None,
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+    {
+        let selected_branch = match static_truth(condition) {
+            Some(true) => Some(then_branch.as_slice()),
+            Some(false) => {
+                let mut selected = None;
+                let mut unknown = false;
+                for (elif_condition, branch) in elif_branches {
+                    match static_truth(elif_condition) {
+                        Some(true) => {
+                            selected = Some(branch.as_slice());
+                            break;
+                        }
+                        Some(false) => {}
+                        None => {
+                            unknown = true;
+                            break;
+                        }
+                    }
+                }
+                if unknown {
+                    None
+                } else {
+                    selected.or_else(|| else_branch.as_deref())
+                }
+            }
+            None => None,
+        };
+        if let Some(
+            [
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+            ],
+        ) = selected_branch
+            && inner_elifs.is_empty()
+            && static_truth(inner_condition).is_none()
+            && has_identifier(inner_condition)
+            && let Some(then_value) = single_value_return(inner_then)
+        {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let lowered = match inner_else.as_deref() {
+                Some(else_branch) => {
+                    if let Some(else_value) = single_value_return(else_branch) {
+                        lucid_cir::Function::from_parameterized_if_direct(
+                            inner_condition,
+                            then_value,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                    } else if branch_is_single_void(else_branch) {
+                        lucid_cir::Function::from_parameterized_if_optional(
+                            inner_condition,
+                            then_value,
+                            &function.parameter_names,
+                        )
+                    } else {
+                        Err(lucid_cir::LowerError::UnsupportedExpression)
+                    }
+                }
+                None => lucid_cir::Function::from_parameterized_if_optional(
+                    inner_condition,
+                    then_value,
+                    &function.parameter_names,
+                ),
+            };
+            return lowered
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported selected nested dynamic branch"));
+        }
+    }
     if let [
         lucid_syntax::Stmt::Return {
             value:
@@ -6837,10 +6934,21 @@ mod tests {
             "dynamic-nested-branch-return.lucid",
             "def answer(value: int):\n    if true:\n        if value > 0:\n            return value + 1\n    else:\n        return 0\n",
         );
-        let error = lower_function_body(&db, file, "answer".into())
+        let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
-            .expect_err("dynamic nested branch return must not be folded statically");
-        assert!(error.contains("constant function branch"));
+            .expect("selected dynamic nested branch return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-else-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            return value + 1\n        else:\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested branch else return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
 
         let file = db.add_file(
             "constant-string-branch.lucid",
