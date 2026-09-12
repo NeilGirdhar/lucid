@@ -1204,6 +1204,9 @@ diverged:
   Interpreter and native capability checks now agree that `DottedPath` is
   `Sized` and `Container`, matching its supported `len()` and indexing
   behavior.
+  Native erased capability checks now keep `Bytes` and `MemoryView` as
+  `Buffer`/`Sized`/`Container` values without treating them as `Iterable` or
+  `Collection`, matching the checker and interpreter.
   Generic builtin type patterns such as `case list[int]`, `case set[int]`,
   and `case dict[str, int]` now use those value-kind tests instead of falling
   through as native match-all arms for non-container subjects. `range` remains
