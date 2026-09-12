@@ -5733,20 +5733,43 @@ static inline void lucid_print_val(LucidVal v) {
         }
     }
 
-    fn exception_condition(&self, exception_type: &TypeExpr) -> String {
+    fn exception_condition(&self, exception_type: &TypeExpr) -> Result<String, CodegenError> {
         let name = match exception_type {
             TypeExpr::Named { name, .. } => name.as_str(),
-            _ => "Any",
+            _ => {
+                return Err(CodegenError {
+                    message: "unsupported non-name exception handler type".to_string(),
+                });
+            }
         };
-        match name {
+        Ok(match name {
             "Any" | "Exception" | "BaseException" => "true".to_string(),
-            "int" => "lucid_pending_exception.type == LUCID_TYPE_INT".to_string(),
+            "int" => "lucid_pending_exception.type == LUCID_TYPE_INT || lucid_pending_exception.type == LUCID_TYPE_BIGINT".to_string(),
             "float" => "lucid_pending_exception.type == LUCID_TYPE_FLOAT".to_string(),
             "bool" => "lucid_pending_exception.type == LUCID_TYPE_BOOL".to_string(),
             "str" => "lucid_pending_exception.type == LUCID_TYPE_STR".to_string(),
+            "complex" => "lucid_pending_exception.type == LUCID_TYPE_COMPLEX".to_string(),
+            "bytes" | "Bytes" => "lucid_pending_exception.type == LUCID_TYPE_BYTES".to_string(),
+            "MemoryView" => "lucid_pending_exception.type == LUCID_TYPE_MEMORYVIEW".to_string(),
+            "list" => "lucid_pending_exception.type == LUCID_TYPE_LIST".to_string(),
+            "set" => "lucid_pending_exception.type == LUCID_TYPE_SET".to_string(),
+            "dict" => "lucid_pending_exception.type == LUCID_TYPE_DICT".to_string(),
+            "DottedPath" => "lucid_pending_exception.type == LUCID_TYPE_DOTTED_PATH".to_string(),
             "none" | "None" => "lucid_pending_exception.type == LUCID_TYPE_NONE".to_string(),
-            _ => "true".to_string(),
-        }
+            name if self.known_classes.contains_key(name) => self
+                .class_pattern_names(name)
+                .into_iter()
+                .map(|class_name| {
+                    format!("lucid_object_is(lucid_as_ptr(lucid_pending_exception), \"{class_name}\")")
+                })
+                .collect::<Vec<_>>()
+                .join(" || "),
+            _ => {
+                return Err(CodegenError {
+                    message: format!("unsupported exception handler type '{name}'"),
+                });
+            }
+        })
     }
 
     fn expr_is_val(&self, expr: &Expr) -> bool {
@@ -9332,7 +9355,7 @@ static inline void lucid_print_val(LucidVal v) {
                     self.emit_line(&format!("if ({handler_jump} == 0) {{"));
                     self.indent += 1;
                     for (index, handler) in handlers.iter().enumerate() {
-                        let condition = self.exception_condition(&handler.exception_type);
+                        let condition = self.exception_condition(&handler.exception_type)?;
                         if index == 0 {
                             self.emit_line(&format!("if ({condition}) {{"));
                         } else {
@@ -17146,6 +17169,29 @@ except str:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "right\n");
+    }
+
+    #[test]
+    fn native_try_rejects_unsupported_handler_type() {
+        let source = r#"
+try:
+    raise "boom"
+except Unknown:
+    print("wrong")
+"#;
+        let module = parse(source).expect("unknown handler source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_unknown_handler_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        let error = compile_to_native(&module, &output, 0).expect_err("unknown handler must fail");
+        let _ = fs::remove_file(&output);
+        assert!(
+            error
+                .message
+                .contains("unsupported exception handler type 'Unknown'")
+        );
     }
 
     #[test]

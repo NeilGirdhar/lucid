@@ -1197,6 +1197,10 @@ diverged:
   directly to lists in expression contexts.
   Native lowering now rejects unsupported explicit type patterns instead of
   compiling them as unconditional matches.
+  Native `except` handler conditions now follow the same rule: supported value
+  handler types lower to explicit tag checks, known classes lower to object
+  checks, and unsupported handler types fail codegen instead of becoming
+  catch-all handlers.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
