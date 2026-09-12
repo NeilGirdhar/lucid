@@ -351,6 +351,11 @@ impl Type {
         if matches!(target, Type::Class { name, .. } if name == "object") {
             return true;
         }
+        if matches!(self, Type::Str | Type::LiteralStr(_))
+            && matches!(target, Type::Class { name, .. } if name == "Path")
+        {
+            return true;
+        }
 
         // Never is bottom: subtype of everything
         if matches!(self, Type::Never) {
@@ -976,6 +981,64 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
     }
 }
 
+fn collect_type_vars(ty: &Type, vars: &mut HashSet<String>) {
+    match ty {
+        Type::TypeVar(name) if !matches!(name.as_str(), "Any" | "Self") => {
+            vars.insert(name.clone());
+        }
+        Type::Class {
+            type_args, fields, ..
+        } => {
+            for arg in type_args {
+                collect_type_vars(arg, vars);
+            }
+            for field_type in fields.values() {
+                collect_type_vars(field_type, vars);
+            }
+        }
+        Type::Interface { type_args, .. } | Type::Trait { type_args, .. } => {
+            for arg in type_args {
+                collect_type_vars(arg, vars);
+            }
+        }
+        Type::Record { fields, .. } => {
+            for (_, field_type) in fields {
+                collect_type_vars(field_type, vars);
+            }
+        }
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                collect_type_vars(param, vars);
+            }
+            collect_type_vars(return_type, vars);
+        }
+        Type::Future(inner) | Type::Negation(inner) | Type::Exact(inner) => {
+            collect_type_vars(inner, vars);
+        }
+        Type::Union(parts) | Type::Intersection(parts) => {
+            for part in parts {
+                collect_type_vars(part, vars);
+            }
+        }
+        Type::View { inner, .. } => collect_type_vars(inner, vars),
+        Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Str
+        | Type::None
+        | Type::Never
+        | Type::TypeVar(_)
+        | Type::LiteralInt(_)
+        | Type::LiteralBool(_)
+        | Type::LiteralFloat(_)
+        | Type::LiteralStr(_)
+        | Type::Shape(_) => {}
+    }
+}
+
 fn infer_type_arguments(
     pattern: &Type,
     actual: &Type,
@@ -1133,6 +1196,7 @@ pub struct TypeEnvironment {
     pub trait_getters: HashMap<(String, String), Type>,
     pub trait_fields: HashMap<(String, String), Type>,
     pub trait_bases: HashMap<String, Vec<String>>,
+    pub class_trait_args: HashMap<(String, String), Vec<Type>>,
     pub interface_methods: HashMap<(String, String), Type>,
     pub interface_method_params: HashMap<(String, String), Vec<String>>,
     pub interface_getters: HashMap<(String, String), Type>,
@@ -1146,6 +1210,7 @@ pub struct TypeEnvironment {
     /// Definition-site variance for each class type parameter.
     pub class_variance: HashMap<String, Vec<Variance>>,
     pub class_type_params: HashMap<String, Vec<String>>,
+    pub trait_type_params: HashMap<String, Vec<String>>,
     pub interface_variance: HashMap<String, Vec<Variance>>,
     pub trait_variance: HashMap<String, Vec<Variance>>,
     pub class_bounds: HashMap<String, Vec<Option<Type>>>,
@@ -2566,6 +2631,16 @@ impl TypeChecker {
                 let mut parent_class = None;
                 let mut traits = Vec::new();
                 let mut interfaces = Vec::new();
+                let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let class_type_param_names = type_params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect::<HashSet<_>>();
+                for param in type_params {
+                    self.env
+                        .type_var_bounds
+                        .insert(param.name.clone(), Type::TypeVar("Any".into()));
+                }
 
                 for base_expr in bases {
                     if let TypeExpr::Named {
@@ -2585,6 +2660,24 @@ impl TypeChecker {
                         } else if self.env.interfaces.contains_key(base_name) {
                             interfaces.push(base_name.clone());
                         } else if self.env.traits.contains_key(base_name) {
+                            if let TypeExpr::Named { args, .. } = base_expr {
+                                let resolved_args = args
+                                    .iter()
+                                    .map(|arg| {
+                                        if let TypeExpr::Named { name, args, .. } = arg {
+                                            if args.is_empty()
+                                                && class_type_param_names.contains(name)
+                                            {
+                                                return Ok(Type::TypeVar(name.clone()));
+                                            }
+                                        }
+                                        self.resolve_type_expr(arg)
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                self.env
+                                    .class_trait_args
+                                    .insert((name.clone(), base_name.clone()), resolved_args);
+                            }
                             traits.push(base_name.clone());
                         } else if parent_class.is_none() {
                             // External or omitted class parent. Forward
@@ -2618,7 +2711,6 @@ impl TypeChecker {
                         .push(name.clone());
                 }
 
-                let saved_type_var_bounds = self.env.type_var_bounds.clone();
                 let class_variance = type_params
                     .iter()
                     .map(|param| param.variance.clone())
@@ -2790,17 +2882,31 @@ impl TypeChecker {
                     if let ClassMember::Method(method) | ClassMember::ClassMethod(method) = member {
                         Self::reject_removed_decorators(method)?;
                     }
-                    let (method_name, params, return_type, is_async) = match member {
+                    let (method_name, params, return_type, default_return, is_async) = match member
+                    {
                         ClassMember::Method(method) | ClassMember::ClassMethod(method) => (
                             &method.name,
                             &method.params,
                             method.return_type.as_ref(),
+                            None,
                             method.is_async,
                         ),
                         ClassMember::Factory(factory) => (
                             &factory.name,
                             &factory.params,
                             factory.return_type.as_ref(),
+                            Some(Type::Class {
+                                name: name.clone(),
+                                type_args: type_params
+                                    .iter()
+                                    .map(|param| Type::TypeVar(param.name.clone()))
+                                    .collect(),
+                                parent: parent_class.clone(),
+                                traits: traits.clone(),
+                                interfaces: interfaces.clone(),
+                                fields: HashMap::new(),
+                                is_sealed: *is_final,
+                            }),
                             false,
                         ),
                         ClassMember::Getter(getter) => {
@@ -2849,6 +2955,7 @@ impl TypeChecker {
                     let return_type = return_type
                         .map(|annotation| self.resolve_type_expr(annotation))
                         .transpose()?
+                        .or(default_return)
                         .unwrap_or(Type::None);
                     let return_type = if is_async {
                         Type::Future(Box::new(return_type))
@@ -3048,6 +3155,16 @@ impl TypeChecker {
                 body,
                 ..
             } => {
+                let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                self.env.trait_type_params.insert(
+                    name.clone(),
+                    type_params.iter().map(|param| param.name.clone()).collect(),
+                );
+                for param in type_params {
+                    self.env
+                        .type_var_bounds
+                        .insert(param.name.clone(), Type::TypeVar("Any".into()));
+                }
                 let mut required = HashSet::new();
                 let base_names = bases
                     .iter()
@@ -3206,6 +3323,7 @@ impl TypeChecker {
                 self.env
                     .variables
                     .insert(name.clone(), (trait_type, MutabilityView::ReadOnly));
+                self.env.type_var_bounds = saved_type_var_bounds;
                 Ok(())
             }
             Stmt::TypeAlias {
@@ -4149,7 +4267,29 @@ impl TypeChecker {
         if let Some(Type::Class { traits, .. }) = self.env.classes.get(class_name) {
             for trait_name in traits {
                 if let Some(method) = self.trait_method_type(trait_name, name) {
-                    return Some(method.clone());
+                    let method = if let Some(args) = self
+                        .env
+                        .class_trait_args
+                        .get(&(class_name.to_string(), trait_name.clone()))
+                    {
+                        if let Some(params) = self.env.trait_type_params.get(trait_name) {
+                            if params.len() == args.len() {
+                                let substitutions = params
+                                    .iter()
+                                    .cloned()
+                                    .zip(args.iter().cloned())
+                                    .collect::<HashMap<_, _>>();
+                                substitute_type(&method, &substitutions)
+                            } else {
+                                method.clone()
+                            }
+                        } else {
+                            method.clone()
+                        }
+                    } else {
+                        method.clone()
+                    };
+                    return Some(method);
                 }
             }
         }
@@ -4510,10 +4650,19 @@ impl TypeChecker {
 
     fn member_type_for_view_inner(&self, inner: &Type, attr: &str) -> Option<Type> {
         match inner {
-            Type::Class { name, .. } => self
+            Type::Class {
+                name, type_args, ..
+            } => self
                 .class_getter_type(name, attr)
-                .or_else(|| self.class_field_type(name, attr))
-                .or_else(|| self.class_method_type(name, attr)),
+                .map(|ty| self.instantiate_class_member_type(name, type_args, ty))
+                .or_else(|| {
+                    self.class_field_type(name, attr)
+                        .map(|ty| self.instantiate_class_member_type(name, type_args, ty))
+                })
+                .or_else(|| {
+                    self.class_method_type(name, attr)
+                        .map(|ty| self.instantiate_class_member_type(name, type_args, ty))
+                }),
             Type::Interface { name, .. } => self
                 .interface_getter_type(name, attr)
                 .or_else(|| self.interface_field_type(name, attr))
@@ -7145,7 +7294,9 @@ impl TypeChecker {
             span,
         } = &argument.value
         {
-            if Self::anonymous_params_need_expected(params) {
+            if matches!(parameter, Type::Function { .. })
+                || Self::anonymous_params_need_expected(params)
+            {
                 self.anonymous_function_type_against_expected(
                     params,
                     return_type.as_ref(),
@@ -8843,9 +8994,68 @@ impl TypeChecker {
                 };
                 match ft {
                     Type::Function {
-                        params,
+                        mut params,
                         return_type,
                     } => {
+                        let mut return_type = *return_type;
+                        let mut generic_names = HashSet::new();
+                        for param in &params {
+                            collect_type_vars(param, &mut generic_names);
+                        }
+                        collect_type_vars(&return_type, &mut generic_names);
+                        if !generic_names.is_empty()
+                            && !called_name
+                                .is_some_and(|name| self.env.overloaded_functions.contains(name))
+                            && !args.iter().any(|argument| {
+                                argument.is_spread
+                                    || argument.is_dict_spread
+                                    || argument.is_gather_spread
+                            })
+                        {
+                            let mut substitutions = HashMap::new();
+                            let mut positional_index = 0usize;
+                            for argument in args {
+                                let index = argument
+                                    .name
+                                    .as_ref()
+                                    .and_then(|argument_name| {
+                                        called_member_params.as_ref().and_then(|names| {
+                                            names.iter().position(|parameter_name| {
+                                                parameter_name == argument_name
+                                            })
+                                        })
+                                    })
+                                    .unwrap_or_else(|| {
+                                        let index = positional_index;
+                                        positional_index += 1;
+                                        index
+                                    });
+                                let Some(parameter) = params.get(index) else {
+                                    continue;
+                                };
+                                let argument_type = self.type_of_expr(&argument.value)?;
+                                if !infer_type_arguments(
+                                    parameter,
+                                    &argument_type,
+                                    &generic_names,
+                                    &mut substitutions,
+                                ) {
+                                    return Err(TypeError {
+                                        message:
+                                            "arguments infer conflicting callable type arguments"
+                                                .into(),
+                                        span: argument.value.span(),
+                                    });
+                                }
+                            }
+                            if !substitutions.is_empty() {
+                                params = params
+                                    .iter()
+                                    .map(|param| substitute_type(param, &substitutions))
+                                    .collect();
+                                return_type = substitute_type(&return_type, &substitutions);
+                            }
+                        }
                         if called_member_params.is_some()
                             && !args.iter().any(|argument| {
                                 argument.is_spread
@@ -9158,7 +9368,7 @@ impl TypeChecker {
                                 .collect();
                             Ok(Type::Function {
                                 params: remaining,
-                                return_type,
+                                return_type: Box::new(return_type),
                             })
                         } else {
                             let builtin_return = called_name.and_then(|name| {
@@ -9236,7 +9446,7 @@ impl TypeChecker {
                                 if is_contextmanager_call {
                                     Ok(Type::TypeVar("ContextManager".into()))
                                 } else {
-                                    Ok(overload_return.or(generic_return).unwrap_or(*return_type))
+                                    Ok(overload_return.or(generic_return).unwrap_or(return_type))
                                 }
                             }
                         }
@@ -9664,7 +9874,11 @@ impl TypeChecker {
                                 }
                                 if let Some(method_type) = self.class_method_type(class_name, attr)
                                 {
-                                    return Ok(method_type);
+                                    return Ok(self.instantiate_class_member_type(
+                                        class_name,
+                                        class_type_args,
+                                        method_type,
+                                    ));
                                 }
                                 if let Some(getter_type) = self.class_getter_type(class_name, attr)
                                 {
@@ -9712,6 +9926,12 @@ impl TypeChecker {
                         if name == "str" && matches!(attr.as_str(), "bin" | "oct" | "hex") {
                             return Ok(Type::Function {
                                 params: vec![Type::Int],
+                                return_type: Box::new(Type::Str),
+                            });
+                        }
+                        if matches!(name.as_str(), "Bytes" | "bytes") && attr == "decode" {
+                            return Ok(Type::Function {
+                                params: Vec::new(),
                                 return_type: Box::new(Type::Str),
                             });
                         }
@@ -9763,7 +9983,7 @@ impl TypeChecker {
                         } else if let Some(class_var_type) = self.class_var_type(name, attr) {
                             Ok(class_var_type)
                         } else if let Some(method_type) = self.class_method_type(name, attr) {
-                            Ok(method_type)
+                            Ok(self.instantiate_class_member_type(name, type_args, method_type))
                         } else if attr.starts_with('_')
                             && self.env.current_class.as_deref() == Some(name)
                         {
@@ -14829,6 +15049,42 @@ def reject(value: not int) -> none:
             )
             .expect_err("mutable user classes should not satisfy !Hashable bounds");
         assert!(error.message.contains("does not satisfy its bound"));
+    }
+
+    #[test]
+    fn generic_trait_methods_substitute_class_base_arguments() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "trait Cache[K, V]:\n    def get_or_put(self, key: K, build: () -> V) -> V:\n        return build()\n\nclass MemoryCache[K, V](Cache[K, V]):\n    pass\n\ncache = MemoryCache[str, User]()\nuser: User = cache.get_or_put(\"ada\", def(): User())\n",
+                )
+                .unwrap(),
+            )
+            .expect("generic trait method parameters should use class base arguments");
+    }
+
+    #[test]
+    fn view_member_lookup_instantiates_class_arguments() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "trait Scorable[K]:\n    def score(self: ~Self, item: K) -> float\n\nclass InferenceModel[K](Scorable[K]):\n    def score(self: ~Self, item: K) -> float:\n        return 1.0\n\ndef evaluate(model: ~InferenceModel[str], item: str) -> float:\n    return model.score(item)\n",
+                )
+                .unwrap(),
+            )
+            .expect("view member lookup should substitute class type arguments");
+    }
+
+    #[test]
+    fn generic_factory_infers_class_argument_from_parameters() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class InferenceModel[K]:\n    labels: list[K]\n\n    factory from_checkpoint(cls, path: Path, labels: list[K]):\n        return construct(labels)\n\nmodel: InferenceModel[str] = InferenceModel.from_checkpoint(\"model.bin\", [\"cat\", \"dog\"])\n",
+                )
+                .unwrap(),
+            )
+            .expect("generic factories should infer class arguments from call parameters");
     }
 
     #[test]
