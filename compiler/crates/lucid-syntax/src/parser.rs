@@ -85,6 +85,7 @@ impl Parser {
 
         while !self.check(&TokenKind::Eof) {
             let stmt = self.parse_statement()?;
+            Self::reject_reserved_module_binding(&stmt)?;
             statements.push(stmt);
             self.skip_newlines();
         }
@@ -110,7 +111,13 @@ impl Parser {
 
         while !self.check(&TokenKind::Eof) {
             match self.parse_statement() {
-                Ok(statement) => statements.push(statement),
+                Ok(statement) => {
+                    if let Err(error) = Self::reject_reserved_module_binding(&statement) {
+                        errors.push(error);
+                    } else {
+                        statements.push(statement);
+                    }
+                }
                 Err(error) => {
                     errors.push(error);
                     while !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) {
@@ -129,6 +136,41 @@ impl Parser {
             },
             errors,
         )
+    }
+
+    fn reject_reserved_module_binding(stmt: &Stmt) -> Result<(), ParseError> {
+        if let Some((name, span)) = Self::reserved_module_binding(stmt) {
+            if name == "__all__" {
+                return Err(ParseError {
+                    message: "__all__ is not supported; Lucid uses leading '_' for module privacy"
+                        .into(),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn reserved_module_binding(stmt: &Stmt) -> Option<(&str, Span)> {
+        match stmt {
+            Stmt::Export(inner) => Self::reserved_module_binding(inner),
+            Stmt::ClassDef { name, span, .. }
+            | Stmt::InterfaceDef { name, span, .. }
+            | Stmt::TraitDef { name, span, .. }
+            | Stmt::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
+            Stmt::Function(FunctionDef { name, span, .. }) => Some((name.as_str(), *span)),
+            Stmt::VarDef {
+                pattern: Pattern::Ident(name, _),
+                span,
+                ..
+            }
+            | Stmt::Assignment {
+                target: Expr::Ident { name, .. },
+                span,
+                ..
+            } => Some((name.as_str(), *span)),
+            _ => None,
+        }
     }
 
     pub fn parse_statement(&mut self) -> Result<Stmt, ParseError> {

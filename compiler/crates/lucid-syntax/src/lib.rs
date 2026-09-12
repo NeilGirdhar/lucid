@@ -496,6 +496,32 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn dunder_all_binding_reports_explicit_rejection() {
+        for source in [
+            "__all__ = [\"value\"]\n",
+            "let __all__ = [\"value\"]\n",
+            "def __all__() -> int:\n    return 1\n",
+            "class __all__:\n    pass\n",
+            "export __all__ = [\"value\"]\n",
+            "type __all__ = int\n",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(error.to_string().contains("__all__ is not supported"));
+        }
+    }
+
+    #[test]
+    fn recovering_parser_drops_dunder_all_but_keeps_later_statements() {
+        let (module, errors) = parse_recovering("__all__ = []\nkept = 1\n").unwrap();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(module.statements.len(), 1);
+        assert!(
+            matches!(&module.statements[0], Stmt::Assignment { target: Expr::Ident { name, .. }, .. } if name == "kept")
+        );
+        assert!(errors[0].message.contains("__all__ is not supported"));
+    }
+
+    #[test]
     fn recovering_parser_keeps_later_statements() {
         let (module, errors) = parse_recovering("first = 1\nbad =\nlast = 3\n").unwrap();
         assert_eq!(errors.len(), 1);

@@ -16093,24 +16093,6 @@ def reject(value: not int) -> none:
     }
 
     #[test]
-    fn test_dunder_all_binding_is_rejected_statically() {
-        for source in [
-            "__all__ = [\"value\"]\nvalue = 1\n",
-            "let __all__ = [\"value\"]\n",
-            "def __all__() -> int:\n    return 1\n",
-            "class __all__:\n    pass\n",
-            "export __all__ = [\"value\"]\n",
-        ] {
-            let mut checker = TypeChecker::new();
-            let error = checker
-                .check_module(&parse(source).unwrap())
-                .expect_err("__all__ binding must fail static checking");
-            assert!(error.message.contains("__all__ is not supported"));
-            assert!(error.span.end > error.span.start);
-        }
-    }
-
-    #[test]
     fn test_delitem_member_is_rejected_statically() {
         for source in [
             "class Bag:\n    def __delitem__(self, index: int):\n        pass\n",
