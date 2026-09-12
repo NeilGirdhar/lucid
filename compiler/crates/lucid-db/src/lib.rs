@@ -4301,6 +4301,20 @@ pub fn lower_function_body(
                         StaticBranch::Selected([lucid_syntax::Stmt::Pass(_)])
                         | StaticBranch::Empty => return void_function(),
                         StaticBranch::Selected(branch) => {
+                            if let Some(lucid_syntax::Stmt::Return { value: None, .. }) =
+                                branch.last()
+                            {
+                                let mut bindings = Vec::new();
+                                for statement in &branch[..branch.len().saturating_sub(1)] {
+                                    collect_pre_return_binding(statement, &mut bindings)?;
+                                }
+                                if bindings.is_empty() {
+                                    return void_function();
+                                }
+                                return Err(Arc::from(
+                                    "constant function branch has no lowerable return",
+                                ));
+                            }
                             let Some(lucid_syntax::Stmt::Return {
                                 value: Some(value), ..
                             }) = branch.last()
@@ -5763,6 +5777,42 @@ mod tests {
             .as_ref()
             .expect("constant elif pass branch should lower to void CIR");
         assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-bare-return-branch.lucid",
+            "def answer(value: int):\n    if true:\n        return\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant bare return branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-elif-bare-return-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    elif true:\n        return\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant elif bare return branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-else-bare-return-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    else:\n        assert(true)\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant else bare return branch with no-op prefix should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-setup-before-bare-return-branch.lucid",
+            "def answer(value: int):\n    if true:\n        temporary = value + 1\n        return\n    else:\n        return value\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("setup before selected bare return must not be erased");
+        assert!(error.contains("constant function branch"));
 
         let file = db.add_file(
             "dynamic-elif-pass-branch.lucid",
