@@ -919,6 +919,9 @@ diverged:
   steps participate in the same emptiness check.
   Statically true assertions are likewise erased in the primitive linear CIR
   subset; false or dynamic assertions remain outside that subset.
+  Identity comparisons now lower consistently across the CIR seams: `===` and
+  `!==` participate in executable comparisons and in constant branch
+  selection alongside `is`/`is not`.
   Constant list, set, and dictionary `for` loops with identifier targets are
   unrolled through the same SSA path; dictionary loops bind keys, matching
   the runtime iteration rule. Wildcard targets are also supported and discard

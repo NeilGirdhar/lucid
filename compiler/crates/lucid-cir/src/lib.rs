@@ -2156,12 +2156,12 @@ impl Function {
                     ) = (left.as_ref(), right.as_ref())
                     {
                         return Some(match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                left == right
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                left != right
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => left == right,
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => left != right,
                             _ => return None,
                         });
                     }
@@ -2189,12 +2189,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                Some(left == right)
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(left != right)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(left == right),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                             _ => None,
                         },
                         (
@@ -2207,10 +2207,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => Some(true),
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(false)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(true),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(false),
                             _ => None,
                         },
                         (
@@ -2223,12 +2225,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                Some(left == right)
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(left != right)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(left == right),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                             _ => None,
                         },
                         (
@@ -2241,10 +2243,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => Some(true),
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(false)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(true),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(false),
                             _ => None,
                         },
                         (
@@ -2271,12 +2275,12 @@ impl Function {
                             };
                             let equal = normalize(left) == normalize(right);
                             match op {
-                                lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                    Some(equal)
-                                }
-                                lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                    Some(!equal)
-                                }
+                                lucid_syntax::BinaryOp::Eq
+                                | lucid_syntax::BinaryOp::Identity
+                                | lucid_syntax::BinaryOp::Is => Some(equal),
+                                lucid_syntax::BinaryOp::NotEq
+                                | lucid_syntax::BinaryOp::NotIdentity
+                                | lucid_syntax::BinaryOp::IsNot => Some(!equal),
                                 _ => None,
                             }
                         }
@@ -3487,20 +3491,20 @@ impl Function {
                             left,
                             right,
                         },
-                        lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                            Instruction::CmpEq {
-                                result: id,
-                                left,
-                                right,
-                            }
-                        }
-                        lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                            Instruction::CmpNe {
-                                result: id,
-                                left,
-                                right,
-                            }
-                        }
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
+                            result: id,
+                            left,
+                            right,
+                        },
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
+                            result: id,
+                            left,
+                            right,
+                        },
                         lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
                             result: id,
                             left,
@@ -3690,12 +3694,12 @@ impl Function {
                     op, left, right, ..
                 } => {
                     let compare = |left: f64, right: f64| match op {
-                        lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                            Some(left == right)
-                        }
-                        lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                            Some(left != right)
-                        }
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => Some(left == right),
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                         lucid_syntax::BinaryOp::Lt => Some(left < right),
                         lucid_syntax::BinaryOp::LtEq => Some(left <= right),
                         lucid_syntax::BinaryOp::Gt => Some(left > right),
@@ -3713,12 +3717,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                Some(left == right)
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(left != right)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(left == right),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                             _ => None,
                         },
                         (
@@ -3731,10 +3735,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => Some(true),
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(false)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(true),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(false),
                             _ => None,
                         },
                         (
@@ -3747,12 +3753,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                Some(left == right)
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(left != right)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(left == right),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                             _ => None,
                         },
                         (
@@ -3765,10 +3771,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => Some(true),
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(false)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(true),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(false),
                             _ => None,
                         },
                         (
@@ -3795,12 +3803,12 @@ impl Function {
                             };
                             let equal = normalize(left) == normalize(right);
                             match op {
-                                lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                    Some(equal)
-                                }
-                                lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                    Some(!equal)
-                                }
+                                lucid_syntax::BinaryOp::Eq
+                                | lucid_syntax::BinaryOp::Identity
+                                | lucid_syntax::BinaryOp::Is => Some(equal),
+                                lucid_syntax::BinaryOp::NotEq
+                                | lucid_syntax::BinaryOp::NotIdentity
+                                | lucid_syntax::BinaryOp::IsNot => Some(!equal),
                                 _ => None,
                             }
                         }
@@ -3814,12 +3822,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                Some(left == right)
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(left != right)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(left == right),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                             _ => None,
                         },
                         (
@@ -4971,20 +4979,20 @@ impl Function {
                             left,
                             right,
                         },
-                        lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                            Instruction::CmpEq {
-                                result,
-                                left,
-                                right,
-                            }
-                        }
-                        lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                            Instruction::CmpNe {
-                                result,
-                                left,
-                                right,
-                            }
-                        }
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
+                            result,
+                            left,
+                            right,
+                        },
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
+                            result,
+                            left,
+                            right,
+                        },
                         // Non-constant nested logical expressions must use
                         // CFG lowering; eager instructions would violate
                         // selective evaluation.
@@ -5142,12 +5150,12 @@ impl Function {
                         };
                     }
                     let comparison = |left: f64, right: f64| match op {
-                        lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                            Some(left == right)
-                        }
-                        lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                            Some(left != right)
-                        }
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => Some(left == right),
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                         lucid_syntax::BinaryOp::Lt => Some(left < right),
                         lucid_syntax::BinaryOp::LtEq => Some(left <= right),
                         lucid_syntax::BinaryOp::Gt => Some(left > right),
@@ -5165,12 +5173,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                Some(left == right)
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(left != right)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(left == right),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                             _ => None,
                         },
                         (
@@ -5183,10 +5191,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => Some(true),
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(false)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(true),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(false),
                             _ => None,
                         },
                         (
@@ -5199,12 +5209,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                Some(left == right)
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(left != right)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(left == right),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                             _ => None,
                         },
                         (
@@ -5217,10 +5227,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => Some(true),
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(false)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(true),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(false),
                             _ => None,
                         },
                         (
@@ -5233,12 +5245,12 @@ impl Function {
                                 ..
                             },
                         ) => match op {
-                            lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => {
-                                Some(left == right)
-                            }
-                            lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                                Some(left != right)
-                            }
+                            lucid_syntax::BinaryOp::Eq
+                            | lucid_syntax::BinaryOp::Identity
+                            | lucid_syntax::BinaryOp::Is => Some(left == right),
+                            lucid_syntax::BinaryOp::NotEq
+                            | lucid_syntax::BinaryOp::NotIdentity
+                            | lucid_syntax::BinaryOp::IsNot => Some(left != right),
                             _ => None,
                         },
                         (
@@ -5620,18 +5632,20 @@ impl Function {
                         left,
                         right,
                     },
-                    lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
+                    lucid_syntax::BinaryOp::Eq
+                    | lucid_syntax::BinaryOp::Identity
+                    | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
                         result: value_id,
                         left,
                         right,
                     },
-                    lucid_syntax::BinaryOp::NotEq | lucid_syntax::BinaryOp::IsNot => {
-                        Instruction::CmpNe {
-                            result: value_id,
-                            left,
-                            right,
-                        }
-                    }
+                    lucid_syntax::BinaryOp::NotEq
+                    | lucid_syntax::BinaryOp::NotIdentity
+                    | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
+                        result: value_id,
+                        left,
+                        right,
+                    },
                     lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
                         result: value_id,
                         left,
@@ -9236,6 +9250,12 @@ return total
             panic!("expected assignment");
         };
         assert_eq!(Function::from_expr(value).unwrap().execute(), Ok(Some(1)));
+
+        let module = lucid_syntax::parse("value = 2 !== 3\n").unwrap();
+        let lucid_syntax::Stmt::Assignment { value, .. } = &module.statements[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(Function::from_expr(value).unwrap().execute(), Ok(Some(1)));
     }
 
     #[test]
@@ -9448,6 +9468,16 @@ return total
             Ok(Some(9))
         );
         let module = lucid_syntax::parse("if 0.0:\n    x = 4\nelse:\n    x = 9\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(9))
+        );
+        let module = lucid_syntax::parse("if 3 === 3:\n    x = 4\nelse:\n    x = 9\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(4))
+        );
+        let module = lucid_syntax::parse("if 3 !== 3:\n    x = 4\nelse:\n    x = 9\n").unwrap();
         assert_eq!(
             Function::from_module_linear(&module).unwrap().execute(),
             Ok(Some(9))
