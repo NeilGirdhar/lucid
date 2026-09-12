@@ -1665,6 +1665,80 @@ pub fn lower_function_body(
                 .map_err(|_| Arc::from("unsupported literal match for function CIR lowering"));
             }
         }
+        if arms.len() >= 3
+            && arms[..arms.len() - 1]
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+            && matches!(
+                arms.last().map(|arm| &arm.pattern),
+                Some(lucid_syntax::Pattern::Wildcard(_))
+            )
+        {
+            let explicit_values = arms[..arms.len() - 1]
+                .iter()
+                .map(|arm| match arm.body.as_slice() {
+                    [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        },
+                    ] => Some(value),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>();
+            let wildcard_value = arms.last().and_then(|arm| match arm.body.as_slice() {
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] => Some(value),
+                _ => None,
+            });
+            if let (Some(explicit_values), Some(wildcard_value)) = (explicit_values, wildcard_value)
+            {
+                let conditions = arms[..arms.len() - 1]
+                    .iter()
+                    .map(|arm| {
+                        let lucid_syntax::Pattern::Literal(literal, span) = &arm.pattern else {
+                            return None;
+                        };
+                        match literal {
+                            lucid_syntax::LiteralValue::Int(_)
+                            | lucid_syntax::LiteralValue::Bool(_) => {
+                                Some(lucid_syntax::Expr::Binary {
+                                    op: lucid_syntax::BinaryOp::Eq,
+                                    left: Box::new(subject.clone()),
+                                    right: Box::new(lucid_syntax::Expr::Literal {
+                                        value: literal.clone(),
+                                        span: *span,
+                                    }),
+                                    span: *span,
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                    && let Some((first_value, elif_values)) = explicit_values.split_first()
+                {
+                    let elif_pairs = elif_conditions
+                        .iter()
+                        .zip(elif_values.iter())
+                        .map(|(condition, value)| (condition, *value))
+                        .collect::<Vec<_>>();
+                    return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                        first_condition,
+                        first_value,
+                        &elif_pairs,
+                        wildcard_value,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported multi-arm match expression"));
+                }
+            }
+        }
         if arms.len() != 2 {
             return Err(Arc::from(
                 "unsupported match shape for function CIR lowering",
@@ -4962,6 +5036,17 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return value + 10\n        case 2:\n            return value * 10\n        case _:\n            return -value\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm expression match should lower through a CIR ladder");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
 
         let file = db.add_file("void.lucid", "def answer():\n    return\n");
         let function = lower_function_body(&db, file, "answer".into())
