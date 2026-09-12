@@ -473,6 +473,9 @@ diverged:
   Selected static branches apply the same no-op filter for `assert(true)`,
   statically false loops, empty loops, and nested statically false no-`else`
   conditionals before collecting local bindings.
+  Static branch local collection is now recursive for branches whose guards are
+  all known, while a dynamic `elif` stops selection instead of falling through
+  to a later `else`.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking

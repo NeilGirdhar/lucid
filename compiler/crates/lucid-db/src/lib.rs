@@ -4107,6 +4107,34 @@ pub fn lower_function_body(
             _ => None,
         }
     }
+    enum StaticBranch<'a> {
+        Selected(&'a [lucid_syntax::Stmt]),
+        Empty,
+        Unknown,
+    }
+    fn static_branch_selection<'a>(
+        condition: &lucid_syntax::Expr,
+        then_branch: &'a [lucid_syntax::Stmt],
+        elif_branches: &'a [(lucid_syntax::Expr, Vec<lucid_syntax::Stmt>)],
+        else_branch: Option<&'a Vec<lucid_syntax::Stmt>>,
+    ) -> StaticBranch<'a> {
+        match static_truth(condition) {
+            Some(true) => StaticBranch::Selected(then_branch),
+            Some(false) => {
+                for (condition, branch) in elif_branches {
+                    match static_truth(condition) {
+                        Some(true) => return StaticBranch::Selected(branch),
+                        Some(false) => continue,
+                        None => return StaticBranch::Unknown,
+                    }
+                }
+                else_branch.map_or(StaticBranch::Empty, |branch| {
+                    StaticBranch::Selected(branch.as_slice())
+                })
+            }
+            None => StaticBranch::Unknown,
+        }
+    }
     fn is_pure_expression(expr: &lucid_syntax::Expr) -> bool {
         match expr {
             lucid_syntax::Expr::Literal { .. } | lucid_syntax::Expr::Ident { .. } => true,
@@ -4126,6 +4154,92 @@ pub fn lower_function_body(
             }
             _ => false,
         }
+    }
+    fn collect_pre_return_binding(
+        statement: &lucid_syntax::Stmt,
+        bindings: &mut Vec<(String, lucid_syntax::Span)>,
+    ) -> Result<(), Arc<str>> {
+        if let lucid_syntax::Stmt::Expr(expr) = statement
+            && is_pure_expression(expr)
+        {
+            return Ok(());
+        }
+        if matches!(statement, lucid_syntax::Stmt::Expr(_)) {
+            return Err(Arc::from(
+                "effectful discarded expression is not supported by typed CIR lowering",
+            ));
+        }
+        if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+            return Ok(());
+        }
+        if let lucid_syntax::Stmt::Assert { condition, .. } = statement
+            && static_truth(condition) == Some(true)
+        {
+            return Ok(());
+        }
+        if let lucid_syntax::Stmt::While {
+            condition,
+            if_broken,
+            ..
+        } = statement
+            && static_truth(condition) == Some(false)
+            && if_broken.is_none()
+        {
+            return Ok(());
+        }
+        if let lucid_syntax::Stmt::For {
+            iterable,
+            if_broken,
+            ..
+        } = statement
+            && if_broken.is_none()
+            && lucid_cir::is_const_empty_iterable(iterable)
+        {
+            return Ok(());
+        }
+        if let lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        } = statement
+        {
+            match static_branch_selection(
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch.as_ref(),
+            ) {
+                StaticBranch::Selected(branch) => {
+                    for statement in branch {
+                        collect_pre_return_binding(statement, bindings)?;
+                    }
+                    return Ok(());
+                }
+                StaticBranch::Empty => return Ok(()),
+                StaticBranch::Unknown => {}
+            }
+        }
+        let (name, value) = match statement {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } => (name, value),
+            _ => {
+                return Err(Arc::from(
+                    "multi-statement function bodies are not yet supported by CIR lowering",
+                ));
+            }
+        };
+        bindings.push((name.clone(), value.span()));
+        Ok(())
     }
     // A single expression return is the common case.  A constant statement
     // branch with one return per selected arm can also be folded here.  A
@@ -4218,150 +4332,7 @@ pub fn lower_function_body(
                 };
                 let mut bindings = Vec::new();
                 for statement in &statements[..statements.len() - 1] {
-                    if let lucid_syntax::Stmt::Expr(expr) = statement
-                        && is_pure_expression(expr)
-                    {
-                        continue;
-                    }
-                    if matches!(statement, lucid_syntax::Stmt::Expr(_)) {
-                        return Err(Arc::from(
-                            "effectful discarded expression is not supported by typed CIR lowering",
-                        ));
-                    }
-                    if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
-                        continue;
-                    }
-                    if let lucid_syntax::Stmt::Assert { condition, .. } = statement
-                        && static_truth(condition) == Some(true)
-                    {
-                        continue;
-                    }
-                    if let lucid_syntax::Stmt::While {
-                        condition,
-                        if_broken,
-                        ..
-                    } = statement
-                        && static_truth(condition) == Some(false)
-                        && if_broken.is_none()
-                    {
-                        continue;
-                    }
-                    if let lucid_syntax::Stmt::For {
-                        iterable,
-                        if_broken,
-                        ..
-                    } = statement
-                        && if_broken.is_none()
-                        && lucid_cir::is_const_empty_iterable(iterable)
-                    {
-                        continue;
-                    }
-                    if let lucid_syntax::Stmt::If {
-                        condition,
-                        elif_branches,
-                        else_branch,
-                        ..
-                    } = statement
-                        && static_truth(condition) == Some(false)
-                        && elif_branches
-                            .iter()
-                            .all(|(elif_condition, _)| static_truth(elif_condition) == Some(false))
-                        && else_branch.is_none()
-                    {
-                        continue;
-                    }
-                    let selected_branch = if let lucid_syntax::Stmt::If {
-                        condition,
-                        then_branch,
-                        elif_branches,
-                        else_branch,
-                        ..
-                    } = statement
-                    {
-                        match static_truth(condition) {
-                            Some(true) => Some(then_branch.as_slice()),
-                            Some(false) => elif_branches
-                                .iter()
-                                .find_map(|(condition, branch)| {
-                                    (static_truth(condition) == Some(true))
-                                        .then_some(branch.as_slice())
-                                })
-                                .or(else_branch.as_deref()),
-                            None => None,
-                        }
-                    } else {
-                        None
-                    };
-                    let candidates: Vec<&lucid_syntax::Stmt> = selected_branch
-                        .map(|branch| branch.iter().collect())
-                        .unwrap_or_else(|| vec![statement]);
-                    for statement in candidates {
-                        if let lucid_syntax::Stmt::Expr(expr) = statement
-                            && is_pure_expression(expr)
-                        {
-                            continue;
-                        }
-                        if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
-                            continue;
-                        }
-                        if let lucid_syntax::Stmt::Assert { condition, .. } = statement
-                            && static_truth(condition) == Some(true)
-                        {
-                            continue;
-                        }
-                        if let lucid_syntax::Stmt::While {
-                            condition,
-                            if_broken,
-                            ..
-                        } = statement
-                            && static_truth(condition) == Some(false)
-                            && if_broken.is_none()
-                        {
-                            continue;
-                        }
-                        if let lucid_syntax::Stmt::For {
-                            iterable,
-                            if_broken,
-                            ..
-                        } = statement
-                            && if_broken.is_none()
-                            && lucid_cir::is_const_empty_iterable(iterable)
-                        {
-                            continue;
-                        }
-                        if let lucid_syntax::Stmt::If {
-                            condition,
-                            elif_branches,
-                            else_branch,
-                            ..
-                        } = statement
-                            && static_truth(condition) == Some(false)
-                            && elif_branches
-                                .iter()
-                                .all(|(condition, _)| static_truth(condition) == Some(false))
-                            && else_branch.is_none()
-                        {
-                            continue;
-                        }
-                        let (name, value) = match statement {
-                            lucid_syntax::Stmt::Assignment {
-                                target: lucid_syntax::Expr::Ident { name, .. },
-                                value,
-                                ..
-                            }
-                            | lucid_syntax::Stmt::VarDef {
-                                pattern: lucid_syntax::Pattern::Ident(name, _),
-                                value: Some(value),
-                                ..
-                            } => (name, value),
-                            _ => {
-                                return Err(Arc::from(
-                                    "multi-statement function bodies are not yet supported by CIR lowering",
-                                ));
-                            }
-                        };
-                        bindings.push((name.clone(), value.span()));
-                    }
+                    collect_pre_return_binding(statement, &mut bindings)?;
                 }
                 (
                     statements
@@ -6385,6 +6356,24 @@ mod tests {
             .as_ref()
             .expect("multiple selected branch assignments should lower");
         assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "nested-selected-branch-locals-before-return.lucid",
+            "def answer(value: int):\n    if true:\n        if true:\n            result = value * 2\n    return result + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested statically selected branch assignments should lower");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-elif-before-return.lucid",
+            "def answer(value: int):\n    if false:\n        result = 0\n    elif value > 0:\n        result = 1\n    else:\n        result = 2\n    return result\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("dynamic elif assignment must not be treated as a selected else");
+        assert!(error.contains("multi-statement function bodies"));
 
         let file = db.add_file(
             "dead-while-before-return.lucid",
