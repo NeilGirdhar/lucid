@@ -512,6 +512,7 @@ fn build_file(path_str: Option<&String>, output_path_str: Option<&String>, opt_l
 
 fn emit_c_file(path_str: &str) {
     let path = Path::new(path_str);
+    validate_file_with_database(path);
     let module = match load_native_project(path) {
         Ok(m) => m,
         Err(e) => {

@@ -396,8 +396,13 @@ fn emit_c_rejects_source_that_fails_type_checking() {
         .output()
         .expect("lucid binary should execute");
     let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Type Error"));
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("for ch in \"abc\":"),
+        "emit-c should render the source line before codegen: {stderr}"
+    );
 }
 
 #[test]
