@@ -3993,6 +3993,43 @@ impl Function {
                 _ => constant_int(value, instructions).map(|value| value != 0),
             }
         }
+        fn statement_static_truth(
+            expr: &lucid_syntax::Expr,
+            bindings: &HashMap<String, ValueId>,
+            instructions: &[Instruction],
+        ) -> Option<bool> {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => {
+                    constant_value_truth(*bindings.get(name)?, instructions)
+                }
+                lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Not,
+                    expr,
+                    ..
+                } => statement_static_truth(expr, bindings, instructions).map(|value| !value),
+                lucid_syntax::Expr::Binary {
+                    op: lucid_syntax::BinaryOp::And,
+                    left,
+                    right,
+                    ..
+                } => match statement_static_truth(left, bindings, instructions) {
+                    Some(false) => Some(false),
+                    Some(true) => statement_static_truth(right, bindings, instructions),
+                    None => None,
+                },
+                lucid_syntax::Expr::Binary {
+                    op: lucid_syntax::BinaryOp::Or,
+                    left,
+                    right,
+                    ..
+                } => match statement_static_truth(left, bindings, instructions) {
+                    Some(true) => Some(true),
+                    Some(false) => statement_static_truth(right, bindings, instructions),
+                    None => None,
+                },
+                _ => constant_truth(expr),
+            }
+        }
         fn visit(
             stmt: &lucid_syntax::Stmt,
             bindings: &mut HashMap<String, ValueId>,
@@ -4143,15 +4180,12 @@ impl Function {
                         return visit_all(then_branch, bindings, instructions, next, last);
                     }
                     for (condition, branch) in elif_branches {
-                        let lucid_syntax::Expr::Literal {
-                            value: lucid_syntax::LiteralValue::Bool(value),
-                            ..
-                        } = condition
-                        else {
-                            return Err(LowerError::UnsupportedExpression);
-                        };
-                        if *value {
-                            return visit_all(branch, bindings, instructions, next, last);
+                        match statement_static_truth(condition, bindings, instructions) {
+                            Some(true) => {
+                                return visit_all(branch, bindings, instructions, next, last);
+                            }
+                            Some(false) => continue,
+                            None => return Err(LowerError::UnsupportedExpression),
                         }
                     }
                     if let Some(branch) = else_branch {
@@ -4172,12 +4206,13 @@ impl Function {
                     else_branch,
                     ..
                 } => {
-                    let truth = !constant_truth(expr).ok_or(LowerError::UnsupportedExpression)?;
+                    let truth = !statement_static_truth(expr, bindings, instructions)
+                        .ok_or(LowerError::UnsupportedExpression)?;
                     if truth {
                         return visit_all(then_branch, bindings, instructions, next, last);
                     }
                     for (condition, branch) in elif_branches {
-                        match constant_truth(condition) {
+                        match statement_static_truth(condition, bindings, instructions) {
                             Some(true) => {
                                 return visit_all(branch, bindings, instructions, next, last);
                             }
@@ -4201,11 +4236,11 @@ impl Function {
                     elif_branches,
                     else_branch,
                     ..
-                } => match constant_truth(condition) {
+                } => match statement_static_truth(condition, bindings, instructions) {
                     Some(true) => visit_all(then_branch, bindings, instructions, next, last),
                     Some(false) => {
                         for (condition, branch) in elif_branches {
-                            match constant_truth(condition) {
+                            match statement_static_truth(condition, bindings, instructions) {
                                 Some(true) => {
                                     return visit_all(branch, bindings, instructions, next, last);
                                 }
@@ -4227,11 +4262,11 @@ impl Function {
                     elif_branches,
                     else_branch,
                     ..
-                } => match constant_truth(condition) {
+                } => match statement_static_truth(condition, bindings, instructions) {
                     Some(true) => visit_all(then_branch, bindings, instructions, next, last),
                     Some(false) => {
                         for (condition, branch) in elif_branches {
-                            match constant_truth(condition) {
+                            match statement_static_truth(condition, bindings, instructions) {
                                 Some(true) => {
                                     return visit_all(branch, bindings, instructions, next, last);
                                 }
@@ -4254,13 +4289,13 @@ impl Function {
                     else_branch,
                     ..
                 } => {
-                    let truth =
-                        constant_truth(condition).ok_or(LowerError::UnsupportedExpression)?;
+                    let truth = statement_static_truth(condition, bindings, instructions)
+                        .ok_or(LowerError::UnsupportedExpression)?;
                     if truth {
                         return visit_all(then_branch, bindings, instructions, next, last);
                     }
                     for (condition, branch) in elif_branches {
-                        match constant_truth(condition) {
+                        match statement_static_truth(condition, bindings, instructions) {
                             Some(true) => {
                                 return visit_all(branch, bindings, instructions, next, last);
                             }
@@ -4279,7 +4314,7 @@ impl Function {
                     // removed before single-block lowering. Statically true
                     // or dynamic loops need back-edges and remain outside
                     // this linear subset.
-                    if constant_truth(condition) == Some(false) {
+                    if statement_static_truth(condition, bindings, instructions) == Some(false) {
                         Ok(())
                     } else {
                         Err(LowerError::UnsupportedExpression)
@@ -4538,10 +4573,12 @@ impl Function {
                 | lucid_syntax::Stmt::Break(_)
                 | lucid_syntax::Stmt::Continue(_)
                 | lucid_syntax::Stmt::With { .. } => Err(LowerError::UnsupportedExpression),
-                lucid_syntax::Stmt::Assert { condition, .. } => match constant_truth(condition) {
-                    Some(true) => Ok(()),
-                    _ => Err(LowerError::UnsupportedExpression),
-                },
+                lucid_syntax::Stmt::Assert { condition, .. } => {
+                    match statement_static_truth(condition, bindings, instructions) {
+                        Some(true) => Ok(()),
+                        _ => Err(LowerError::UnsupportedExpression),
+                    }
+                }
                 lucid_syntax::Stmt::ClassDef { .. }
                 | lucid_syntax::Stmt::InterfaceDef { .. }
                 | lucid_syntax::Stmt::TraitDef { .. }
@@ -9497,6 +9534,38 @@ return total
             Function::from_module_linear(&module).unwrap().execute(),
             Ok(Some(3))
         );
+        let module = lucid_syntax::parse(
+            "flag = false\nif flag:\n    x = 3\nelif 1 < 2:\n    x = 4\nelse:\n    x = 5\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(4))
+        );
+        let module = lucid_syntax::parse(
+            "flag = false\nother = true\nif flag:\n    x = 3\nelif other:\n    x = 4\nelse:\n    x = 5\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(4))
+        );
+        let module = lucid_syntax::parse(
+            "flag = false\nother = true\nif flag:\n    x = 3\nelif not other:\n    x = 4\nelse:\n    x = 5\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(5))
+        );
+        let module = lucid_syntax::parse(
+            "flag = false\nif flag:\n    x = 3\nelif not true:\n    x = 4\nelse:\n    x = 5\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(5))
+        );
         let module =
             lucid_syntax::parse("flag = 1 < 2\nif flag:\n    x = 3\nelse:\n    x = 4\n").unwrap();
         assert_eq!(
@@ -9567,6 +9636,18 @@ return total
         assert_eq!(
             Function::from_module_linear(&module).unwrap().execute(),
             Ok(Some(4))
+        );
+        let module =
+            lucid_syntax::parse("keep_going = false\nwhile keep_going:\n    x = 1\nx = 6\n")
+                .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(6))
+        );
+        let module = lucid_syntax::parse("checked = true\nassert(checked)\nx = 7\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(7))
         );
         let module = lucid_syntax::parse("if 2 < 3:\n    x = 5\nelse:\n    x = 6\n").unwrap();
         assert_eq!(

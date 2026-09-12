@@ -1776,6 +1776,10 @@ diverged:
 * Constant-condition `if` statements now select and lower only the reachable
   branch in that boundary; dynamic control flow remains an explicit CIR task.
   Integer conditions use Lucid truthiness (`0` is false, non-zero is true).
+  Statement guards whose truth is held in earlier primitive bindings now use
+  the same constant-truth path for selected `elif`, dead `while`, and
+  statically true `assert` lowering instead of accepting only literal
+  booleans in those positions.
 * A first dynamic `if` diamond now lowers to branch blocks plus a verified Phi
   merge when both branches assign one literal value; Cranelift executes it
   through the same CFG.
