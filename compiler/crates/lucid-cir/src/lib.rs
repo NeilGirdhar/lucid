@@ -3852,6 +3852,7 @@ impl Function {
             right_temp: ValueId,
             parameter_names: &[String],
             alias_initial: Option<&lucid_syntax::Stmt>,
+            allow_division_family: bool,
         ) -> Option<(Vec<Instruction>, bool)> {
             fn atom_instruction(
                 expr: &lucid_syntax::Expr,
@@ -3905,6 +3906,7 @@ impl Function {
                         right_temp,
                         parameter_names,
                         None,
+                        allow_division_family,
                     )?;
                     Some((instructions, true))
                 }
@@ -3930,13 +3932,22 @@ impl Function {
                 }
                 lucid_syntax::Expr::Binary {
                     op, left, right, ..
-                } if matches!(
-                    op,
-                    lucid_syntax::BinaryOp::Add
-                        | lucid_syntax::BinaryOp::Sub
-                        | lucid_syntax::BinaryOp::Mul
-                ) =>
-                {
+                } => {
+                    let op_allowed = matches!(
+                        op,
+                        lucid_syntax::BinaryOp::Add
+                            | lucid_syntax::BinaryOp::Sub
+                            | lucid_syntax::BinaryOp::Mul
+                    ) || (allow_division_family
+                        && matches!(
+                            op,
+                            lucid_syntax::BinaryOp::Div
+                                | lucid_syntax::BinaryOp::FloorDiv
+                                | lucid_syntax::BinaryOp::Mod
+                        ));
+                    if !op_allowed {
+                        return None;
+                    }
                     let (left_instruction, left_used_alias) =
                         atom_instruction(left.as_ref(), left_temp, parameter_names, alias_initial)?;
                     let (right_instruction, right_used_alias) = atom_instruction(
@@ -3957,6 +3968,21 @@ impl Function {
                             right: right_temp,
                         },
                         lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::Div => Instruction::Div {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::FloorDiv => Instruction::FloorDiv {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::Mod => Instruction::Mod {
                             result,
                             left: left_temp,
                             right: right_temp,
@@ -3984,6 +4010,7 @@ impl Function {
                 ValueId(11),
                 parameter_names,
                 alias_initial,
+                true,
             )
         }
         fn accumulator_operand_instructions(
@@ -3999,6 +4026,7 @@ impl Function {
                 ValueId(13),
                 parameter_names,
                 alias_initial,
+                true,
             )
         }
         fn induction_step_instructions(
@@ -4014,6 +4042,7 @@ impl Function {
                 ValueId(15),
                 parameter_names,
                 alias_initial,
+                false,
             )
         }
         let statements = module.statements.as_slice();
@@ -11669,6 +11698,26 @@ return total
 
         let module = lucid_syntax::parse(
             r#"total = 0
+while n > limit // scale:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("division-bound while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "scale".into()],
+        )
+        .expect("division-bound while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 6, 2]), Ok(Some(9)));
+        assert_eq!(
+            function.execute_with_args(&[5, 6, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
 stop = limit + 1
 tick = step + 1
 while n > stop:
@@ -11685,6 +11734,26 @@ return total
         .expect("dynamic arithmetic accumulator counted loop should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 2, 2]), Ok(Some(9)));
         assert_eq!(function.execute_with_args(&[1, 2, 2]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += step % modulus
+    n -= 1
+return total
+"#,
+        )
+        .expect("modulo operand counted while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "modulus".into()],
+        )
+        .expect("modulo operand counted while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 5, 3]), Ok(Some(10)));
+        assert_eq!(
+            function.execute_with_args(&[5, 5, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
 
         let module = lucid_syntax::parse(
             r#"total = 0

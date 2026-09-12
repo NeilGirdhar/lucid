@@ -1522,6 +1522,57 @@ fn run_cir_executes_parameter_bound_while_accumulator() {
 }
 
 #[test]
+fn run_cir_executes_division_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_division_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int, limit: int, scale: int):\n    total = 0\n    while n > limit // scale:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir division-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir division-bound zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn run_cir_executes_dynamic_arithmetic_counted_while_accumulator() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_dynamic_arithmetic_while_accumulator_{}.lucid",

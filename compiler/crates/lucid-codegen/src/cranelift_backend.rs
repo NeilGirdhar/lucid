@@ -3234,6 +3234,62 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_division_bound_counted_while_accumulator_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > limit // scale:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("division-bound counted while accumulator fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "scale".into()],
+        )
+        .expect("division-bound counted while accumulator should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile division-bound counted accumulator CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 6, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 9);
+        let zero = unsafe { compiled.call_result_with_args(&[5, 6, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::DivisionByZero
+        );
+    }
+
+    #[test]
+    fn result_abi_executes_modulo_operand_counted_while_accumulator_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += step % modulus
+    n -= 1
+return total
+"#,
+        )
+        .expect("modulo operand counted while accumulator fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "modulus".into()],
+        )
+        .expect("modulo operand counted while accumulator should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile modulo operand counted accumulator CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 5, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 10);
+        let zero = unsafe { compiled.call_result_with_args(&[5, 5, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::DivisionByZero
+        );
+    }
+
+    #[test]
     fn result_abi_executes_local_bound_local_step_parameter_induction_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit
