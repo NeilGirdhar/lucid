@@ -7454,14 +7454,14 @@ return total
             Function::from_module(&module).is_err(),
             "oversized constant ranges must not be unrolled without a bound"
         );
-        let module = lucid_syntax::parse("assert true\nvalue = 11\n").unwrap();
+        let module = lucid_syntax::parse("assert(true)\nvalue = 11\n").unwrap();
         assert_eq!(
             Function::from_module(&module)
                 .expect("a statically true assertion should be removed")
                 .execute(),
             Ok(Some(11))
         );
-        let module = lucid_syntax::parse("assert false\nvalue = 12\n").unwrap();
+        let module = lucid_syntax::parse("assert(false)\nvalue = 12\n").unwrap();
         assert!(
             Function::from_module(&module).is_err(),
             "a statically false assertion must not be erased"

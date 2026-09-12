@@ -273,18 +273,20 @@ impl Parser {
             }
             TokenKind::Assert => {
                 self.advance();
-                let (condition, message) = if self.match_tok(&TokenKind::LParen) {
-                    let condition = self.parse_expr()?;
-                    let message = if self.match_tok(&TokenKind::Comma) {
-                        Some(self.parse_expr()?)
-                    } else {
-                        None
-                    };
-                    self.expect(&TokenKind::RParen)?;
-                    (condition, message)
+                if !self.match_tok(&TokenKind::LParen) {
+                    return Err(ParseError {
+                        message: "assert requires parentheses: use assert(condition) or assert(condition, message)"
+                            .into(),
+                        span: self.peek().span,
+                    });
+                }
+                let condition = self.parse_expr()?;
+                let message = if self.match_tok(&TokenKind::Comma) {
+                    Some(self.parse_expr()?)
                 } else {
-                    (self.parse_expr()?, None)
+                    None
                 };
+                self.expect(&TokenKind::RParen)?;
                 self.consume_stmt_end()?;
                 Ok(Stmt::Assert {
                     condition,

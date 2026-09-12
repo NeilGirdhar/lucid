@@ -4568,7 +4568,7 @@ mod tests {
 
         let file = db.add_file(
             "true-assert-before-return.lucid",
-            "def answer(value: int):\n    assert true\n    return value + 1\n",
+            "def answer(value: int):\n    assert(true)\n    return value + 1\n",
         );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()

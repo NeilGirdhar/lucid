@@ -241,6 +241,15 @@ contextmanager def locked(lock: Lock):
     }
 
     #[test]
+    fn test_parse_requires_parenthesized_assert() {
+        parse("assert(true)\n").expect("parenthesized assert should parse");
+        parse("assert(true, \"message\")\n").expect("assert message should parse");
+
+        let error = parse("assert true\n").expect_err("bare assert must fail in parsing");
+        assert!(error.contains("assert requires parentheses"));
+    }
+
+    #[test]
     fn test_parse_rejects_field_delete_with_fixed_shape_message() {
         let error = parse("del obj.field\n").expect_err("field delete must fail in parsing");
         assert!(error.contains("fields are fixed, not deletable"));
