@@ -9848,6 +9848,21 @@ return total
             Err(LowerError::UnsupportedExpression)
         );
 
+        let module = lucid_syntax::parse(
+            r#"total = 0
+begin = stop
+stop = begin
+for i in range(begin, n):
+    total += i
+return total
+"#,
+        )
+        .expect("cyclic range alias fixture should parse");
+        assert_eq!(
+            Function::from_module_linear_with_params(&module, &["n".into()]),
+            Err(LowerError::UnsupportedExpression)
+        );
+
         let module =
             lucid_syntax::parse("total = 20\nfor i in range(n):\n    total -= i\nreturn total\n")
                 .expect("range subtraction fixture should parse");
