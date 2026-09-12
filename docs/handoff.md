@@ -118,16 +118,19 @@ boundary.
 own cleanup during native lowering.
 Named nested functions with a single expression return can now be called from
 their defining scope through the existing captured-local closure machinery;
-escaping named closures still require the planned first-class closure ABI.
+capturing anonymous functions now lower to first-class erased closures that
+retain their environment after the defining activation returns.
 Aliases assigned from those nested functions preserve the same captured-call
 binding instead of being lowered as an undeclared native variable.
 `let` aliases receive the same preservation, so immutable local bindings do
 not erase the nested closure call shape.
 Higher-order builtins such as `map` also retain the captured binding after a
 nested-function alias.
-The native runtime now has the tagged closure value and packed-argument call
-primitives that form the ABI foundation; constructing and lowering escaping
-closures remains the next step.
+The native runtime uses the tagged closure value and packed-argument call
+primitives for anonymous closures stored in containers, returned from
+functions, and invoked through loop bindings. Recursive closure binding cells,
+environment reclamation, and the shared CIR closure representation remain
+open.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
@@ -1653,9 +1656,9 @@ gaps are architectural rather than isolated syntax features:
    both the interpreter and native backend use the same representation. A
    closure returned from a function must therefore retain its environment
    after the activation ends, while non-capturing functions may use a shared
-   empty environment. The current native inline-expression path is only a
-   temporary optimization for direct calls and must be removed once this ABI
-   exists.
+   empty environment. Native anonymous closures now satisfy the escaping
+   environment requirement, but recursive cells, reclamation, and CIR/Cranelift
+   integration still need to replace the AST-directed implementation.
 6. Shape semantics are open in [Shapes](shape.md): literal-count inference for
    dispatch by rank or shape still needs precise rules and tests; type-level
    `stack` shape inference now has a concrete implementation.
