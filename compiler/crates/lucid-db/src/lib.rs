@@ -2500,6 +2500,13 @@ pub fn lower_function_body(
                     span: *span,
                 };
                 Some(match &arm.guard {
+                    Some(guard) if static_truth(guard) == Some(true) => pattern_test,
+                    Some(guard) if static_truth(guard) == Some(false) => {
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bool(false),
+                            span: guard.span(),
+                        }
+                    }
                     Some(guard) => lucid_syntax::Expr::Binary {
                         op: lucid_syntax::BinaryOp::And,
                         left: Box::new(pattern_test),
@@ -2509,7 +2516,16 @@ pub fn lower_function_body(
                     None => pattern_test,
                 })
             }
-            lucid_syntax::Pattern::Wildcard(_) => arm.guard.clone(),
+            lucid_syntax::Pattern::Wildcard(_) => match &arm.guard {
+                Some(guard) if static_truth(guard) == Some(true) => None,
+                Some(guard) if static_truth(guard) == Some(false) => {
+                    Some(lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Bool(false),
+                        span: guard.span(),
+                    })
+                }
+                other => other.clone(),
+            },
             _ => None,
         };
         if arms.iter().any(|arm| arm.guard.is_some())
@@ -7218,6 +7234,25 @@ mod tests {
             "statically false guarded arm should be skipped before lowering"
         );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "static-true-guarded-literal-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if true:\n            return 11\n        case _:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statically true guarded literal match should lower as unguarded");
+        assert!(
+            !function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, lucid_cir::Instruction::And { .. }))
+            }),
+            "statically true guarded arm should not emit guard conjunction"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
 
         let file = db.add_file(
