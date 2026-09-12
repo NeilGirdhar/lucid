@@ -10134,6 +10134,12 @@ static inline void lucid_print_val(LucidVal v) {
                 Ok(format!("lucid_closure({adapter}, {env}, NULL)"))
             }
             Expr::Ident { name, .. } => {
+                if name == "_" {
+                    return Err(CodegenError {
+                        message: "'_' is a black-hole assignment target, not a readable value"
+                            .into(),
+                    });
+                }
                 if self
                     .from_imports
                     .get(name)
@@ -21804,6 +21810,27 @@ print(g(21))
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "43");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_black_hole_identifier_is_not_readable() {
+        for source in [
+            "_ = 1\nvalue = _\n",
+            "left, _ = [1, 2]\nvalue = _\n",
+            "values = [_ for _ in [1, 2]]\n",
+        ] {
+            let module = parse(source).expect("black-hole source should parse");
+            let output = std::env::temp_dir()
+                .join(format!("lucid_native_black_hole_{}", std::process::id()));
+            let _ = std::fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("black-hole '_' reads must fail native codegen");
+            let _ = std::fs::remove_file(&output);
+            assert!(
+                error.message.contains("black-hole assignment target"),
+                "{source}: {error}"
+            );
+        }
     }
 
     #[test]

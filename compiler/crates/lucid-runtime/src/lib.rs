@@ -6648,10 +6648,19 @@ impl Interpreter {
                 LiteralValue::Sentinel(s) => Value::Sentinel(s.clone()),
                 LiteralValue::Ellipsis => Value::None,
             }),
-            Expr::Ident { name, span } => self.env.borrow().get(name).ok_or_else(|| RuntimeError {
-                message: format!("undefined variable '{name}'"),
-                span: *span,
-            }),
+            Expr::Ident { name, span } => {
+                if name == "_" {
+                    return Err(RuntimeError {
+                        message: "'_' is a black-hole assignment target, not a readable value"
+                            .into(),
+                        span: *span,
+                    });
+                }
+                self.env.borrow().get(name).ok_or_else(|| RuntimeError {
+                    message: format!("undefined variable '{name}'"),
+                    span: *span,
+                })
+            }
             Expr::Binary {
                 op,
                 left,
@@ -13075,6 +13084,25 @@ result = inc(4)
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(5)));
+    }
+
+    #[test]
+    fn black_hole_identifier_is_not_readable_at_runtime() {
+        for source in [
+            "_ = 1\nvalue = _\n",
+            "left, _ = [1, 2]\nvalue = _\n",
+            "values = [_ for _ in [1, 2]]\n",
+        ] {
+            let module = parse(source).unwrap();
+            let mut interp = Interpreter::new();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("black-hole '_' reads must fail at runtime");
+            assert!(
+                error.message.contains("black-hole assignment target"),
+                "{source}: {error:?}"
+            );
+        }
     }
 
     #[test]
