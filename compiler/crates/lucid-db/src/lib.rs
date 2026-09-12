@@ -6654,6 +6654,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-1]), Ok(None));
 
         let file = db.add_file(
+            "parameterized-optional-pass-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("optional dynamic pass conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
             "parameterized-pass-void-conditional.lucid",
             "def answer(value: int):\n    if value > 0:\n        return\n    else:\n        pass\n",
         );
