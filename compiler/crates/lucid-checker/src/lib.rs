@@ -8765,6 +8765,25 @@ impl TypeChecker {
                                 require_int()?;
                                 Ok(Type::Str)
                             }
+                            Type::Class {
+                                name, type_args, ..
+                            } if matches!(name.as_str(), "dict" | "frozendict") => {
+                                if let Some(key_type) = type_args.first() {
+                                    if !index_t.is_subtype_of(key_type, &self.env) {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "dictionary key has type {:?}, expected {:?}",
+                                                index_t, key_type
+                                            ),
+                                            span: index.span(),
+                                        });
+                                    }
+                                }
+                                Ok(type_args
+                                    .get(1)
+                                    .cloned()
+                                    .unwrap_or(Type::TypeVar("Any".to_string())))
+                            }
                             Type::Trait {
                                 name, type_args, ..
                             } if name == "Sequence" => {
@@ -8792,7 +8811,7 @@ impl TypeChecker {
                             ref name,
                             ref type_args,
                             ..
-                        } if name == "dict" => {
+                        } if matches!(name.as_str(), "dict" | "frozendict") => {
                             if let Some(key_type) = type_args.first() {
                                 if !index_t.is_subtype_of(key_type, &self.env) {
                                     return Err(TypeError {
@@ -12428,6 +12447,28 @@ def reject(value: not int) -> none:
             .check_module(&parse("values: list[int] = [\"x\"]\n").unwrap())
             .expect_err("non-empty mismatched literals must still fail");
         assert!(error.message.contains("type mismatch"));
+    }
+
+    #[test]
+    fn test_read_only_dictionary_views_are_indexable_but_not_mutable() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Animal:\n    pass\nclass Cat(Animal):\n    pass\nclass Dog(Animal):\n    pass\ncats: dict[str, Cat] = {:}\nanimals: ~dict[str, Animal] = cats\nanimal: Animal = animals[\"ada\"]\n",
+                )
+                .unwrap(),
+            )
+            .expect("read-only dictionary views should support indexed reads");
+
+        let error = TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Animal:\n    pass\nclass Cat(Animal):\n    pass\nclass Dog(Animal):\n    pass\ncats: dict[str, Cat] = {:}\nanimals: ~dict[str, Animal] = cats\nanimals[\"turing\"] = Dog()\n",
+                )
+                .unwrap(),
+            )
+            .expect_err("read-only dictionary views must reject indexed writes");
+        assert!(error.message.contains("read-only"));
     }
 
     #[test]
