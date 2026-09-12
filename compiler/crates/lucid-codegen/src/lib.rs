@@ -1392,7 +1392,7 @@ impl CCodeGenerator {
         let top_function_aliases = self.function_aliases.clone();
         for stmt in &module.statements {
             if let Stmt::Function(f) = Self::unwrap_export(stmt) {
-                self.emit_closure_adapter(f, true);
+                self.emit_closure_adapter(f, true)?;
             }
         }
         self.emit_line("");
@@ -1406,7 +1406,7 @@ impl CCodeGenerator {
         }
         for stmt in &module.statements {
             if let Stmt::Function(f) = Self::unwrap_export(stmt) {
-                self.emit_closure_adapter(f, false);
+                self.emit_closure_adapter(f, false)?;
             }
         }
         self.emit_line("");
@@ -6077,39 +6077,48 @@ static inline void lucid_print_val(LucidVal v) {
     /// native entry points retain their typed C signatures; these adapters
     /// are the ABI boundary used when a function is stored in a value (for
     /// example in a list) and later invoked through `lucid_call`.
-    fn emit_closure_adapter(&mut self, f: &FunctionDef, prototype: bool) {
+    fn emit_closure_adapter(&mut self, f: &FunctionDef, prototype: bool) -> Result<(), CodegenError> {
         if f.is_dispatch
             || f.is_async
             || f.decorators.iter().any(|decorator| {
                 matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
             })
             || f.params.iter().any(|param| {
-                param.default.is_some()
-                    || param.is_variadic_positional
+                param.is_variadic_positional
                     || param.is_variadic_keyword
                     || param.is_gather
             })
         {
-            return;
+            return Ok(());
         }
         let adapter = Self::closure_adapter_name(f);
         if prototype {
             self.emit_line(&format!("static LucidVal {adapter}(void*, LucidList*);"));
-            return;
+            return Ok(());
         }
         let fn_name = self.dispatch_name(f, &f.name);
         let ret_ty = self.map_type_expr(f.return_type.as_ref());
         self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args) {{"));
         self.indent += 1;
         self.emit_line("(void)_env;");
+        let required = f
+            .params
+            .iter()
+            .filter(|param| {
+                param.default.is_none()
+                    && !param.is_variadic_positional
+                    && !param.is_variadic_keyword
+                    && !param.is_gather
+            })
+            .count();
         self.emit_line(&format!(
-            "if (!args || args->len != {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
+            "if (!args || args->len < {required} || args->len > {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
             f.params.len()
         ));
         let mut call_args = Vec::new();
         for (index, param) in f.params.iter().enumerate() {
             let ty = self.map_type_expr(param.type_annotation.as_ref());
-            let expression = match ty.as_str() {
+            let supplied = match ty.as_str() {
                 "int64_t" => format!("lucid_as_int(args->items[{index}])"),
                 "double" => format!("lucid_as_float(args->items[{index}])"),
                 "bool" => format!("lucid_as_bool(args->items[{index}])"),
@@ -6119,6 +6128,12 @@ static inline void lucid_print_val(LucidVal v) {
                 "LucidSet*" => format!("lucid_as_set(args->items[{index}])"),
                 "LucidVal" => format!("args->items[{index}]"),
                 other => format!("({other})lucid_as_ptr(args->items[{index}])"),
+            };
+            let expression = if let Some(default) = &param.default {
+                let default_code = self.emit_expr(default)?;
+                format!("(args->len > {index} ? {supplied} : {default_code})")
+            } else {
+                supplied
             };
             call_args.push(expression);
         }
@@ -6131,6 +6146,7 @@ static inline void lucid_print_val(LucidVal v) {
         }
         self.indent -= 1;
         self.emit_line("}");
+        Ok(())
     }
 
     fn emit_contextmanager_function(&mut self, f: &FunctionDef) -> Result<(), CodegenError> {
@@ -17539,6 +17555,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "function value list failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+    }
+
+    #[test]
+    fn native_erased_function_value_uses_default_arguments() {
+        let source = "def add(a: int, b: int = 5) -> int:\n    return a + b\nfs = [add]\nprint(fs[0](3))\n";
+        let module = parse(source).expect("default closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_function_value_default_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("default closure should compile");
+        let run = Command::new(&output).output().expect("run default closure");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "default closure failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
     }
 
     #[test]
