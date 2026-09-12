@@ -1847,9 +1847,12 @@ pub fn lower_function_body(
                 None => return Ok(Some(Vec::new())),
             };
             let mut bindings = Vec::new();
-            for statement in setup {
+            fn collect_match_void_binding(
+                statement: &lucid_syntax::Stmt,
+                bindings: &mut Vec<(String, lucid_syntax::Span)>,
+            ) -> Result<bool, Arc<str>> {
                 if branch_noop_statement(statement) {
-                    continue;
+                    return Ok(true);
                 }
                 let (name, value) = match statement {
                     lucid_syntax::Stmt::Assignment {
@@ -1867,9 +1870,41 @@ pub fn lower_function_body(
                             "effectful discarded expression is not supported by typed CIR lowering",
                         ));
                     }
-                    _ => return Ok(None),
+                    lucid_syntax::Stmt::Return { value: None, .. } => return Ok(true),
+                    lucid_syntax::Stmt::If {
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch,
+                        ..
+                    } => {
+                        return match static_branch_selection(
+                            condition,
+                            then_branch,
+                            elif_branches,
+                            else_branch.as_ref(),
+                        ) {
+                            StaticBranch::Selected(branch) => {
+                                for statement in branch {
+                                    if !collect_match_void_binding(statement, bindings)? {
+                                        return Ok(false);
+                                    }
+                                }
+                                Ok(true)
+                            }
+                            StaticBranch::Empty => Ok(true),
+                            StaticBranch::Unknown => Ok(false),
+                        };
+                    }
+                    _ => return Ok(false),
                 };
                 bindings.push((name.clone(), value.span()));
+                Ok(true)
+            }
+            for statement in setup {
+                if !collect_match_void_binding(statement, &mut bindings)? {
+                    return Ok(None);
+                }
             }
             Ok(Some(bindings))
         }
@@ -6869,6 +6904,22 @@ mod tests {
         );
 
         let file = db.add_file(
+            "constant-subject-static-branch-setup-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            if true:\n                temporary = value + 1\n                return\n            else:\n                return value\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject static branch setup before void match should lower");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
             "constant-subject-pure-setup-void-match.lucid",
             "def answer(value: int):\n    match true as flag:\n        case true:\n            value + 1\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
         );
@@ -6907,6 +6958,22 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("constant subject no-op setup-only match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-static-branch-setup-fallthrough-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            if true:\n                temporary = value + 1\n            else:\n                return value\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject static branch setup-only match should preserve setup");
         assert_eq!(function.execute_with_args(&[42]), Ok(None));
         assert!(
             function
