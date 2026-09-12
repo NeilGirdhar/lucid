@@ -2387,11 +2387,19 @@ pub fn lower_function_body(
                 let arm_matches = matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_))
                     || pattern_literal(&arm.pattern) == Some(subject_literal);
                 if arm_matches {
-                    if arm.guard.is_some() {
-                        return None;
+                    if let Some(guard) = arm.guard.as_ref() {
+                        match static_truth(guard) {
+                            Some(false) => continue,
+                            Some(true) => {
+                                selected = Some(arm);
+                                break;
+                            }
+                            None => return None,
+                        }
+                    } else {
+                        selected = Some(arm);
+                        break;
                     }
-                    selected = Some(arm);
-                    break;
                 }
                 if pattern_literal(&arm.pattern).is_none() {
                     return None;
@@ -7637,6 +7645,36 @@ mod tests {
             .as_ref()
             .expect("guarded constant subject match should keep the guard dynamic");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(Some(7)));
+
+        let file = db.add_file(
+            "static-true-guarded-constant-subject-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true if true:\n            return value + 10\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statically true guarded constant subject should fold directly");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "statically true guarded constant subject should not emit dead fallback control flow"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(Some(3)));
+
+        let file = db.add_file(
+            "static-false-guarded-constant-subject-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true if false:\n            return 1 // 0\n        case _:\n            return -value\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statically false guarded constant subject arm should be skipped");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "statically false guarded constant subject should not emit dead selected control flow"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(-1)));
         assert_eq!(function.execute_with_args(&[-7]), Ok(Some(7)));
 
         let file = db.add_file(

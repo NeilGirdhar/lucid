@@ -482,8 +482,10 @@ diverged:
   Constant integer/boolean subjects written with the required `as` alias now
   fold to the selected unguarded literal or wildcard arm and lower that arm
   directly, including value-returning and void arms, so dead arms are not
-  evaluated. A matching guarded arm still blocks that fold and stays on the
-  dynamic conditional path, because the guard decides arm selection at runtime.
+  evaluated. Static guards participate in that fold: `if false` arms are
+  skipped and `if true` arms select normally. A matching dynamic guarded arm
+  still blocks the fold and stays on the dynamic conditional path, because the
+  guard decides arm selection at runtime.
   Statically false guarded arms before an unguarded wildcard are now skipped
   before primitive match lowering, so the wildcard arm can lower directly
   instead of carrying dead guard control flow.
