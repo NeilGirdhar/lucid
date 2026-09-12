@@ -10621,6 +10621,36 @@ static inline void lucid_print_val(LucidVal v) {
                                 "MemoryView" => {
                                     format!("(lucid_wrap({l_str}).type == LUCID_TYPE_MEMORYVIEW)")
                                 }
+                                "list" => {
+                                    if left_ty == "LucidList*" {
+                                        "((bool)1)".into()
+                                    } else {
+                                        format!("(lucid_wrap({l_str}).type == LUCID_TYPE_LIST)")
+                                    }
+                                }
+                                "dict" => {
+                                    if left_ty == "LucidDict*" {
+                                        "((bool)1)".into()
+                                    } else {
+                                        format!("(lucid_wrap({l_str}).type == LUCID_TYPE_DICT)")
+                                    }
+                                }
+                                "set" => {
+                                    if left_ty == "LucidSet*" {
+                                        "((bool)1)".into()
+                                    } else {
+                                        format!("(lucid_wrap({l_str}).type == LUCID_TYPE_SET)")
+                                    }
+                                }
+                                "DottedPath" => {
+                                    format!("(lucid_wrap({l_str}).type == LUCID_TYPE_DOTTED_PATH)")
+                                }
+                                "range" => {
+                                    return Err(CodegenError {
+                                        message: "native range type checks require first-class native ranges"
+                                            .to_string(),
+                                    });
+                                }
                                 name if self.known_classes.contains_key(name) => {
                                     if left_ty.ends_with('*') {
                                         format!(
@@ -10872,6 +10902,36 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "MemoryView" => {
                                     format!("(lucid_wrap({l_str}).type != LUCID_TYPE_MEMORYVIEW)")
+                                }
+                                "list" => {
+                                    if left_ty == "LucidList*" {
+                                        "((bool)0)".into()
+                                    } else {
+                                        format!("(lucid_wrap({l_str}).type != LUCID_TYPE_LIST)")
+                                    }
+                                }
+                                "dict" => {
+                                    if left_ty == "LucidDict*" {
+                                        "((bool)0)".into()
+                                    } else {
+                                        format!("(lucid_wrap({l_str}).type != LUCID_TYPE_DICT)")
+                                    }
+                                }
+                                "set" => {
+                                    if left_ty == "LucidSet*" {
+                                        "((bool)0)".into()
+                                    } else {
+                                        format!("(lucid_wrap({l_str}).type != LUCID_TYPE_SET)")
+                                    }
+                                }
+                                "DottedPath" => {
+                                    format!("(lucid_wrap({l_str}).type != LUCID_TYPE_DOTTED_PATH)")
+                                }
+                                "range" => {
+                                    return Err(CodegenError {
+                                        message: "native range type checks require first-class native ranges"
+                                            .to_string(),
+                                    });
                                 }
                                 name if self.known_classes.contains_key(name) => {
                                     if left_ty.ends_with('*') {
@@ -17650,6 +17710,62 @@ print(z is complex)
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
             "true\ntrue\nfalse\ntrue\ntrue\n"
+        );
+    }
+
+    #[test]
+    fn native_builtin_value_type_checks_use_value_tags() {
+        let source = r#"
+items = [1]
+mapping = {"a": 1}
+unique = {1}
+def sample() -> int:
+    return 1
+path = sample.__path__
+missing = sample.__doc__
+print(items is list)
+print(items is not dict)
+print(mapping is dict)
+print(mapping is not list)
+print(unique is set)
+print(unique is not dict)
+print(path is DottedPath)
+print(path is not list)
+print(missing is None)
+print(missing is not list)
+"#;
+        let module = parse(source).expect("builtin type-check source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_builtin_type_checks_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("builtin type-check source should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {run:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+        );
+    }
+
+    #[test]
+    fn native_range_type_check_fails_until_ranges_are_first_class() {
+        let source = "value = range(3)\nprint(value is range)\n";
+        let module = parse(source).expect("range type-check source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_range_type_check_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        let error = compile_to_native(&module, &output, 0)
+            .expect_err("native range type checks must fail until ranges are first class");
+        let _ = fs::remove_file(&output);
+        assert!(
+            error
+                .message
+                .contains("native range type checks require first-class native ranges")
         );
     }
 

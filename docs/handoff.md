@@ -1197,6 +1197,10 @@ diverged:
   Native class-like identifier patterns that are not known classes now fail
   codegen instead of compiling as unconditional matches; lowercase binding
   patterns remain the match-all binding form.
+  Native `is`/`is not` checks now use concrete value tags for represented
+  builtin value classes (`list`, `dict`, `set`, `DottedPath`, and `None`)
+  instead of falling through to object/trait checks. Native `is range` now
+  fails explicitly until native ranges are first-class.
   Generic builtin type patterns such as `case list[int]`, `case set[int]`,
   and `case dict[str, int]` now use those value-kind tests instead of falling
   through as native match-all arms for non-container subjects. `range` remains
