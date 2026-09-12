@@ -187,6 +187,7 @@ pub struct CCodeGenerator {
     known_without_traits: HashMap<String, HashSet<String>>,
     known_parents: HashMap<String, String>,
     known_class_members: HashMap<String, Vec<String>>,
+    implementation_methods: HashMap<String, Vec<FunctionDef>>,
     known_field_types: HashMap<(String, String), String>,
     known_field_defaults: HashMap<(String, String), Option<Expr>>,
     known_methods: HashMap<String, String>,
@@ -308,6 +309,7 @@ impl CCodeGenerator {
             known_without_traits: HashMap::new(),
             known_parents: HashMap::new(),
             known_class_members: HashMap::new(),
+            implementation_methods: HashMap::new(),
             known_field_types: HashMap::new(),
             known_field_defaults: HashMap::new(),
             known_methods: HashMap::new(),
@@ -463,6 +465,59 @@ impl CCodeGenerator {
             current = self.known_parents.get(&name).cloned();
         }
         None
+    }
+
+    fn record_method_metadata(&mut self, class: &str, method: &FunctionDef) {
+        self.known_methods
+            .insert(method.name.clone(), class.to_string());
+        self.known_method_param_names.insert(
+            (class.to_string(), method.name.clone()),
+            method.params.iter().skip(1).map(|p| p.name.clone()).collect(),
+        );
+        self.known_method_param_types.insert(
+            (class.to_string(), method.name.clone()),
+            method
+                .params
+                .iter()
+                .skip(1)
+                .map(|p| self.map_type_expr(p.type_annotation.as_ref()))
+                .collect(),
+        );
+        self.known_method_return_types.insert(
+            (class.to_string(), method.name.clone()),
+            self.map_type_expr(method.return_type.as_ref()),
+        );
+        self.known_method_defaults.insert(
+            (class.to_string(), method.name.clone()),
+            method
+                .params
+                .iter()
+                .skip(1)
+                .map(|p| p.default.clone())
+                .collect(),
+        );
+        if let Some((index, param)) = method
+            .params
+            .iter()
+            .skip(1)
+            .enumerate()
+            .find(|(_, param)| param.is_gather)
+        {
+            if let Some(TypeExpr::Named { name: bundle, .. }) = &param.type_annotation {
+                self.known_method_gather.insert(
+                    (class.to_string(), method.name.clone()),
+                    (index, bundle.clone()),
+                );
+            }
+        }
+        if method
+            .decorators
+            .iter()
+            .any(|decorator| matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"))
+        {
+            self.contextmanager_methods
+                .insert((class.to_string(), method.name.clone()));
+        }
     }
 
     fn class_has_capability(&self, class: &str, capability: &str) -> bool {
@@ -667,46 +722,7 @@ impl CCodeGenerator {
                         }
                         ClassMember::Method(m) => {
                             members.push(m.name.clone());
-                            self.known_methods.insert(m.name.clone(), name.clone());
-                            self.known_method_param_names.insert(
-                                (name.clone(), m.name.clone()),
-                                m.params.iter().skip(1).map(|p| p.name.clone()).collect(),
-                            );
-                            self.known_method_param_types.insert(
-                                (name.clone(), m.name.clone()),
-                                m.params
-                                    .iter()
-                                    .skip(1)
-                                    .map(|p| self.map_type_expr(p.type_annotation.as_ref()))
-                                    .collect(),
-                            );
-                            self.known_method_return_types.insert(
-                                (name.clone(), m.name.clone()),
-                                self.map_type_expr(m.return_type.as_ref()),
-                            );
-                            self.known_method_defaults.insert(
-                                (name.clone(), m.name.clone()),
-                                m.params.iter().skip(1).map(|p| p.default.clone()).collect(),
-                            );
-                            if let Some((index, param)) = m
-                                .params
-                                .iter()
-                                .skip(1)
-                                .enumerate()
-                                .find(|(_, param)| param.is_gather)
-                            {
-                                if let Some(TypeExpr::Named { name: bundle, .. }) =
-                                    &param.type_annotation
-                                {
-                                    self.known_method_gather.insert(
-                                        (name.clone(), m.name.clone()),
-                                        (index, bundle.clone()),
-                                    );
-                                }
-                            }
-                            if m.decorators.iter().any(|decorator| matches!(decorator, Expr::Ident { name: decorator_name, .. } if decorator_name == "contextmanager")) {
-                                self.contextmanager_methods.insert((name.clone(), m.name.clone()));
-                            }
+                            self.record_method_metadata(name, m);
                         }
                         ClassMember::Getter(g) => {
                             members.push(g.name.clone());
@@ -852,6 +868,24 @@ impl CCodeGenerator {
                         }
                     }
                 }
+            } else if let Stmt::ImplementDef { target, body, .. } = stmt {
+                let TypeExpr::Named { name: target_name, .. } = target else {
+                    continue;
+                };
+                if !self.known_classes.contains_key(target_name) {
+                    continue;
+                }
+                for function in body {
+                    self.known_class_members
+                        .entry(target_name.clone())
+                        .or_default()
+                        .push(function.name.clone());
+                    self.record_method_metadata(target_name, function);
+                    self.implementation_methods
+                        .entry(target_name.clone())
+                        .or_default()
+                        .push(function.clone());
+                }
             }
         }
 
@@ -979,7 +1013,11 @@ impl CCodeGenerator {
         // 2. Emit class struct definitions & constructors
         for stmt in &module.statements {
             if let Stmt::ClassDef { name, body, .. } = Self::unwrap_export(stmt) {
-                self.emit_class_def(name, body)?;
+                let mut augmented_body = body.clone();
+                if let Some(methods) = self.implementation_methods.get(name) {
+                    augmented_body.extend(methods.iter().cloned().map(ClassMember::Method));
+                }
+                self.emit_class_def(name, &augmented_body)?;
             }
         }
 
@@ -1176,6 +1214,7 @@ impl CCodeGenerator {
                     s,
                     Stmt::Function(_)
                         | Stmt::ClassDef { .. }
+                        | Stmt::ImplementDef { .. }
                         | Stmt::InterfaceDef { .. }
                         | Stmt::TraitDef { .. }
                 )
@@ -15969,6 +16008,43 @@ print(packet.storage[1])
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
             "72\n105\ntrue\ntrue\nfalse\n72\n73\n105\n"
+        );
+    }
+
+    #[test]
+    fn native_retroactive_buffer_implementation_feeds_memoryview() {
+        let source = r#"
+class Packet:
+    storage: ByteArray
+
+implement Buffer for Packet:
+    def __buffer__(self) -> MemoryView:
+        return memoryview(self.storage)
+
+def identity(value: Any) -> Any:
+    return value
+
+packet = Packet(bytearray([65, 66]))
+view = memoryview(identity(packet))
+view[0] = 72
+print(packet is Buffer)
+print(identity(packet) is Buffer)
+print(bytes(identity(packet))[0])
+print(packet.storage[0])
+"#;
+        let module = parse(source).expect("retroactive buffer source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_retro_buffer_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("retroactive buffer should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "true\ntrue\n72\n72\n"
         );
     }
 
