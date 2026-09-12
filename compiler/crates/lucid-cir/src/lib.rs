@@ -3330,13 +3330,27 @@ impl Function {
             expr: &lucid_syntax::Expr,
             result: ValueId,
             parameter_names: &[String],
-        ) -> Option<Instruction> {
+            alias_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(Instruction, bool)> {
             match Function::int_literal_expr(expr) {
-                Some(value) => Some(Instruction::ConstInt { result, value }),
+                Some(value) => Some((Instruction::ConstInt { result, value }, false)),
                 None => match expr {
-                    lucid_syntax::Expr::Ident { name, .. } => {
-                        parameter_instruction(name, result, parameter_names)
-                    }
+                    lucid_syntax::Expr::Ident { name, .. } => match alias_initial {
+                        Some(statement) => {
+                            let (alias_name, value) = initialized_ident(statement)?;
+                            if alias_name == name {
+                                Some((
+                                    initializer_instruction(value, result, parameter_names)?,
+                                    true,
+                                ))
+                            } else {
+                                Some((parameter_instruction(name, result, parameter_names)?, false))
+                            }
+                        }
+                        None => {
+                            Some((parameter_instruction(name, result, parameter_names)?, false))
+                        }
+                    },
                     _ => None,
                 },
             }
@@ -3347,6 +3361,7 @@ impl Function {
             initial_expr,
             induction_initial,
             bound_initial,
+            alias_initial,
             condition,
             body,
             if_broken,
@@ -3378,6 +3393,7 @@ impl Function {
                     initial_expr,
                     None,
                     None,
+                    None,
                     condition,
                     body,
                     if_broken,
@@ -3406,18 +3422,35 @@ impl Function {
                 };
                 let (first_name, first_expr) = initialized_ident(first_statement)?;
                 let (second_name, second_expr) = initialized_ident(second_statement)?;
-                let (acc_name, initial_expr, induction_statement) = if first_name == return_name {
-                    (first_name, first_expr, second_statement)
-                } else if second_name == return_name {
-                    (second_name, second_expr, first_statement)
-                } else {
+                let lucid_syntax::Expr::Binary { left, .. } = condition else {
                     return None;
+                };
+                let lucid_syntax::Expr::Ident {
+                    name: induction_name,
+                    ..
+                } = left.as_ref()
+                else {
+                    return None;
+                };
+                let (acc_name, initial_expr, other_name, other_statement) =
+                    if first_name == return_name {
+                        (first_name, first_expr, second_name, second_statement)
+                    } else if second_name == return_name {
+                        (second_name, second_expr, first_name, first_statement)
+                    } else {
+                        return None;
+                    };
+                let (induction_statement, alias_statement) = if other_name == induction_name {
+                    (Some(other_statement), None)
+                } else {
+                    (None, Some(other_statement))
                 };
                 (
                     acc_name,
                     initial_expr,
-                    Some(induction_statement),
+                    induction_statement,
                     None,
+                    alias_statement,
                     condition,
                     body,
                     if_broken,
@@ -3491,6 +3524,7 @@ impl Function {
                     initial_expr,
                     Some(initializer_statements[induction_index]),
                     Some(initializer_statements[bound_index]),
+                    None,
                     condition,
                     body,
                     if_broken,
@@ -3503,6 +3537,9 @@ impl Function {
             .and_then(initialized_ident)
             .is_some_and(|(name, _)| name == acc_name)
             || bound_initial
+                .and_then(initialized_ident)
+                .is_some_and(|(name, _)| name == acc_name)
+            || alias_initial
                 .and_then(initialized_ident)
                 .is_some_and(|(name, _)| name == acc_name)
         {
@@ -3594,13 +3631,17 @@ impl Function {
             expr: &lucid_syntax::Expr,
             induction_name: &str,
             parameter_names: &[String],
-        ) -> Option<AccumulatorOperand> {
+            alias_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(AccumulatorOperand, bool)> {
             match expr {
                 lucid_syntax::Expr::Ident { name, .. } if name == induction_name => {
-                    Some(AccumulatorOperand::Induction)
+                    Some((AccumulatorOperand::Induction, false))
                 }
-                _ => operand_instruction(expr, ValueId(6), parameter_names)
-                    .map(AccumulatorOperand::Materialized),
+                _ => {
+                    let (instruction, used_alias) =
+                        operand_instruction(expr, ValueId(6), parameter_names, alias_initial)?;
+                    Some((AccumulatorOperand::Materialized(instruction), used_alias))
+                }
             }
         }
         fn accumulator_self_update(
@@ -3608,7 +3649,8 @@ impl Function {
             target: &str,
             induction_name: &str,
             parameter_names: &[String],
-        ) -> Option<(lucid_syntax::BinaryOp, AccumulatorOperand)> {
+            alias_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(lucid_syntax::BinaryOp, AccumulatorOperand, bool)> {
             match statement {
                 lucid_syntax::Stmt::AugAssign {
                     target:
@@ -3618,10 +3660,11 @@ impl Function {
                     op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
                     value,
                     ..
-                } if update_name == target => Some((
-                    update_op.clone(),
-                    accumulator_operand(value, induction_name, parameter_names)?,
-                )),
+                } if update_name == target => {
+                    let (operand, used_alias) =
+                        accumulator_operand(value, induction_name, parameter_names, alias_initial)?;
+                    Some((update_op.clone(), operand, used_alias))
+                }
                 lucid_syntax::Stmt::Assignment {
                     target:
                         lucid_syntax::Expr::Ident {
@@ -3639,10 +3682,13 @@ impl Function {
                 } if update_name == target
                     && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
                 {
-                    Some((
-                        update_op.clone(),
-                        accumulator_operand(right.as_ref(), induction_name, parameter_names)?,
-                    ))
+                    let (operand, used_alias) = accumulator_operand(
+                        right.as_ref(),
+                        induction_name,
+                        parameter_names,
+                        alias_initial,
+                    )?;
+                    Some((update_op.clone(), operand, used_alias))
                 }
                 lucid_syntax::Stmt::Assignment {
                     target:
@@ -3660,10 +3706,13 @@ impl Function {
                 } if update_name == target
                     && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
                 {
-                    Some((
-                        lucid_syntax::BinaryOp::Add,
-                        accumulator_operand(left.as_ref(), induction_name, parameter_names)?,
-                    ))
+                    let (operand, used_alias) = accumulator_operand(
+                        left.as_ref(),
+                        induction_name,
+                        parameter_names,
+                        alias_initial,
+                    )?;
+                    Some((lucid_syntax::BinaryOp::Add, operand, used_alias))
                 }
                 _ => None,
             }
@@ -3673,7 +3722,8 @@ impl Function {
             target: &str,
             result: ValueId,
             parameter_names: &[String],
-        ) -> Option<(lucid_syntax::BinaryOp, Instruction)> {
+            alias_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(lucid_syntax::BinaryOp, Instruction, bool)> {
             match statement {
                 lucid_syntax::Stmt::AugAssign {
                     target:
@@ -3683,10 +3733,11 @@ impl Function {
                     op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
                     value,
                     ..
-                } if update_name == target => Some((
-                    update_op.clone(),
-                    operand_instruction(value, result, parameter_names)?,
-                )),
+                } if update_name == target => {
+                    let (instruction, used_alias) =
+                        operand_instruction(value, result, parameter_names, alias_initial)?;
+                    Some((update_op.clone(), instruction, used_alias))
+                }
                 lucid_syntax::Stmt::Assignment {
                     target:
                         lucid_syntax::Expr::Ident {
@@ -3704,10 +3755,13 @@ impl Function {
                 } if update_name == target
                     && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
                 {
-                    Some((
-                        update_op.clone(),
-                        operand_instruction(right.as_ref(), result, parameter_names)?,
-                    ))
+                    let (instruction, used_alias) = operand_instruction(
+                        right.as_ref(),
+                        result,
+                        parameter_names,
+                        alias_initial,
+                    )?;
+                    Some((update_op.clone(), instruction, used_alias))
                 }
                 lucid_syntax::Stmt::Assignment {
                     target:
@@ -3725,18 +3779,30 @@ impl Function {
                 } if update_name == target
                     && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
                 {
-                    Some((
-                        lucid_syntax::BinaryOp::Add,
-                        operand_instruction(left.as_ref(), result, parameter_names)?,
-                    ))
+                    let (instruction, used_alias) =
+                        operand_instruction(left.as_ref(), result, parameter_names, alias_initial)?;
+                    Some((lucid_syntax::BinaryOp::Add, instruction, used_alias))
                 }
                 _ => None,
             }
         }
-        let (acc_op, acc_operand) =
-            accumulator_self_update(&body[0], acc_name, induction_name, parameter_names)?;
-        let (induction_op, induction_step_instruction) =
-            operand_self_update(&body[1], induction_name, ValueId(8), parameter_names)?;
+        let (acc_op, acc_operand, used_acc_alias) = accumulator_self_update(
+            &body[0],
+            acc_name,
+            induction_name,
+            parameter_names,
+            alias_initial,
+        )?;
+        let (induction_op, induction_step_instruction, used_induction_alias) = operand_self_update(
+            &body[1],
+            induction_name,
+            ValueId(8),
+            parameter_names,
+            alias_initial,
+        )?;
+        if alias_initial.is_some() && !used_acc_alias && !used_induction_alias {
+            return None;
+        }
         let comparison = match op {
             lucid_syntax::BinaryOp::NotEq
             | lucid_syntax::BinaryOp::NotIdentity
@@ -9636,6 +9702,36 @@ return total
         )
         .expect("parameter-step while accumulator should lower");
         assert_eq!(function.execute_with_args(&[10, 4, 3]), Ok(Some(16)));
+
+        let module = lucid_syntax::parse(
+            r#"tick = step
+total = 0
+while n > 0:
+    total += tick
+    n -= 1
+return total
+"#,
+        )
+        .expect("local accumulator-step while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("local accumulator-step while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(15)));
+
+        let module = lucid_syntax::parse(
+            r#"tick = step
+total = 0
+while n > 0:
+    total += 1
+    n -= tick
+return total
+"#,
+        )
+        .expect("local induction-step while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("local induction-step while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(4)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
