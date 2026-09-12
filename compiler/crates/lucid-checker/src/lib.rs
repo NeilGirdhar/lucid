@@ -6339,6 +6339,25 @@ impl TypeChecker {
                                 let Some(parameter) = params.get(index) else {
                                     continue;
                                 };
+                                if called_member_params.is_some()
+                                    && index + 1 == params.len()
+                                    && matches!(
+                                        parameter,
+                                        Type::Class { name, .. }
+                                            if name == "Arguments"
+                                                || name == "Parameters"
+                                                || name.ends_with("Arguments")
+                                                || name.ends_with("Parameters")
+                                    )
+                                {
+                                    // A method's final Arguments/Parameters
+                                    // slot receives the remaining call
+                                    // arguments as a gather bundle; the
+                                    // individual values are checked when the
+                                    // bundle is constructed, not against the
+                                    // bundle class itself.
+                                    continue;
+                                }
                                 if matches!(&argument.value, Expr::Ident { name, .. } if name == "_")
                                 {
                                     continue;
@@ -10767,6 +10786,12 @@ def reject(value: not int) -> none:
         .unwrap();
         let error = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(error.message.contains("method accepts fewer arguments"));
+
+        let gather = parse(
+            "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\nclass Worker:\n    def run(self, ***rest: Arguments) -> int:\n        return len(rest.vpargs)\nw = Worker()\nresult = w.run(1, 2)\n",
+        )
+        .unwrap();
+        assert!(TypeChecker::new().check_module(&gather).is_ok());
 
     }
 
