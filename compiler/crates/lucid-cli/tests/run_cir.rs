@@ -2423,6 +2423,37 @@ fn run_cir_executes_range_accumulator_with_dynamic_step() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_dynamic_bound_expressions() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_dynamic_bound_expressions_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_window(start: int, stop: int, step: int):\n    total = 0\n    for i in range(start + 1, stop + 1, step + 1):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_window",
+            "--args",
+            "0,6,1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range dynamic bound-expression accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
 fn run_cir_executes_void_range_with_local_aliases() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_void_range_aliases_{}.lucid",

@@ -4768,42 +4768,110 @@ impl Function {
             if depth > bound_aliases.len() {
                 return Some(false);
             }
-            let lucid_syntax::Expr::Ident { name, .. } = expr else {
-                return Some(false);
-            };
-            if name == alias {
-                return Some(true);
-            }
-            match bound_alias_value(name, bound_aliases) {
-                Some(value) => expr_uses_bound_alias(value, alias, bound_aliases, depth + 1),
-                None => Some(false),
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => {
+                    if name == alias {
+                        return Some(true);
+                    }
+                    match bound_alias_value(name, bound_aliases) {
+                        Some(value) => {
+                            expr_uses_bound_alias(value, alias, bound_aliases, depth + 1)
+                        }
+                        None => Some(false),
+                    }
+                }
+                lucid_syntax::Expr::Unary { expr, .. } => {
+                    expr_uses_bound_alias(expr, alias, bound_aliases, depth)
+                }
+                lucid_syntax::Expr::Binary { left, right, .. } => Some(
+                    expr_uses_bound_alias(left, alias, bound_aliases, depth)?
+                        || expr_uses_bound_alias(right, alias, bound_aliases, depth)?,
+                ),
+                _ => Some(false),
             }
         }
         fn operand(
             expr: &lucid_syntax::Expr,
             result: ValueId,
+            left_temp: ValueId,
+            right_temp: ValueId,
             bound_aliases: &[&lucid_syntax::Stmt],
             parameter_names: &[String],
             depth: usize,
-        ) -> Option<Instruction> {
+        ) -> Option<Vec<Instruction>> {
             if depth > bound_aliases.len() {
                 return None;
             }
             match Function::const_int_expr(expr) {
-                Some(value) => Some(Instruction::ConstInt { result, value }),
+                Some(value) => Some(vec![Instruction::ConstInt { result, value }]),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => {
                         if let Some(value) = bound_alias_value(name, bound_aliases) {
-                            operand(value, result, bound_aliases, parameter_names, depth + 1)
+                            operand(
+                                value,
+                                result,
+                                left_temp,
+                                right_temp,
+                                bound_aliases,
+                                parameter_names,
+                                depth + 1,
+                            )
                         } else {
-                            Some(Instruction::Param {
+                            Some(vec![Instruction::Param {
                                 result,
                                 index: parameter_names
                                     .iter()
                                     .position(|parameter| parameter == name)?
                                     as u32,
-                            })
+                            }])
                         }
+                    }
+                    lucid_syntax::Expr::Binary {
+                        op, left, right, ..
+                    } if matches!(
+                        op,
+                        lucid_syntax::BinaryOp::Add
+                            | lucid_syntax::BinaryOp::Sub
+                            | lucid_syntax::BinaryOp::Mul
+                    ) =>
+                    {
+                        let mut instructions = operand(
+                            left,
+                            left_temp,
+                            ValueId(left_temp.0 + 100),
+                            ValueId(left_temp.0 + 101),
+                            bound_aliases,
+                            parameter_names,
+                            depth,
+                        )?;
+                        instructions.extend(operand(
+                            right,
+                            right_temp,
+                            ValueId(right_temp.0 + 100),
+                            ValueId(right_temp.0 + 101),
+                            bound_aliases,
+                            parameter_names,
+                            depth,
+                        )?);
+                        instructions.push(match op {
+                            lucid_syntax::BinaryOp::Add => Instruction::Add {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            _ => return None,
+                        });
+                        Some(instructions)
                     }
                     _ => None,
                 },
@@ -4830,7 +4898,7 @@ impl Function {
         }
         #[derive(Clone)]
         enum RangeAccumulatorOperand {
-            Materialized(Instruction),
+            Materialized(Vec<Instruction>),
             Induction,
         }
         let accumulator_operand = |expr: &lucid_syntax::Expr| -> Option<RangeAccumulatorOperand> {
@@ -4838,8 +4906,16 @@ impl Function {
                 lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
                     Some(RangeAccumulatorOperand::Induction)
                 }
-                _ => operand(expr, ValueId(9), &bound_aliases, parameter_names, 0)
-                    .map(RangeAccumulatorOperand::Materialized),
+                _ => operand(
+                    expr,
+                    ValueId(9),
+                    ValueId(27),
+                    ValueId(28),
+                    &bound_aliases,
+                    parameter_names,
+                    0,
+                )
+                .map(RangeAccumulatorOperand::Materialized),
             }
         };
         let accumulator_update = match &body[0] {
@@ -4900,7 +4976,7 @@ impl Function {
         #[derive(Clone)]
         enum RangeStep {
             Static(i64),
-            Dynamic(Instruction),
+            Dynamic(Vec<Instruction>),
         }
         let (start_expr, stop_expr, step_expr, step) = match args.as_slice() {
             [stop] => (&zero, &stop.value, None, RangeStep::Static(1)),
@@ -4912,6 +4988,8 @@ impl Function {
                     None => RangeStep::Dynamic(operand(
                         &step_arg.value,
                         ValueId(8),
+                        ValueId(25),
+                        ValueId(26),
                         &bound_aliases,
                         parameter_names,
                         0,
@@ -4934,11 +5012,33 @@ impl Function {
                 return None;
             }
         }
-        let start_instruction =
-            operand(start_expr, ValueId(1), &bound_aliases, parameter_names, 0)?;
-        let stop_instruction = operand(stop_expr, ValueId(0), &bound_aliases, parameter_names, 0)?;
-        let accumulator_instruction =
-            operand(initial_expr, ValueId(2), &bound_aliases, parameter_names, 0)?;
+        let start_instructions = operand(
+            start_expr,
+            ValueId(1),
+            ValueId(19),
+            ValueId(20),
+            &bound_aliases,
+            parameter_names,
+            0,
+        )?;
+        let stop_instructions = operand(
+            stop_expr,
+            ValueId(0),
+            ValueId(21),
+            ValueId(22),
+            &bound_aliases,
+            parameter_names,
+            0,
+        )?;
+        let accumulator_instructions = operand(
+            initial_expr,
+            ValueId(2),
+            ValueId(23),
+            ValueId(24),
+            &bound_aliases,
+            parameter_names,
+            0,
+        )?;
         let accumulator_operand_value = match accumulator_operand {
             RangeAccumulatorOperand::Materialized(_) => ValueId(9),
             RangeAccumulatorOperand::Induction => ValueId(3),
@@ -4957,8 +5057,8 @@ impl Function {
             _ => return None,
         };
         let mut body_instructions = Vec::new();
-        if let RangeAccumulatorOperand::Materialized(instruction) = accumulator_operand {
-            body_instructions.push(instruction);
+        if let RangeAccumulatorOperand::Materialized(instructions) = accumulator_operand {
+            body_instructions.extend(instructions);
         }
         body_instructions.push(accumulator_update_instruction);
         if let RangeStep::Static(step) = step {
@@ -4978,7 +5078,7 @@ impl Function {
         });
         let step_instruction = match &step {
             RangeStep::Static(_) => None,
-            RangeStep::Dynamic(instruction) => Some(instruction.clone()),
+            RangeStep::Dynamic(instructions) => Some(instructions.clone()),
         };
         let step_check_instruction = match step {
             RangeStep::Static(_) => None,
@@ -5051,10 +5151,12 @@ impl Function {
                 operand: ValueId(17),
             }],
         };
-        let mut entry_instructions =
-            vec![stop_instruction, start_instruction, accumulator_instruction];
-        if let Some(instruction) = step_instruction {
-            entry_instructions.push(instruction);
+        let mut entry_instructions = Vec::new();
+        entry_instructions.extend(stop_instructions);
+        entry_instructions.extend(start_instructions);
+        entry_instructions.extend(accumulator_instructions);
+        if let Some(instructions) = step_instruction {
+            entry_instructions.extend(instructions);
         }
         if let Some(instruction) = step_check_instruction {
             entry_instructions.push(instruction);
@@ -5196,42 +5298,110 @@ impl Function {
             if depth > bound_aliases.len() {
                 return Some(false);
             }
-            let lucid_syntax::Expr::Ident { name, .. } = expr else {
-                return Some(false);
-            };
-            if name == alias {
-                return Some(true);
-            }
-            match bound_alias_value(name, bound_aliases) {
-                Some(value) => expr_uses_bound_alias(value, alias, bound_aliases, depth + 1),
-                None => Some(false),
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => {
+                    if name == alias {
+                        return Some(true);
+                    }
+                    match bound_alias_value(name, bound_aliases) {
+                        Some(value) => {
+                            expr_uses_bound_alias(value, alias, bound_aliases, depth + 1)
+                        }
+                        None => Some(false),
+                    }
+                }
+                lucid_syntax::Expr::Unary { expr, .. } => {
+                    expr_uses_bound_alias(expr, alias, bound_aliases, depth)
+                }
+                lucid_syntax::Expr::Binary { left, right, .. } => Some(
+                    expr_uses_bound_alias(left, alias, bound_aliases, depth)?
+                        || expr_uses_bound_alias(right, alias, bound_aliases, depth)?,
+                ),
+                _ => Some(false),
             }
         }
         fn operand(
             expr: &lucid_syntax::Expr,
             result: ValueId,
+            left_temp: ValueId,
+            right_temp: ValueId,
             bound_aliases: &[&lucid_syntax::Stmt],
             parameter_names: &[String],
             depth: usize,
-        ) -> Option<Instruction> {
+        ) -> Option<Vec<Instruction>> {
             if depth > bound_aliases.len() {
                 return None;
             }
             match Function::const_int_expr(expr) {
-                Some(value) => Some(Instruction::ConstInt { result, value }),
+                Some(value) => Some(vec![Instruction::ConstInt { result, value }]),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => {
                         if let Some(value) = bound_alias_value(name, bound_aliases) {
-                            operand(value, result, bound_aliases, parameter_names, depth + 1)
+                            operand(
+                                value,
+                                result,
+                                left_temp,
+                                right_temp,
+                                bound_aliases,
+                                parameter_names,
+                                depth + 1,
+                            )
                         } else {
-                            Some(Instruction::Param {
+                            Some(vec![Instruction::Param {
                                 result,
                                 index: parameter_names
                                     .iter()
                                     .position(|parameter| parameter == name)?
                                     as u32,
-                            })
+                            }])
                         }
+                    }
+                    lucid_syntax::Expr::Binary {
+                        op, left, right, ..
+                    } if matches!(
+                        op,
+                        lucid_syntax::BinaryOp::Add
+                            | lucid_syntax::BinaryOp::Sub
+                            | lucid_syntax::BinaryOp::Mul
+                    ) =>
+                    {
+                        let mut instructions = operand(
+                            left,
+                            left_temp,
+                            ValueId(left_temp.0 + 100),
+                            ValueId(left_temp.0 + 101),
+                            bound_aliases,
+                            parameter_names,
+                            depth,
+                        )?;
+                        instructions.extend(operand(
+                            right,
+                            right_temp,
+                            ValueId(right_temp.0 + 100),
+                            ValueId(right_temp.0 + 101),
+                            bound_aliases,
+                            parameter_names,
+                            depth,
+                        )?);
+                        instructions.push(match op {
+                            lucid_syntax::BinaryOp::Add => Instruction::Add {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            _ => return None,
+                        });
+                        Some(instructions)
                     }
                     _ => None,
                 },
@@ -5263,7 +5433,7 @@ impl Function {
         #[derive(Clone)]
         enum RangeStep {
             Static(i64),
-            Dynamic(Instruction),
+            Dynamic(Vec<Instruction>),
         }
         let (start_expr, stop_expr, step_expr, step) = match args.as_slice() {
             [stop] => (&zero, &stop.value, None, RangeStep::Static(1)),
@@ -5275,6 +5445,8 @@ impl Function {
                     None => RangeStep::Dynamic(operand(
                         &step_arg.value,
                         ValueId(5),
+                        ValueId(19),
+                        ValueId(20),
                         &bound_aliases,
                         parameter_names,
                         0,
@@ -5295,9 +5467,24 @@ impl Function {
                 return None;
             }
         }
-        let start_instruction =
-            operand(start_expr, ValueId(1), &bound_aliases, parameter_names, 0)?;
-        let stop_instruction = operand(stop_expr, ValueId(0), &bound_aliases, parameter_names, 0)?;
+        let start_instructions = operand(
+            start_expr,
+            ValueId(1),
+            ValueId(17),
+            ValueId(18),
+            &bound_aliases,
+            parameter_names,
+            0,
+        )?;
+        let stop_instructions = operand(
+            stop_expr,
+            ValueId(0),
+            ValueId(15),
+            ValueId(16),
+            &bound_aliases,
+            parameter_names,
+            0,
+        )?;
         let (comparison_instructions, branch_condition) = match step {
             RangeStep::Static(step) if step > 0 => (
                 vec![Instruction::CmpLt {
@@ -5362,11 +5549,13 @@ impl Function {
         };
         let step_instruction = match &step {
             RangeStep::Static(_) => None,
-            RangeStep::Dynamic(instruction) => Some(instruction.clone()),
+            RangeStep::Dynamic(instructions) => Some(instructions.clone()),
         };
-        let mut entry_instructions = vec![stop_instruction, start_instruction];
-        if let Some(instruction) = step_instruction {
-            entry_instructions.push(instruction);
+        let mut entry_instructions = Vec::new();
+        entry_instructions.extend(stop_instructions);
+        entry_instructions.extend(start_instructions);
+        if let Some(instructions) = step_instruction {
+            entry_instructions.extend(instructions);
         }
         if matches!(step, RangeStep::Dynamic(_)) {
             entry_instructions.push(Instruction::CheckNonZero {
@@ -11786,6 +11975,50 @@ return total
         );
 
         let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n + 1):
+    total += i
+return total
+"#,
+        )
+        .expect("dynamic range stop expression fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("dynamic range stop expression should lower");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = n + 1
+for i in range(stop):
+    total += i
+return total
+"#,
+        )
+        .expect("local dynamic range stop expression fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("local dynamic range stop expression should lower");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(start + 1, stop + 1, step + 1):
+    total += i
+return total
+"#,
+        )
+        .expect("dynamic range bound and step expression fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("dynamic range bound and step expression should lower");
+        assert_eq!(function.execute_with_args(&[0, 6, 1]), Ok(Some(9)));
+        assert_eq!(
+            function.execute_with_args(&[0, 6, -1]),
+            Err(ExecuteError::RangeStepZero)
+        );
+
+        let module = lucid_syntax::parse(
             r#"for i in range(n):
     pass
 "#,
@@ -11851,6 +12084,33 @@ for i in range(n, stop, stride):
         assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(None));
         assert_eq!(
             function.execute_with_args(&[0, 6, 0]),
+            Err(ExecuteError::RangeStepZero)
+        );
+
+        let module = lucid_syntax::parse(
+            r#"for i in range(n + 1):
+    pass
+"#,
+        )
+        .expect("void dynamic range stop expression fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("void dynamic range stop expression should lower");
+        assert_eq!(function.execute_with_args(&[4]), Ok(None));
+
+        let module = lucid_syntax::parse(
+            r#"for i in range(start + 1, stop + 1, step + 1):
+    pass
+"#,
+        )
+        .expect("void dynamic range bound and step expression fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("void dynamic range bound and step expression should lower");
+        assert_eq!(function.execute_with_args(&[0, 6, 1]), Ok(None));
+        assert_eq!(
+            function.execute_with_args(&[0, 6, -1]),
             Err(ExecuteError::RangeStepZero)
         );
 
