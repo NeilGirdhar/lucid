@@ -1013,6 +1013,41 @@ impl Default for TypeChecker {
 }
 
 impl TypeChecker {
+    fn removed_builtin_message(name: &str) -> Option<&'static str> {
+        match name {
+            "tuple" => Some("tuple is not supported; use a class or !list instead"),
+            "property" => Some("property is not supported; use getter/setter member syntax instead"),
+            "staticmethod" => Some(
+                "staticmethod is not supported; a function that needs no self or cls stays a function",
+            ),
+            "classmethod" => Some("classmethod is a declaration modifier, not a decorator or builtin"),
+            "NotImplemented" => Some(
+                "NotImplemented is not supported; multiple dispatch replaces reflected operator negotiation",
+            ),
+            "isinstance" => Some("isinstance() is not supported; use `value is Type` instead"),
+            "issubclass" => Some("issubclass() is not supported; use declaration-kind `is` checks instead"),
+            "frozenset" => Some("frozenset() is not supported; use an immutable set literal !{...} instead"),
+            "eval" => Some("eval() is not supported; Lucid only runs code the checker can see"),
+            "exec" => Some("exec() is not supported; Lucid only runs code the checker can see"),
+            "__import__" => Some("__import__() is not supported; use static import declarations instead"),
+            "vars" => Some("vars() is not supported; use fields(...) for documented reflection"),
+            "dir" => Some("dir() is not supported; use fields(...) for documented reflection"),
+            "next" => Some("next() is not a bare builtin; call cursor.next() on an iterator instead"),
+            "ascii" => Some("ascii() is not a bare builtin; use string.ascii(...) instead"),
+            "filter" => Some("filter() is not supported; use a comprehension with an if clause instead"),
+            "globals" => Some("globals() is not supported; use locals() for the visible bindings"),
+            "compile" => Some("compile() is not a bare builtin"),
+            "delattr" => Some("delattr() is not supported; declared fields are fixed"),
+            "open" => Some("open() is not a bare builtin; use Path.open(...) instead"),
+            "bin" => Some("bin() is not a bare builtin; use str.bin(...) instead"),
+            "oct" => Some("oct() is not a bare builtin; use str.oct(...) instead"),
+            "hex" => Some("hex() is not a bare builtin; use str.hex(...) instead"),
+            "chr" => Some("chr() is not a bare builtin; use string.chr(...) instead"),
+            "ord" => Some("ord() is not a bare builtin; use string.ord(...) instead"),
+            _ => None,
+        }
+    }
+
     pub fn new() -> Self {
         let mut env = TypeEnvironment::default();
         // Register builtins
@@ -5430,6 +5465,11 @@ impl TypeChecker {
                     // calls remain type-checkable without inventing a second
                     // class hierarchy in the expression checker.
                     Ok(Type::TypeVar("super".to_string()))
+                } else if let Some(message) = Self::removed_builtin_message(name) {
+                    Err(TypeError {
+                        message: message.into(),
+                        span: *span,
+                    })
                 } else {
                     Err(TypeError {
                         message: format!("undefined variable '{name}'"),
@@ -5888,11 +5928,9 @@ impl TypeChecker {
                             span: func.span(),
                         });
                     }
-                    if matches!(name.as_str(), "chr" | "ord") {
+                    if let Some(message) = Self::removed_builtin_message(name) {
                         return Err(TypeError {
-                            message: format!(
-                                "{name}() is not a bare builtin; use string.{name}(...) instead"
-                            ),
+                            message: message.into(),
                             span: func.span(),
                         });
                     }
@@ -11419,6 +11457,51 @@ def reject(value: not int) -> none:
                 .check_module(&parse(source).unwrap())
                 .expect_err("removed string codepoint builtin must fail static checking");
             assert!(error.message.contains("is not a bare builtin"));
+            assert!(error.span.end > error.span.start);
+        }
+    }
+
+    #[test]
+    fn test_removed_builtins_have_specific_static_diagnostics() {
+        for (source, message) in [
+            ("value = tuple([1, 2])\n", "tuple is not supported"),
+            ("value = property\n", "getter/setter"),
+            ("value = staticmethod\n", "staticmethod is not supported"),
+            ("value = NotImplemented\n", "NotImplemented is not supported"),
+            ("value = isinstance(1, int)\n", "value is Type"),
+            ("value = issubclass(int, object)\n", "declaration-kind"),
+            ("value = frozenset([1, 2])\n", "immutable set literal"),
+            ("value = eval(\"1 + 1\")\n", "checker can see"),
+            ("exec(\"value = 1\")\n", "checker can see"),
+            ("value = __import__(\"math\")\n", "static import"),
+            ("value = vars()\n", "fields"),
+            ("value = dir()\n", "fields"),
+            ("value = next([1, 2])\n", "cursor.next"),
+            ("value = ascii(\"é\")\n", "string.ascii"),
+            (
+                "value = filter(def(v: int) -> bool: true, [1])\n",
+                "comprehension",
+            ),
+            ("value = globals()\n", "locals"),
+            ("value = compile(\"1\", \"<x>\", \"eval\")\n", "compile() is not a bare builtin"),
+            (
+                "class P:\n    x: int\np = P(1)\ndelattr(p, \"x\")\n",
+                "declared fields are fixed",
+            ),
+            ("value = open(\"a.txt\")\n", "Path.open"),
+            ("value = bin(5)\n", "str.bin"),
+            ("value = oct(5)\n", "str.oct"),
+            ("value = hex(5)\n", "str.hex"),
+        ] {
+            let mut checker = TypeChecker::new();
+            let error = checker
+                .check_module(&parse(source).unwrap())
+                .expect_err("removed Python builtin must fail static checking");
+            assert!(
+                error.message.contains(message),
+                "{source}: {}",
+                error.message
+            );
             assert!(error.span.end > error.span.start);
         }
     }
