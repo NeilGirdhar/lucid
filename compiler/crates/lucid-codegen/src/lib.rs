@@ -15684,6 +15684,25 @@ print(z is complex)
     }
 
     #[test]
+    fn native_anonymous_parameters_gather_preserves_prefix_bundle() {
+        let source = "class Parameters:\n    pargs: list[int]\n    vpargs: list[int]\n    kwargs: dict[str, int]\nf = def(prefix: int, ***rest: Parameters): len(rest.pargs) + len(rest.vpargs) + len(rest.kwargs)\nprint(f(10, 20, extra=30))\n";
+        let module = parse(source).expect("parameters gather source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_parameters_gather_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("parameters gather should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run parameters gather");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "parameters gather failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+    }
+
+    #[test]
     fn native_fixed_prefix_keyword_variadic_function_packs_tail() {
         let source = "def count(start: int, **values: int) -> int:\n    return start + len(values)\nprint(count(10, a=1, b=2))\n";
         let module = parse(source).expect("mixed keyword variadic source should parse");
