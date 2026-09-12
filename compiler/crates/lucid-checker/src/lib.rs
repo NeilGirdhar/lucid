@@ -6791,6 +6791,7 @@ impl TypeChecker {
                         | "Bytes"
                         | "MemoryView"
                         | "list"
+                        | "set"
                         | "dict"
                         | "none"
                         | "None"
@@ -11979,6 +11980,7 @@ fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
                     | "Bytes"
                     | "MemoryView"
                     | "list"
+                    | "set"
                     | "dict"
                     | "none"
                     | "None"
@@ -12435,6 +12437,7 @@ mod tests {
                     Pattern::Ident("bytes".into(), Span::default()),
                     Pattern::Ident("MemoryView".into(), Span::default()),
                     Pattern::Ident("list".into(), Span::default()),
+                    Pattern::Ident("set".into(), Span::default()),
                     Pattern::Ident("dict".into(), Span::default()),
                 ],
                 Span::default(),
@@ -12448,6 +12451,7 @@ mod tests {
         assert!(!names.contains("bytes"));
         assert!(!names.contains("MemoryView"));
         assert!(!names.contains("list"));
+        assert!(!names.contains("set"));
         assert!(!names.contains("dict"));
         assert!(names.contains("value"));
     }

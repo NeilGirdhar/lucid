@@ -616,6 +616,7 @@ fn pattern_identifier_binds(name: &str) -> bool {
             | "Bytes"
             | "MemoryView"
             | "list"
+            | "set"
             | "dict"
             | "none"
             | "None"
@@ -6857,6 +6858,7 @@ mod tests {
         assert!(!pattern_identifier_binds("bytes"));
         assert!(!pattern_identifier_binds("MemoryView"));
         assert!(!pattern_identifier_binds("list"));
+        assert!(!pattern_identifier_binds("set"));
         assert!(!pattern_identifier_binds("dict"));
         assert!(!pattern_identifier_binds("_"));
         assert!(pattern_identifier_binds("value"));

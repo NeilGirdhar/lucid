@@ -950,6 +950,7 @@ impl Interpreter {
                 | "Bytes"
                 | "MemoryView"
                 | "list"
+                | "set"
                 | "dict"
                 | "none"
                 | "None"
@@ -9898,6 +9899,7 @@ impl Interpreter {
                 Value::Bytes(_) if matches!(name.as_str(), "bytes" | "Bytes") => true,
                 Value::MemoryView { .. } if name == "MemoryView" => true,
                 Value::List(_) if name == "list" => true,
+                Value::Set(_) if name == "set" => true,
                 Value::Dict(_) if name == "dict" => true,
                 Value::None if name == "none" => true,
                 Value::Object { class_name, .. }
@@ -10092,6 +10094,7 @@ mod tests {
         assert!(!Interpreter::pattern_identifier_binds("bytes"));
         assert!(!Interpreter::pattern_identifier_binds("MemoryView"));
         assert!(!Interpreter::pattern_identifier_binds("list"));
+        assert!(!Interpreter::pattern_identifier_binds("set"));
         assert!(!Interpreter::pattern_identifier_binds("dict"));
         assert!(!Interpreter::pattern_identifier_binds("_"));
         assert!(Interpreter::pattern_identifier_binds("value"));
@@ -10637,6 +10640,13 @@ match items:
     case _:
         list_result = 0
 
+unique = {1, 2}
+match unique:
+    case set:
+        set_result = 1
+    case _:
+        set_result = 0
+
 mapping = {"a": 1}
 match mapping:
     case dict:
@@ -10652,6 +10662,7 @@ match mapping:
         assert_eq!(env.get("view_result"), Some(Value::Int(1)));
         assert_eq!(env.get("other_result"), Some(Value::Int(0)));
         assert_eq!(env.get("list_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("set_result"), Some(Value::Int(1)));
         assert_eq!(env.get("dict_result"), Some(Value::Int(1)));
     }
 
