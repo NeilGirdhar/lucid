@@ -13324,6 +13324,9 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                 }
                 let v_code = self.emit_expr(value)?;
+                if self.expr_is_complex(value) && matches!(attr.as_str(), "real" | "imag") {
+                    return Ok(format!("({v_code}).{}", attr));
+                }
                 if self.infer_expr_type(value, &HashMap::new()) == "const char*" && attr == "chars"
                 {
                     return Ok(format!(
@@ -18490,7 +18493,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_complex_literals_and_arithmetic() {
-        let source = "def negate(z: complex) -> complex:\n    return -z\nz = 1 + 2j\nw = z * (3 + 4j)\nprint(w)\nprint(-z)\nprint(negate(2j))\nprint(z == complex(1, 2))\n";
+        let source = "def negate(z: complex) -> complex:\n    return -z\nz = 1 + 2j\nw = z * (3 + 4j)\nprint(w)\nprint(-z)\nprint(negate(2j))\nprint(z.real)\nprint(z.imag)\nprint(z == complex(1, 2))\n";
         let module = parse(source).expect("complex source should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_complex_test_{}", std::process::id()));
@@ -18503,7 +18506,7 @@ print(all({1, 2}))
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "(-5+10j)\n(-1-2j)\n(-0-2j)\ntrue\n"
+            "(-5+10j)\n(-1-2j)\n(-0-2j)\n1\n2\ntrue\n"
         );
     }
 

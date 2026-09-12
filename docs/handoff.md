@@ -73,6 +73,9 @@ Native `round` now rejects BigInt values that arrive through erased `Any`,
 matching the interpreter's numeric capability dispatch.
 Native `str` now renders complex values in the same `(real+imagj)` form as
 the interpreter.
+Complex values expose typed `.real` and `.imag` attributes in the checker,
+interpreter, and native backend; each returns the corresponding `float`
+component.
 Native `repr` now uses generated per-class callbacks for object values,
 including field names and representations after an `Any` erasure.
 Native `str` uses the same generated object representation for class instances,

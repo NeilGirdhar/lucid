@@ -7043,6 +7043,8 @@ impl Interpreter {
                             }),
                         })
                     }
+                    Value::Complex(real, _) if attr == "real" => Ok(Value::Float(real)),
+                    Value::Complex(_, imag) if attr == "imag" => Ok(Value::Float(imag)),
                     Value::Str(s) => {
                         if attr == "chars" {
                             let chars = Value::List(Rc::new(RefCell::new(
@@ -10267,6 +10269,15 @@ s = sum(r)
             Some(Value::Complex(-1.0, -2.0))
         );
         assert_eq!(interp.env.borrow().get("result"), Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn complex_real_and_imag_attributes_return_float_components() {
+        let module = parse("z = 1 + 2j\nreal = z.real\nimag = z.imag\n").unwrap();
+        let mut interp = Interpreter::default();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("real"), Some(Value::Float(1.0)));
+        assert_eq!(interp.env.borrow().get("imag"), Some(Value::Float(2.0)));
     }
 
     #[test]

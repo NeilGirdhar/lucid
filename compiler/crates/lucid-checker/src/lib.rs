@@ -6956,6 +6956,11 @@ impl TypeChecker {
                         });
                     }
                 }
+                if matches!(&obj_type, Type::Class { name, .. } if name == "complex")
+                    && matches!(attr.as_str(), "real" | "imag")
+                {
+                    return Ok(Type::Float);
+                }
                 match obj_type {
                     Type::Str => match attr.as_str() {
                         "chars" => Ok(Type::View {
