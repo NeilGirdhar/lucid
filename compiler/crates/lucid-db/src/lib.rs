@@ -2729,7 +2729,7 @@ pub fn lower_function_body(
                 .map_err(|_| Arc::from("unsupported optional guarded match chain"));
             }
         }
-        if arms.len() >= 3
+        if arms.len() >= 2
             && arms.iter().all(|arm| {
                 matches!(
                     arm.pattern,
@@ -2779,6 +2779,52 @@ pub fn lower_function_body(
                 )
                 .map(Arc::new)
                 .map_err(|_| Arc::from("unsupported mixed match chain"));
+            } else if let Some((first_condition, [])) = conditions.split_first()
+                && let Some((first_return, [])) = returns.split_first()
+            {
+                match (*first_return, fallback_return.flatten()) {
+                    (Some(first_value), Some(fallback_value)) => {
+                        return lucid_cir::Function::from_parameterized_if_direct(
+                            first_condition,
+                            first_value,
+                            fallback_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported mixed match expression"));
+                    }
+                    (Some(first_value), None) => {
+                        return lucid_cir::Function::from_parameterized_if_optional(
+                            first_condition,
+                            first_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported mixed optional match expression"));
+                    }
+                    (None, Some(fallback_value)) => {
+                        let inverted = lucid_syntax::Expr::Unary {
+                            op: lucid_syntax::UnaryOp::Not,
+                            expr: Box::new(first_condition.clone()),
+                            span: first_condition.span(),
+                        };
+                        return lucid_cir::Function::from_parameterized_if_optional(
+                            &inverted,
+                            fallback_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported mixed inverse match expression"));
+                    }
+                    (None, None) => {
+                        return lucid_cir::Function::from_parameterized_if_void(
+                            first_condition,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported mixed void match expression"));
+                    }
+                }
             }
         }
         if let Some(wildcard_index) = arms.iter().position(|arm| {
@@ -8601,6 +8647,26 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(None));
         assert_eq!(function.execute_with_args(&[3]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "mixed-two-arm-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed two-arm match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "mixed-two-arm-optional-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed optional two-arm match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(
