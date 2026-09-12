@@ -8145,6 +8145,23 @@ impl TypeChecker {
                                 }
                                 true
                             }
+                            Type::Class { name, .. }
+                                if matches!(
+                                    name.as_str(),
+                                    "Bytes" | "ByteArray" | "MemoryView"
+                                ) =>
+                            {
+                                if !lt.is_subtype_of(&Type::Int, &self.env) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "buffer membership requires int, got {:?}",
+                                            lt
+                                        ),
+                                        span: left.span(),
+                                    });
+                                }
+                                true
+                            }
                             Type::Shape(_) => {
                                 if !lt.is_subtype_of(&Type::Int, &self.env) {
                                     return Err(TypeError {
@@ -13680,6 +13697,23 @@ u.id = 2
             checker.type_of_expr(expr),
             Ok(Type::Class { ref name, .. }) if name == "Bytes"
         ));
+    }
+
+    #[test]
+    fn binary_buffers_accept_integer_membership() {
+        let module = parse(
+            "data: Bytes = b\"AB\"\nhas_a = 65 in data\nview: MemoryView = memoryview(data)\nhas_b = 66 in view\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("binary buffer membership should accept integers");
+
+        let bad = parse("data: Bytes = b\"AB\"\nwrong = \"A\" in data\n").unwrap();
+        let err = TypeChecker::new()
+            .check_module(&bad)
+            .expect_err("binary buffer membership requires int");
+        assert!(err.message.contains("buffer membership requires int"));
     }
 
     #[test]

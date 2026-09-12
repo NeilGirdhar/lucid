@@ -634,6 +634,9 @@ diverged:
   mutation with the original storage, while `Bytes`-backed views are read-only;
   indexing, slicing, length, list conversion, and erased `is MemoryView` all
   use the view rather than copying a list.
+  Binary buffer membership now accepts integer byte values for `Bytes`,
+  `ByteArray`, and `MemoryView` in the checker, interpreter, and native
+  backend, including erased native memoryviews.
 * Recovering syntax parses now preserve valid prefixes and report lexical
   failures as structured `ParseError` values with source spans, matching
   grammar-error recovery and giving diagnostic consumers one error shape.

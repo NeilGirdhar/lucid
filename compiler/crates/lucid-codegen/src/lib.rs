@@ -2852,6 +2852,14 @@ static inline void lucid_memoryview_set(LucidMemoryView* view, int64_t idx, Luci
     int64_t offset = lucid_memoryview_offset(view, idx);
     lucid_list_set(view->list, offset, value);
 }
+static inline bool lucid_memoryview_contains(LucidMemoryView* view, LucidVal needle) {
+    if (!view || needle.type != LUCID_TYPE_INT) return false;
+    for (int64_t i = 0; i < view->len; ++i) {
+        LucidVal item = lucid_memoryview_get(view, i);
+        if (item.type == LUCID_TYPE_INT && item.i == needle.i) return true;
+    }
+    return false;
+}
 static inline LucidList* lucid_memoryview_to_list(LucidMemoryView* view) {
     LucidList* out = lucid_list_new(view ? view->len : 0);
     if (view) for (int64_t i = 0; i < view->len; ++i)
@@ -3919,6 +3927,7 @@ static inline bool lucid_contains_value(LucidVal container, LucidVal needle) {
     if (container.type == LUCID_TYPE_DICT) return lucid_dict_contains(container.dict, needle);
     if (container.type == LUCID_TYPE_RANGE) return lucid_range_contains(container.range, needle);
     if (container.type == LUCID_TYPE_STR) return lucid_str_contains(container.s, needle);
+    if (container.type == LUCID_TYPE_MEMORYVIEW) return lucid_memoryview_contains(container.view, needle);
     if (container.type == LUCID_TYPE_BYTES) {
         if (needle.type != LUCID_TYPE_INT) return false;
         if (!container.bytes) return false;
@@ -17683,6 +17692,25 @@ print(readonly[1:][0])
             "read-only memoryview mutation should fail"
         );
         assert!(String::from_utf8_lossy(&run.stderr).contains("read-only memoryview"));
+    }
+
+    #[test]
+    fn native_binary_buffer_membership_uses_byte_values() {
+        let source = "data = b\"AB\"\nprint(65 in data)\nprint(67 in data)\nview = memoryview(data)\nprint(66 in view)\ndef identity(value: Any) -> Any:\n    return value\nprint(0 not in identity(view))\n";
+        let module = parse(source).expect("binary membership source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_binary_membership_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("binary membership should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "true\nfalse\ntrue\ntrue\n"
+        );
     }
 
     #[test]

@@ -2051,6 +2051,29 @@ impl Interpreter {
                         Value::Int(value) => range_contains(*start, *stop, *step, value),
                         _ => false,
                     },
+                    Value::Bytes(bytes) => match lval {
+                        Value::Int(value) => u8::try_from(value)
+                            .ok()
+                            .is_some_and(|byte| bytes.contains(&byte)),
+                        _ => false,
+                    },
+                    Value::MemoryView {
+                        data,
+                        start,
+                        len,
+                        stride,
+                        ..
+                    } => match lval {
+                        Value::Int(value) => {
+                            let items = data.borrow();
+                            (0..*len).any(|offset| {
+                                items
+                                    .get((start + offset * stride) as usize)
+                                    .is_some_and(|item| item == &Value::Int(value))
+                            })
+                        }
+                        _ => false,
+                    },
                     Value::Str(s) => match &lval {
                         Value::Str(sub) => s.contains(sub),
                         _ => false,
@@ -2087,6 +2110,29 @@ impl Interpreter {
                     },
                     Value::Range { start, stop, step } => match lval {
                         Value::Int(value) => range_contains(*start, *stop, *step, value),
+                        _ => false,
+                    },
+                    Value::Bytes(bytes) => match lval {
+                        Value::Int(value) => u8::try_from(value)
+                            .ok()
+                            .is_some_and(|byte| bytes.contains(&byte)),
+                        _ => false,
+                    },
+                    Value::MemoryView {
+                        data,
+                        start,
+                        len,
+                        stride,
+                        ..
+                    } => match lval {
+                        Value::Int(value) => {
+                            let items = data.borrow();
+                            (0..*len).any(|offset| {
+                                items
+                                    .get((start + offset * stride) as usize)
+                                    .is_some_and(|item| item == &Value::Int(value))
+                            })
+                        }
                         _ => false,
                     },
                     Value::Str(s) => match &lval {
@@ -12609,6 +12655,20 @@ readonly_tail_first = readonly[1:][0]
             .eval_module(&module)
             .expect_err("read-only memoryview mutation should fail");
         assert!(error.message.contains("read-only memoryview"));
+    }
+
+    #[test]
+    fn test_binary_buffer_membership_uses_byte_values() {
+        let module = parse(
+            "data = b\"AB\"\nhas_a = 65 in data\nmissing = 67 in data\nview = memoryview(data)\nhas_b = 66 in view\nnot_zero = 0 not in view\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("has_a"), Some(Value::Bool(true)));
+        assert_eq!(interp.env.borrow().get("missing"), Some(Value::Bool(false)));
+        assert_eq!(interp.env.borrow().get("has_b"), Some(Value::Bool(true)));
+        assert_eq!(interp.env.borrow().get("not_zero"), Some(Value::Bool(true)));
     }
 
     #[test]
