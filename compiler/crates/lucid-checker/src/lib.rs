@@ -936,6 +936,8 @@ pub struct TypeEnvironment {
     pub function_type_params: HashMap<String, Vec<TypeParam>>,
     pub function_arity: HashMap<String, (usize, Option<usize>)>,
     pub function_param_names: HashMap<String, Vec<String>>,
+    pub function_positional_only: HashMap<String, HashSet<String>>,
+    pub function_keyword_only: HashMap<String, HashSet<String>>,
     pub function_required_params: HashMap<String, Vec<String>>,
     pub function_overloads: HashMap<String, Vec<Type>>,
     pub dispatch_functions: HashSet<String>,
@@ -2618,6 +2620,22 @@ impl TypeChecker {
                 self.env.function_param_names.insert(
                     func.name.clone(),
                     func.params.iter().map(|param| param.name.clone()).collect(),
+                );
+                self.env.function_positional_only.insert(
+                    func.name.clone(),
+                    func.params
+                        .iter()
+                        .filter(|param| param.is_positional_only)
+                        .map(|param| param.name.clone())
+                        .collect(),
+                );
+                self.env.function_keyword_only.insert(
+                    func.name.clone(),
+                    func.params
+                        .iter()
+                        .filter(|param| param.is_keyword_only)
+                        .map(|param| param.name.clone())
+                        .collect(),
                 );
                 self.env.function_required_params.insert(
                     func.name.clone(),
@@ -6345,6 +6363,20 @@ impl TypeChecker {
                                                 span: argument.value.span(),
                                             });
                                         };
+                                        if self
+                                            .env
+                                            .function_positional_only
+                                            .get(name)
+                                            .is_some_and(|only| only.contains(argument_name))
+                                        {
+                                            return Err(TypeError {
+                                                message: format!(
+                                                    "positional-only argument '{}' passed by keyword",
+                                                    argument_name
+                                                ),
+                                                span: argument.value.span(),
+                                            });
+                                        }
                                         if !seen_named.insert(argument_name.clone()) {
                                             return Err(TypeError {
                                                 message: format!(
@@ -6364,6 +6396,20 @@ impl TypeChecker {
                                         }
                                         let index = positional_index;
                                         positional_index += 1;
+                                        if parameter_names
+                                            .get(index)
+                                            .is_some_and(|parameter_name| {
+                                                self.env
+                                                    .function_keyword_only
+                                                    .get(name)
+                                                    .is_some_and(|only| only.contains(parameter_name))
+                                            })
+                                        {
+                                            return Err(TypeError {
+                                                message: "keyword-only argument passed positionally".into(),
+                                                span: argument.value.span(),
+                                            });
+                                        }
                                         index
                                     };
                                     let Some(parameter) = params.get(index) else {
@@ -10676,5 +10722,19 @@ def reject(value: not int) -> none:
         .unwrap();
         let error = TypeChecker::new().check_module(&late).unwrap_err();
         assert!(error.message.contains("positional argument follows named"));
+
+        let positional_only = parse(
+            "def f(value: int, /) -> int:\n    return value\nresult = f(value=1)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&positional_only).unwrap_err();
+        assert!(error.message.contains("positional-only argument"));
+
+        let keyword_only = parse(
+            "def f(*, value: int) -> int:\n    return value\nresult = f(1)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&keyword_only).unwrap_err();
+        assert!(error.message.contains("keyword-only argument"));
     }
 }
