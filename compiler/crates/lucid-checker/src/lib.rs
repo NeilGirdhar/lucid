@@ -790,6 +790,7 @@ impl Type {
                         "Sequence",
                         "Iterable",
                         "Reversible",
+                        "Eq",
                     ],
                     "range" => &[
                         "Sized",
@@ -798,23 +799,33 @@ impl Type {
                         "Sequence",
                         "Iterable",
                         "Reversible",
+                        "Eq",
                     ],
-                    "set" => &["Sized", "Container", "Collection", "Iterable", "Set"],
+                    "set" => &["Sized", "Container", "Collection", "Iterable", "Set", "Eq"],
                     "frozenset" => &[
                         "Sized",
                         "Container",
                         "Collection",
                         "Iterable",
                         "Set",
+                        "Eq",
                         "Hashable",
                     ],
-                    "dict" => &["Sized", "Container", "Collection", "Iterable", "Mapping"],
+                    "dict" => &[
+                        "Sized",
+                        "Container",
+                        "Collection",
+                        "Iterable",
+                        "Mapping",
+                        "Eq",
+                    ],
                     "frozendict" => &[
                         "Sized",
                         "Container",
                         "Collection",
                         "Iterable",
                         "Mapping",
+                        "Eq",
                         "Hashable",
                     ],
                     "Bytes" => &["Sized", "Container", "Buffer"],
@@ -14299,7 +14310,7 @@ def reject(value: not int) -> none:
         TypeChecker::new()
             .check_module(
                 &parse(
-                    "def f(value: int = 1) -> int:\n    return value\nx = f(skip)\nitems = [1, skip, 2]\nmapping = {\"a\": 1, \"b\": skip}\n",
+                    "def f(value: int = 1) -> int:\n    return value\nx = f(skip)\nitems = [1, skip, 2]\nmapping = {\"a\": 1, \"b\": skip}\nlist_equal = [1, 2, 3 if false else skip, 4] == [1, 2, 4]\ndict_equal = {1: 2, 3: skip, skip: 6} == {1: 2}\n",
                 )
                 .unwrap(),
             )
