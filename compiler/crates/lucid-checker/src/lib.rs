@@ -2905,21 +2905,6 @@ impl TypeChecker {
                 ) {
                     self.env.contextmanager_functions.insert(func.name.clone());
                 }
-                if self.env.functions.contains_key(&func.name) {
-                    if !func.is_dispatch || !self.env.dispatch_functions.contains(&func.name) {
-                        return Err(TypeError {
-                            message: format!(
-                                "duplicate function '{}' requires dispatch on every overload",
-                                func.name
-                            ),
-                            span: func.span,
-                        });
-                    }
-                    self.env.overloaded_functions.insert(func.name.clone());
-                }
-                if func.is_dispatch {
-                    self.env.dispatch_functions.insert(func.name.clone());
-                }
                 let mut param_types = Vec::new();
                 for p in &func.params {
                     let pt = if let Some(ref t) = p.type_annotation {
@@ -2944,6 +2929,32 @@ impl TypeChecker {
                     params: param_types,
                     return_type: Box::new(fn_return),
                 };
+                if let Some(existing_overloads) = self.env.function_overloads.get(&func.name) {
+                    let duplicate_signature =
+                        existing_overloads.iter().any(|existing| match existing {
+                            Type::Function {
+                                params: existing_params,
+                                ..
+                            } => existing_params == match &fn_type {
+                                Type::Function { params, .. } => params,
+                                _ => unreachable!(),
+                            },
+                            _ => false,
+                        });
+                    if duplicate_signature {
+                        return Err(TypeError {
+                            message: format!(
+                                "duplicate function '{}' has the same parameter types as an existing overload",
+                                func.name
+                            ),
+                            span: func.span,
+                        });
+                    }
+                    self.env.overloaded_functions.insert(func.name.clone());
+                }
+                if func.is_dispatch {
+                    self.env.dispatch_functions.insert(func.name.clone());
+                }
                 self.env
                     .function_overloads
                     .entry(func.name.clone())
@@ -7436,7 +7447,8 @@ impl TypeChecker {
                         // call binder; their runtime cardinality is not known
                         // at this stage, so do not reject them based on the
                         // count of explicit arguments alone.
-                        if !args.iter().any(|argument| {
+                        if !self.env.overloaded_functions.contains(name)
+                            && !args.iter().any(|argument| {
                             argument.is_spread
                                 || argument.is_dict_spread
                                 || argument.is_gather_spread
@@ -11921,6 +11933,14 @@ def reject(value: not int) -> none:
             .check_module(&invalid_overload)
             .unwrap_err();
         assert!(error.message.contains("no overload"));
+        let ordinary_overload = parse(
+            "def choose(value: int) -> int:\n    return value\ndef choose(value: str) -> str:\n    return value\nint_result: int = choose(1)\nstr_result: str = choose(\"x\")\n",
+        )
+        .unwrap();
+        let mut ordinary_overload_checker = TypeChecker::new();
+        ordinary_overload_checker
+            .check_module(&ordinary_overload)
+            .unwrap();
         let duplicate_function =
             parse("def duplicate() -> int:\n    return 1\ndef duplicate() -> int:\n    return 2\n")
                 .unwrap();
@@ -11928,7 +11948,7 @@ def reject(value: not int) -> none:
         let error = duplicate_function_checker
             .check_module(&duplicate_function)
             .unwrap_err();
-        assert!(error.message.contains("requires dispatch"));
+        assert!(error.message.contains("same parameter types"));
         let default_constructor =
             parse("class Defaults:\n    value: int = 1\nd = Defaults()\n").unwrap();
         let mut default_constructor_checker = TypeChecker::new();
