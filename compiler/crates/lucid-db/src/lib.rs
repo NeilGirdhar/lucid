@@ -8690,6 +8690,26 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(
+            "mixed-bool-match.lucid",
+            "def choose(flag: bool):\n    match flag:\n        case true:\n            return 11\n        case false:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed bool match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "mixed-bool-match-inverse.lucid",
+            "def choose(flag: bool):\n    match flag:\n        case true:\n            return\n        case false:\n            return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("inverse mixed bool match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
             "multi-match-noop-hir.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 11\n        case 2:\n            value + 1\n            return 22\n        case _:\n            fallback = 33\n            return fallback\n",
         );
