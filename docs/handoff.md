@@ -563,6 +563,8 @@ diverged:
   standard builtin namespace.
   It tracks modules still being initialized and rejects value cycles instead
   of exposing an incomplete placeholder environment.
+  Entry-module loading state is cleaned up on syntax, evaluation, and
+  hierarchy errors, so a failed import cannot poison later evaluations.
   Imported class, trait, and class-variable registries are propagated back to
   the importing interpreter, so imported constructors use the same runtime
   metadata as local classes.
