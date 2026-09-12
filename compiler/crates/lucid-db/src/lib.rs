@@ -2729,6 +2729,58 @@ pub fn lower_function_body(
                 .map_err(|_| Arc::from("unsupported optional guarded match chain"));
             }
         }
+        if arms.len() >= 3
+            && arms.iter().all(|arm| {
+                matches!(
+                    arm.pattern,
+                    lucid_syntax::Pattern::Literal(
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                        _
+                    ) | lucid_syntax::Pattern::Wildcard(_)
+                ) && (match_arm_value(arm).is_some() || match_arm_is_void(arm))
+            })
+        {
+            let mut conditions = Vec::new();
+            let mut returns = Vec::new();
+            let mut fallback_return = None;
+            for arm in arms {
+                let arm_return = match_arm_value(arm)
+                    .map(Some)
+                    .or_else(|| match_arm_is_void(arm).then_some(None::<&lucid_syntax::Expr>));
+                let Some(arm_return) = arm_return else {
+                    return Err(Arc::from("unsupported mixed match arm"));
+                };
+                if let Some(condition) = arm_condition(arm) {
+                    if static_truth(&condition) == Some(false) {
+                        continue;
+                    }
+                    conditions.push(condition);
+                    returns.push(arm_return);
+                } else {
+                    fallback_return = Some(arm_return);
+                    break;
+                }
+            }
+            if let Some((first_condition, elif_conditions)) = conditions.split_first()
+                && let Some((first_return, elif_returns)) = returns.split_first()
+                && !elif_conditions.is_empty()
+            {
+                let elif_pairs = elif_conditions
+                    .iter()
+                    .zip(elif_returns.iter())
+                    .map(|(condition, value)| (condition, *value))
+                    .collect::<Vec<_>>();
+                return lucid_cir::Function::from_parameterized_if_elif_mixed_return_chain(
+                    first_condition,
+                    *first_return,
+                    &elif_pairs,
+                    fallback_return.flatten(),
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported mixed match chain"));
+            }
+        }
         if let Some(wildcard_index) = arms.iter().position(|arm| {
             matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_)) && arm.guard.is_none()
         }) && wildcard_index > 0
@@ -8538,6 +8590,18 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "mixed-multi-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case 2:\n            return\n        case 3:\n            return 33\n        case _:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed value/void literal match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(
             "multi-match-noop-hir.lucid",
