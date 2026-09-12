@@ -9752,6 +9752,22 @@ return total
         assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(15)));
 
         let module = lucid_syntax::parse(
+            r#"value = n
+tick = step
+total = 0
+while value > 0:
+    total += value
+    value -= tick
+return total
+"#,
+        )
+        .expect("local-init local induction-step while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("local-init local induction-step while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(22)));
+
+        let module = lucid_syntax::parse(
             r#"tick = step
 total = 0
 while n > 0:
