@@ -11145,6 +11145,25 @@ return n
         );
 
         let module = lucid_syntax::parse(
+            r#"stop = limit // scale
+while n > stop:
+    n -= 1
+return n
+"#,
+        )
+        .expect("local division-bound counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "scale".into()],
+        )
+        .expect("local division-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 6, 2]), Ok(Some(3)));
+        assert_eq!(
+            function.execute_with_args(&[5, 6, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
+
+        let module = lucid_syntax::parse(
             r#"stop = limit + 1
 while n > stop:
     n -= 1
@@ -11748,6 +11767,27 @@ return total
             &["n".into(), "limit".into(), "scale".into()],
         )
         .expect("division-bound while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 6, 2]), Ok(Some(9)));
+        assert_eq!(
+            function.execute_with_args(&[5, 6, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
+
+        let module = lucid_syntax::parse(
+            r#"stop = limit // scale
+total = 0
+while n > stop:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("local division-bound while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "scale".into()],
+        )
+        .expect("local division-bound while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[5, 6, 2]), Ok(Some(9)));
         assert_eq!(
             function.execute_with_args(&[5, 6, 0]),

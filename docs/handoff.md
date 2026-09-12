@@ -639,7 +639,9 @@ diverged:
   through the counted path, so
   `while n > limit + 1`, `while n > -limit`,
   `while n > limit // scale`,
-  `stop = limit + 1; while n > stop`, `stop = limit; while n > stop + 1`,
+  `stop = limit + 1; while n > stop`,
+  `stop = limit // scale; while n > stop`,
+  `stop = limit; while n > stop + 1`,
   and `while n > 1 + 1` all share the same Phi-backed CFG. Plain counted loops
   can also keep the induction value as a parameter while seeding the comparison
   bound from a local, with or without a local step alias, as in
