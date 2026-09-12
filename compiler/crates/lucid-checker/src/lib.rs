@@ -6311,6 +6311,23 @@ impl TypeChecker {
                                 }
                                 true
                             }
+                            Type::Trait {
+                                name, type_args, ..
+                            } if matches!(name.as_str(), "Container" | "Collection" | "Sequence") =>
+                            {
+                                if let Some(element_type) = type_args.first() {
+                                    if !lt.is_subtype_of(element_type, &self.env) {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "membership value has type {:?}, expected {:?}",
+                                                lt, element_type
+                                            ),
+                                            span: left.span(),
+                                        });
+                                    }
+                                }
+                                true
+                            }
                             Type::Str => {
                                 if lt != Type::Str {
                                     return Err(TypeError {
@@ -8592,6 +8609,17 @@ impl TypeChecker {
                                 .cloned()
                                 .unwrap_or(Type::TypeVar("Any".to_string())))
                         }
+                        Type::Trait {
+                            ref name,
+                            ref type_args,
+                            ..
+                        } if name == "Sequence" => {
+                            require_int()?;
+                            Ok(type_args
+                                .first()
+                                .cloned()
+                                .unwrap_or(Type::TypeVar("Any".to_string())))
+                        }
                         Type::Class { ref name, .. }
                             if matches!(name.as_str(), "Bytes" | "ByteArray" | "MemoryView") =>
                         {
@@ -8611,6 +8639,15 @@ impl TypeChecker {
                             Type::Class { name, .. } if name == "str" => {
                                 require_int()?;
                                 Ok(Type::Str)
+                            }
+                            Type::Trait {
+                                name, type_args, ..
+                            } if name == "Sequence" => {
+                                require_int()?;
+                                Ok(type_args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or(Type::TypeVar("Any".to_string())))
                             }
                             Type::Class { name, .. }
                                 if matches!(
@@ -12001,9 +12038,13 @@ def reject(value: not int) -> none:
 
         checker
             .check_module(
-                &parse("text = \"abc\"\nfor ch in text.chars:\n    ch.upper()\nfirst: str = text.chars[0]\npart = text.chars[1:]\nhas_b = \"b\" in text.chars\nmissing_pair = \"bc\" in text.chars\n").unwrap(),
+                &parse("text = \"abc\"\nfor ch in text.chars:\n    ch.upper()\nfirst: str = text.chars[0]\npart = text.chars[1:]\nhas_b = \"b\" in text.chars\nmissing_pair = \"bc\" in text.chars\nchars: ~Sequence[str] = text.chars\nview_first: str = chars[0]\nview_has_b = \"b\" in chars\n").unwrap(),
             )
             .expect("str.chars should be iterable, indexable, and support membership");
+        let error = TypeChecker::new()
+            .check_module(&parse("text = \"abc\"\nchars: ~Sequence[str] = text.chars\nbad = 1 in chars\n").unwrap())
+            .unwrap_err();
+        assert!(error.message.contains("membership value"));
         let error = TypeChecker::new()
             .check_module(&parse("text = \"abc\"\ntext.chars.append(\"x\")\n").unwrap())
             .unwrap_err();
