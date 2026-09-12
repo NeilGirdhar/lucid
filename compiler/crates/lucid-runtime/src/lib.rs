@@ -6196,13 +6196,26 @@ impl Interpreter {
                 span,
             } => {
                 let subj_val = self.eval_expr(subject)?;
-                if let Some(ref alias) = subject_alias {
-                    self.env.borrow_mut().set(alias.clone(), subj_val.clone());
-                }
 
                 for arm in arms {
                     if self.matches_pattern(&arm.pattern, &subj_val) {
+                        let saved_bindings = self.env.borrow().bindings.clone();
+                        let saved_binding_order = self.env.borrow().binding_order.clone();
+                        let saved_final_bindings = self.env.borrow().final_bindings.clone();
+                        if let Some(ref alias) = subject_alias {
+                            self.env.borrow_mut().set(alias.clone(), subj_val.clone());
+                        }
                         self.bind_match_pattern(&arm.pattern, subj_val.clone(), *span)?;
+                        if let Some(guard) = &arm.guard {
+                            let guard_value = self.eval_expr(guard)?;
+                            if !self.is_truthy(&guard_value) {
+                                let mut env = self.env.borrow_mut();
+                                env.bindings = saved_bindings;
+                                env.binding_order = saved_binding_order;
+                                env.final_bindings = saved_final_bindings;
+                                continue;
+                            }
+                        }
                         return self.eval_block(&arm.body);
                     }
                 }
@@ -10556,6 +10569,38 @@ match value:
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(5)));
+    }
+
+    #[test]
+    fn test_match_guard_false_falls_through() {
+        let src = r#"
+value = 2
+match value:
+    case n if n > 10:
+        result = n
+    case _:
+        result = 99
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(99)));
+    }
+
+    #[test]
+    fn test_match_guard_can_use_subject_alias_and_pattern_binding() {
+        let src = r#"
+value = 4
+match value as subject:
+    case n if subject == n:
+        result = n + subject
+    case _:
+        result = 0
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(8)));
     }
 
     #[test]
