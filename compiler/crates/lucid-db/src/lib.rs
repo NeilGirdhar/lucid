@@ -3995,6 +3995,130 @@ pub fn lower_function_body(
             condition,
             then_branch,
             elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+    {
+        let mut dynamic_elifs = Vec::new();
+        let mut unsupported = false;
+        for (elif_condition, branch) in elif_branches {
+            match static_truth(elif_condition) {
+                Some(false) => continue,
+                Some(true) | None => {
+                    let [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        },
+                    ] = branch.as_slice()
+                    else {
+                        unsupported = true;
+                        break;
+                    };
+                    if static_truth(elif_condition).is_none() {
+                        if !has_identifier(elif_condition) {
+                            unsupported = true;
+                            break;
+                        }
+                        dynamic_elifs.push((elif_condition, value));
+                    } else {
+                        if function.is_async {
+                            return Err(Arc::from(
+                                "async function bodies are not yet supported by CIR lowering",
+                            ));
+                        }
+                        let lowered = if dynamic_elifs.is_empty() {
+                            lucid_cir::Function::from_parameterized_if_direct(
+                                condition,
+                                then_value,
+                                value,
+                                &function.parameter_names,
+                            )
+                        } else {
+                            lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                                condition,
+                                then_value,
+                                &dynamic_elifs,
+                                value,
+                                &function.parameter_names,
+                            )
+                        };
+                        return lowered
+                            .map(Arc::new)
+                            .map_err(|_| Arc::from("unsupported mixed static elif branch"));
+                    }
+                }
+            }
+        }
+        if !unsupported && dynamic_elifs.len() < elif_branches.len() {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let lowered = match else_branch.as_deref() {
+                Some(
+                    [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(else_value),
+                            ..
+                        },
+                    ],
+                ) => {
+                    if dynamic_elifs.is_empty() {
+                        lucid_cir::Function::from_parameterized_if(
+                            condition,
+                            then_value,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                    } else {
+                        lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                            condition,
+                            then_value,
+                            &dynamic_elifs,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                    }
+                }
+                None => {
+                    if dynamic_elifs.is_empty() {
+                        lucid_cir::Function::from_parameterized_if_optional(
+                            condition,
+                            then_value,
+                            &function.parameter_names,
+                        )
+                    } else {
+                        lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                            condition,
+                            then_value,
+                            &dynamic_elifs,
+                            &function.parameter_names,
+                        )
+                    }
+                }
+                _ => Err(lucid_cir::LowerError::UnsupportedExpression),
+            };
+            return lowered
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported mixed dynamic elif chain"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
             else_branch: None,
             ..
         },
@@ -6891,6 +7015,27 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-mixed-static-false-dynamic-elif.lucid",
+            "def choose(value: int):\n    if value > 10:\n        return 100\n    elif false:\n        return 999\n    elif value > 0:\n        return 1\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("static false elif inside dynamic return chain should be skipped");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-mixed-static-false-optional-elif.lucid",
+            "def choose(value: int):\n    if value > 0:\n        return 1\n    elif false:\n        return 999\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("static false optional elif inside dynamic return chain should be skipped");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
 
         let file = db.add_file(
             "parameterized-dead-leading-dynamic-elif.lucid",

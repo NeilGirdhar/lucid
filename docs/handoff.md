@@ -444,6 +444,9 @@ diverged:
   adapter, preserving the same branch and merge semantics for both backends.
   A statically false leading `if` arm no longer blocks direct-return dynamic
   `elif` ladders, including optional no-`else` fall-through.
+  Statically false `elif` arms inside an otherwise dynamic direct-return ladder
+  are now skipped before CIR lowering instead of forcing the whole shape out of
+  the typed path.
   The typed API also supports a value-returning branch with a void fall-through
   and verifies both outcomes before backend lowering.
   Statement conditionals with a `pass` or bare-`return` fall-through now use
