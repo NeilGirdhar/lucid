@@ -590,6 +590,15 @@ fn test_removed_type_builtin_call_is_rejected() {
     assert!(chk.unwrap_err().contains("type() is not supported"));
 }
 
+#[test]
+fn test_removed_string_codepoint_builtins_are_rejected() {
+    for source in ["letter = chr(65)\n", "codepoint = ord(\"A\")\n"] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("is not a bare builtin"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 20. Keyword reference (docs/keywords.rst)
 // ---------------------------------------------------------------------------

@@ -1530,26 +1530,6 @@ impl TypeChecker {
             ),
         );
         env.variables.insert(
-            "ord".to_string(),
-            (
-                Type::Function {
-                    params: vec![Type::Str],
-                    return_type: Box::new(Type::Int),
-                },
-                MutabilityView::ReadOnly,
-            ),
-        );
-        env.variables.insert(
-            "chr".to_string(),
-            (
-                Type::Function {
-                    params: vec![Type::Int],
-                    return_type: Box::new(Type::Str),
-                },
-                MutabilityView::ReadOnly,
-            ),
-        );
-        env.variables.insert(
             "time".to_string(),
             (
                 Type::Function {
@@ -1774,8 +1754,6 @@ impl TypeChecker {
             ("memoryview", 1, Some(1)),
             ("list", 0, Some(1)),
             ("set", 0, Some(1)),
-            ("ord", 1, Some(1)),
-            ("chr", 1, Some(1)),
             ("time", 0, Some(0)),
         ] {
             env.function_arity.insert(name.into(), (required, maximum));
@@ -5749,6 +5727,14 @@ impl TypeChecker {
                             span: func.span(),
                         });
                     }
+                    if matches!(name.as_str(), "chr" | "ord") {
+                        return Err(TypeError {
+                            message: format!(
+                                "{name}() is not a bare builtin; use string.{name}(...) instead"
+                            ),
+                            span: func.span(),
+                        });
+                    }
                     if name == "round" && args.len() == 2 {
                         let digits = self.type_of_expr(&args[1].value)?;
                         if !digits.is_subtype_of(&Type::Int, &self.env) {
@@ -5919,59 +5905,6 @@ impl TypeChecker {
                                     ),
                                     span: argument.value.span(),
                                 });
-                            }
-                        }
-                    }
-                    if name == "ord" {
-                        if let Some(argument) = args.first() {
-                            let argument_type = self.type_of_expr(&argument.value)?;
-                            if !argument_type.is_subtype_of(&Type::Str, &self.env) {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "ord() argument must be str, got {:?}",
-                                        argument_type
-                                    ),
-                                    span: argument.value.span(),
-                                });
-                            }
-                            if let Expr::Literal {
-                                value: LiteralValue::Str(value),
-                                ..
-                            } = &argument.value
-                            {
-                                if value.chars().count() != 1 {
-                                    return Err(TypeError {
-                                        message: "ord() requires a one-character string".into(),
-                                        span: argument.value.span(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    if name == "chr" {
-                        if let Some(argument) = args.first() {
-                            let argument_type = self.type_of_expr(&argument.value)?;
-                            if !argument_type.is_subtype_of(&Type::Int, &self.env) {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "chr() argument must be int, got {:?}",
-                                        argument_type
-                                    ),
-                                    span: argument.value.span(),
-                                });
-                            }
-                            if let Expr::Literal {
-                                value: LiteralValue::Int(value),
-                                ..
-                            } = &argument.value
-                            {
-                                if char::from_u32(*value as u32).is_none() {
-                                    return Err(TypeError {
-                                        message: "chr() argument is outside the Unicode range"
-                                            .into(),
-                                        span: argument.value.span(),
-                                    });
-                                }
                             }
                         }
                     }
@@ -10990,8 +10923,8 @@ def reject(value: not int) -> none:
             ("help(1, 2)\n", "accepts at most 1"),
             ("fields()\n", "requires at least 1"),
             ("len(1)\n", "not sized"),
-            ("ord(\"ab\")\n", "one-character"),
-            ("chr(0x110000)\n", "outside the Unicode range"),
+            ("ord(\"ab\")\n", "is not a bare builtin"),
+            ("chr(0x110000)\n", "is not a bare builtin"),
         ] {
             let error = TypeChecker::new()
                 .check_module(&parse(source).unwrap())
@@ -11234,6 +11167,18 @@ def reject(value: not int) -> none:
                 .check_module(&parse(source).unwrap())
                 .expect_err("removed Python decorator must fail static checking");
             assert!(error.message.contains(message));
+            assert!(error.span.end > error.span.start);
+        }
+    }
+
+    #[test]
+    fn test_removed_string_codepoint_builtins_are_rejected_statically() {
+        for source in ["letter = chr(65)\n", "codepoint = ord(\"A\")\n"] {
+            let mut checker = TypeChecker::new();
+            let error = checker
+                .check_module(&parse(source).unwrap())
+                .expect_err("removed string codepoint builtin must fail static checking");
+            assert!(error.message.contains("is not a bare builtin"));
             assert!(error.span.end > error.span.start);
         }
     }
