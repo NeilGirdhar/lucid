@@ -3916,9 +3916,16 @@ impl Function {
                     },
                 ..
             } => {
-                (matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
-                    && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
-                    && update_name == acc_name).then_some(update_op.clone())
+                let ordinary_update = matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
+                    && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name);
+                let commuted_add = *update_op == lucid_syntax::BinaryOp::Add
+                    && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
+                    && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name);
+                if update_name == acc_name && (ordinary_update || commuted_add) {
+                    Some(update_op.clone())
+                } else {
+                    None
+                }
             }
             _ => None,
         };
@@ -9496,6 +9503,18 @@ return total
         .expect("range accumulation fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("range accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total = i + total
+return total
+"#,
+        )
+        .expect("commuted range accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("commuted range accumulation should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(

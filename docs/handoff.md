@@ -569,8 +569,10 @@ diverged:
   `begin = seed; for i in range(begin, n)`,
   `begin = seed; stop = limit; for i in range(begin, stop)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
-  CIR/native path. An unused pre-loop alias is still rejected instead of being
-  treated as loop setup.
+  CIR/native path. Range accumulator updates accept `+=`, `-=`,
+  `x = x + i`, `x = x - i`, and the commuted additive spelling `x = i + x`.
+  An unused pre-loop alias is still rejected instead of being treated as loop
+  setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from an integer literal or parameter, then updated before the
   induction update. The accumulator step can be a literal or the current
