@@ -560,7 +560,8 @@ diverged:
   arithmetic.
   Counted loop recognizers now accept repeated `pass` tails after the update,
   while `continue` remains accepted only as a single final tail statement,
-  matching the public checker boundary.
+  matching the public checker boundary. The repeated-`pass` counted-`while`
+  form also has Cranelift result-ABI coverage.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from an integer literal or parameter, then updated before the
   induction update. The accumulator step can be a literal or the current

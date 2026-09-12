@@ -2348,6 +2348,26 @@ return value
     }
 
     #[test]
+    fn result_abi_executes_counted_while_with_repeated_pass_tail() {
+        let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= 1
+    pass
+    pass
+return n
+"#,
+        )
+        .expect("repeated-pass counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("repeated-pass counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile repeated-pass counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[4]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 0);
+    }
+
+    #[test]
     fn result_abi_executes_void_local_bound_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"value = n
