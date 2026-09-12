@@ -2406,6 +2406,30 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_reordered_local_bound_aliases_cfg() {
+        let module = lucid_syntax::parse(
+            r#"begin = seed
+stop = limit
+total = 0
+for i in range(begin, stop):
+    total += i
+return total
+"#,
+        )
+        .expect("range reordered two-alias accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["seed".into(), "limit".into()],
+        )
+        .expect("range reordered two-alias accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile range reordered two-alias loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[2, 6]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 14);
+    }
+
+    #[test]
     fn result_abi_executes_descending_range_accumulation_with_local_bound_alias_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0

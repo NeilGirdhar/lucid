@@ -3802,9 +3802,7 @@ impl Function {
                     return_name,
                 )
             }
-            [acc_statement, alias_statement, for_statement, return_statement] => {
-                let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
-                let (alias_name, _) = initialized_ident(alias_statement)?;
+            [first_statement, second_statement, for_statement, return_statement] => {
                 let lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Ident(index_name, _),
                     iterable: lucid_syntax::Expr::Call { func, args, .. },
@@ -3825,6 +3823,16 @@ impl Function {
                 else {
                     return None;
                 };
+                let (first_name, first_expr) = initialized_ident(first_statement)?;
+                let (second_name, second_expr) = initialized_ident(second_statement)?;
+                let (acc_name, initial_expr, alias_statement) = if first_name == return_name {
+                    (first_name, first_expr, second_statement)
+                } else if second_name == return_name {
+                    (second_name, second_expr, first_statement)
+                } else {
+                    return None;
+                };
+                let (alias_name, _) = initialized_ident(alias_statement)?;
                 if alias_name == acc_name || alias_name == index_name {
                     return None;
                 }
@@ -3840,11 +3848,8 @@ impl Function {
                     return_name,
                 )
             }
-            [acc_statement, first_alias_statement, second_alias_statement, for_statement, return_statement] =>
+            [first_statement, second_statement, third_statement, for_statement, return_statement] =>
             {
-                let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
-                let (first_alias_name, _) = initialized_ident(first_alias_statement)?;
-                let (second_alias_name, _) = initialized_ident(second_alias_statement)?;
                 let lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Ident(index_name, _),
                     iterable: lucid_syntax::Expr::Call { func, args, .. },
@@ -3865,6 +3870,21 @@ impl Function {
                 else {
                     return None;
                 };
+                let setup_statements = [first_statement, second_statement, third_statement];
+                let initializers = [
+                    initialized_ident(first_statement)?,
+                    initialized_ident(second_statement)?,
+                    initialized_ident(third_statement)?,
+                ];
+                let acc_index = initializers
+                    .iter()
+                    .position(|(name, _)| *name == return_name)?;
+                let alias_indices: Vec<_> = (0..setup_statements.len())
+                    .filter(|index| *index != acc_index)
+                    .collect();
+                let (acc_name, initial_expr) = initializers[acc_index];
+                let (first_alias_name, _) = initializers[alias_indices[0]];
+                let (second_alias_name, _) = initializers[alias_indices[1]];
                 if first_alias_name == acc_name
                     || first_alias_name == index_name
                     || second_alias_name == acc_name
@@ -3876,7 +3896,10 @@ impl Function {
                 (
                     acc_name,
                     initial_expr,
-                    vec![first_alias_statement, second_alias_statement],
+                    vec![
+                        setup_statements[alias_indices[0]],
+                        setup_statements[alias_indices[1]],
+                    ],
                     index_name,
                     func,
                     args,
@@ -9708,6 +9731,20 @@ return total
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
 
         let module = lucid_syntax::parse(
+            r#"begin = seed
+total = 0
+for i in range(begin, n):
+    total += i
+return total
+"#,
+        )
+        .expect("range reordered start alias accumulation fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
+                .expect("range reordered start alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
             r#"total = 0
 begin = seed
 stop = limit
@@ -9720,6 +9757,21 @@ return total
         let function =
             Function::from_module_linear_with_params(&module, &["seed".into(), "limit".into()])
                 .expect("range two-alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[2, 6]), Ok(Some(14)));
+
+        let module = lucid_syntax::parse(
+            r#"begin = seed
+stop = limit
+total = 0
+for i in range(begin, stop):
+    total += i
+return total
+"#,
+        )
+        .expect("range reordered two-alias accumulation fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["seed".into(), "limit".into()])
+                .expect("range reordered two-alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[2, 6]), Ok(Some(14)));
 
         let module = lucid_syntax::parse(
