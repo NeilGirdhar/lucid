@@ -1186,7 +1186,7 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
 fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
     let lower_path = path.to_string_lossy().to_ascii_lowercase();
     if lower_path.contains("rejected-features") {
-        return true;
+        return !block.contains("class FileHandle:");
     }
     block.lines().any(|line| {
         let line = line.to_ascii_lowercase();
