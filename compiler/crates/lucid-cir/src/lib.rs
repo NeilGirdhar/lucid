@@ -4689,11 +4689,11 @@ impl Function {
                     else_produced_value |= else_last.is_some();
                 }
             }
-            let then_value = then_last.ok_or(LowerError::NoLowerableAssignment)?;
-            let else_value = else_last.ok_or(LowerError::NoLowerableAssignment)?;
-            let result = ValueId(*state.next);
-            *state.next += 1;
             let (merge_instructions, terminator) = if suffix.is_empty() {
+                let then_value = then_last.ok_or(LowerError::NoLowerableAssignment)?;
+                let else_value = else_last.ok_or(LowerError::NoLowerableAssignment)?;
+                let result = ValueId(*state.next);
+                *state.next += 1;
                 (
                     vec![Instruction::Phi {
                         result,
@@ -4702,23 +4702,30 @@ impl Function {
                     Terminator::Return(Some(result)),
                 )
             } else {
-                let merged_name = then_bindings.iter().find_map(|(name, value)| {
-                    (*value == then_value && else_bindings.get(name).copied() == Some(else_value))
-                        .then(|| name.clone())
+                let branch_values = then_last.zip(else_last);
+                let merged_name = branch_values.and_then(|(then_value, else_value)| {
+                    then_bindings.iter().find_map(|(name, value)| {
+                        (*value == then_value
+                            && else_bindings.get(name).copied() == Some(else_value))
+                        .then(|| (name.clone(), then_value, else_value))
+                    })
                 });
                 let mut merge_bindings = state.bindings.clone();
                 let has_phi = merged_name.is_some();
-                let mut merge_instructions = if let Some(merged_name) = merged_name {
-                    merge_bindings.insert(merged_name, result);
-                    vec![Instruction::Phi {
-                        result,
-                        incomings: vec![(BlockId(1), then_value), (BlockId(2), else_value)],
-                    }]
-                } else {
-                    Vec::new()
-                };
+                let mut merge_instructions =
+                    if let Some((merged_name, then_value, else_value)) = merged_name {
+                        let result = ValueId(*state.next);
+                        *state.next += 1;
+                        merge_bindings.insert(merged_name, result);
+                        vec![Instruction::Phi {
+                            result,
+                            incomings: vec![(BlockId(1), then_value), (BlockId(2), else_value)],
+                        }]
+                    } else {
+                        Vec::new()
+                    };
                 let mut merge_last = if has_phi {
-                    Some(result)
+                    merge_instructions.last().map(instruction_value)
                 } else {
                     fallthrough_value
                 };
@@ -10034,6 +10041,25 @@ return total
             function.execute_with_args(&[1]),
             Err(ExecuteError::DivisionByZero)
         );
+        let module = lucid_syntax::parse("if flag:\n    left = 1\nvalue = 3\n").unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("one-sided unused branch locals should allow a suffix result");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(3)));
+        let module = lucid_syntax::parse("if flag:\n    left = 1 / 0\nvalue = 3\n").unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("one-sided branch errors should remain conditional before suffix");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
+        assert_eq!(
+            function.execute_with_args(&[1]),
+            Err(ExecuteError::DivisionByZero)
+        );
+        let module =
+            lucid_syntax::parse("value = 1\nif flag:\n    value = 2\nvalue = value + 1\n").unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("one-sided reassignment should merge with the incoming value");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(3)));
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
         )

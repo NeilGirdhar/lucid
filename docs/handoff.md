@@ -1811,6 +1811,9 @@ diverged:
   If the continuation does not read a branch-local assignment, the merge block
   can continue from prefix bindings without fabricating an unused Phi, while
   keeping branch-local errors conditional.
+  One-sided diamonds with a later suffix result now use the same continuation
+  path: branch values are required only when the diamond itself returns a value
+  or when the suffix needs a merged local.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
