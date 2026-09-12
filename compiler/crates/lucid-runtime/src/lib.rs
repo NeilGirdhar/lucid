@@ -5125,6 +5125,18 @@ impl Interpreter {
         )
     }
 
+    fn reject_skip_value(value: &Value, context: &str, span: Span) -> Result<(), RuntimeError> {
+        if matches!(value, Value::Skip) {
+            return Err(RuntimeError {
+                message: format!(
+                    "skip cannot be used as a {context}; it only elides call arguments and collection entries"
+                ),
+                span,
+            });
+        }
+        Ok(())
+    }
+
     /// Invoke an entry point inside a configured library context manager.
     /// The synthetic `with` statement deliberately reuses the ordinary
     /// context-manager implementation, including reverse-order teardown and
@@ -5478,6 +5490,7 @@ impl Interpreter {
                     if let Value::Return(_) = v {
                         return Ok(v);
                     }
+                    Self::reject_skip_value(&v, "variable initializer", e.span())?;
                     v
                 } else {
                     Value::None
@@ -5504,6 +5517,7 @@ impl Interpreter {
                 if let Value::Return(_) = val {
                     return Ok(val);
                 }
+                Self::reject_skip_value(&val, "assignment value", value.span())?;
                 match target {
                     Expr::Ident { name, .. } => {
                         if self.env.borrow().is_final(name) {
@@ -5827,6 +5841,7 @@ impl Interpreter {
                 if let Value::Return(_) = rhs {
                     return Ok(rhs);
                 }
+                Self::reject_skip_value(&rhs, "assignment value", value.span())?;
                 match target {
                     Expr::Ident {
                         name,
@@ -6005,11 +6020,13 @@ impl Interpreter {
                 ..
             } => {
                 let cond_val = self.eval_expr(condition)?;
+                Self::reject_skip_value(&cond_val, "if condition", condition.span())?;
                 if self.is_truthy(&cond_val) {
                     return self.eval_block(then_branch);
                 }
                 for (elif_cond, elif_body) in elif_branches {
                     let elif_val = self.eval_expr(elif_cond)?;
+                    Self::reject_skip_value(&elif_val, "elif condition", elif_cond.span())?;
                     if self.is_truthy(&elif_val) {
                         return self.eval_block(elif_body);
                     }
@@ -6183,6 +6200,7 @@ impl Interpreter {
                 let mut broken = false;
                 loop {
                     let cond = self.eval_expr(condition)?;
+                    Self::reject_skip_value(&cond, "while condition", condition.span())?;
                     if !self.is_truthy(&cond) {
                         break;
                     }
@@ -6247,7 +6265,9 @@ impl Interpreter {
             }
             Stmt::Return { value, .. } => {
                 let val = if let Some(ref e) = value {
-                    self.eval_expr(e)?
+                    let value = self.eval_expr(e)?;
+                    Self::reject_skip_value(&value, "return value", e.span())?;
+                    value
                 } else {
                     Value::None
                 };
@@ -6259,9 +6279,11 @@ impl Interpreter {
                 span,
             } => {
                 let condition_value = self.eval_expr(condition)?;
+                Self::reject_skip_value(&condition_value, "assert condition", condition.span())?;
                 if !self.is_truthy(&condition_value) {
                     let detail = if let Some(message) = message {
                         let message_value = self.eval_expr(message)?;
+                        Self::reject_skip_value(&message_value, "assert message", message.span())?;
                         let message_value = if matches!(
                             message_value,
                             Value::Function { .. } | Value::BuiltinFunction { .. }
@@ -6297,6 +6319,7 @@ impl Interpreter {
             }
             Stmt::Raise { exception, span } => {
                 let value = self.eval_expr(exception)?;
+                Self::reject_skip_value(&value, "raised value", exception.span())?;
                 Err(RuntimeError {
                     message: format!("raised invariant ({}): {value:?}", value.type_name()),
                     span: *span,
@@ -6306,7 +6329,8 @@ impl Interpreter {
                 // A complete contextmanager scheduler will suspend and resume
                 // this frame. The tree-walk backend has no scheduler yet, but it
                 // must still evaluate yield expressions for their side effects.
-                let _ = self.eval_expr(value)?;
+                let yielded = self.eval_expr(value)?;
+                Self::reject_skip_value(&yielded, "yield value", value.span())?;
                 Ok(Value::None)
             }
             Stmt::Break(span) => {
@@ -6505,7 +6529,11 @@ impl Interpreter {
                 Ok(Value::None)
             }
             Stmt::Pass(_) => Ok(Value::None),
-            Stmt::Expr(expr) => self.eval_expr(expr),
+            Stmt::Expr(expr) => {
+                let value = self.eval_expr(expr)?;
+                Self::reject_skip_value(&value, "expression statement", expr.span())?;
+                Ok(value)
+            }
         }
     }
 
@@ -7066,7 +7094,10 @@ impl Interpreter {
                             }
                         }
                     } else {
-                        evaluated_args.push((arg.name.clone(), self.eval_expr(&arg.value)?));
+                        let value = self.eval_expr(&arg.value)?;
+                        if !matches!(value, Value::Skip) {
+                            evaluated_args.push((arg.name.clone(), value));
+                        }
                     }
                 }
                 let positional_args: Vec<Value> = evaluated_args
@@ -10181,6 +10212,39 @@ mod tests {
         assert!(!Interpreter::pattern_identifier_binds("DottedPath"));
         assert!(!Interpreter::pattern_identifier_binds("_"));
         assert!(Interpreter::pattern_identifier_binds("value"));
+    }
+
+    #[test]
+    fn bare_skip_is_rejected_in_runtime_value_positions() {
+        for (source, expected) in [
+            ("value = skip\n", "assignment value"),
+            ("let value = skip\n", "variable initializer"),
+            ("def f():\n    return skip\nvalue = f()\n", "return value"),
+            ("skip\n", "expression statement"),
+            ("if skip:\n    pass\n", "if condition"),
+            ("while skip:\n    pass\n", "while condition"),
+        ] {
+            let module = parse(source).unwrap();
+            let mut interp = Interpreter::new();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("bare skip must fail outside elision contexts");
+            assert!(error.message.contains(expected), "{source}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn skip_still_elides_runtime_calls_and_collections() {
+        let module = parse("def f(value: int = 1) -> int:\n    return value\nx = f(skip)\nitems = [1, skip, 2]\nmapping = {\"a\": 1, \"b\": skip}\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("x"), Some(Value::Int(1)));
+        assert!(
+            matches!(interp.env.borrow().get("items"), Some(Value::List(items)) if items.borrow().len() == 2)
+        );
+        assert!(
+            matches!(interp.env.borrow().get("mapping"), Some(Value::Dict(items)) if items.borrow().len() == 1)
+        );
     }
 
     #[test]

@@ -5368,6 +5368,17 @@ static inline void lucid_print_val(LucidVal v) {
         Ok(())
     }
 
+    fn reject_bare_skip_value(expr: &Expr, context: &str) -> Result<(), CodegenError> {
+        if matches!(expr, Expr::Skip(_)) {
+            return Err(CodegenError {
+                message: format!(
+                    "skip cannot be used as a {context}; it only elides call arguments and collection entries"
+                ),
+            });
+        }
+        Ok(())
+    }
+
     fn collect_vars_from_stmt(&mut self, stmt: &Stmt, vars: &mut HashMap<String, String>) {
         match stmt {
             Stmt::VarDef {
@@ -8661,6 +8672,7 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                     }
                     if let Some(val_expr) = value {
+                        Self::reject_bare_skip_value(val_expr, "variable initializer")?;
                         if Self::type_expr_is_bytes(type_annotation.as_ref())
                             || self.expr_is_bytes_value(val_expr)
                         {
@@ -8685,6 +8697,7 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                         _ => None,
                     };
+                    Self::reject_bare_skip_value(val_expr, "variable initializer")?;
                     let val_code = self.emit_expr(val_expr)?;
                     let subject = self.new_temp();
                     self.emit_line(&format!("LucidVal {subject} = lucid_wrap({val_code});"));
@@ -8697,6 +8710,7 @@ static inline void lucid_print_val(LucidVal v) {
                 Ok(())
             }
             Stmt::Assignment { target, value, .. } => {
+                Self::reject_bare_skip_value(value, "assignment value")?;
                 match target {
                     Expr::Ident { name, .. } => {
                         self.deleted_bindings.remove(name);
@@ -9192,6 +9206,7 @@ static inline void lucid_print_val(LucidVal v) {
                 else_branch,
                 ..
             } => {
+                Self::reject_bare_skip_value(condition, "if condition")?;
                 // `del` changes a source binding's lifetime.  Because branch
                 // bodies are emitted sequentially, keep each branch's state
                 // independent and retain only deletions guaranteed on every
@@ -9209,6 +9224,7 @@ static inline void lucid_print_val(LucidVal v) {
                 self.deleted_bindings = base_deleted.clone();
 
                 for (elif_cond, elif_stmts) in elif_branches {
+                    Self::reject_bare_skip_value(elif_cond, "elif condition")?;
                     let elif_truth = self.emit_condition(elif_cond)?;
                     self.emit_line(&format!("}} else if ({elif_truth}) {{"));
                     self.indent += 1;
@@ -9403,6 +9419,7 @@ static inline void lucid_print_val(LucidVal v) {
                 if_broken,
                 ..
             } => {
+                Self::reject_bare_skip_value(condition, "while condition")?;
                 let break_flag = self.new_temp();
                 self.emit_line(&format!("bool {break_flag} = false;"));
                 let cond_truth = self.emit_condition(condition)?;
@@ -9675,6 +9692,7 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Stmt::Return { value, .. } => {
                 if let Some(val_expr) = value {
+                    Self::reject_bare_skip_value(val_expr, "return value")?;
                     let val_code = self.emit_expr(val_expr)?;
                     self.emit_finally_cleanups()?;
                     self.emit_context_cleanups();
@@ -9724,7 +9742,9 @@ static inline void lucid_print_val(LucidVal v) {
             Stmt::Assert {
                 condition, message, ..
             } => {
+                Self::reject_bare_skip_value(condition, "assert condition")?;
                 if let Some(message) = message {
+                    Self::reject_bare_skip_value(message, "assert message")?;
                     let message_code = if let Expr::AnonymousDef { params, body, .. } = message {
                         if params.is_empty() {
                             if let [
@@ -9775,11 +9795,13 @@ static inline void lucid_print_val(LucidVal v) {
                 Ok(())
             }
             Stmt::Raise { exception, .. } => {
+                Self::reject_bare_skip_value(exception, "raised value")?;
                 let exception_code = self.emit_expr(exception)?;
                 self.emit_line(&format!("lucid_raise_value(lucid_wrap({exception_code}));"));
                 Ok(())
             }
             Stmt::Yield { value, .. } => {
+                Self::reject_bare_skip_value(value, "yield value")?;
                 let value_code = self.emit_expr(value)?;
                 self.emit_line(&format!("(void)({value_code});"));
                 Ok(())
@@ -9846,6 +9868,7 @@ static inline void lucid_print_val(LucidVal v) {
                 Ok(())
             }
             Stmt::Expr(expr) => {
+                Self::reject_bare_skip_value(expr, "expression statement")?;
                 let code = self.emit_expr(expr)?;
                 self.emit_line(&format!("{code};"));
                 Ok(())
@@ -22439,6 +22462,27 @@ print(result[1])
             String::from_utf8_lossy(&run.stdout),
             "1 3\n[list len=2]\n[dict len=1]\n"
         );
+    }
+
+    #[test]
+    fn native_bare_skip_is_rejected_in_value_positions() {
+        for (source, expected) in [
+            ("value = skip\n", "assignment value"),
+            ("let value = skip\n", "variable initializer"),
+            ("def f():\n    return skip\nvalue = f()\n", "return value"),
+            ("skip\n", "expression statement"),
+            ("if skip:\n    pass\n", "if condition"),
+            ("while skip:\n    pass\n", "while condition"),
+        ] {
+            let module = parse(source).expect("bare skip source should parse");
+            let output =
+                std::env::temp_dir().join(format!("lucid_native_bare_skip_{}", std::process::id()));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("bare skip must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
+        }
     }
 
     #[test]
