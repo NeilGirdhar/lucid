@@ -768,13 +768,7 @@ impl Type {
                         "Hashable",
                     ],
                     "dict" => &["Sized", "Container", "Collection", "Iterable"],
-                    "frozendict" => &[
-                        "Sized",
-                        "Container",
-                        "Collection",
-                        "Iterable",
-                        "Hashable",
-                    ],
+                    "frozendict" => &["Sized", "Container", "Collection", "Iterable", "Hashable"],
                     "Bytes" => &["Sized", "Container", "Buffer"],
                     "ByteArray" | "MemoryView" => &["Sized", "Container", "Buffer"],
                     _ => &[],
@@ -1163,6 +1157,10 @@ impl TypeChecker {
         Ok(())
     }
 
+    fn callable_name_is_user_bound(&self, name: &str) -> bool {
+        self.env.variables.contains_key(name) || self.env.functions.contains_key(name)
+    }
+
     pub fn new() -> Self {
         let mut env = TypeEnvironment::default();
         // Register builtins
@@ -1299,10 +1297,8 @@ impl TypeChecker {
                     return_type: Box::new(return_type),
                 },
             );
-            env.trait_method_params.insert(
-                (trait_name.into(), method_name.into()),
-                vec!["self".into()],
-            );
+            env.trait_method_params
+                .insert((trait_name.into(), method_name.into()), vec!["self".into()]);
         }
         for (trait_name, method_name, params) in [
             ("SupportsAbs", "__abs__", Vec::new()),
@@ -1371,7 +1367,10 @@ impl TypeChecker {
                     ("__abs__", Type::Float),
                 ],
             ),
-            ("bool", vec![("__int__", Type::Int), ("__index__", Type::Int)]),
+            (
+                "bool",
+                vec![("__int__", Type::Int), ("__index__", Type::Int)],
+            ),
         ] {
             let members = env.class_members.entry(class_name.into()).or_default();
             for (method_name, return_type) in methods {
@@ -1383,10 +1382,8 @@ impl TypeChecker {
                         return_type: Box::new(return_type),
                     },
                 );
-                env.class_method_params.insert(
-                    (class_name.into(), method_name.into()),
-                    vec!["self".into()],
-                );
+                env.class_method_params
+                    .insert((class_name.into(), method_name.into()), vec!["self".into()]);
             }
         }
         for name in ["Bytes", "ByteArray", "MemoryView"] {
@@ -1490,7 +1487,11 @@ impl TypeChecker {
         env.class_members
             .entry("frozendict".into())
             .or_default()
-            .extend(["get", "keys", "values", "items"].into_iter().map(str::to_string));
+            .extend(
+                ["get", "keys", "values", "items"]
+                    .into_iter()
+                    .map(str::to_string),
+            );
         for (method, arity) in [
             ("get", 2usize),
             ("pop", 1),
@@ -1597,7 +1598,9 @@ impl TypeChecker {
                 parent: None,
                 traits: Vec::new(),
                 interfaces: Vec::new(),
-                fields: [("value".to_string(), cell_t.clone())].into_iter().collect(),
+                fields: [("value".to_string(), cell_t.clone())]
+                    .into_iter()
+                    .collect(),
                 is_sealed: true,
             },
         );
@@ -2508,8 +2511,7 @@ impl TypeChecker {
                     .class_constructor_required
                     .insert(name.clone(), constructor_required);
                 for member in body {
-                    if let ClassMember::Method(method) | ClassMember::ClassMethod(method) = member
-                    {
+                    if let ClassMember::Method(method) | ClassMember::ClassMethod(method) = member {
                         Self::reject_removed_decorators(method)?;
                     }
                     let (method_name, params, return_type, is_async) = match member {
@@ -2841,8 +2843,7 @@ impl TypeChecker {
                 }
                 self.env.obligations.insert(name.clone(), required);
                 for member in body {
-                    if let TraitMember::Method(method) | TraitMember::ClassMethod(method) = member
-                    {
+                    if let TraitMember::Method(method) | TraitMember::ClassMethod(method) = member {
                         Self::reject_removed_decorators(method)?;
                     }
                     match member {
@@ -3000,7 +3001,11 @@ impl TypeChecker {
                     .find(|(_, param)| param.is_gather)
                 {
                     if gather_index + 1 != func.params.len()
-                        || func.params.iter().skip(gather_index + 1).any(|param| param.is_gather)
+                        || func
+                            .params
+                            .iter()
+                            .skip(gather_index + 1)
+                            .any(|param| param.is_gather)
                     {
                         return Err(TypeError {
                             message: format!(
@@ -3046,10 +3051,13 @@ impl TypeChecker {
                             Type::Function {
                                 params: existing_params,
                                 ..
-                            } => existing_params == match &fn_type {
-                                Type::Function { params, .. } => params,
-                                _ => unreachable!(),
-                            },
+                            } => {
+                                existing_params
+                                    == match &fn_type {
+                                        Type::Function { params, .. } => params,
+                                        _ => unreachable!(),
+                                    }
+                            }
                             _ => false,
                         });
                     if duplicate_signature {
@@ -3211,9 +3219,7 @@ impl TypeChecker {
 
     fn reject_removed_member(name: &str, span: Span) -> Result<(), TypeError> {
         let message = match name {
-            "__delitem__" => {
-                "__delitem__ is not supported; use an explicit removal method instead"
-            }
+            "__delitem__" => "__delitem__ is not supported; use an explicit removal method instead",
             "__getattr__" => "__getattr__ is not supported; declare visible members instead",
             "__getattribute__" => {
                 "__getattribute__ is not supported; attribute reads use visible members"
@@ -3246,11 +3252,7 @@ impl TypeChecker {
         for decorator in &function.decorators {
             let (name, span) = match decorator {
                 Expr::Ident { name, span } => (name.as_str(), *span),
-                Expr::Attribute {
-                    value,
-                    attr,
-                    span,
-                } if matches!(&**value, Expr::Ident { name, .. } if name == "typing") => {
+                Expr::Attribute { value, attr, span } if matches!(&**value, Expr::Ident { name, .. } if name == "typing") => {
                     (attr.as_str(), *span)
                 }
                 _ => continue,
@@ -3975,10 +3977,10 @@ impl TypeChecker {
             return true;
         }
         matches!(base, Type::Class { name, .. }
-            if matches!(
-                self.class_method_type(name, "__bool__"),
-                Some(Type::Function { return_type, .. }) if return_type.is_subtype_of(&Type::Bool, &self.env)
-            ))
+        if matches!(
+            self.class_method_type(name, "__bool__"),
+            Some(Type::Function { return_type, .. }) if return_type.is_subtype_of(&Type::Bool, &self.env)
+        ))
     }
 
     fn is_byte_conversion_input(&self, value: &Type) -> bool {
@@ -4194,14 +4196,11 @@ impl TypeChecker {
                 .iter()
                 .find(|(name, _)| name.as_deref() == Some(attr))
                 .map(|(_, field_type)| field_type.clone()),
-            Type::TypeVar(name) if name == "Self" => self
-                .env
-                .current_class
-                .as_deref()
-                .and_then(|class_name| self.member_type_for_view_inner(
-                    self.env.classes.get(class_name)?,
-                    attr,
-                )),
+            Type::TypeVar(name) if name == "Self" => {
+                self.env.current_class.as_deref().and_then(|class_name| {
+                    self.member_type_for_view_inner(self.env.classes.get(class_name)?, attr)
+                })
+            }
             Type::TypeVar(name) => self
                 .env
                 .classes
@@ -4267,9 +4266,8 @@ impl TypeChecker {
         if let Some((name, span)) = Self::reserved_module_binding(stmt) {
             if name == "__all__" {
                 return Err(TypeError {
-                    message:
-                        "__all__ is not supported; Lucid uses leading '_' for module privacy"
-                            .into(),
+                    message: "__all__ is not supported; Lucid uses leading '_' for module privacy"
+                        .into(),
                     span,
                 });
             }
@@ -4618,6 +4616,16 @@ impl TypeChecker {
                         local_exact_vars = self.env.exact_variables.clone();
                     }
                 }
+                for statement in &func.body {
+                    if let Stmt::Function(nested) = statement {
+                        let nested_type = self.named_function_signature_type(nested)?;
+                        local_vars.insert(
+                            nested.name.clone(),
+                            (nested_type, MutabilityView::Immutable),
+                        );
+                        local_exact_vars.remove(&nested.name);
+                    }
+                }
 
                 let old_vars = std::mem::replace(&mut self.env.variables, local_vars);
                 let old_exact_vars =
@@ -4793,16 +4801,16 @@ impl TypeChecker {
                         };
                         match typed {
                             Ok(ty) => Some(ty),
-                        Err(error) => {
-                            if let Some((name, _)) = &provisional {
-                                if let Some(Some(previous)) = previous.clone() {
-                                    self.env.variables.insert(name.clone(), previous);
-                                } else {
-                                    self.env.variables.remove(name);
+                            Err(error) => {
+                                if let Some((name, _)) = &provisional {
+                                    if let Some(Some(previous)) = previous.clone() {
+                                        self.env.variables.insert(name.clone(), previous);
+                                    } else {
+                                        self.env.variables.remove(name);
+                                    }
                                 }
+                                return Err(error);
                             }
-                            return Err(error);
-                        }
                         }
                     }
                     None => None,
@@ -5108,34 +5116,34 @@ impl TypeChecker {
                                     span: *span,
                                 });
                             }
-                        if let Some(field_type) = self.class_field_type(class_name, attr) {
-                            let field_type = match &obj_type {
-                                Type::Class { type_args, .. } => self
-                                    .instantiate_class_member_type(
-                                        class_name, type_args, field_type,
-                                    ),
-                                Type::View { inner, .. } => match inner.as_ref() {
+                            if let Some(field_type) = self.class_field_type(class_name, attr) {
+                                let field_type = match &obj_type {
                                     Type::Class { type_args, .. } => self
                                         .instantiate_class_member_type(
                                             class_name, type_args, field_type,
                                         ),
+                                    Type::View { inner, .. } => match inner.as_ref() {
+                                        Type::Class { type_args, .. } => self
+                                            .instantiate_class_member_type(
+                                                class_name, type_args, field_type,
+                                            ),
+                                        _ => field_type,
+                                    },
                                     _ => field_type,
-                                },
-                                _ => field_type,
-                            };
-                            if !val_type.is_subtype_of(&field_type, &self.env) {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "cannot assign type {:?} to field '{}' of type {:?}",
-                                        val_type, attr, field_type
-                                    ),
-                                    span: *span,
-                                });
-                            }
-                        } else if let Some(field_type) = self.class_var_type(class_name, attr) {
-                            if !val_type.is_subtype_of(&field_type, &self.env) {
-                                return Err(TypeError {
-                                    message: format!(
+                                };
+                                if !val_type.is_subtype_of(&field_type, &self.env) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "cannot assign type {:?} to field '{}' of type {:?}",
+                                            val_type, attr, field_type
+                                        ),
+                                        span: *span,
+                                    });
+                                }
+                            } else if let Some(field_type) = self.class_var_type(class_name, attr) {
+                                if !val_type.is_subtype_of(&field_type, &self.env) {
+                                    return Err(TypeError {
+                                        message: format!(
                                             "cannot assign type {:?} to field '{}' of type {:?}",
                                             val_type, attr, field_type
                                         ),
@@ -5290,10 +5298,7 @@ impl TypeChecker {
                                             || index_type.is_subtype_of(&Type::Str, &self.env)
                                         {
                                             Type::make_union(
-                                                fields
-                                                    .iter()
-                                                    .map(|(_, ty)| ty.clone())
-                                                    .collect(),
+                                                fields.iter().map(|(_, ty)| ty.clone()).collect(),
                                             )
                                         } else {
                                             return Err(TypeError {
@@ -5853,13 +5858,14 @@ impl TypeChecker {
         body: &[Stmt],
         span: Span,
     ) -> Result<(), TypeError> {
-        if let Some((gather_index, gather)) = params
-            .iter()
-            .enumerate()
-            .find(|(_, param)| param.is_gather)
+        if let Some((gather_index, gather)) =
+            params.iter().enumerate().find(|(_, param)| param.is_gather)
         {
             if gather_index + 1 != params.len()
-                || params.iter().skip(gather_index + 1).any(|param| param.is_gather)
+                || params
+                    .iter()
+                    .skip(gather_index + 1)
+                    .any(|param| param.is_gather)
             {
                 return Err(TypeError {
                     message: format!(
@@ -6231,6 +6237,36 @@ impl TypeChecker {
         Ok((ptypes, function_return, body_return))
     }
 
+    fn named_function_signature_type(&self, func: &FunctionDef) -> Result<Type, TypeError> {
+        let params = func
+            .params
+            .iter()
+            .map(|param| {
+                param
+                    .type_annotation
+                    .as_ref()
+                    .map(|annotation| self.resolve_type_expr(annotation))
+                    .transpose()
+                    .map(|ty| ty.unwrap_or(Type::TypeVar("Any".into())))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|annotation| self.resolve_type_expr(annotation))
+            .transpose()?
+            .unwrap_or(Type::TypeVar("Any".into()));
+        let return_type = if func.is_async {
+            Type::Future(Box::new(return_type))
+        } else {
+            return_type
+        };
+        Ok(Type::Function {
+            params,
+            return_type: Box::new(return_type),
+        })
+    }
+
     fn anonymous_function_type(
         &self,
         params: &[Param],
@@ -6321,8 +6357,9 @@ impl TypeChecker {
             && !expected_return.is_subtype_of(&function_return, &self.env)
         {
             return Err(TypeError {
-                message: "anonymous function return type is incompatible with expected function type"
-                    .into(),
+                message:
+                    "anonymous function return type is incompatible with expected function type"
+                        .into(),
                 span,
             });
         }
@@ -6351,11 +6388,7 @@ impl TypeChecker {
         expected: &Type,
         span: Span,
     ) -> Result<Type, TypeError> {
-        let Type::Record {
-            fields,
-            is_open,
-        } = expected
-        else {
+        let Type::Record { fields, is_open } = expected else {
             return self.type_of_expr(&Expr::Dict {
                 entries: entries.to_vec(),
                 span,
@@ -6429,7 +6462,11 @@ impl TypeChecker {
         Ok(expected.clone())
     }
 
-    fn argument_type_against_parameter(&self, argument: &Arg, parameter: &Type) -> Result<Type, TypeError> {
+    fn argument_type_against_parameter(
+        &self,
+        argument: &Arg,
+        parameter: &Type,
+    ) -> Result<Type, TypeError> {
         if matches!(parameter, Type::Class { name, .. } if name == "__class__") {
             if let Expr::Ident { name, .. } = &argument.value {
                 if let Some(class_type) = self.env.classes.get(name) {
@@ -6477,27 +6514,26 @@ impl TypeChecker {
         if !self.env.overloaded_functions.contains(name) {
             return Ok(None);
         }
-        let candidates = self
-            .env
-            .function_overloads
-            .get(name)
-            .into_iter()
-            .flatten()
-            .filter_map(|candidate| match candidate {
-                Type::Function {
-                    params,
-                    return_type,
-                } if params.len() == argument_types.len()
-                    && params
-                        .iter()
-                        .zip(argument_types.iter())
-                        .all(|(parameter, argument)| argument.is_subtype_of(parameter, &self.env)) =>
-                {
-                    Some((params.clone(), return_type.as_ref().clone()))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let candidates =
+            self.env
+                .function_overloads
+                .get(name)
+                .into_iter()
+                .flatten()
+                .filter_map(|candidate| match candidate {
+                    Type::Function {
+                        params,
+                        return_type,
+                    } if params.len() == argument_types.len()
+                        && params.iter().zip(argument_types.iter()).all(
+                            |(parameter, argument)| argument.is_subtype_of(parameter, &self.env),
+                        ) =>
+                    {
+                        Some((params.clone(), return_type.as_ref().clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
         if candidates.is_empty() {
             return Ok(None);
         }
@@ -6721,9 +6757,11 @@ impl TypeChecker {
                         || matches!(ty, Type::TypeVar(name) if name == "Any")
                 };
                 if let Some(dispatch_name) = Self::binary_dispatch_name(op.clone()) {
-                    if let Some(return_type) =
-                        self.dispatch_return_for_types(dispatch_name, &[lt.clone(), rt.clone()], left.span())?
-                    {
+                    if let Some(return_type) = self.dispatch_return_for_types(
+                        dispatch_name,
+                        &[lt.clone(), rt.clone()],
+                        left.span(),
+                    )? {
                         return Ok(return_type);
                     }
                 }
@@ -6923,7 +6961,10 @@ impl TypeChecker {
                             }
                             Type::Trait {
                                 name, type_args, ..
-                            } if matches!(name.as_str(), "Container" | "Collection" | "Sequence") =>
+                            } if matches!(
+                                name.as_str(),
+                                "Container" | "Collection" | "Sequence"
+                            ) =>
                             {
                                 if let Some(element_type) = type_args.first() {
                                     if !lt.is_subtype_of(element_type, &self.env) {
@@ -7002,9 +7043,8 @@ impl TypeChecker {
                         Ok(Type::Bool)
                     }
                     BinaryOp::Is | BinaryOp::IsNot | BinaryOp::Identity | BinaryOp::NotIdentity => {
-                        let declaration_kind_check =
-                            matches!(&**right, Expr::Ident { name, .. } if matches!(name.as_str(), "class" | "trait" | "interface"))
-                                || matches!(&**right, Expr::Type(TypeExpr::Named { name, .. }) if matches!(name.as_str(), "class" | "trait" | "interface"));
+                        let declaration_kind_check = matches!(&**right, Expr::Ident { name, .. } if matches!(name.as_str(), "class" | "trait" | "interface"))
+                            || matches!(&**right, Expr::Type(TypeExpr::Named { name, .. }) if matches!(name.as_str(), "class" | "trait" | "interface"));
                         let tested_type = if let Expr::Ident { name, .. } = &**right {
                             match name.as_str() {
                                 "int" => Type::Int,
@@ -7124,11 +7164,13 @@ impl TypeChecker {
                             span: func.span(),
                         });
                     }
-                    if let Some(message) = Self::removed_builtin_message(name) {
-                        return Err(TypeError {
-                            message: message.into(),
-                            span: func.span(),
-                        });
+                    if !self.callable_name_is_user_bound(name) {
+                        if let Some(message) = Self::removed_builtin_message(name) {
+                            return Err(TypeError {
+                                message: message.into(),
+                                span: func.span(),
+                            });
+                        }
                     }
                     if name == "print" {
                         for argument in args {
@@ -7559,9 +7601,7 @@ impl TypeChecker {
                     let receiver_type = self.type_of_expr(value)?;
                     if attr == "replace"
                         && matches!(&**value, Expr::Ident { name, .. } if self.env.classes.contains_key(name))
-                        && !args
-                            .first()
-                            .is_some_and(|argument| argument.name.is_none())
+                        && !args.first().is_some_and(|argument| argument.name.is_none())
                     {
                         return Err(TypeError {
                             message: "replace() requires an instance argument".into(),
@@ -7728,10 +7768,11 @@ impl TypeChecker {
                         // count of explicit arguments alone.
                         if !self.env.overloaded_functions.contains(name)
                             && !args.iter().any(|argument| {
-                            argument.is_spread
-                                || argument.is_dict_spread
-                                || argument.is_gather_spread
-                        }) {
+                                argument.is_spread
+                                    || argument.is_dict_spread
+                                    || argument.is_gather_spread
+                            })
+                        {
                             let accepts_gather_bundle = matches!(
                                 &ft,
                                 Type::Function { params, .. }
@@ -7961,57 +8002,57 @@ impl TypeChecker {
                         if generic_params.is_empty() {
                             None
                         } else {
-                        let mut substitutions = HashMap::new();
-                        let generic_names = generic_params
-                            .iter()
-                            .map(|generic| generic.name.clone())
-                            .collect::<HashSet<_>>();
-                        let parameter_names = self.env.function_param_names.get(name);
-                        let mut positional_index = 0usize;
-                        for argument in args {
-                            let index = argument
-                                .name
-                                .as_ref()
-                                .and_then(|argument_name| {
-                                    parameter_names.and_then(|names| {
-                                        names.iter().position(|parameter_name| {
-                                            parameter_name == argument_name
+                            let mut substitutions = HashMap::new();
+                            let generic_names = generic_params
+                                .iter()
+                                .map(|generic| generic.name.clone())
+                                .collect::<HashSet<_>>();
+                            let parameter_names = self.env.function_param_names.get(name);
+                            let mut positional_index = 0usize;
+                            for argument in args {
+                                let index = argument
+                                    .name
+                                    .as_ref()
+                                    .and_then(|argument_name| {
+                                        parameter_names.and_then(|names| {
+                                            names.iter().position(|parameter_name| {
+                                                parameter_name == argument_name
+                                            })
                                         })
                                     })
-                                })
-                                .unwrap_or_else(|| {
-                                    let index = positional_index;
-                                    positional_index += 1;
-                                    index
-                                });
-                            let Some(parameter) = params.get(index) else {
-                                continue;
-                            };
-                            let argument_type = self.type_of_expr(&argument.value)?;
-                            if !infer_type_arguments(
-                                parameter,
-                                &argument_type,
-                                &generic_names,
-                                &mut substitutions,
-                            ) {
-                                return Err(TypeError {
+                                    .unwrap_or_else(|| {
+                                        let index = positional_index;
+                                        positional_index += 1;
+                                        index
+                                    });
+                                let Some(parameter) = params.get(index) else {
+                                    continue;
+                                };
+                                let argument_type = self.type_of_expr(&argument.value)?;
+                                if !infer_type_arguments(
+                                    parameter,
+                                    &argument_type,
+                                    &generic_names,
+                                    &mut substitutions,
+                                ) {
+                                    return Err(TypeError {
                                     message: format!(
                                         "arguments to generic function '{}' infer conflicting type arguments",
                                         name
                                     ),
                                     span: argument.value.span(),
                                 });
+                                }
                             }
-                        }
-                        for generic in generic_params {
-                            if let Some(argument_type) = substitutions.get(&generic.name) {
-                                if let Some(bound) = generic
-                                    .bound
-                                    .as_ref()
-                                    .and_then(|bound| self.resolve_type_expr(bound).ok())
-                                {
-                                    if !argument_type.is_subtype_of(&bound, &self.env) {
-                                        return Err(TypeError {
+                            for generic in generic_params {
+                                if let Some(argument_type) = substitutions.get(&generic.name) {
+                                    if let Some(bound) = generic
+                                        .bound
+                                        .as_ref()
+                                        .and_then(|bound| self.resolve_type_expr(bound).ok())
+                                    {
+                                        if !argument_type.is_subtype_of(&bound, &self.env) {
+                                            return Err(TypeError {
                                             message: format!(
                                                 "type argument for '{}' does not satisfy bound on '{}'",
                                                 name, generic.name
@@ -8021,11 +8062,11 @@ impl TypeChecker {
                                                 .map(|argument| argument.value.span())
                                                 .unwrap_or_default(),
                                         });
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Some(substitute_type(return_type, &substitutions))
+                            Some(substitute_type(return_type, &substitutions))
                         }
                     } else {
                         None
@@ -8262,7 +8303,8 @@ impl TypeChecker {
                                     .get(name)
                                     .cloned()
                                     .unwrap_or_default();
-                                if let Some((required, maximum)) = self.env.function_arity.get(name) {
+                                if let Some((required, maximum)) = self.env.function_arity.get(name)
+                                {
                                     let supplied = args
                                         .iter()
                                         .filter(|argument| !matches!(argument.value, Expr::Skip(_)))
@@ -8301,9 +8343,10 @@ impl TypeChecker {
                                 for argument in args {
                                     let index = if let Some(argument_name) = &argument.name {
                                         saw_named = true;
-                                        let index = parameter_names
-                                            .iter()
-                                            .position(|parameter_name| parameter_name == argument_name);
+                                        let index =
+                                            parameter_names.iter().position(|parameter_name| {
+                                                parameter_name == argument_name
+                                            });
                                         if index.is_none() && !accepts_gather_bundle {
                                             return Err(TypeError {
                                                 message: format!(
@@ -8343,23 +8386,28 @@ impl TypeChecker {
                                     } else {
                                         if saw_named {
                                             return Err(TypeError {
-                                                message: "positional argument follows named argument".into(),
+                                                message:
+                                                    "positional argument follows named argument"
+                                                        .into(),
                                                 span: argument.value.span(),
                                             });
                                         }
                                         let index = positional_index;
                                         positional_index += 1;
-                                        if parameter_names
-                                            .get(index)
-                                            .is_some_and(|parameter_name| {
+                                        if parameter_names.get(index).is_some_and(
+                                            |parameter_name| {
                                                 self.env
                                                     .function_keyword_only
                                                     .get(name)
-                                                    .is_some_and(|only| only.contains(parameter_name))
-                                            })
-                                        {
+                                                    .is_some_and(|only| {
+                                                        only.contains(parameter_name)
+                                                    })
+                                            },
+                                        ) {
                                             return Err(TypeError {
-                                                message: "keyword-only argument passed positionally".into(),
+                                                message:
+                                                    "keyword-only argument passed positionally"
+                                                        .into(),
                                                 span: argument.value.span(),
                                             });
                                         }
@@ -9103,9 +9151,9 @@ impl TypeChecker {
                 let mut sub = self.clone();
                 if let Pattern::Ident(name, _) = target {
                     if name != "_" {
-                    sub.env
-                        .variables
-                        .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                        sub.env
+                            .variables
+                            .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
                     }
                 }
                 if let Some(condition) = condition {
@@ -9149,9 +9197,9 @@ impl TypeChecker {
                 let mut sub = self.clone();
                 if let Pattern::Ident(name, _) = target {
                     if name != "_" {
-                    sub.env
-                        .variables
-                        .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                        sub.env
+                            .variables
+                            .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
                     }
                 }
                 if let Some(condition) = condition {
@@ -9196,9 +9244,9 @@ impl TypeChecker {
                 let mut sub = self.clone();
                 if let Pattern::Ident(name, _) = target {
                     if name != "_" {
-                    sub.env
-                        .variables
-                        .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
+                        sub.env
+                            .variables
+                            .insert(name.clone(), (elem_t, MutabilityView::ReadOnly));
                     }
                 }
                 if let Some(condition) = condition {
@@ -10491,8 +10539,13 @@ fn types_may_overlap(left: &Type, right: &Type, env: &TypeEnvironment) -> bool {
     }
     if matches!(
         (left, right),
-        (Type::Int | Type::Float | Type::Bool | Type::Str | Type::None, Type::Trait { .. })
-            | (Type::Trait { .. }, Type::Int | Type::Float | Type::Bool | Type::Str | Type::None)
+        (
+            Type::Int | Type::Float | Type::Bool | Type::Str | Type::None,
+            Type::Trait { .. }
+        ) | (
+            Type::Trait { .. },
+            Type::Int | Type::Float | Type::Bool | Type::Str | Type::None
+        )
     ) {
         return true;
     }
@@ -10611,12 +10664,16 @@ class Child(Reusable, Base1, Base2):
         let module = parse("class Base:\n    final def save(self) -> int\n").unwrap();
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
-        assert!(err.message.contains("final method 'Base.save' must have a body"));
+        assert!(err
+            .message
+            .contains("final method 'Base.save' must have a body"));
 
         let module = parse("class Base:\n    final classmethod make(cls) -> int\n").unwrap();
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
-        assert!(err.message.contains("final method 'Base.make' must have a body"));
+        assert!(err
+            .message
+            .contains("final method 'Base.make' must have a body"));
     }
 
     #[test]
@@ -10627,7 +10684,9 @@ class Child(Reusable, Base1, Base2):
         .unwrap();
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
-        assert!(err.message.contains("unimplemented abstract member 'required'"));
+        assert!(err
+            .message
+            .contains("unimplemented abstract member 'required'"));
 
         let module = parse(
             "class Base:\n    def required(self) -> int\n\nclass Child(Base):\n    override def required(self) -> int:\n        return 1\n\nvalue = Child()\n",
@@ -10641,9 +10700,10 @@ class Child(Reusable, Base1, Base2):
 
     #[test]
     fn test_final_obligation_fields_require_final_fields() {
-        let module =
-            parse("trait Named:\n    final name: str\n\nclass Person(Named):\n    final name: str\n")
-                .unwrap();
+        let module = parse(
+            "trait Named:\n    final name: str\n\nclass Person(Named):\n    final name: str\n",
+        )
+        .unwrap();
         let mut checker = TypeChecker::new();
         checker
             .check_module(&module)
@@ -10990,8 +11050,8 @@ class Child(Base):
             .message
             .contains("needs an annotation or an expected function type"));
 
-        let annotated_assignment = parse("f: (int) -> int = def(x): x * 3\nresult = f(4)\n")
-            .unwrap();
+        let annotated_assignment =
+            parse("f: (int) -> int = def(x): x * 3\nresult = f(4)\n").unwrap();
         TypeChecker::new()
             .check_module(&annotated_assignment)
             .expect("annotation should supply anonymous parameter type");
@@ -11039,10 +11099,8 @@ class Child(Base):
 
     #[test]
     fn list_repetition_preserves_element_type() {
-        let module = parse(
-            "items: list[str] = [\"x\"] * 3\nmore: list[str] = 2 * [\"y\"]\n",
-        )
-        .unwrap();
+        let module =
+            parse("items: list[str] = [\"x\"] * 3\nmore: list[str] = 2 * [\"y\"]\n").unwrap();
         TypeChecker::new()
             .check_module(&module)
             .expect("list repetition should preserve the list element type");
@@ -11054,9 +11112,10 @@ class Child(Base):
 
     #[test]
     fn cell_constructor_preserves_value_type() {
-        let module =
-            parse("counter = Cell(0)\ncounter.value += 1\nlabel = Cell(\"x\")\nlabel.value = \"y\"\n")
-                .unwrap();
+        let module = parse(
+            "counter = Cell(0)\ncounter.value += 1\nlabel = Cell(\"x\")\nlabel.value = \"y\"\n",
+        )
+        .unwrap();
         TypeChecker::new()
             .check_module(&module)
             .expect("Cell[T].value should have type T");
@@ -11064,6 +11123,17 @@ class Child(Base):
         let module = parse("label = Cell(\"x\")\nlabel.value = 1\n").unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("cannot assign type"));
+    }
+
+    #[test]
+    fn nested_functions_shadow_removed_builtin_names() {
+        let module = parse(
+            "def make_counter() -> () -> int:\n    count = Cell(0)\n\n    def next() -> int:\n        count.value += 1\n        return count.value\n\n    return next\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("local function named next should shadow removed builtin next");
     }
 
     #[test]
@@ -11439,7 +11509,9 @@ from_text: Bytes = bytes("A")
         let error = checker
             .check_module(&bad_memoryview)
             .expect_err("memoryview() should reject strings");
-        assert!(error.message.contains("memoryview() argument must be a buffer"));
+        assert!(error
+            .message
+            .contains("memoryview() argument must be a buffer"));
 
         let mut checker = TypeChecker::new();
         let bad_list = parse("bad = bytearray([\"x\"])\n").unwrap();
@@ -12082,9 +12154,10 @@ def reject(value: not int) -> none:
             .check_module(&bad_record_value)
             .unwrap_err();
         assert!(error.message.contains("record field 'name' expects"));
-        let missing_record_field =
-            parse("type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths\"}\n")
-                .unwrap();
+        let missing_record_field = parse(
+            "type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths\"}\n",
+        )
+        .unwrap();
         let mut missing_record_field_checker = TypeChecker::new();
         let error = missing_record_field_checker
             .check_module(&missing_record_field)
@@ -12102,7 +12175,9 @@ def reject(value: not int) -> none:
             parse("type Movie = {\"name\": str, \"year\": int, ...}\nmovie: Movie = {\"name\": \"Paths\", \"year\": 1957, \"director\": \"Kubrick\"}\n")
                 .unwrap();
         let mut open_record_field_checker = TypeChecker::new();
-        open_record_field_checker.check_module(&open_record_field).unwrap();
+        open_record_field_checker
+            .check_module(&open_record_field)
+            .unwrap();
         assert!(matches!(
             open_record_field_checker.env.variables.get("movie"),
             Some((Type::Record { is_open: true, .. }, _))
@@ -12944,7 +13019,10 @@ def reject(value: not int) -> none:
             )
             .expect("str.chars should be iterable, indexable, and support membership");
         let error = TypeChecker::new()
-            .check_module(&parse("text = \"abc\"\nchars: ~Sequence[str] = text.chars\nbad = 1 in chars\n").unwrap())
+            .check_module(
+                &parse("text = \"abc\"\nchars: ~Sequence[str] = text.chars\nbad = 1 in chars\n")
+                    .unwrap(),
+            )
             .unwrap_err();
         assert!(error.message.contains("membership value"));
         let error = TypeChecker::new()
@@ -13225,10 +13303,7 @@ def reject(value: not int) -> none:
                 "bad: SourceLocation = VarName.from_assignment()\n",
                 "type mismatch",
             ),
-            (
-                "bad: VarName = SourceLocation.caller()\n",
-                "type mismatch",
-            ),
+            ("bad: VarName = SourceLocation.caller()\n", "type mismatch"),
         ] {
             let error = TypeChecker::new()
                 .check_module(&parse(source).unwrap())
@@ -13308,7 +13383,10 @@ def reject(value: not int) -> none:
                 "def f(x: str) -> str:\n    return x\nletters = map(f, \"abc\")\n",
                 "iterable argument must be iterable",
             ),
-            ("pairs = zip(\"ab\", [1, 2])\n", "arguments must be iterable"),
+            (
+                "pairs = zip(\"ab\", [1, 2])\n",
+                "arguments must be iterable",
+            ),
             ("letters = reversed(\"abc\")\n", "not reversible"),
         ] {
             let error = TypeChecker::new()
@@ -13490,7 +13568,10 @@ def reject(value: not int) -> none:
             ("value = tuple([1, 2])\n", "tuple is not supported"),
             ("value = property\n", "getter/setter"),
             ("value = staticmethod\n", "staticmethod is not supported"),
-            ("value = NotImplemented\n", "NotImplemented is not supported"),
+            (
+                "value = NotImplemented\n",
+                "NotImplemented is not supported",
+            ),
             ("value = isinstance(1, int)\n", "value is Type"),
             ("value = issubclass(int, object)\n", "declaration-kind"),
             ("value = frozenset([1, 2])\n", "immutable set literal"),
@@ -13506,7 +13587,10 @@ def reject(value: not int) -> none:
                 "comprehension",
             ),
             ("value = globals()\n", "locals"),
-            ("value = compile(\"1\", \"<x>\", \"eval\")\n", "compile() is not a bare builtin"),
+            (
+                "value = compile(\"1\", \"<x>\", \"eval\")\n",
+                "compile() is not a bare builtin",
+            ),
             (
                 "class P:\n    x: int\np = P(1)\ndelattr(p, \"x\")\n",
                 "declared fields are fixed",
@@ -13782,8 +13866,8 @@ def reject(value: not int) -> none:
             Some((Type::Int, _))
         ));
 
-        let value = parse("def value():\n    temp = 40 + 2\n    return temp\nresult = value()\n")
-            .unwrap();
+        let value =
+            parse("def value():\n    temp = 40 + 2\n    return temp\nresult = value()\n").unwrap();
         let mut checker = TypeChecker::new();
         checker.check_module(&value).unwrap();
         assert!(matches!(
@@ -13810,7 +13894,9 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         let error = TypeChecker::new().check_module(&module).unwrap_err();
-        assert!(error.message.contains("must be the function's final parameter"));
+        assert!(error
+            .message
+            .contains("must be the function's final parameter"));
     }
 
     #[test]
@@ -13820,7 +13906,9 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         let error = TypeChecker::new().check_module(&module).unwrap_err();
-        assert!(error.message.contains("must be the method's final parameter"));
+        assert!(error
+            .message
+            .contains("must be the method's final parameter"));
     }
 
     #[test]
@@ -13837,7 +13925,6 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         assert!(TypeChecker::new().check_module(&gather).is_ok());
-
     }
 
     #[test]
@@ -13867,10 +13954,9 @@ def reject(value: not int) -> none:
 
     #[test]
     fn named_calls_reject_duplicate_and_late_positional_arguments() {
-        let duplicate = parse(
-            "def f(value: int) -> int:\n    return value\nresult = f(value=1, value=2)\n",
-        )
-        .unwrap();
+        let duplicate =
+            parse("def f(value: int) -> int:\n    return value\nresult = f(value=1, value=2)\n")
+                .unwrap();
         let error = TypeChecker::new().check_module(&duplicate).unwrap_err();
         assert!(error.message.contains("passed more than once"));
 
@@ -13905,32 +13991,30 @@ def reject(value: not int) -> none:
             .unwrap_err();
         assert!(error.message.contains("positional argument follows named"));
 
-        let positional_only = parse(
-            "def f(value: int, /) -> int:\n    return value\nresult = f(value=1)\n",
-        )
-        .unwrap();
-        let error = TypeChecker::new().check_module(&positional_only).unwrap_err();
+        let positional_only =
+            parse("def f(value: int, /) -> int:\n    return value\nresult = f(value=1)\n").unwrap();
+        let error = TypeChecker::new()
+            .check_module(&positional_only)
+            .unwrap_err();
         assert!(error.message.contains("positional-only argument"));
 
-        let keyword_only = parse(
-            "def f(*, value: int) -> int:\n    return value\nresult = f(1)\n",
-        )
-        .unwrap();
+        let keyword_only =
+            parse("def f(*, value: int) -> int:\n    return value\nresult = f(1)\n").unwrap();
         let error = TypeChecker::new().check_module(&keyword_only).unwrap_err();
         assert!(error.message.contains("keyword-only argument"));
 
-        let too_many = parse(
-            "def f(value: int) -> int:\n    return value\nresult = f(1, 2)\n",
-        )
-        .unwrap();
+        let too_many =
+            parse("def f(value: int) -> int:\n    return value\nresult = f(1, 2)\n").unwrap();
         let error = TypeChecker::new().check_module(&too_many).unwrap_err();
         assert!(error.message.contains("accepts at most"));
 
-        let too_few = parse(
-            "def f(left: int, right: int) -> int:\n    return left + right\nresult = f(1)\n",
-        )
-        .unwrap();
+        let too_few =
+            parse("def f(left: int, right: int) -> int:\n    return left + right\nresult = f(1)\n")
+                .unwrap();
         let error = TypeChecker::new().check_module(&too_few).unwrap_err();
-        assert!(error.message.contains("requires at least") || error.message.contains("required argument"));
+        assert!(
+            error.message.contains("requires at least")
+                || error.message.contains("required argument")
+        );
     }
 }

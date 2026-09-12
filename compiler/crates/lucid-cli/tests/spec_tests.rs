@@ -98,7 +98,11 @@ if Flag(true):
     pass
 "#;
     let (chk, _evl) = run_lucid(truthy);
-    assert!(chk.is_ok(), "__bool__ should satisfy condition: {:?}", chk.err());
+    assert!(
+        chk.is_ok(),
+        "__bool__ should satisfy condition: {:?}",
+        chk.err()
+    );
 
     let len_only = "class SizedOnly:\n    def __len__(self) -> int:\n        return 1\nif SizedOnly():\n    pass\n";
     let (chk, _evl) = run_lucid(len_only);
@@ -162,7 +166,7 @@ fn test_names_destructuring_and_cell() {
     let src = r#"
 (a, b) = [10, 20]
 cell = Cell(a)
-cell_val = cell
+cell_val = cell.value
 "#;
     let val = eval_ok(src);
     assert_eq!(val, Value::Int(10));
@@ -855,16 +859,8 @@ fn test_native_declaration_only_import_cycle() {
     let a_path = temp_dir.join("a.lucid");
     let b_path = temp_dir.join("b.lucid");
     let output_path = temp_dir.join("a_bin");
-    fs::write(
-        &a_path,
-        "from .b import B\nclass A:\n    pass\n",
-    )
-    .unwrap();
-    fs::write(
-        &b_path,
-        "from .a import A\nclass B:\n    pass\n",
-    )
-    .unwrap();
+    fs::write(&a_path, "from .b import B\nclass A:\n    pass\n").unwrap();
+    fs::write(&b_path, "from .a import A\nclass B:\n    pass\n").unwrap();
     let status = Command::new(env!("CARGO_BIN_EXE_lucid"))
         .args([
             "build",

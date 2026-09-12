@@ -1641,21 +1641,22 @@ impl Interpreter {
                     Ok(Value::BigInt(result))
                 }
                 (Value::BigInt(base), Value::BigInt(exp))
-                    if exp.sign() != num_bigint::Sign::Minus => {
-                        let mut power = base.clone();
-                        let mut exponent = exp.clone();
-                        let mut result = BigInt::one();
-                        while !exponent.is_zero() {
-                            if (&exponent & BigInt::one()) == BigInt::one() {
-                                result *= &power;
-                            }
-                            exponent >>= 1;
-                            if !exponent.is_zero() {
-                                power = &power * &power;
-                            }
+                    if exp.sign() != num_bigint::Sign::Minus =>
+                {
+                    let mut power = base.clone();
+                    let mut exponent = exp.clone();
+                    let mut result = BigInt::one();
+                    while !exponent.is_zero() {
+                        if (&exponent & BigInt::one()) == BigInt::one() {
+                            result *= &power;
                         }
-                        Ok(Value::BigInt(result))
+                        exponent >>= 1;
+                        if !exponent.is_zero() {
+                            power = &power * &power;
+                        }
                     }
+                    Ok(Value::BigInt(result))
+                }
                 (Value::BigInt(base), Value::BigInt(exp)) => Ok(Value::Float(
                     bigint_to_float(base).powf(bigint_to_float(exp)),
                 )),
@@ -2138,11 +2139,13 @@ impl Interpreter {
 
         // Cell(val)
         let cell_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
-            if let Some(first) = args.first() {
-                Ok(first.clone())
-            } else {
-                Ok(Value::None)
-            }
+            let mut fields = HashMap::new();
+            fields.insert("value".into(), args.first().cloned().unwrap_or(Value::None));
+            Ok(Value::Object {
+                class_name: "Cell".into(),
+                fields: Rc::new(RefCell::new(fields)),
+                is_frozen: Rc::new(RefCell::new(false)),
+            })
         });
         self.env.borrow_mut().set(
             "Cell".to_string(),
@@ -3495,79 +3498,85 @@ impl Interpreter {
 
         // Immutable byte conversion. Mutable bytearray/memoryview values
         // still use integer-list storage, but Bytes has its own runtime tag.
-        let bytes_fn = Rc::new(|args: &[Value], interp: &mut Interpreter| {
-            if args.len() != 1 {
-                return Err(RuntimeError {
-                    message: "bytes() takes exactly one argument".into(),
-                    span: Span::default(),
-                });
-            }
-            match &args[0] {
-                Value::Bytes(bytes) => Ok(Value::Bytes(bytes.clone())),
-                Value::Str(s) => Ok(Value::Bytes(s.bytes().collect())),
-                Value::List(items) => {
-                    let mut out = Vec::with_capacity(items.borrow().len());
-                    for item in items.borrow().iter() {
-                        out.push(byte_from_value(item, "bytes() list")?);
-                    }
-                    Ok(Value::Bytes(out))
+        let bytes_fn =
+            Rc::new(|args: &[Value], interp: &mut Interpreter| {
+                if args.len() != 1 {
+                    return Err(RuntimeError {
+                        message: "bytes() takes exactly one argument".into(),
+                        span: Span::default(),
+                    });
                 }
-                Value::MemoryView {
-                    data,
-                    start,
-                    len,
-                    stride,
-                    ..
-                } => {
-                    let items = memoryview_items(data, *start, *len, *stride);
-                    let mut out = Vec::with_capacity(items.len());
-                    for item in &items {
-                        out.push(byte_from_value(item, "bytes() memoryview")?);
-                    }
-                    Ok(Value::Bytes(out))
-                }
-                Value::Object { fields, .. } => {
-                    let method = fields.borrow().get("__buffer__").cloned().ok_or_else(|| {
-                        RuntimeError {
-                            message: "bytes() cannot convert object".into(),
-                            span: Span::default(),
+                match &args[0] {
+                    Value::Bytes(bytes) => Ok(Value::Bytes(bytes.clone())),
+                    Value::Str(s) => Ok(Value::Bytes(s.bytes().collect())),
+                    Value::List(items) => {
+                        let mut out = Vec::with_capacity(items.borrow().len());
+                        for item in items.borrow().iter() {
+                            out.push(byte_from_value(item, "bytes() list")?);
                         }
-                    })?;
-                    match interp.invoke_value(method, vec![(None, args[0].clone())], Span::default())? {
-                        Value::Bytes(bytes) => Ok(Value::Bytes(bytes)),
-                        Value::List(items) => {
-                            let mut out = Vec::with_capacity(items.borrow().len());
-                            for item in items.borrow().iter() {
-                                out.push(byte_from_value(item, "bytes() buffer")?);
+                        Ok(Value::Bytes(out))
+                    }
+                    Value::MemoryView {
+                        data,
+                        start,
+                        len,
+                        stride,
+                        ..
+                    } => {
+                        let items = memoryview_items(data, *start, *len, *stride);
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in &items {
+                            out.push(byte_from_value(item, "bytes() memoryview")?);
+                        }
+                        Ok(Value::Bytes(out))
+                    }
+                    Value::Object { fields, .. } => {
+                        let method =
+                            fields.borrow().get("__buffer__").cloned().ok_or_else(|| {
+                                RuntimeError {
+                                    message: "bytes() cannot convert object".into(),
+                                    span: Span::default(),
+                                }
+                            })?;
+                        match interp.invoke_value(
+                            method,
+                            vec![(None, args[0].clone())],
+                            Span::default(),
+                        )? {
+                            Value::Bytes(bytes) => Ok(Value::Bytes(bytes)),
+                            Value::List(items) => {
+                                let mut out = Vec::with_capacity(items.borrow().len());
+                                for item in items.borrow().iter() {
+                                    out.push(byte_from_value(item, "bytes() buffer")?);
+                                }
+                                Ok(Value::Bytes(out))
                             }
-                            Ok(Value::Bytes(out))
-                        }
-                        Value::MemoryView {
-                            data,
-                            start,
-                            len,
-                            stride,
-                            ..
-                        } => {
-                            let items = memoryview_items(&data, start, len, stride);
-                            let mut out = Vec::with_capacity(items.len());
-                            for item in &items {
-                                out.push(byte_from_value(item, "bytes() buffer")?);
+                            Value::MemoryView {
+                                data,
+                                start,
+                                len,
+                                stride,
+                                ..
+                            } => {
+                                let items = memoryview_items(&data, start, len, stride);
+                                let mut out = Vec::with_capacity(items.len());
+                                for item in &items {
+                                    out.push(byte_from_value(item, "bytes() buffer")?);
+                                }
+                                Ok(Value::Bytes(out))
                             }
-                            Ok(Value::Bytes(out))
+                            other => Err(RuntimeError {
+                                message: format!("__buffer__ returned {}", other.type_name()),
+                                span: Span::default(),
+                            }),
                         }
-                        other => Err(RuntimeError {
-                            message: format!("__buffer__ returned {}", other.type_name()),
-                            span: Span::default(),
-                        }),
                     }
+                    other => Err(RuntimeError {
+                        message: format!("bytes() cannot convert {}", other.type_name()),
+                        span: Span::default(),
+                    }),
                 }
-                other => Err(RuntimeError {
-                    message: format!("bytes() cannot convert {}", other.type_name()),
-                    span: Span::default(),
-                }),
-            }
-        });
+            });
         self.env.borrow_mut().set(
             "bytes".into(),
             Value::BuiltinFunction {
@@ -3603,21 +3612,34 @@ impl Interpreter {
                     ..
                 } => memoryview_items(data, *start, *len, *stride)
                     .iter()
-                    .map(|item| byte_from_value(item, "bytearray()").map(|byte| Value::Int(byte as i64)))
+                    .map(|item| {
+                        byte_from_value(item, "bytearray()").map(|byte| Value::Int(byte as i64))
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
                 Value::Object { fields, .. } => {
-                    let method = fields.borrow().get("__buffer__").cloned().ok_or_else(|| {
-                        RuntimeError {
-                            message: "bytearray() cannot convert object".into(),
-                            span: Span::default(),
+                    let method =
+                        fields
+                            .borrow()
+                            .get("__buffer__")
+                            .cloned()
+                            .ok_or_else(|| RuntimeError {
+                                message: "bytearray() cannot convert object".into(),
+                                span: Span::default(),
+                            })?;
+                    match interp.invoke_value(
+                        method,
+                        vec![(None, args[0].clone())],
+                        Span::default(),
+                    )? {
+                        Value::Bytes(bytes) => {
+                            bytes.iter().map(|b| Value::Int(*b as i64)).collect()
                         }
-                    })?;
-                    match interp.invoke_value(method, vec![(None, args[0].clone())], Span::default())? {
-                        Value::Bytes(bytes) => bytes.iter().map(|b| Value::Int(*b as i64)).collect(),
                         Value::List(items) => {
                             let mut bytes = Vec::with_capacity(items.borrow().len());
                             for item in items.borrow().iter() {
-                                bytes.push(Value::Int(byte_from_value(item, "bytearray() buffer")? as i64));
+                                bytes.push(Value::Int(
+                                    byte_from_value(item, "bytearray() buffer")? as i64,
+                                ));
                             }
                             bytes
                         }
@@ -3658,68 +3680,74 @@ impl Interpreter {
                 func: bytearray_fn,
             },
         );
-        let memoryview_fn = Rc::new(|args: &[Value], interp: &mut Interpreter| {
-            if args.len() != 1 {
-                return Err(RuntimeError {
-                    message: "memoryview() takes exactly 1 argument".into(),
-                    span: Span::default(),
-                });
-            }
-            match &args[0] {
-                Value::MemoryView { .. } => Ok(args[0].clone()),
-                Value::List(items) => Ok(Value::MemoryView {
-                    data: Rc::clone(items),
-                    start: 0,
-                    len: items.borrow().len() as i64,
-                    stride: 1,
-                    read_only: false,
-                }),
-                Value::Bytes(bytes) => Ok(Value::MemoryView {
-                    data: Rc::new(RefCell::new(
-                        bytes.iter().map(|byte| Value::Int(*byte as i64)).collect(),
-                    )),
-                    start: 0,
-                    len: bytes.len() as i64,
-                    stride: 1,
-                    read_only: true,
-                }),
-                Value::Object { fields, .. } => {
-                    let method = fields.borrow().get("__buffer__").cloned().ok_or_else(|| {
-                        RuntimeError {
-                            message: "memoryview() cannot convert object".into(),
-                            span: Span::default(),
-                        }
-                    })?;
-                    match interp.invoke_value(method, vec![(None, args[0].clone())], Span::default())? {
-                        buffer @ Value::MemoryView { .. } => Ok(buffer),
-                        Value::List(items) => Ok(Value::MemoryView {
-                            data: Rc::clone(&items),
-                            start: 0,
-                            len: items.borrow().len() as i64,
-                            stride: 1,
-                            read_only: false,
-                        }),
-                        Value::Bytes(bytes) => Ok(Value::MemoryView {
-                            data: Rc::new(RefCell::new(
-                                bytes.iter().map(|byte| Value::Int(*byte as i64)).collect(),
-                            )),
-                            start: 0,
-                            len: bytes.len() as i64,
-                            stride: 1,
-                            read_only: true,
-                        }),
-                        other => Err(RuntimeError {
-                            message: format!("__buffer__ returned {}", other.type_name()),
-                            span: Span::default(),
-                        }),
-                    }
+        let memoryview_fn =
+            Rc::new(|args: &[Value], interp: &mut Interpreter| {
+                if args.len() != 1 {
+                    return Err(RuntimeError {
+                        message: "memoryview() takes exactly 1 argument".into(),
+                        span: Span::default(),
+                    });
                 }
-                other => Err(RuntimeError {
-                    message: format!("memoryview() cannot convert {}", other.type_name()),
-                    span: Span::default(),
-                }),
-            }
-        });
+                match &args[0] {
+                    Value::MemoryView { .. } => Ok(args[0].clone()),
+                    Value::List(items) => Ok(Value::MemoryView {
+                        data: Rc::clone(items),
+                        start: 0,
+                        len: items.borrow().len() as i64,
+                        stride: 1,
+                        read_only: false,
+                    }),
+                    Value::Bytes(bytes) => Ok(Value::MemoryView {
+                        data: Rc::new(RefCell::new(
+                            bytes.iter().map(|byte| Value::Int(*byte as i64)).collect(),
+                        )),
+                        start: 0,
+                        len: bytes.len() as i64,
+                        stride: 1,
+                        read_only: true,
+                    }),
+                    Value::Object { fields, .. } => {
+                        let method =
+                            fields.borrow().get("__buffer__").cloned().ok_or_else(|| {
+                                RuntimeError {
+                                    message: "memoryview() cannot convert object".into(),
+                                    span: Span::default(),
+                                }
+                            })?;
+                        match interp.invoke_value(
+                            method,
+                            vec![(None, args[0].clone())],
+                            Span::default(),
+                        )? {
+                            buffer @ Value::MemoryView { .. } => Ok(buffer),
+                            Value::List(items) => Ok(Value::MemoryView {
+                                data: Rc::clone(&items),
+                                start: 0,
+                                len: items.borrow().len() as i64,
+                                stride: 1,
+                                read_only: false,
+                            }),
+                            Value::Bytes(bytes) => Ok(Value::MemoryView {
+                                data: Rc::new(RefCell::new(
+                                    bytes.iter().map(|byte| Value::Int(*byte as i64)).collect(),
+                                )),
+                                start: 0,
+                                len: bytes.len() as i64,
+                                stride: 1,
+                                read_only: true,
+                            }),
+                            other => Err(RuntimeError {
+                                message: format!("__buffer__ returned {}", other.type_name()),
+                                span: Span::default(),
+                            }),
+                        }
+                    }
+                    other => Err(RuntimeError {
+                        message: format!("memoryview() cannot convert {}", other.type_name()),
+                        span: Span::default(),
+                    }),
+                }
+            });
         self.env.borrow_mut().set(
             "memoryview".into(),
             Value::BuiltinFunction {
@@ -4787,7 +4815,10 @@ impl Interpreter {
         if let Some(cached) = self.module_cache.get(&canon) {
             if self.module_loading.contains(&canon) && !declaration_only_module(&canon) {
                 return Err(RuntimeError {
-                    message: format!("cyclic module initialization involving '{}'", canon.display()),
+                    message: format!(
+                        "cyclic module initialization involving '{}'",
+                        canon.display()
+                    ),
                     span,
                 });
             }
@@ -4868,7 +4899,8 @@ impl Interpreter {
         for (name, entries) in sub_interp.dispatch.methods {
             let builtin_count = builtin_dispatch_counts.get(&name).copied().unwrap_or(0);
             for entry in entries.into_iter().skip(builtin_count) {
-                self.dispatch.register(name.clone(), entry.param_types, entry.func);
+                self.dispatch
+                    .register(name.clone(), entry.param_types, entry.func);
             }
         }
         self.module_cache = sub_interp.module_cache;
@@ -4920,8 +4952,7 @@ impl Interpreter {
                     _ => {}
                 }
             }
-            self.module_cache
-                .insert(path.clone(), Rc::clone(&self.env));
+            self.module_cache.insert(path.clone(), Rc::clone(&self.env));
             self.module_loading.insert(path.clone());
         }
         let result = (|| {
@@ -5206,9 +5237,11 @@ impl Interpreter {
                         ),
                         span: *span,
                     })?;
-                if !class.bases.iter().any(|base| {
-                    matches!(base, TypeExpr::Named { name, .. } if name == trait_name)
-                }) {
+                if !class
+                    .bases
+                    .iter()
+                    .any(|base| matches!(base, TypeExpr::Named { name, .. } if name == trait_name))
+                {
                     class.bases.push(TypeExpr::Named {
                         name: trait_name.to_string(),
                         args: Vec::new(),
@@ -6398,7 +6431,10 @@ impl Interpreter {
             }
             Value::Set(values) => Ok(values.borrow().clone()),
             Value::Dict(values) => Ok(values.borrow().keys().cloned().map(Value::Str).collect()),
-            Value::Bytes(bytes) => Ok(bytes.into_iter().map(|byte| Value::Int(byte as i64)).collect()),
+            Value::Bytes(bytes) => Ok(bytes
+                .into_iter()
+                .map(|byte| Value::Int(byte as i64))
+                .collect()),
             Value::Range { start, stop, step } => Ok(materialize_range(start, stop, step)),
             Value::Object {
                 class_name,
@@ -6533,37 +6569,45 @@ impl Interpreter {
                                     | Value::BuiltinFunction { .. }
                                     | Value::Partial { .. }
                             ),
-                            "Sized" => matches!(
-                                lval,
-                                Value::Str(_)
-                                    | Value::Bytes(_)
-                                    | Value::List(_)
-                                    | Value::Set(_)
-                                    | Value::Dict(_)
-                                    | Value::Range { .. }
-                            ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Sized")),
-                            "Container" => matches!(
-                                lval,
-                                Value::Str(_)
-                                    | Value::Bytes(_)
-                                    | Value::List(_)
-                                    | Value::Set(_)
-                                    | Value::Dict(_)
-                                    | Value::Range { .. }
-                            ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Container")),
-                            "Iterable" | "Collection" => matches!(
-                                lval,
-                                Value::List(_)
-                                    | Value::Set(_)
-                                    | Value::Dict(_)
-                                    | Value::Range { .. }
-                            ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, &name)),
+                            "Sized" => {
+                                matches!(
+                                    lval,
+                                    Value::Str(_)
+                                        | Value::Bytes(_)
+                                        | Value::List(_)
+                                        | Value::Set(_)
+                                        | Value::Dict(_)
+                                        | Value::Range { .. }
+                                ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Sized"))
+                            }
+                            "Container" => {
+                                matches!(
+                                    lval,
+                                    Value::Str(_)
+                                        | Value::Bytes(_)
+                                        | Value::List(_)
+                                        | Value::Set(_)
+                                        | Value::Dict(_)
+                                        | Value::Range { .. }
+                                ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Container"))
+                            }
+                            "Iterable" | "Collection" => {
+                                matches!(
+                                    lval,
+                                    Value::List(_)
+                                        | Value::Set(_)
+                                        | Value::Dict(_)
+                                        | Value::Range { .. }
+                                ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, &name))
+                            }
                             "Sequence" | "Reversible" => {
                                 matches!(lval, Value::List(_) | Value::Range { .. })
                                     || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, &name))
                             }
-                            "Set" => matches!(lval, Value::Set(_))
-                                || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Set")),
+                            "Set" => {
+                                matches!(lval, Value::Set(_))
+                                    || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Set"))
+                            }
                             "Buffer" => match &lval {
                                 Value::Bytes(_) | Value::MemoryView { .. } | Value::List(_) => true,
                                 Value::Object { fields, .. } => {
@@ -6571,8 +6615,10 @@ impl Interpreter {
                                 }
                                 _ => false,
                             },
-                            "Shape" => matches!(lval, Value::List(_))
-                                || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Shape")),
+                            "Shape" => {
+                                matches!(lval, Value::List(_))
+                                    || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Shape"))
+                            }
                             "Eq" | "Ord" | "Hashable" => match &lval {
                                 Value::None => false,
                                 Value::Object { class_name, .. } => {
@@ -8227,8 +8273,10 @@ impl Interpreter {
                             stride,
                             read_only,
                         } => {
-                            let mut slice_start = start_val.unwrap_or(if step_val > 0 { 0 } else { len - 1 });
-                            let mut slice_stop = stop_val.unwrap_or(if step_val > 0 { len } else { -1 });
+                            let mut slice_start =
+                                start_val.unwrap_or(if step_val > 0 { 0 } else { len - 1 });
+                            let mut slice_stop =
+                                stop_val.unwrap_or(if step_val > 0 { len } else { -1 });
                             if slice_start < 0 {
                                 slice_start += len;
                             }
@@ -8244,7 +8292,11 @@ impl Interpreter {
                             }
                             let mut count = 0;
                             let mut cur = slice_start;
-                            while if step_val > 0 { cur < slice_stop } else { cur > slice_stop } {
+                            while if step_val > 0 {
+                                cur < slice_stop
+                            } else {
+                                cur > slice_stop
+                            } {
                                 count += 1;
                                 let Some(next) = cur.checked_add(step_val) else {
                                     return Err(RuntimeError {
@@ -8847,9 +8899,11 @@ impl Interpreter {
             {
                 return false;
             }
-            if class.bases.iter().any(|base| {
-                matches!(base, TypeExpr::Named { name, .. } if name == capability)
-            }) {
+            if class
+                .bases
+                .iter()
+                .any(|base| matches!(base, TypeExpr::Named { name, .. } if name == capability))
+            {
                 return true;
             }
             current = class.bases.iter().find_map(|base| {
@@ -10904,7 +10958,10 @@ s = sum(r)
         let module = parse("result = pow(100000000000000000000, 2, 1000)\n").unwrap();
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
-        assert_eq!(interp.env.borrow().get("result"), Some(Value::BigInt(BigInt::from(0))));
+        assert_eq!(
+            interp.env.borrow().get("result"),
+            Some(Value::BigInt(BigInt::from(0)))
+        );
     }
 
     #[test]
@@ -10912,7 +10969,10 @@ s = sum(r)
         let module = parse("result = 1 ** 9223372036854775808\n").unwrap();
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
-        assert_eq!(interp.env.borrow().get("result"), Some(Value::BigInt(BigInt::from(1))));
+        assert_eq!(
+            interp.env.borrow().get("result"),
+            Some(Value::BigInt(BigInt::from(1)))
+        );
     }
 
     #[test]
@@ -11743,18 +11803,16 @@ abs_val = math.abs(-42)
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
-            root.join("child.lucid"),
-            "class Box:\n    value: int\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("child.lucid"), "class Box:\n    value: int\n").unwrap();
         let entry = root.join("entry.lucid");
         let source = "import .child\nitem = child.Box(7)\n";
         std::fs::write(&entry, source).unwrap();
         let module = parse(source).unwrap();
         let mut interp = Interpreter::default();
         interp.set_current_file(Some(entry));
-        interp.eval_module(&module).expect("imported class should construct");
+        interp
+            .eval_module(&module)
+            .expect("imported class should construct");
         assert!(matches!(
             interp.env.borrow().get("item"),
             Some(Value::Object { class_name, .. }) if class_name == "Box"
@@ -11781,18 +11839,24 @@ abs_val = math.abs(-42)
         let module = parse(source).unwrap();
         let mut interp = Interpreter::default();
         interp.set_current_file(Some(entry));
-        interp.eval_module(&module).expect("dispatch module should load");
-        assert_eq!(interp.call_dispatch("choose", &[Value::Int(2), Value::Int(3)]), Ok(Value::Int(1)));
-        assert_eq!(interp.call_dispatch("choose", &[Value::Str("a".into()), Value::Str("b".into())]), Ok(Value::Int(2)));
+        interp
+            .eval_module(&module)
+            .expect("dispatch module should load");
+        assert_eq!(
+            interp.call_dispatch("choose", &[Value::Int(2), Value::Int(3)]),
+            Ok(Value::Int(1))
+        );
+        assert_eq!(
+            interp.call_dispatch("choose", &[Value::Str("a".into()), Value::Str("b".into())]),
+            Ok(Value::Int(2))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn declaration_only_module_cycles_are_cached_before_execution() {
-        let root = std::env::temp_dir().join(format!(
-            "lucid_runtime_decl_cycle_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("lucid_runtime_decl_cycle_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let a = root.join("a.lucid");
@@ -11813,10 +11877,8 @@ abs_val = math.abs(-42)
 
     #[test]
     fn value_module_cycles_report_initialization_error() {
-        let root = std::env::temp_dir().join(format!(
-            "lucid_runtime_value_cycle_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("lucid_runtime_value_cycle_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.lucid"), "import .b\nvalue = 1\n").unwrap();
@@ -11959,7 +12021,10 @@ readonly_tail_first = readonly[1:][0]
         assert_eq!(interp.env.borrow().get("second"), Some(Value::Int(105)));
         assert_eq!(interp.env.borrow().get("mutated"), Some(Value::Int(73)));
         assert_eq!(interp.env.borrow().get("readonly_len"), Some(Value::Int(2)));
-        assert_eq!(interp.env.borrow().get("readonly_first"), Some(Value::Int(0)));
+        assert_eq!(
+            interp.env.borrow().get("readonly_first"),
+            Some(Value::Int(0))
+        );
         assert_eq!(
             interp.env.borrow().get("readonly_tail_first"),
             Some(Value::Int(65))
@@ -12014,7 +12079,10 @@ storage_second = packet.storage[1]
             interp.env.borrow().get("str_is_buffer"),
             Some(Value::Bool(false))
         );
-        assert_eq!(interp.env.borrow().get("copied_first"), Some(Value::Int(72)));
+        assert_eq!(
+            interp.env.borrow().get("copied_first"),
+            Some(Value::Int(72))
+        );
         assert_eq!(
             interp.env.borrow().get("mutable_second"),
             Some(Value::Int(73))

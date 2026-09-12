@@ -358,13 +358,9 @@ pub fn resolved_declarations<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<[Res
                 (Some(name), DeclKind::Interface, false)
             }
             lucid_syntax::Stmt::TraitDef { name, .. } => (Some(name), DeclKind::Trait, false),
-            lucid_syntax::Stmt::TypeAlias { name, .. } => {
-                (Some(name), DeclKind::TypeAlias, false)
-            }
+            lucid_syntax::Stmt::TypeAlias { name, .. } => (Some(name), DeclKind::TypeAlias, false),
             lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef {
-                name,
-                is_dispatch,
-                ..
+                name, is_dispatch, ..
             }) => (Some(name), DeclKind::Function, *is_dispatch),
             lucid_syntax::Stmt::VarDef {
                 pattern: lucid_syntax::Pattern::Ident(name, _),
@@ -1317,6 +1313,40 @@ pub fn typed_module<'db>(
             }
         }
         body_checker.env.current_return_type = Some(body_return_type);
+        for statement in &function.body {
+            if let lucid_syntax::Stmt::Function(nested) = statement {
+                let params = nested
+                    .params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .type_annotation
+                            .as_ref()
+                            .map(|annotation| body_checker.resolve_type_expr(annotation))
+                            .transpose()
+                            .map(|ty| ty.unwrap_or(lucid_checker::Type::TypeVar("Any".into())))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| Arc::<str>::from(error.message))?;
+                let return_type = nested
+                    .return_type
+                    .as_ref()
+                    .map(|annotation| body_checker.resolve_type_expr(annotation))
+                    .transpose()
+                    .map_err(|error| Arc::<str>::from(error.message))?
+                    .unwrap_or(lucid_checker::Type::TypeVar("Any".into()));
+                body_checker.env.variables.insert(
+                    nested.name.clone(),
+                    (
+                        lucid_checker::Type::Function {
+                            params,
+                            return_type: Box::new(return_type),
+                        },
+                        lucid_syntax::MutabilityView::Immutable,
+                    ),
+                );
+            }
+        }
         // Seed the body checker with local bindings before collecting the
         // expression graph.  The regular module check already validates the
         // body, but this clone must replay statement effects (for example a
@@ -3190,7 +3220,16 @@ pub fn module_order(db: &dyn Db, project: Project) -> Result<Arc<[SourceFile]>, 
             if let Some(target) = resolve_import(db, project, files[index], import.clone())
                 && let Some(&target_index) = indices.get(target)
             {
-                visit(db, project, files, indices, state, order, stack, target_index)?;
+                visit(
+                    db,
+                    project,
+                    files,
+                    indices,
+                    state,
+                    order,
+                    stack,
+                    target_index,
+                )?;
             }
         }
         stack.pop();
@@ -3273,9 +3312,8 @@ pub fn declaration_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Arc<str>]>
     for declaration in declarations.iter() {
         let name = declaration.symbol.name(db);
         if let Some(previous) = seen.get(name.as_str()) {
-            let dispatch_overload = *previous
-                && declaration.kind == DeclKind::Function
-                && declaration.is_dispatch;
+            let dispatch_overload =
+                *previous && declaration.kind == DeclKind::Function && declaration.is_dispatch;
             if dispatch_overload {
                 continue;
             }
@@ -3338,9 +3376,8 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
     for declaration in declarations.iter() {
         let name = declaration.symbol.name(db);
         if let Some(previous) = seen.get(name.as_str()) {
-            let dispatch_overload = *previous
-                && declaration.kind == DeclKind::Function
-                && declaration.is_dispatch;
+            let dispatch_overload =
+                *previous && declaration.kind == DeclKind::Function && declaration.is_dispatch;
             if dispatch_overload {
                 continue;
             }
@@ -5074,11 +5111,17 @@ mod tests {
         );
         let declarations = resolved_declarations(&db, file);
         assert_eq!(declarations.len(), 2);
-        assert!(declarations.iter().all(|declaration| declaration.is_dispatch));
+        assert!(
+            declarations
+                .iter()
+                .all(|declaration| declaration.is_dispatch)
+        );
         assert!(declaration_diagnostics(&db, file).is_empty());
-        assert!(file_diagnostics(&db, file)
-            .iter()
-            .all(|diagnostic| diagnostic.code != "E0100"));
+        assert!(
+            file_diagnostics(&db, file)
+                .iter()
+                .all(|diagnostic| diagnostic.code != "E0100")
+        );
     }
 
     #[test]
