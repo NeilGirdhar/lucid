@@ -5459,7 +5459,12 @@ static inline void lucid_print_val(LucidVal v) {
                         .collect::<Vec<_>>()
                         .join(" || ")
                 }
-                _ => "true".to_string(),
+                name if Self::pattern_identifier_binds(name) => "true".to_string(),
+                _ => {
+                    return Err(CodegenError {
+                        message: format!("unsupported identifier pattern '{name}'"),
+                    });
+                }
             },
             Pattern::Literal(value, _) => {
                 let literal = self.emit_expr(&Expr::Literal {
@@ -15713,6 +15718,24 @@ print(" ".join(capitalized))
             error
                 .message
                 .contains("native range patterns require first-class native ranges")
+        );
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_match_rejects_unknown_class_like_identifier_pattern() {
+        let source = "value = 3\nmatch value:\n    case MissingClass:\n        print(1)\n    case _:\n        print(0)\n";
+        let module = parse(source).expect("unknown class-like match pattern source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_unknown_class_like_match_pattern_{}",
+            std::process::id()
+        ));
+        let error = compile_to_native(&module, &output, 0)
+            .expect_err("unknown class-like pattern must not compile as match-all");
+        assert!(
+            error
+                .message
+                .contains("unsupported identifier pattern 'MissingClass'")
         );
         let _ = std::fs::remove_file(output);
     }

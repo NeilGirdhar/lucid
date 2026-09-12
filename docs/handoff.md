@@ -1194,6 +1194,9 @@ diverged:
   no longer binds a local named `range`; the checker and typed-HIR local scans
   follow the same non-binding rule. Native `case range` now fails explicitly
   until native `range(...)` expressions stop lowering directly to lists.
+  Native class-like identifier patterns that are not known classes now fail
+  codegen instead of compiling as unconditional matches; lowercase binding
+  patterns remain the match-all binding form.
   Generic builtin type patterns such as `case list[int]`, `case set[int]`,
   and `case dict[str, int]` now use those value-kind tests instead of falling
   through as native match-all arms for non-container subjects. `range` remains
