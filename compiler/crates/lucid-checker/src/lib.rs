@@ -889,6 +889,14 @@ fn infer_type_arguments(
     substitutions: &mut HashMap<String, Type>,
 ) -> bool {
     match (pattern, actual) {
+        (Type::TypeVar(name), actual) if generic_names.contains(name) => {
+            if let Some(existing) = substitutions.get(name) {
+                existing == actual
+            } else {
+                substitutions.insert(name.clone(), actual.clone());
+                true
+            }
+        }
         (
             Type::Class {
                 name, type_args, ..
@@ -1560,6 +1568,36 @@ impl TypeChecker {
                 },
             );
         }
+        let cell_t = Type::TypeVar("T".to_string());
+        env.classes.insert(
+            "Cell".into(),
+            Type::Class {
+                name: "Cell".into(),
+                type_args: vec![cell_t.clone()],
+                parent: None,
+                traits: Vec::new(),
+                interfaces: Vec::new(),
+                fields: [("value".to_string(), cell_t.clone())].into_iter().collect(),
+                is_sealed: true,
+            },
+        );
+        env.class_members
+            .entry("Cell".into())
+            .or_default()
+            .insert("value".into());
+        env.class_implemented_members
+            .entry("Cell".into())
+            .or_default()
+            .insert("value".into());
+        env.class_type_params
+            .insert("Cell".into(), vec!["T".into()]);
+        env.class_variance
+            .insert("Cell".into(), vec![Variance::Invariant]);
+        env.class_bounds.insert("Cell".into(), vec![None]);
+        env.class_constructor_arity.insert("Cell".into(), 1);
+        env.class_constructor_required.insert("Cell".into(), 1);
+        env.class_field_order
+            .insert("Cell".into(), vec!["value".into()]);
 
         env.variables.insert(
             "print".to_string(),
@@ -1595,11 +1633,29 @@ impl TypeChecker {
             "Cell".to_string(),
             (
                 Type::Function {
-                    params: vec![Type::TypeVar("T".to_string())],
-                    return_type: Box::new(Type::TypeVar("Cell".to_string())),
+                    params: vec![cell_t.clone()],
+                    return_type: Box::new(Type::Class {
+                        name: "Cell".into(),
+                        type_args: vec![cell_t],
+                        parent: None,
+                        traits: Vec::new(),
+                        interfaces: Vec::new(),
+                        fields: HashMap::new(),
+                        is_sealed: true,
+                    }),
                 },
                 MutabilityView::ReadOnly,
             ),
+        );
+        env.function_type_params.insert(
+            "Cell".into(),
+            vec![TypeParam {
+                name: "T".into(),
+                variance: Variance::Invariant,
+                bound: None,
+                is_higher_kinded: false,
+                span: Span::default(),
+            }],
         );
         env.variables.insert(
             "range".to_string(),
@@ -3706,6 +3762,26 @@ impl TypeChecker {
         })
     }
 
+    fn instantiate_class_member_type(
+        &self,
+        class_name: &str,
+        type_args: &[Type],
+        member_type: Type,
+    ) -> Type {
+        let Some(params) = self.env.class_type_params.get(class_name) else {
+            return member_type;
+        };
+        if params.len() != type_args.len() {
+            return member_type;
+        }
+        let substitutions = params
+            .iter()
+            .cloned()
+            .zip(type_args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        substitute_type(&member_type, &substitutions)
+    }
+
     fn class_method_type(&self, class_name: &str, name: &str) -> Option<Type> {
         if let Some(method) = self
             .env
@@ -5012,13 +5088,34 @@ impl TypeChecker {
                                     span: *span,
                                 });
                             }
-                            if let Some(field_type) = self
-                                .class_field_type(class_name, attr)
-                                .or_else(|| self.class_var_type(class_name, attr))
-                            {
-                                if !val_type.is_subtype_of(&field_type, &self.env) {
-                                    return Err(TypeError {
-                                        message: format!(
+                        if let Some(field_type) = self.class_field_type(class_name, attr) {
+                            let field_type = match &obj_type {
+                                Type::Class { type_args, .. } => self
+                                    .instantiate_class_member_type(
+                                        class_name, type_args, field_type,
+                                    ),
+                                Type::View { inner, .. } => match inner.as_ref() {
+                                    Type::Class { type_args, .. } => self
+                                        .instantiate_class_member_type(
+                                            class_name, type_args, field_type,
+                                        ),
+                                    _ => field_type,
+                                },
+                                _ => field_type,
+                            };
+                            if !val_type.is_subtype_of(&field_type, &self.env) {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "cannot assign type {:?} to field '{}' of type {:?}",
+                                        val_type, attr, field_type
+                                    ),
+                                    span: *span,
+                                });
+                            }
+                        } else if let Some(field_type) = self.class_var_type(class_name, attr) {
+                            if !val_type.is_subtype_of(&field_type, &self.env) {
+                                return Err(TypeError {
+                                    message: format!(
                                             "cannot assign type {:?} to field '{}' of type {:?}",
                                             val_type, attr, field_type
                                         ),
@@ -8785,7 +8882,11 @@ impl TypeChecker {
                             span: expr.span(),
                         }),
                     },
-                    Type::Class { ref name, .. } => {
+                    Type::Class {
+                        ref name,
+                        ref type_args,
+                        ..
+                    } => {
                         if matches!(
                             (name.as_str(), attr.as_str()),
                             ("float", "inf" | "nan") | ("int", "inf" | "nan") | ("complex", "nan")
@@ -8854,7 +8955,7 @@ impl TypeChecker {
                         if let Some(getter_type) = self.class_getter_type(name, attr) {
                             Ok(getter_type)
                         } else if let Some(field_type) = self.class_field_type(name, attr) {
-                            Ok(field_type)
+                            Ok(self.instantiate_class_member_type(name, type_args, field_type))
                         } else if let Some(class_var_type) = self.class_var_type(name, attr) {
                             Ok(class_var_type)
                         } else if let Some(method_type) = self.class_method_type(name, attr) {
@@ -10883,6 +10984,20 @@ class Child(Base):
         let module = parse("items = [\"x\"] * \"bad\"\n").unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("unsupported operands"));
+    }
+
+    #[test]
+    fn cell_constructor_preserves_value_type() {
+        let module =
+            parse("counter = Cell(0)\ncounter.value += 1\nlabel = Cell(\"x\")\nlabel.value = \"y\"\n")
+                .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("Cell[T].value should have type T");
+
+        let module = parse("label = Cell(\"x\")\nlabel.value = 1\n").unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("cannot assign type"));
     }
 
     #[test]
