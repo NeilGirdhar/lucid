@@ -4793,11 +4793,10 @@ impl Function {
         fn operand(
             expr: &lucid_syntax::Expr,
             result: ValueId,
-            left_temp: ValueId,
-            right_temp: ValueId,
             bound_aliases: &[&lucid_syntax::Stmt],
             parameter_names: &[String],
             depth: usize,
+            next_value: &mut u32,
         ) -> Option<Vec<Instruction>> {
             if depth > bound_aliases.len() {
                 return None;
@@ -4810,11 +4809,10 @@ impl Function {
                             operand(
                                 value,
                                 result,
-                                left_temp,
-                                right_temp,
                                 bound_aliases,
                                 parameter_names,
                                 depth + 1,
+                                next_value,
                             )
                         } else {
                             Some(vec![Instruction::Param {
@@ -4835,23 +4833,25 @@ impl Function {
                             | lucid_syntax::BinaryOp::Mul
                     ) =>
                     {
+                        let left_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let right_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
                         let mut instructions = operand(
                             left,
                             left_temp,
-                            ValueId(left_temp.0 + 100),
-                            ValueId(left_temp.0 + 101),
                             bound_aliases,
                             parameter_names,
                             depth,
+                            next_value,
                         )?;
                         instructions.extend(operand(
                             right,
                             right_temp,
-                            ValueId(right_temp.0 + 100),
-                            ValueId(right_temp.0 + 101),
                             bound_aliases,
                             parameter_names,
                             depth,
+                            next_value,
                         )?);
                         instructions.push(match op {
                             lucid_syntax::BinaryOp::Add => Instruction::Add {
@@ -4901,23 +4901,24 @@ impl Function {
             Materialized(Vec<Instruction>),
             Induction,
         }
-        let accumulator_operand = |expr: &lucid_syntax::Expr| -> Option<RangeAccumulatorOperand> {
-            match expr {
-                lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
-                    Some(RangeAccumulatorOperand::Induction)
+        let mut next_value = 19;
+        let accumulator_operand =
+            |expr: &lucid_syntax::Expr, next_value: &mut u32| -> Option<RangeAccumulatorOperand> {
+                match expr {
+                    lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
+                        Some(RangeAccumulatorOperand::Induction)
+                    }
+                    _ => operand(
+                        expr,
+                        ValueId(9),
+                        &bound_aliases,
+                        parameter_names,
+                        0,
+                        next_value,
+                    )
+                    .map(RangeAccumulatorOperand::Materialized),
                 }
-                _ => operand(
-                    expr,
-                    ValueId(9),
-                    ValueId(27),
-                    ValueId(28),
-                    &bound_aliases,
-                    parameter_names,
-                    0,
-                )
-                .map(RangeAccumulatorOperand::Materialized),
-            }
-        };
+            };
         let accumulator_update = match &body[0] {
             lucid_syntax::Stmt::AugAssign {
                 target:
@@ -4927,9 +4928,11 @@ impl Function {
                 op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
                 value,
                 ..
-            } if update_name == acc_name => {
-                Some((update_op.clone(), accumulator_operand(value)?, value))
-            }
+            } if update_name == acc_name => Some((
+                update_op.clone(),
+                accumulator_operand(value, &mut next_value)?,
+                value,
+            )),
             lucid_syntax::Stmt::Assignment {
                 target:
                     lucid_syntax::Expr::Ident {
@@ -4946,7 +4949,7 @@ impl Function {
             } => {
                 let ordinary_update = matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
                     .then(|| {
-                        accumulator_operand(right.as_ref())
+                        accumulator_operand(right.as_ref(), &mut next_value)
                             .map(|operand| (operand, right.as_ref()))
                     })
                     .flatten();
@@ -4954,7 +4957,8 @@ impl Function {
                     && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name);
                 let commuted_update = commuted_add
                     .then(|| {
-                        accumulator_operand(left.as_ref()).map(|operand| (operand, left.as_ref()))
+                        accumulator_operand(left.as_ref(), &mut next_value)
+                            .map(|operand| (operand, left.as_ref()))
                     })
                     .flatten();
                 if update_name == acc_name {
@@ -4988,11 +4992,10 @@ impl Function {
                     None => RangeStep::Dynamic(operand(
                         &step_arg.value,
                         ValueId(8),
-                        ValueId(25),
-                        ValueId(26),
                         &bound_aliases,
                         parameter_names,
                         0,
+                        &mut next_value,
                     )?),
                 };
                 (&start.value, &stop.value, Some(&step_arg.value), step)
@@ -5015,29 +5018,26 @@ impl Function {
         let start_instructions = operand(
             start_expr,
             ValueId(1),
-            ValueId(19),
-            ValueId(20),
             &bound_aliases,
             parameter_names,
             0,
+            &mut next_value,
         )?;
         let stop_instructions = operand(
             stop_expr,
             ValueId(0),
-            ValueId(21),
-            ValueId(22),
             &bound_aliases,
             parameter_names,
             0,
+            &mut next_value,
         )?;
         let accumulator_instructions = operand(
             initial_expr,
             ValueId(2),
-            ValueId(23),
-            ValueId(24),
             &bound_aliases,
             parameter_names,
             0,
+            &mut next_value,
         )?;
         let accumulator_operand_value = match accumulator_operand {
             RangeAccumulatorOperand::Materialized(_) => ValueId(9),
@@ -5323,11 +5323,10 @@ impl Function {
         fn operand(
             expr: &lucid_syntax::Expr,
             result: ValueId,
-            left_temp: ValueId,
-            right_temp: ValueId,
             bound_aliases: &[&lucid_syntax::Stmt],
             parameter_names: &[String],
             depth: usize,
+            next_value: &mut u32,
         ) -> Option<Vec<Instruction>> {
             if depth > bound_aliases.len() {
                 return None;
@@ -5340,11 +5339,10 @@ impl Function {
                             operand(
                                 value,
                                 result,
-                                left_temp,
-                                right_temp,
                                 bound_aliases,
                                 parameter_names,
                                 depth + 1,
+                                next_value,
                             )
                         } else {
                             Some(vec![Instruction::Param {
@@ -5365,23 +5363,25 @@ impl Function {
                             | lucid_syntax::BinaryOp::Mul
                     ) =>
                     {
+                        let left_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let right_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
                         let mut instructions = operand(
                             left,
                             left_temp,
-                            ValueId(left_temp.0 + 100),
-                            ValueId(left_temp.0 + 101),
                             bound_aliases,
                             parameter_names,
                             depth,
+                            next_value,
                         )?;
                         instructions.extend(operand(
                             right,
                             right_temp,
-                            ValueId(right_temp.0 + 100),
-                            ValueId(right_temp.0 + 101),
                             bound_aliases,
                             parameter_names,
                             depth,
+                            next_value,
                         )?);
                         instructions.push(match op {
                             lucid_syntax::BinaryOp::Add => Instruction::Add {
@@ -5435,6 +5435,7 @@ impl Function {
             Static(i64),
             Dynamic(Vec<Instruction>),
         }
+        let mut next_value = 15;
         let (start_expr, stop_expr, step_expr, step) = match args.as_slice() {
             [stop] => (&zero, &stop.value, None, RangeStep::Static(1)),
             [start, stop] => (&start.value, &stop.value, None, RangeStep::Static(1)),
@@ -5445,11 +5446,10 @@ impl Function {
                     None => RangeStep::Dynamic(operand(
                         &step_arg.value,
                         ValueId(5),
-                        ValueId(19),
-                        ValueId(20),
                         &bound_aliases,
                         parameter_names,
                         0,
+                        &mut next_value,
                     )?),
                 };
                 (&start.value, &stop.value, Some(&step_arg.value), step)
@@ -5470,20 +5470,18 @@ impl Function {
         let start_instructions = operand(
             start_expr,
             ValueId(1),
-            ValueId(17),
-            ValueId(18),
             &bound_aliases,
             parameter_names,
             0,
+            &mut next_value,
         )?;
         let stop_instructions = operand(
             stop_expr,
             ValueId(0),
-            ValueId(15),
-            ValueId(16),
             &bound_aliases,
             parameter_names,
             0,
+            &mut next_value,
         )?;
         let (comparison_instructions, branch_condition) = match step {
             RangeStep::Static(step) if step > 0 => (
@@ -12017,6 +12015,21 @@ return total
             function.execute_with_args(&[0, 6, -1]),
             Err(ExecuteError::RangeStepZero)
         );
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range((start + 1) + 1, stop + 1, step + 1):
+    total += i
+return total
+"#,
+        )
+        .expect("nested dynamic range expression fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into()],
+        )
+        .expect("nested dynamic range expression should lower");
+        assert_eq!(function.execute_with_args(&[0, 6, 1]), Ok(Some(12)));
 
         let module = lucid_syntax::parse(
             r#"for i in range(n):
