@@ -3115,6 +3115,25 @@ return value
     }
 
     #[test]
+    fn result_abi_executes_local_constant_init_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"value = 1 + 2
+while value > 0:
+    value -= 1
+return value
+"#,
+        )
+        .expect("local constant-init counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &[])
+            .expect("local constant-init counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile local constant-init counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 0);
+    }
+
+    #[test]
     fn result_abi_executes_void_local_bound_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"value = n

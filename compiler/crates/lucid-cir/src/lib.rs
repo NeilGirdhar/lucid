@@ -10221,6 +10221,18 @@ return value
         assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(-2)));
 
         let module = lucid_syntax::parse(
+            r#"value = 1 + 2
+while value > 0:
+    value -= 1
+return value
+"#,
+        )
+        .expect("local constant-init counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &[])
+            .expect("local constant-init counted loop should lower");
+        assert_eq!(function.execute(), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
             r#"tick = step
 value = n
 while value > 0:

@@ -620,8 +620,9 @@ diverged:
   such as `stop = 1 + 1`, with or without a local step alias, as in
   `stop = limit; tick = step; while n > stop`.
   Plain counted
-  loops can seed local induction, bound, and step-alias values together, in any
-  setup order, before lowering the same Phi-backed CFG. The accumulator
+  loops can seed local induction, bound, and step-alias values from parameters
+  or checked constant expressions, in any setup order, before lowering the same
+  Phi-backed CFG. The accumulator
   step can be a signed literal, positional parameter, pre-loop local alias, or the
   current induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
   commuted additive spelling `x = y + x`; the same local alias slot can also
