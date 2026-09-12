@@ -604,7 +604,9 @@ diverged:
   seeds local induction and bound variables, as in `stop = limit; total +=
   value; value -= tick`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
-  and accumulator Phis. Cranelift result-ABI coverage now executes the same
+  and accumulator Phis. Accumulator loops can also keep the induction value as
+  a parameter while seeding both a local bound and local step alias before the
+  loop. Cranelift result-ABI coverage now executes the same
   countdown-sum CFG natively. Plain counted loops and accumulator loops now
   also accept a distinct positional parameter as the comparison bound, such as
   `while n > limit`, with both CIR interpretation and native result-ABI

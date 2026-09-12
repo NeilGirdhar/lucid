@@ -3597,12 +3597,6 @@ impl Function {
                 let acc_index = initializers
                     .iter()
                     .position(|(name, _)| *name == return_name)?;
-                let induction_index = initializers
-                    .iter()
-                    .position(|(name, _)| *name == induction_name)?;
-                if acc_index == induction_index {
-                    return None;
-                }
                 let initializer_statements = [first_statement, second_statement, third_statement];
                 let (acc_name, initial_expr) = initializers[acc_index];
                 match right.as_ref() {
@@ -3615,15 +3609,23 @@ impl Function {
                         let bound_index = initializers
                             .iter()
                             .position(|(name, _)| *name == bound_name)?;
-                        if acc_index == bound_index || induction_index == bound_index {
+                        if acc_index == bound_index {
                             return None;
                         }
+                        let induction_index = initializers
+                            .iter()
+                            .position(|(name, _)| *name == induction_name);
+                        let alias_index = [0usize, 1, 2].into_iter().find(|index| {
+                            *index != acc_index
+                                && *index != bound_index
+                                && induction_index != Some(*index)
+                        });
                         (
                             acc_name,
                             initial_expr,
-                            Some(initializer_statements[induction_index]),
+                            induction_index.map(|index| initializer_statements[index]),
                             Some(initializer_statements[bound_index]),
-                            None,
+                            alias_index.map(|index| initializer_statements[index]),
                             condition,
                             body,
                             if_broken,
@@ -3631,6 +3633,12 @@ impl Function {
                         )
                     }
                     expr if Function::int_literal_expr(expr).is_some() => {
+                        let induction_index = initializers
+                            .iter()
+                            .position(|(name, _)| *name == induction_name)?;
+                        if acc_index == induction_index {
+                            return None;
+                        }
                         let alias_index = [0usize, 1, 2]
                             .into_iter()
                             .find(|index| *index != acc_index && *index != induction_index)?;
@@ -10187,6 +10195,24 @@ return total
             &["n".into(), "limit".into(), "step".into()],
         )
         .expect("local-bound local-induction-step accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(Some(21)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = limit
+tick = step
+while n > stop:
+    total += n
+    n -= tick
+return total
+"#,
+        )
+        .expect("parameter-induction local-bound local-step accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("parameter-induction local-bound local-step accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(Some(21)));
 
         let module = lucid_syntax::parse(
