@@ -489,15 +489,11 @@ impl CCodeGenerator {
         let class = ty.trim_end_matches('*');
         if let Some(owner) = self.method_owner(class, "__bool__") {
             format!("{owner}___bool__(({owner}*)({code}))")
-        } else if let Some(owner) = self.method_owner(class, "__len__") {
-            format!("({owner}___len__(({owner}*)({code})) != 0)")
         } else {
             match ty.as_str() {
-                "const char*" | "char*" => format!("lucid_str_truthy({code})"),
-                "LucidList*" => format!("lucid_list_truthy({code})"),
-                "LucidRange*" => format!("lucid_range_truthy({code})"),
-                "LucidDict*" => format!("lucid_dict_truthy({code})"),
-                "LucidSet*" => format!("lucid_set_truthy({code})"),
+                "int64_t" | "double" | "const char*" | "char*" | "LucidList*" | "LucidRange*"
+                | "LucidDict*" | "LucidSet*" => "lucid_truth_error()".to_string(),
+                "LucidVal" => format!("lucid_strict_bool_val(lucid_wrap({code}))"),
                 _ => format!("lucid_bool_val({code})"),
             }
         }
@@ -505,7 +501,7 @@ impl CCodeGenerator {
 
     /// Emit an expression used as a condition.  Logical operators return one
     /// of their operands in Lucid, so testing the resulting `LucidVal` with
-    /// `lucid_bool_val` would bypass a class's custom `__bool__`/`__len__`.
+    /// `lucid_bool_val` would bypass a class's custom `__bool__`.
     /// Lower them directly to short-circuiting truth tests instead.
     fn emit_condition(&mut self, expr: &Expr) -> Result<String, CodegenError> {
         if let Expr::Binary {
@@ -779,10 +775,8 @@ impl CCodeGenerator {
         let item = self.new_temp();
         let truth = if let Some(owner) = self.method_owner(class, "__bool__") {
             format!("{owner}___bool__(({owner}*)lucid_as_ptr({item}))")
-        } else if let Some(owner) = self.method_owner(class, "__len__") {
-            format!("({owner}___len__(({owner}*)lucid_as_ptr({item})) != 0)")
         } else {
-            format!("lucid_bool_val({item})")
+            format!("lucid_strict_bool_val({item})")
         };
         let condition = if any {
             truth.clone()
@@ -2115,7 +2109,8 @@ static inline bool lucid_object_truthy(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i)
         if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].truthy)
             return lucid_object_tags[i].truthy(ptr);
-    return true;
+    fprintf(stderr, "object does not define truth behavior\n");
+    exit(1);
 }
 
 typedef enum {
@@ -3058,6 +3053,12 @@ static inline bool lucid_as_bool(LucidVal v) {
     if (v.type == LUCID_TYPE_PTR) return lucid_object_truthy(v.ptr);
     return v.type != LUCID_TYPE_NONE;
 }
+static inline bool lucid_strict_bool_val(LucidVal v) {
+    if (v.type == LUCID_TYPE_BOOL) return v.b;
+    if (v.type == LUCID_TYPE_PTR) return lucid_object_truthy(v.ptr);
+    fprintf(stderr, "value does not define truth behavior\n");
+    exit(1);
+}
 static inline const char* lucid_as_str(LucidVal v) {
     if (v.type == LUCID_TYPE_STR || v.type == LUCID_TYPE_DOTTED_PATH) return v.s ? v.s : "";
     if (v.type == LUCID_TYPE_BYTES) return lucid_bytes_text(v);
@@ -3439,10 +3440,14 @@ static inline int64_t _i_def(void* p) { (void)p; return 0; }
 )(x)
 
 static inline bool _b_bool(bool b) { return b; }
+static inline bool lucid_truth_error(void) {
+    fprintf(stderr, "value does not define truth behavior\n");
+    exit(1);
+}
 static inline bool _b_int(int64_t i) { return i != 0; }
 static inline bool _b_float(double f) { return f != 0.0; }
 static inline bool _b_val(LucidVal v) { return lucid_as_bool(v); }
-static inline bool _b_ptr(void* p) { return p != NULL; }
+static inline bool _b_ptr(void* p) { (void)p; return lucid_truth_error(); }
 static inline bool lucid_str_truthy(const char* value) {
     return value != NULL && value[0] != '\0';
 }
@@ -4520,14 +4525,14 @@ static inline LucidVal lucid_next_value(LucidVal value, bool has_default, LucidV
 static inline bool lucid_any(LucidVal value) {
     LucidList* items = lucid_iterable_to_list(value);
     for (int64_t i = 0; i < items->len; ++i)
-        if (lucid_bool_val(items->items[i])) return true;
+        if (lucid_strict_bool_val(items->items[i])) return true;
     return false;
 }
 
 static inline bool lucid_all(LucidVal value) {
     LucidList* items = lucid_iterable_to_list(value);
     for (int64_t i = 0; i < items->len; ++i)
-        if (!lucid_bool_val(items->items[i])) return false;
+        if (!lucid_strict_bool_val(items->items[i])) return false;
     return true;
 }
 
@@ -6180,23 +6185,11 @@ static inline void lucid_print_val(LucidVal v) {
         // Dynamic `Any` values retain class truthiness through the object tag
         // registry. Emit a prototype before the constructor stores the
         // callback; the implementation itself is emitted with the methods.
-        let truthy_owner = self
-            .method_owner(name, "__bool__")
-            .filter(|owner| {
-                self.known_method_return_types
-                    .get(&(owner.clone(), "__bool__".to_string()))
-                    .is_some_and(|ty| ty == "bool")
-            })
-            .map(|owner| (owner, true))
-            .or_else(|| {
-                self.method_owner(name, "__len__")
-                    .filter(|owner| {
-                        self.known_method_return_types
-                            .get(&(owner.clone(), "__len__".to_string()))
-                            .is_some_and(|ty| ty == "int64_t")
-                    })
-                    .map(|owner| (owner, false))
-            });
+        let truthy_owner = self.method_owner(name, "__bool__").filter(|owner| {
+            self.known_method_return_types
+                .get(&(owner.clone(), "__bool__".to_string()))
+                .is_some_and(|ty| ty == "bool")
+        });
         let hash_owner = self.method_owner(name, "__hash__").filter(|owner| {
             self.known_method_return_types
                 .get(&(owner.clone(), "__hash__".to_string()))
@@ -6319,17 +6312,8 @@ static inline void lucid_print_val(LucidVal v) {
                 .cloned()?;
             (return_type != "void").then_some((owner, return_type))
         });
-        if let Some((owner, is_bool)) = &truthy_owner {
-            let ret_ty = if *is_bool { "bool" } else { "int64_t" };
-            self.emit_line(&format!(
-                "{ret_ty} {owner}___{}({owner}* self);",
-                if *is_bool { "bool__" } else { "len__" }
-            ));
-            if !*is_bool {
-                self.emit_line(&format!(
-                    "static bool {name}_truthy(void* raw) {{ return {owner}___len__(({owner}*)raw) != 0; }}"
-                ));
-            }
+        if let Some(owner) = &truthy_owner {
+            self.emit_line(&format!("bool {owner}___bool__({owner}* self);"));
         }
         if let Some(owner) = &hash_owner {
             self.emit_line(&format!("int64_t {owner}___hash__({owner}* self);"));
@@ -6533,13 +6517,7 @@ static inline void lucid_print_val(LucidVal v) {
         self.emit_line(&format!("{name}* self = ({name}*)malloc(sizeof({name}));"));
         let truthy_callback = truthy_owner
             .as_ref()
-            .map(|(owner, is_bool)| {
-                if *is_bool {
-                    format!("(LucidObjectTruthy){owner}___bool__")
-                } else {
-                    format!("{name}_truthy")
-                }
-            })
+            .map(|owner| format!("(LucidObjectTruthy){owner}___bool__"))
             .unwrap_or_else(|| "NULL".to_string());
         let hash_callback = hash_owner
             .as_ref()
@@ -16828,7 +16806,7 @@ match value as subject:
     }
 
     #[test]
-    fn native_predicates_iterate_dict_keys() {
+    fn native_predicates_reject_dict_key_truthiness() {
         let source = "d = {\"a\": 1, \"b\": 2}\nprint(any(d))\nprint(all(d))\n";
         let module = parse(source).expect("dict predicate source should parse");
         let output = std::env::temp_dir().join(format!(
@@ -16839,8 +16817,12 @@ match value as subject:
         compile_to_native(&module, &output, 0).expect("dict predicates should compile");
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
+        assert!(!run.status.success(), "native program should fail: {run:?}");
+        assert!(
+            String::from_utf8_lossy(&run.stderr).contains("does not define truth behavior"),
+            "stderr was: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
     }
 
     #[test]
@@ -16997,7 +16979,7 @@ match value as subject:
 
     #[test]
     fn native_any_drains_user_iterator() {
-        let source = "import iteration\nclass Counter:\n    current: int\n    def __iter__(self):\n        return self\n    def next(self):\n        if self.current >= 2:\n            return iteration.done\n        self.current = self.current + 1\n        return self.current - 1\nprint(any(Counter(0)))\nprint(all(Counter(0)))\n";
+        let source = "import iteration\nclass Counter:\n    current: int\n    def __iter__(self):\n        return self\n    def next(self):\n        if self.current >= 2:\n            return iteration.done\n        self.current = self.current + 1\n        return self.current == 2\nprint(any(Counter(0)))\nprint(all(Counter(0)))\n";
         let module = parse(source).expect("predicate iterator source should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_any_iterator_{}", std::process::id()));
@@ -17194,7 +17176,7 @@ print(c.x, c.y)
 
     #[test]
     fn native_union_return_uses_tagged_value_abi() {
-        let source = "def maybe(flag: int) -> int | none:\n    if flag:\n        return 1\n    return none\nprint(maybe(1))\n";
+        let source = "def maybe(flag: bool) -> int | none:\n    if flag:\n        return 1\n    return none\nprint(maybe(true))\n";
         let module = parse(source).expect("union source should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_union_{}", std::process::id()));
@@ -17392,7 +17374,7 @@ print(c.x, c.y)
 
     #[test]
     fn native_and_or_preserve_selected_operand() {
-        let source = "print(0 and 5)\nprint(2 and 5)\nprint(0 or 5)\nprint(2 or 5)\ndef identity(value: Any) -> Any:\n    return value\nzero = identity(0)\nfive = identity(5)\nprint(zero and five)\nprint(zero or five)\n";
+        let source = "print(false and true)\nprint(true and true)\nprint(false or true)\nprint(true or false)\ndef identity(value: Any) -> Any:\n    return value\nleft = identity(false)\nright = identity(true)\nprint(left and right)\nprint(left or right)\n";
         let module = parse(source).expect("logical source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_logical_values_{}",
@@ -17403,12 +17385,15 @@ print(c.x, c.y)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n5\n5\n2\n0\n5\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "false\ntrue\ntrue\ntrue\nfalse\ntrue\n"
+        );
     }
 
     #[test]
     fn native_logical_conditions_preserve_custom_truthiness() {
-        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nclass Sized:\n    items: list[int]\n    def __len__(self) -> int:\n        return len(self.items)\nf: Flag = Flag(false)\nif f and true:\n    print(1)\nelse:\n    print(0)\nif f or false:\n    print(1)\nelse:\n    print(0)\ndef identity(value: Any) -> Any:\n    return value\ndynamic = identity(Flag(false))\nif dynamic:\n    print(1)\nelse:\n    print(0)\ndynamic_sized = identity(Sized([]))\nif dynamic_sized:\n    print(1)\nelse:\n    print(0)\n";
+        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nf: Flag = Flag(false)\nif f and true:\n    print(1)\nelse:\n    print(0)\nif f or false:\n    print(1)\nelse:\n    print(0)\ndef identity(value: Any) -> Any:\n    return value\ndynamic = identity(Flag(false))\nif dynamic:\n    print(1)\nelse:\n    print(0)\n";
         let module = parse(source).expect("logical condition source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_logical_truthiness_{}",
@@ -17419,12 +17404,12 @@ print(c.x, c.y)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n0\n0\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n0\n");
     }
 
     #[test]
-    fn native_tagged_truthiness_handles_empty_collections_and_numeric_zero() {
-        let source = "if 0:\n    print(1)\nelse:\n    print(0)\nif complex(0, 0):\n    print(1)\nelse:\n    print(0)\nif {}:\n    print(1)\nelse:\n    print(0)\nif set():\n    print(1)\nelse:\n    print(0)\nif 100000000000000000000 - 100000000000000000000:\n    print(1)\nelse:\n    print(0)\n";
+    fn native_tagged_truthiness_rejects_builtin_fallbacks() {
+        let source = "if 0:\n    print(1)\nelse:\n    print(0)\n";
         let module = parse(source).expect("tagged truthiness source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_tagged_truthiness_{}",
@@ -17436,8 +17421,12 @@ print(c.x, c.y)
             .output()
             .expect("compiled tagged truthiness should run");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "native program failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n0\n0\n0\n0\n");
+        assert!(!run.status.success(), "native program should fail: {run:?}");
+        assert!(
+            String::from_utf8_lossy(&run.stderr).contains("does not define truth behavior"),
+            "stderr was: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
     }
 
     #[test]
@@ -17842,7 +17831,7 @@ print(b.value)
 
     #[test]
     fn native_bool_builtin_uses_custom_truthiness() {
-        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nf: Flag = Flag(false)\nprint(bool(f))\nprint(bool(3))\n";
+        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nf: Flag = Flag(false)\nprint(bool(f))\n";
         let module = parse(source).expect("bool source should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_bool_builtin_{}", std::process::id()));
@@ -17851,7 +17840,26 @@ print(b.value)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "false\ntrue\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "false\n");
+    }
+
+    #[test]
+    fn native_bool_builtin_rejects_implicit_numeric_truthiness() {
+        let module = parse("print(bool(3))\n").expect("bool source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_bool_builtin_reject_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("bool source should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "native program should fail: {run:?}");
+        assert!(
+            String::from_utf8_lossy(&run.stderr).contains("does not define truth behavior"),
+            "stderr was: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
     }
 
     #[test]
@@ -18202,7 +18210,7 @@ print(missing is not list)
 
     #[test]
     fn native_range_type_check_uses_range_tag() {
-        let source = "value = range(3)\nprint(value is range)\nprint(value is not list)\nprint(len(value))\nprint(list(value)[2])\nprint(bool(range(5, 5)))\n";
+        let source = "value = range(3)\nprint(value is range)\nprint(value is not list)\nprint(len(value))\nprint(list(value)[2])\n";
         let module = parse(source).expect("range type-check source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_range_type_check_{}",
@@ -18213,10 +18221,7 @@ print(missing is not list)
         let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {run:?}");
-        assert_eq!(
-            String::from_utf8_lossy(&run.stdout),
-            "true\ntrue\n3\n2\nfalse\n"
-        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n3\n2\n");
     }
 
     #[test]
@@ -19335,10 +19340,6 @@ print(found)
         let source = r#"
 for x in range(3, 0, -1):
     print(x)
-if range(5, 5):
-    print(1)
-else:
-    print(0)
 "#;
         let module = parse(source).expect("descending range should parse");
         let output = std::env::temp_dir().join(format!(
@@ -19352,7 +19353,7 @@ else:
             .expect("compiled descending range should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n2\n1\n0\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n2\n1\n");
     }
 
     #[test]
@@ -19546,11 +19547,10 @@ print(zip("ab".chars, {8, 9})[1][0])
     #[test]
     fn native_any_and_all_follow_truthiness() {
         let source = r#"
-print(any([false, 0, 3]))
-print(all([true, 1, 2]))
-print(all([true, 0, 2]))
+print(any([false, true]))
+print(all([true, true]))
+print(all([true, false]))
 print(any("".chars))
-print(all({1, 2}))
 "#;
         let module = parse(source).expect("any/all source should parse");
         let output =
@@ -19564,7 +19564,28 @@ print(all({1, 2}))
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "true\ntrue\nfalse\nfalse\ntrue\n"
+            "true\ntrue\nfalse\nfalse\n"
+        );
+    }
+
+    #[test]
+    fn native_any_and_all_reject_non_bool_elements() {
+        let module = parse("print(any([0]))\n").expect("any/all source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_any_all_reject_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("any/all source should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled any/all program should run");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "native program should fail: {run:?}");
+        assert!(
+            String::from_utf8_lossy(&run.stderr).contains("does not define truth behavior"),
+            "stderr was: {}",
+            String::from_utf8_lossy(&run.stderr)
         );
     }
 
