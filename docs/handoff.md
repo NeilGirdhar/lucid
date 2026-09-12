@@ -249,6 +249,10 @@ uv run zensical build --clean --strict
 No issues found
 ```
 
+The specification-snippet harness now exits nonzero unless every positive
+snippet parses and type-checks and every expected-failure snippet is rejected;
+partial percentages are no longer treated as a successful validation run.
+
 `git diff --check` is clean. The implementation is backed up on the active
 development branch. A repository-wide `cargo fmt --check` currently reports
 large formatting differences in the existing codebase, so do not apply a

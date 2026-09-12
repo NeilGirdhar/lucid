@@ -934,3 +934,54 @@ fn test_native_declaration_only_import_cycle() {
     assert!(run.status.success(), "declaration cycle binary failed");
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_spec_command_exits_nonzero_when_positive_snippet_fails() {
+    use std::fs;
+    use std::process::Command;
+    let temp_dir = std::env::temp_dir().join(format!(
+        "lucid_spec_exit_failure_{}_{}",
+        std::process::id(),
+        "typecheck"
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(
+        temp_dir.join("broken.md"),
+        "```python\nvalue: int = \"wrong\"\n```\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["test-spec", temp_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "test-spec should fail when a positive snippet does not typecheck"
+    );
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_spec_command_exits_zero_when_all_snippets_validate() {
+    use std::fs;
+    use std::process::Command;
+    let temp_dir = std::env::temp_dir().join(format!(
+        "lucid_spec_exit_success_{}_{}",
+        std::process::id(),
+        "typecheck"
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(temp_dir.join("ok.md"), "```python\nvalue: int = 42\n```\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["test-spec", temp_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "test-spec should pass when every positive snippet validates: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let _ = fs::remove_dir_all(&temp_dir);
+}

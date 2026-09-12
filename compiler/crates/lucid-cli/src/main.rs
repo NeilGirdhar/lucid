@@ -146,7 +146,9 @@ fn main() {
                 .find(|a| !a.starts_with('-'))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("docs"));
-            test_spec_docs(&docs_path, verbose);
+            if !test_spec_docs(&docs_path, verbose) {
+                exit(1);
+            }
         }
         "--help" | "-h" | "help" => {
             print_help();
@@ -1057,7 +1059,7 @@ fn print_repl_help() {
     println!("  - Expressions are evaluated and their result printed immediately.");
 }
 
-fn test_spec_docs(docs_dir: &Path, verbose: bool) {
+fn test_spec_docs(docs_dir: &Path, verbose: bool) -> bool {
     println!(
         "Testing Lucid specification code snippets from: {}",
         docs_dir.display()
@@ -1191,6 +1193,9 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
             "  Expected failures accepted: {expected_failures_matched} / {expected_failure_blocks}"
         );
     }
+    positive_parsed_blocks == positive_blocks
+        && typechecked_blocks == positive_parsed_blocks
+        && expected_failures_matched == expected_failure_blocks
 }
 
 fn spec_block_typechecks_with_context_or_stubs(previous_blocks: &[String], block: &str) -> bool {
