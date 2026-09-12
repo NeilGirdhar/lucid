@@ -6603,6 +6603,10 @@ static inline void lucid_print_val(LucidVal v) {
                                 .cloned()
                                 .unwrap_or_else(|| "LucidVal".into());
                             let source_index = index + field_index;
+                            self.emit_line(&format!(
+                                "if ((!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\"))) && (!args || args->len <= {source_index})) {{ fprintf(stderr, \"missing gathered argument: {field}\\n\"); exit(1); }}",
+                                c_escape_string(field)
+                            ));
                             let source = format!(
                                 "(kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\")) ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args && args->len > {source_index} ? args->items[{source_index}] : lucid_none()))",
                                 c_escape_string(field),
@@ -15868,6 +15872,24 @@ print(z is complex)
         let _ = fs::remove_file(&output);
         assert!(!run.status.success(), "unknown gather keyword unexpectedly succeeded");
         assert!(String::from_utf8_lossy(&run.stderr).contains("unknown keyword"));
+    }
+
+    #[test]
+    fn native_named_class_gather_adapter_rejects_missing_field() {
+        let source = "class Options:\n    retries: int\n    label: str\ndef render(***rest: Options) -> int:\n    return rest.retries\nfs = [render]\nprint(fs[0](3))\n";
+        let module = parse(source).expect("missing gather field source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_named_class_gather_missing_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("missing gather should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run missing named gather");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "missing gather field unexpectedly succeeded");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("missing gathered argument"));
     }
 
     #[test]
