@@ -2516,6 +2516,65 @@ pub fn lower_function_body(
         && elif_branches
             .iter()
             .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && matches!(else_branch.as_slice(), [lucid_syntax::Stmt::Pass(_)])
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+    {
+        let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(condition, branch)| match branch.as_slice() {
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] => Some((condition, value)),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Err(Arc::from("unsupported dynamic pass elif chain"));
+        };
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        if function.is_dispatch {
+            return Err(Arc::from(
+                "dispatch function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+            condition,
+            then_value,
+            &elif_values,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic pass elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
         && let [
             lucid_syntax::Stmt::Return {
                 value: Some(then_value),
@@ -4748,6 +4807,18 @@ mod tests {
             .expect("pass branch should lower through the mixed result ABI");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
         assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-pass-elif.lucid",
+            "def maybe(value: int):\n    if value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    elif value < 0:\n        return -1\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("pass fallback after dynamic elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
 
         let file = db.add_file(
             "temporary.lucid",
