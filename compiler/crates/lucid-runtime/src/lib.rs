@@ -1035,6 +1035,7 @@ impl Interpreter {
         for member in body {
             let (name, span) = match member {
                 ClassMember::Method(method) | ClassMember::ClassMethod(method) => {
+                    Self::reject_removed_decorators(method)?;
                     (&method.name, method.span)
                 }
                 ClassMember::Factory(factory) => (&factory.name, factory.span),
@@ -1060,6 +1061,7 @@ impl Interpreter {
         for member in body {
             let (name, span) = match member {
                 TraitMember::Method(method) | TraitMember::ClassMethod(method) => {
+                    Self::reject_removed_decorators(method)?;
                     (&method.name, method.span)
                 }
                 TraitMember::Getter(getter) => (&getter.name, getter.span),
@@ -1095,6 +1097,36 @@ impl Interpreter {
                     span,
                 });
             }
+        }
+        Ok(())
+    }
+
+    fn reject_removed_decorators(function: &FunctionDef) -> Result<(), RuntimeError> {
+        for decorator in &function.decorators {
+            let (name, span) = match decorator {
+                Expr::Ident { name, span } => (name.as_str(), *span),
+                Expr::Attribute { value, attr, span } if matches!(&**value, Expr::Ident { name, .. } if name == "typing") => {
+                    (attr.as_str(), *span)
+                }
+                _ => continue,
+            };
+            let message = match name {
+                "staticmethod" => {
+                    "staticmethod is not supported; use a module-level function instead"
+                }
+                "classmethod" => {
+                    "classmethod is not supported as a decorator; use the classmethod member modifier instead"
+                }
+                "property" => "property is not supported; use getter or setter syntax instead",
+                "overload" => {
+                    "overload is not supported as a decorator; use dispatch definitions instead"
+                }
+                _ => continue,
+            };
+            return Err(RuntimeError {
+                message: message.into(),
+                span,
+            });
         }
         Ok(())
     }
@@ -5593,6 +5625,7 @@ impl Interpreter {
                 Ok(Value::None)
             }
             Stmt::Function(func) => {
+                Self::reject_removed_decorators(func)?;
                 let mut func_val = Value::Function {
                     name: func.name.clone(),
                     params: func.params.clone(),
@@ -13891,6 +13924,43 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             let error = interp
                 .eval_module(&module)
                 .expect_err("unsupported member must fail at runtime");
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_rejects_removed_python_decorators() {
+        for (source, expected) in [
+            (
+                "class Tools:\n    @staticmethod\n    def answer() -> int:\n        return 42\n",
+                "staticmethod is not supported",
+            ),
+            (
+                "class Circle:\n    @property\n    def area(self) -> int:\n        return 1\n",
+                "property is not supported",
+            ),
+            (
+                "@staticmethod\ndef answer() -> int:\n    return 42\n",
+                "staticmethod is not supported",
+            ),
+            (
+                "@overload\ndef parse(value: str) -> int:\n    return 1\n",
+                "overload is not supported",
+            ),
+            (
+                "@typing.overload\ndef parse(value: str) -> int:\n    return 1\n",
+                "overload is not supported",
+            ),
+        ] {
+            let module = parse(source).expect("removed decorator source should parse");
+            let mut interp = Interpreter::default();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("removed Python decorator must fail at runtime");
             assert!(
                 error.message.contains(expected),
                 "{source}: {}",

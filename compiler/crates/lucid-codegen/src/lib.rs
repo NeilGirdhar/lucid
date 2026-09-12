@@ -309,6 +309,7 @@ impl CCodeGenerator {
         for member in body {
             match member {
                 ClassMember::Method(method) | ClassMember::ClassMethod(method) => {
+                    Self::reject_removed_decorators(method)?;
                     Self::validate_removed_member(&method.name)?;
                 }
                 ClassMember::Factory(factory) => {
@@ -336,6 +337,7 @@ impl CCodeGenerator {
         for member in body {
             match member {
                 TraitMember::Method(method) | TraitMember::ClassMethod(method) => {
+                    Self::reject_removed_decorators(method)?;
                     Self::validate_removed_member(&method.name)?;
                 }
                 TraitMember::Getter(getter) => {
@@ -371,11 +373,41 @@ impl CCodeGenerator {
         Ok(())
     }
 
+    fn reject_removed_decorators(function: &FunctionDef) -> Result<(), CodegenError> {
+        for decorator in &function.decorators {
+            let name = match decorator {
+                Expr::Ident { name, .. } => name.as_str(),
+                Expr::Attribute { value, attr, .. } if matches!(&**value, Expr::Ident { name, .. } if name == "typing") => {
+                    attr.as_str()
+                }
+                _ => continue,
+            };
+            let message = match name {
+                "staticmethod" => {
+                    "staticmethod is not supported; use a module-level function instead"
+                }
+                "classmethod" => {
+                    "classmethod is not supported as a decorator; use the classmethod member modifier instead"
+                }
+                "property" => "property is not supported; use getter or setter syntax instead",
+                "overload" => {
+                    "overload is not supported as a decorator; use dispatch definitions instead"
+                }
+                _ => continue,
+            };
+            return Err(CodegenError {
+                message: message.into(),
+            });
+        }
+        Ok(())
+    }
+
     fn validate_declared_member_names(stmt: &Stmt) -> Result<(), CodegenError> {
         match Self::unwrap_export(stmt) {
             Stmt::ClassDef { body, .. } => Self::validate_class_member_names(body),
             Stmt::TraitDef { body, .. } => Self::validate_trait_member_names(body),
             Stmt::InterfaceDef { body, .. } => Self::validate_interface_member_names(body),
+            Stmt::Function(function) => Self::reject_removed_decorators(function),
             _ => Ok(()),
         }
     }
@@ -22905,6 +22937,43 @@ print(result[1])
             let _ = fs::remove_file(&output);
             let error = compile_to_native(&module, &output, 0)
                 .expect_err("unsupported member must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn native_rejects_removed_python_decorators() {
+        for (source, expected) in [
+            (
+                "class Tools:\n    @staticmethod\n    def answer() -> int:\n        return 42\n",
+                "staticmethod is not supported",
+            ),
+            (
+                "class Circle:\n    @property\n    def area(self) -> int:\n        return 1\n",
+                "property is not supported",
+            ),
+            (
+                "@staticmethod\ndef answer() -> int:\n    return 42\n",
+                "staticmethod is not supported",
+            ),
+            (
+                "@overload\ndef parse(value: str) -> int:\n    return 1\n",
+                "overload is not supported",
+            ),
+            (
+                "@typing.overload\ndef parse(value: str) -> int:\n    return 1\n",
+                "overload is not supported",
+            ),
+        ] {
+            let module = parse(source).expect("removed decorator source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_native_removed_decorator_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("removed Python decorator must fail native codegen");
             let _ = fs::remove_file(&output);
             assert!(error.message.contains(expected), "{source}: {error}");
         }
