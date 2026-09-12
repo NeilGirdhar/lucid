@@ -6618,6 +6618,22 @@ mod tests {
                 .flat_map(|block| &block.instructions)
                 .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
         );
+
+        let file = db.add_file(
+            "bare-return-after-nested-static-binding.lucid",
+            "def discard(value: int):\n    if true:\n        if true:\n            temporary = value + 1\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("nested static bindings before a bare return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
     }
 
     #[test]

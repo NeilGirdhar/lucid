@@ -475,7 +475,8 @@ diverged:
   conditionals before collecting local bindings.
   Static branch local collection is now recursive for branches whose guards are
   all known, while a dynamic `elif` stops selection instead of falling through
-  to a later `else`.
+  to a later `else`. The same recursive collection feeds bare-return lowering,
+  so void functions keep validated setup expressions before returning no value.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking
