@@ -960,18 +960,11 @@ fn collect_typed_body<'db>(
                 // and the lowering stage would have to recover match order
                 // from syntax again.
                 if arms.len() == 2
-                    && let Some((literal_arm, wildcard_arm)) =
-                        match (&arms[0].pattern, &arms[1].pattern) {
-                            (
-                                lucid_syntax::Pattern::Literal(_, _),
-                                lucid_syntax::Pattern::Wildcard(_),
-                            ) => Some((&arms[0], &arms[1])),
-                            (
-                                lucid_syntax::Pattern::Wildcard(_),
-                                lucid_syntax::Pattern::Literal(_, _),
-                            ) => Some((&arms[1], &arms[0])),
-                            _ => None,
-                        }
+                    && let (
+                        lucid_syntax::Pattern::Literal(_, _),
+                        lucid_syntax::Pattern::Wildcard(_),
+                    ) = (&arms[0].pattern, &arms[1].pattern)
+                    && let (literal_arm, wildcard_arm) = (&arms[0], &arms[1])
                     && let lucid_syntax::Pattern::Literal(literal, _) = &literal_arm.pattern
                     && matches!(
                         literal,
@@ -1930,6 +1923,59 @@ pub fn lower_function_body(
                     .map(Arc::new)
                     .map_err(|_| Arc::from("unsupported void match chain"));
                 }
+            }
+        }
+        if let Some(first_arm) = arms.first()
+            && matches!(first_arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+        {
+            if let Some(value) = match_arm_value(first_arm) {
+                let nodes = function
+                    .body_expressions
+                    .iter()
+                    .map(|node| lucid_cir::TypedExprNode {
+                        id: node.id,
+                        kind: node.kind.clone(),
+                        detail: node.detail.clone(),
+                        children: node.children.to_vec(),
+                        literal: node.literal,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(root) = function
+                    .body_expressions
+                    .iter()
+                    .rev()
+                    .find(|node| node.span == value.span())
+                    && let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                        &nodes,
+                        root.id,
+                        &function.parameter_names,
+                    )
+                {
+                    return Ok(Arc::new(lowered));
+                }
+                return Err(Arc::from("unsupported leading wildcard match expression"));
+            }
+            if match_arm_is_void(first_arm) {
+                let function = lucid_cir::Function {
+                    entry: lucid_cir::BlockId(0),
+                    blocks: vec![lucid_cir::Block {
+                        id: lucid_cir::BlockId(0),
+                        instructions: function
+                            .parameter_names
+                            .iter()
+                            .enumerate()
+                            .map(|(index, _)| lucid_cir::Instruction::Param {
+                                result: lucid_cir::ValueId(index as u32),
+                                index: index as u32,
+                            })
+                            .collect(),
+                        terminator: lucid_cir::Terminator::Return(None),
+                    }],
+                };
+                function
+                    .verify()
+                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+                return Ok(Arc::new(function));
             }
         }
         if arms.len() != 2 {
@@ -5189,6 +5235,36 @@ mod tests {
             .expect("literal match should lower through conditional CIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "leading-wildcard-match.lucid",
+            "def choose(value: int):\n    match value:\n        case _:\n            return value + 100\n        case 1:\n            return 11\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("leading wildcard match should preserve arm order");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "leading-wildcard-local-match.lucid",
+            "def choose(value: int):\n    match value:\n        case _:\n            selected = value + 100\n            return selected\n        case 1:\n            return 11\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("leading wildcard local match should preserve arm order");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "leading-wildcard-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case _:\n            return\n        case 1:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("leading wildcard void match should preserve arm order");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(
             "match-local-cir.lucid",
