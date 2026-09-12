@@ -2435,6 +2435,55 @@ pub fn lower_function_body(
             }
             return Err(Arc::from("unsupported constant match expression"));
         }
+        if let Some((live_index, live_arm)) = arms.iter().enumerate().find(|(_, arm)| {
+            !arm.guard
+                .as_ref()
+                .is_some_and(|guard| static_truth(guard) == Some(false))
+        }) && live_index > 0
+            && arms[..live_index].iter().all(|arm| {
+                arm.guard
+                    .as_ref()
+                    .is_some_and(|guard| static_truth(guard) == Some(false))
+            })
+            && matches!(live_arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+            && live_arm.guard.is_none()
+        {
+            if let Some(value) = match_arm_value(live_arm) {
+                let nodes = function
+                    .body_expressions
+                    .iter()
+                    .map(|node| lucid_cir::TypedExprNode {
+                        id: node.id,
+                        kind: node.kind.clone(),
+                        detail: node.detail.clone(),
+                        children: node.children.to_vec(),
+                        literal: node.literal,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(root) = function
+                    .body_expressions
+                    .iter()
+                    .rev()
+                    .find(|node| node.span == value.span())
+                    && let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                        &nodes,
+                        root.id,
+                        &function.parameter_names,
+                    )
+                {
+                    return Ok(Arc::new(lowered));
+                }
+                return Err(Arc::from(
+                    "unsupported static-dead leading match expression",
+                ));
+            }
+            if match_arm_is_void(live_arm) {
+                return lower_match_bindings_to_void(&[]);
+            }
+            if let Some(bindings) = match_arm_void_bindings(live_arm)? {
+                return lower_match_bindings_to_void(&bindings);
+            }
+        }
         let arm_condition = |arm: &lucid_syntax::MatchArm| match &arm.pattern {
             lucid_syntax::Pattern::Literal(
                 literal
@@ -7163,6 +7212,11 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("guarded literal match should lower with guard in CIR");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "statically false guarded arm should be skipped before lowering"
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
 
@@ -7182,15 +7236,11 @@ mod tests {
         );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
-            .expect("guarded void match should lower with guard in CIR");
-        assert!(
-            function.blocks.iter().any(|block| {
-                block
-                    .instructions
-                    .iter()
-                    .any(|instruction| matches!(instruction, lucid_cir::Instruction::And { .. }))
-            }),
-            "guarded void match CIR should retain the guard expression"
+            .expect("statically false guarded void match should lower through fallback arm");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "statically false guarded void arm should be skipped before lowering"
         );
         assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));

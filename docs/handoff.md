@@ -484,6 +484,9 @@ diverged:
   directly, including value-returning and void arms, so dead arms are not
   evaluated. A matching guarded arm still blocks that fold and stays on the
   dynamic conditional path, because the guard decides arm selection at runtime.
+  Statically false guarded arms before an unguarded wildcard are now skipped
+  before primitive match lowering, so the wildcard arm can lower directly
+  instead of carrying dead guard control flow.
   Setup work before a selected constant-match void or fallthrough arm now
   lowers through the typed-local void path, while effectful discarded setup
   remains rejected.
