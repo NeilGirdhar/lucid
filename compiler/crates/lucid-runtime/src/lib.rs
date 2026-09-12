@@ -5318,6 +5318,12 @@ impl Interpreter {
                     let decorator_value = self.eval_expr(decorator)?;
                     func_val =
                         self.invoke_value(decorator_value, vec![(None, func_val)], func.span)?;
+                    match &mut func_val {
+                        Value::Function { name, .. } | Value::BuiltinFunction { name, .. } => {
+                            *name = func.name.clone();
+                        }
+                        _ => {}
+                    }
                 }
 
                 if func.is_dispatch {
@@ -12317,6 +12323,38 @@ result = greet()
             interp.env.borrow().get("result"),
             Some(Value::Str("hello".into()))
         );
+    }
+
+    #[test]
+    fn decorators_preserve_replaced_function_identity_metadata() {
+        let src = r#"
+def wrap(f):
+    return def() -> int: 2
+
+@wrap
+def original() -> int:
+    return 1
+
+plain = wrap(original)
+decorated_name = original.__name__
+decorated_path = original.__path__
+plain_name = plain.__name__
+result = original()
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        let env = interp.env.borrow();
+        assert_eq!(env.get("result"), Some(Value::Int(2)));
+        assert_eq!(
+            env.get("decorated_name"),
+            Some(Value::Str("original".into()))
+        );
+        assert_eq!(
+            env.get("decorated_path"),
+            Some(Value::Str("original".into()))
+        );
+        assert_eq!(env.get("plain_name"), Some(Value::Str("<def>".into())));
     }
 
     #[test]
