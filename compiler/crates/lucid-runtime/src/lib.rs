@@ -4052,9 +4052,6 @@ impl Interpreter {
                     let items = materialize_range(*start, *stop, *step);
                     Ok(Value::List(Rc::new(RefCell::new(items))))
                 }
-                Value::Str(s) => Ok(Value::List(Rc::new(RefCell::new(
-                    s.chars().map(|c| Value::Str(c.to_string())).collect(),
-                )))),
                 Value::Bytes(bytes) => Ok(Value::List(Rc::new(RefCell::new(
                     bytes.iter().map(|b| Value::Int(*b as i64)).collect(),
                 )))),
@@ -4145,7 +4142,6 @@ impl Interpreter {
                     }
                     materialize_range(*start, *stop, *step)
                 }
-                Some(Value::Str(s)) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
                 Some(value @ (Value::Bytes(_) | Value::MemoryView { .. })) => {
                     binary_sequence_items(value).unwrap_or_default()
                 }
@@ -11572,17 +11568,37 @@ s = sum(r)
             "enumerate(\"abc\")\n",
             "reversed(\"abc\")\n",
             "sum(\"abc\")\n",
+            "list(\"abc\")\n",
+            "set(\"abc\")\n",
+            "dict(\"abc\")\n",
         ] {
             let mut interp = Interpreter::new();
             let error = interp
                 .eval_module(&parse(source).unwrap())
                 .expect_err("raw strings are not Iterable/Reversible");
             assert!(
-                error.message.contains("not iterable") || error.message.contains("not reversible"),
+                error.message.contains("not iterable")
+                    || error.message.contains("not reversible")
+                    || error.message.contains("cannot convert")
+                    || error.message.contains("not a mapping or sequence of pairs"),
                 "{source}: {}",
                 error.message
             );
         }
+
+        let module = parse("letters = list(\"abc\".chars)\nunique = set(\"aba\".chars)\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp
+            .eval_module(&module)
+            .expect("str.chars should remain iterable");
+        assert!(matches!(
+            interp.env.borrow().get("letters"),
+            Some(Value::List(_))
+        ));
+        assert!(matches!(
+            interp.env.borrow().get("unique"),
+            Some(Value::Set(_))
+        ));
     }
 
     #[test]
