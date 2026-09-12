@@ -486,7 +486,8 @@ diverged:
   `else` arms.
   Selected static branches ending in a bare `return` lower to verified void CIR
   through the same typed-local void path, preserving setup instructions before
-  returning no value.
+  returning no value, including setup inside nested statically selected
+  branches.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking

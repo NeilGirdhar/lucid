@@ -5863,6 +5863,22 @@ mod tests {
         );
 
         let file = db.add_file(
+            "constant-nested-setup-before-bare-return-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if true:\n            temporary = value + 1\n        return\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested setup before selected bare return should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
             "dynamic-elif-pass-branch.lucid",
             "def answer(value: int):\n    if false:\n        return value\n    elif value > 0:\n        pass\n    else:\n        return 0\n",
         );
