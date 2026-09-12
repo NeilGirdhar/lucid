@@ -4622,7 +4622,7 @@ impl Function {
             prefix: &[lucid_syntax::Stmt],
             condition: &lucid_syntax::Expr,
             then_branch: &[lucid_syntax::Stmt],
-            else_branch: &[lucid_syntax::Stmt],
+            else_branch: Option<&[lucid_syntax::Stmt]>,
             bindings: &mut HashMap<String, ValueId>,
             instructions: &mut Vec<Instruction>,
             next: &mut u32,
@@ -4631,6 +4631,7 @@ impl Function {
             for statement in prefix {
                 visit(statement, bindings, instructions, next, &mut last)?;
             }
+            let fallthrough_value = last;
             let condition_value = lower(condition, bindings, instructions, next)?;
             let mut then_bindings = bindings.clone();
             let mut then_instructions = Vec::new();
@@ -4654,23 +4655,26 @@ impl Function {
             }
             let mut else_bindings = bindings.clone();
             let mut else_instructions = Vec::new();
-            let mut else_last = None;
-            for statement in else_branch {
-                if statement_static_noop(statement, bindings, instructions) {
-                    continue;
+            let mut else_last = fallthrough_value;
+            if let Some(else_branch) = else_branch {
+                else_last = None;
+                for statement in else_branch {
+                    if statement_static_noop(statement, bindings, instructions) {
+                        continue;
+                    }
+                    if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
+                        && else_last.is_some()
+                    {
+                        continue;
+                    }
+                    visit(
+                        statement,
+                        &mut else_bindings,
+                        &mut else_instructions,
+                        next,
+                        &mut else_last,
+                    )?;
                 }
-                if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
-                    && else_last.is_some()
-                {
-                    continue;
-                }
-                visit(
-                    statement,
-                    &mut else_bindings,
-                    &mut else_instructions,
-                    next,
-                    &mut else_last,
-                )?;
             }
             let then_value = then_last.ok_or(LowerError::NoLowerableAssignment)?;
             let else_value = else_last.ok_or(LowerError::NoLowerableAssignment)?;
@@ -4717,7 +4721,7 @@ impl Function {
         if let Some(lucid_syntax::Stmt::If {
             condition,
             then_branch,
-            else_branch: Some(else_branch),
+            else_branch,
             elif_branches,
             ..
         }) = module.statements.last()
@@ -4728,7 +4732,7 @@ impl Function {
                     prefix,
                     condition,
                     then_branch,
-                    else_branch,
+                    else_branch.as_deref(),
                     &mut bindings,
                     &mut instructions,
                     &mut next,
@@ -9741,6 +9745,28 @@ return total
         assert_eq!(
             Function::from_module_linear(&module).unwrap().execute(),
             Ok(Some(3))
+        );
+        let module =
+            lucid_syntax::parse("flag = true\nvalue = 1\nif flag:\n    value = 2\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(2))
+        );
+        let module =
+            lucid_syntax::parse("flag = false\nvalue = 1\nif flag:\n    value = 2\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(1))
+        );
+        let module = lucid_syntax::parse("flag = true\nif flag:\n    value = 2\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(2))
+        );
+        let module = lucid_syntax::parse("flag = true\nvalue = 1\nif flag:\n    pass\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module),
+            Err(LowerError::NoLowerableAssignment)
         );
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",

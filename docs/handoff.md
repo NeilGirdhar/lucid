@@ -1792,6 +1792,9 @@ diverged:
   A branch-local bare `return` after such a value is now treated as branch
   completion for that final diamond, while a branch with no produced value
   still reports `NoLowerableAssignment`.
+  A no-`else` final dynamic `if` can also lower when the prefix has a value to
+  use as the fall-through Phi input; a selected branch with no produced value
+  remains an explicit `NoLowerableAssignment` error.
 * The same diamond accepts one statically selected `elif` arm, preserving
   branch selection without lowering an incomplete conditional chain.
 * The compiler database now exposes an incremental resolved-module HIR
