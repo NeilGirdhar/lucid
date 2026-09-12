@@ -1012,139 +1012,6 @@ pub fn compile_integer_result_function(
     function
         .verify()
         .map_err(|error| CraneliftError::InvalidCIR(format!("{error:?}")))?;
-    let block = function
-        .blocks
-        .iter()
-        .find(|block| block.id == function.entry)
-        .ok_or(CraneliftError::UnsupportedControlFlow)?;
-    let has_division_operations = function.has_division_operations();
-    if !has_division_operations {
-        // With no recoverable operation, the status is always success.  Let
-        // the ordinary CIR backend handle diamonds, jumps, and Phi merges so
-        // the result ABI is not artificially limited to one block.
-        return compile_integer_function_impl(function, true);
-    }
-    // A recoverable operation in a branch can still use the result ABI when
-    // its value is returned directly from that same block. The block-local
-    // lowering records the corresponding status without pretending to
-    // propagate an error through an unrelated merge.
-    if has_division_operations && function.blocks.len() > 1 {
-        let direct_branch_recoverable = function.blocks.iter().all(|block| {
-            let recoverable_count = block
-                .instructions
-                .iter()
-                .filter(|instruction| {
-                    matches!(
-                        instruction,
-                        Instruction::Add { .. }
-                            | Instruction::Sub { .. }
-                            | Instruction::Mul { .. }
-                            | Instruction::Pow { .. }
-                            | Instruction::Neg { .. }
-                            | Instruction::Shl { .. }
-                            | Instruction::Shr { .. }
-                            | Instruction::Div { .. }
-                            | Instruction::FloorDiv { .. }
-                            | Instruction::Mod { .. }
-                    )
-                })
-                .count();
-            if recoverable_count == 0 {
-                return true;
-            }
-            match block.terminator {
-                Terminator::Return(Some(returned)) => {
-                    block.instructions.last().map(instruction_result) == Some(Some(returned))
-                }
-                _ => false,
-            }
-        });
-        if direct_branch_recoverable {
-            return compile_integer_function_impl(function, true);
-        }
-    }
-    let Terminator::Return(Some(returned)) = block.terminator else {
-        return Err(CraneliftError::UnsupportedControlFlow);
-    };
-    let final_is_returned =
-        block.instructions.last().map(instruction_result) == Some(Some(returned));
-    let straight_line_arithmetic =
-        block
-            .instructions
-            .iter()
-            .enumerate()
-            .all(|(index, instruction)| {
-                if index + 1 == block.instructions.len() {
-                    matches!(
-                        instruction,
-                        Instruction::Div { .. }
-                            | Instruction::FloorDiv { .. }
-                            | Instruction::Mod { .. }
-                            | Instruction::ConstInt { .. }
-                            | Instruction::ConstBool { .. }
-                            | Instruction::Add { .. }
-                            | Instruction::Sub { .. }
-                            | Instruction::Mul { .. }
-                            | Instruction::Pow { .. }
-                            | Instruction::Neg { .. }
-                            | Instruction::Shl { .. }
-                            | Instruction::Shr { .. }
-                            | Instruction::BitAnd { .. }
-                            | Instruction::BitOr { .. }
-                            | Instruction::BitXor { .. }
-                            | Instruction::BitNot { .. }
-                            | Instruction::Not { .. }
-                            | Instruction::And { .. }
-                            | Instruction::Or { .. }
-                            | Instruction::CmpEq { .. }
-                            | Instruction::CmpNe { .. }
-                            | Instruction::CmpLe { .. }
-                            | Instruction::CmpGt { .. }
-                            | Instruction::CmpGe { .. }
-                            | Instruction::CmpLt { .. }
-                            | Instruction::Param { .. }
-                    )
-                } else {
-                    matches!(
-                        instruction,
-                        Instruction::Param { .. }
-                            | Instruction::ConstInt { .. }
-                            | Instruction::ConstBool { .. }
-                            | Instruction::Add { .. }
-                            | Instruction::Sub { .. }
-                            | Instruction::Mul { .. }
-                            | Instruction::Pow { .. }
-                            | Instruction::Neg { .. }
-                            | Instruction::Shl { .. }
-                            | Instruction::Shr { .. }
-                            | Instruction::Div { .. }
-                            | Instruction::FloorDiv { .. }
-                            | Instruction::Mod { .. }
-                            | Instruction::BitAnd { .. }
-                            | Instruction::BitOr { .. }
-                            | Instruction::BitXor { .. }
-                            | Instruction::BitNot { .. }
-                            | Instruction::Not { .. }
-                            | Instruction::And { .. }
-                            | Instruction::Or { .. }
-                            | Instruction::CmpEq { .. }
-                            | Instruction::CmpNe { .. }
-                            | Instruction::CmpLe { .. }
-                            | Instruction::CmpGt { .. }
-                            | Instruction::CmpGe { .. }
-                            | Instruction::CmpLt { .. }
-                    )
-                }
-            });
-    // A result ABI is useful for successful arithmetic too: zero divisions
-    // returns status 0, while division-family operations carry their
-    // recoverable error status. In either case the returned value must be the
-    // final instruction; the status keeps the first error in the block.
-    if !final_is_returned || !straight_line_arithmetic {
-        return Err(CraneliftError::UnsupportedInstruction(
-            "result ABI requires constants and checked straight-line arithmetic".into(),
-        ));
-    }
     compile_integer_function_impl(function, true)
 }
 
@@ -1271,6 +1138,17 @@ fn compile_integer_function_impl(
             .collect::<Vec<_>>();
         phi_params.insert(block.id, params);
     }
+    let propagate_result_error =
+        result_abi && function.has_recoverable_operations() && function.blocks.len() > 1;
+    let mut error_params = std::collections::HashMap::new();
+    if propagate_result_error {
+        for block in &function.blocks {
+            if block.id != function.entry {
+                let parameter = builder.append_block_param(block_ids[&block.id], types::I32);
+                error_params.insert(block.id, parameter);
+            }
+        }
+    }
 
     let mut values = std::collections::HashMap::<ValueId, Variable>::new();
     let mut constant_values = std::collections::HashMap::<ValueId, i64>::new();
@@ -1298,7 +1176,18 @@ fn compile_integer_function_impl(
     for block in &function.blocks {
         let cranelift_block = block_ids[&block.id];
         builder.switch_to_block(cranelift_block);
-        let mut block_error = None;
+        let zero_error = builder.ins().iconst(types::I32, 0);
+        let mut block_error = if result_abi {
+            Some(if propagate_result_error && block.id != function.entry {
+                *error_params
+                    .get(&block.id)
+                    .ok_or(CraneliftError::UnsupportedControlFlow)?
+            } else {
+                zero_error
+            })
+        } else {
+            None
+        };
         for (result, parameter, _) in &phi_params[&block.id] {
             let variable = Variable::new(values.len());
             builder.declare_var(variable, types::I64);
@@ -2177,7 +2066,11 @@ fn compile_integer_function_impl(
                 let target = *block_ids
                     .get(&target_id)
                     .ok_or(CraneliftError::UnsupportedControlFlow)?;
-                let args = phi_arguments(block.id, target_id, &mut builder, &values, &phi_params)?;
+                let mut args =
+                    phi_arguments(block.id, target_id, &mut builder, &values, &phi_params)?;
+                if propagate_result_error {
+                    args.push(block_error.unwrap_or(zero_error));
+                }
                 builder.ins().jump(target, &args);
             }
             Terminator::Branch {
@@ -2194,10 +2087,15 @@ fn compile_integer_function_impl(
                 let else_block = *block_ids
                     .get(&else_id)
                     .ok_or(CraneliftError::UnsupportedControlFlow)?;
-                let then_args =
+                let mut then_args =
                     phi_arguments(block.id, then_id, &mut builder, &values, &phi_params)?;
-                let else_args =
+                let mut else_args =
                     phi_arguments(block.id, else_id, &mut builder, &values, &phi_params)?;
+                if propagate_result_error {
+                    let error = block_error.unwrap_or(zero_error);
+                    then_args.push(error);
+                    else_args.push(error);
+                }
                 builder
                     .ins()
                     .brif(condition, then_block, &then_args, else_block, &else_args);
@@ -2750,6 +2648,33 @@ return total
         assert_eq!(
             zero.error,
             crate::native_abi::NativeErrorCode::RangeStepZero
+        );
+    }
+
+    #[test]
+    fn result_abi_executes_range_accumulation_with_division_bound_expressions_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(start // scale, stop // scale, step // scale):
+    total += i
+return total
+"#,
+        )
+        .expect("division range bound-expression fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into(), "scale".into()],
+        )
+        .expect("division range bound-expression accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile division range bound-expression loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[0, 12, 4, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 6);
+        let zero = unsafe { compiled.call_result_with_args(&[0, 12, 4, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::DivisionByZero
         );
     }
 

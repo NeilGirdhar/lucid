@@ -568,15 +568,16 @@ diverged:
   matching the public checker boundary. The repeated-`pass` counted-`while`
   form also has Cranelift result-ABI coverage.
   Range accumulator loops now also accept checked constant, parameter, local
-  alias, unary `+`/`-`, and binary `+`, `-`, or `*` integer expressions for
-  range start, stop, and dynamic step operands. Local aliases may be used as
-  the start or stop
+  alias, unary `+`/`-`, and binary `+`, `-`, `*`, `/`, `//`, or `%` integer
+  expressions for range start, stop, and dynamic step operands. Local aliases
+  may be used as the start or stop
   operand in one-, two-, or three-argument ranges. This
   keeps `limit = n; for i in range(limit)`,
   `for i in range(n + 1)`,
   `begin = seed; for i in range(begin, n)`,
   `begin = 1 + 1; for i in range(begin, n)`,
-  `begin = seed; stop = limit; for i in range(begin, stop)`, and
+  `begin = seed; stop = limit; for i in range(begin, stop)`,
+  `for i in range(start // scale, stop // scale, step // scale)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
   CIR/native path. Three-argument ranges may spell a statically known step
   through a local alias, as in `stride = -1; range(n, 0, stride)`, or use a
@@ -609,9 +610,14 @@ diverged:
   induction, signed literal, parameter, local setup-alias, unary `+`/`-`, or
   binary `+`, `-`, or `*` operands with `+=`, `-=`, `x = x + y`, `x = x - y`,
   and the commuted additive spelling `x = y + x`, including
-  `inc = step; total += inc`, `total += -step`, and `total += step + 1`. An
-  unused pre-loop alias is still rejected instead of being treated as loop
-  setup.
+  `inc = step; total += inc`, `total += -step`, `total += step + 1`, and
+  `total += step % modulus`. Division-family zero denominators report the
+  shared recoverable `division by zero` error through the interpreter,
+  `run-cir`, and native result ABI. The native result ABI now carries a hidden
+  error-status Phi through CFG blocks, so the first recoverable arithmetic
+  error is preserved across branches and loop back-edges instead of being
+  limited to one block. An unused pre-loop alias is still rejected instead of
+  being treated as loop setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from a checked constant integer expression or parameter, then
   updated before the induction update. Plain counted loops and accumulator

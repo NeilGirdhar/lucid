@@ -4926,6 +4926,9 @@ impl Function {
                         lucid_syntax::BinaryOp::Add
                             | lucid_syntax::BinaryOp::Sub
                             | lucid_syntax::BinaryOp::Mul
+                            | lucid_syntax::BinaryOp::Div
+                            | lucid_syntax::BinaryOp::FloorDiv
+                            | lucid_syntax::BinaryOp::Mod
                     ) =>
                     {
                         let left_temp = ValueId(*next_value);
@@ -4960,6 +4963,21 @@ impl Function {
                                 right: right_temp,
                             },
                             lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Div => Instruction::Div {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::FloorDiv => Instruction::FloorDiv {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Mod => Instruction::Mod {
                                 result,
                                 left: left_temp,
                                 right: right_temp,
@@ -5491,6 +5509,9 @@ impl Function {
                         lucid_syntax::BinaryOp::Add
                             | lucid_syntax::BinaryOp::Sub
                             | lucid_syntax::BinaryOp::Mul
+                            | lucid_syntax::BinaryOp::Div
+                            | lucid_syntax::BinaryOp::FloorDiv
+                            | lucid_syntax::BinaryOp::Mod
                     ) =>
                     {
                         let left_temp = ValueId(*next_value);
@@ -5525,6 +5546,21 @@ impl Function {
                                 right: right_temp,
                             },
                             lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Div => Instruction::Div {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::FloorDiv => Instruction::FloorDiv {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Mod => Instruction::Mod {
                                 result,
                                 left: left_temp,
                                 right: right_temp,
@@ -12340,6 +12376,44 @@ return total
         )
         .expect("nested dynamic range expression should lower");
         assert_eq!(function.execute_with_args(&[0, 6, 1]), Ok(Some(12)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(start // scale, stop // scale, step // scale):
+    total += i
+return total
+"#,
+        )
+        .expect("division dynamic range expression fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["start".into(), "stop".into(), "step".into(), "scale".into()],
+        )
+        .expect("division dynamic range expression should lower");
+        assert_eq!(function.execute_with_args(&[0, 12, 4, 2]), Ok(Some(6)));
+        assert_eq!(
+            function.execute_with_args(&[0, 12, 4, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total += step % modulus
+return total
+"#,
+        )
+        .expect("modulo range accumulator operand fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "modulus".into()],
+        )
+        .expect("modulo range accumulator operand should lower");
+        assert_eq!(function.execute_with_args(&[5, 5, 3]), Ok(Some(10)));
+        assert_eq!(
+            function.execute_with_args(&[5, 5, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
 
         let module = lucid_syntax::parse(
             r#"for i in range(n):
