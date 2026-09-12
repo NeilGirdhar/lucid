@@ -4565,7 +4565,8 @@ impl Interpreter {
         // observe the names collected below instead of re-entering the
         // loader indefinitely. The subsequent evaluation replaces these
         // placeholders with the complete definitions.
-        let module_env = Rc::new(RefCell::new(Environment::new()));
+        let mut sub_interp = Interpreter::new();
+        let module_env = Rc::clone(&sub_interp.env);
         for statement in &parsed.statements {
             let statement = match statement {
                 Stmt::Export(inner) => inner.as_ref(),
@@ -4595,10 +4596,8 @@ impl Interpreter {
         }
         self.module_cache
             .insert(canon.clone(), Rc::clone(&module_env));
-        let mut sub_interp = Interpreter::new();
         sub_interp.current_file = Some(canon.clone());
         sub_interp.module_cache = self.module_cache.clone();
-        sub_interp.env = module_env;
         if let Err(error) = sub_interp.eval_module(&parsed) {
             self.module_cache.remove(&canon);
             return Err(error);
