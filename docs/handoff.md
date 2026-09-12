@@ -132,6 +132,12 @@ functions, and invoked through loop bindings. Recursive closure binding cells,
 mutual recursion, and typed captured slots now work in the native closure
 adapter. Rebinding cells, environment reclamation, and the shared CIR closure
 representation remain open.
+Anonymous and named function values also preserve `Arguments`, `Parameters`,
+and ordinary-class `***` gathers through the erased call ABI, including
+`***` spreading from containers. Gather adapters validate fixed prefixes,
+missing fields, surplus arguments, and unknown keywords. The parser and
+checker enforce positional-only/keyword-only boundaries, duplicate named
+arguments, and positional-after-named ordering for both functions and methods.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
