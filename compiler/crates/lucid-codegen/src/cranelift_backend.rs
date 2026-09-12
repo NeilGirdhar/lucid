@@ -2071,6 +2071,42 @@ fn compile_integer_function_impl(
                     left,
                     right
                 ),
+                Instruction::CheckNonZero { operand, .. } => {
+                    let value = load(&mut builder, &values, *operand)?;
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let is_zero = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::Equal,
+                        value,
+                        zero,
+                    );
+                    if result_abi {
+                        let code = builder.ins().iconst(
+                            types::I32,
+                            lucid_abi::NativeErrorCode::RangeStepZero.as_raw() as i64,
+                        );
+                        let zero_error = builder.ins().iconst(types::I32, 0);
+                        let current_error = builder.ins().select(is_zero, code, zero_error);
+                        block_error = Some(match block_error {
+                            Some(previous) => {
+                                let previous_failed = builder.ins().icmp(
+                                    cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+                                    previous,
+                                    zero_error,
+                                );
+                                builder
+                                    .ins()
+                                    .select(previous_failed, previous, current_error)
+                            }
+                            None => current_error,
+                        });
+                    } else {
+                        builder.ins().trapnz(
+                            is_zero,
+                            cranelift_codegen::ir::TrapCode::INTEGER_DIVISION_BY_ZERO,
+                        );
+                    }
+                    value
+                }
                 other => return Err(CraneliftError::UnsupportedInstruction(format!("{other:?}"))),
             };
             let variable = Variable::new(values.len());
@@ -2130,7 +2166,7 @@ fn compile_integer_function_impl(
             Terminator::Return(None) => {
                 if result_abi {
                     let value = builder.ins().iconst(types::I64, 0);
-                    let error = builder.ins().iconst(types::I32, 0);
+                    let error = block_error.unwrap_or_else(|| builder.ins().iconst(types::I32, 0));
                     builder.ins().return_(&[value, error]);
                 } else {
                     builder.ins().return_(&[]);
@@ -2227,7 +2263,8 @@ fn instruction_result(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::CmpLe { result, .. }
         | Instruction::CmpLt { result, .. }
         | Instruction::CmpGe { result, .. }
-        | Instruction::CmpGt { result, .. } => Some(*result),
+        | Instruction::CmpGt { result, .. }
+        | Instruction::CheckNonZero { result, .. } => Some(*result),
         _ => None,
     }
 }
@@ -2682,6 +2719,11 @@ return total
         let negative = unsafe { compiled.call_result_with_args(&[5, 0, -2]) };
         assert!(negative.is_ok());
         assert_eq!(negative.value, 9);
+        let zero = unsafe { compiled.call_result_with_args(&[0, 6, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::RangeStepZero
+        );
     }
 
     #[test]
@@ -2727,6 +2769,11 @@ for i in range(n, stop, stride):
         let negative = unsafe { compiled.call_result_with_args(&[5, 0, -2]) };
         assert!(negative.is_ok());
         assert_eq!(negative.value, 0);
+        let zero = unsafe { compiled.call_result_with_args(&[0, 6, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::RangeStepZero
+        );
     }
 
     #[test]

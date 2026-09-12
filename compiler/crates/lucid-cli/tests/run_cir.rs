@@ -2269,13 +2269,33 @@ fn run_cir_executes_range_accumulator_with_dynamic_step() {
         ])
         .output()
         .expect("lucid binary should execute");
-    let _ = fs::remove_file(&path);
     assert!(
         output.status.success(),
         "run-cir range dynamic negative step accumulator failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_stride",
+            "--args",
+            "0,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir range dynamic zero step accumulator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("range step cannot be zero"),
+        "expected range-step error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -2348,13 +2368,33 @@ fn run_cir_executes_void_range_with_dynamic_step() {
         ])
         .output()
         .expect("lucid binary should execute");
-    let _ = fs::remove_file(&path);
     assert!(
         output.status.success(),
         "run-cir void dynamic negative-step range loop failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "0,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir void dynamic zero-step range loop should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("range step cannot be zero"),
+        "expected range-step error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

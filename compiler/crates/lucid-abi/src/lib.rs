@@ -10,6 +10,7 @@ pub enum NativeErrorCode {
     InvalidOperation = 4,
     UnexpectedArgumentCount = 5,
     StepLimitExceeded = 6,
+    RangeStepZero = 7,
 }
 impl NativeErrorCode {
     pub const fn as_raw(self) -> u32 {
@@ -24,6 +25,7 @@ impl NativeErrorCode {
             4 => Self::InvalidOperation,
             5 => Self::UnexpectedArgumentCount,
             6 => Self::StepLimitExceeded,
+            7 => Self::RangeStepZero,
             _ => Self::InvalidOperation,
         }
     }
@@ -38,6 +40,7 @@ impl std::fmt::Display for NativeErrorCode {
             Self::InvalidOperation => "invalid operation",
             Self::UnexpectedArgumentCount => "unexpected argument count",
             Self::StepLimitExceeded => "step limit exceeded",
+            Self::RangeStepZero => "range step cannot be zero",
         })
     }
 }
@@ -51,6 +54,7 @@ impl From<&lucid_cir::ExecuteError> for NativeErrorCode {
                 Self::UnexpectedArgumentCount
             }
             lucid_cir::ExecuteError::StepLimitExceeded => Self::StepLimitExceeded,
+            lucid_cir::ExecuteError::RangeStepZero => Self::RangeStepZero,
             _ => Self::InvalidOperation,
         }
     }
@@ -230,6 +234,11 @@ mod tests {
         assert_eq!(
             NativeErrorCode::from_raw(6),
             NativeErrorCode::StepLimitExceeded
+        );
+        assert_eq!(NativeErrorCode::from_raw(7), NativeErrorCode::RangeStepZero);
+        assert_eq!(
+            NativeErrorCode::RangeStepZero.to_string(),
+            "range step cannot be zero"
         );
         assert_eq!(
             checked_integer_binary(NativeBinaryOp::FloorDiv, -5, 2),

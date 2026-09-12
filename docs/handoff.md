@@ -581,8 +581,9 @@ diverged:
   parameter-backed step, as in `range(start, stop, step)`. The dynamic-step
   CFG selects the positive-step or negative-step condition at runtime, so the
   same lowered function handles both `step = 2` and `step = -2`. A zero
-  dynamic step currently takes the empty-loop path until the runtime ABI grows
-  a dedicated range-step error.
+  dynamic step is checked before the loop enters and reports the shared
+  `range step cannot be zero` recoverable error through the interpreter,
+  `run-cir`, and native result ABI.
   Static step aliases may themselves point at another local literal alias,
   matching the existing chained range-bound alias behavior. The step resolver
   also folds checked constant integer expressions in that local alias, so

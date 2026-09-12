@@ -136,6 +136,10 @@ pub enum Instruction {
         left: ValueId,
         right: ValueId,
     },
+    CheckNonZero {
+        result: ValueId,
+        operand: ValueId,
+    },
     Phi {
         result: ValueId,
         incomings: Vec<(BlockId, ValueId)>,
@@ -205,6 +209,7 @@ pub enum ExecuteError {
     DivisionByZero,
     ArithmeticOverflow,
     NegativeExponent,
+    RangeStepZero,
     UnsupportedInstruction,
 }
 
@@ -372,6 +377,7 @@ impl Function {
                         | Instruction::Div { .. }
                         | Instruction::FloorDiv { .. }
                         | Instruction::Mod { .. }
+                        | Instruction::CheckNonZero { .. }
                 )
             })
         })
@@ -931,6 +937,12 @@ impl Function {
                                 result: value(*result),
                                 operand: value(*operand),
                             },
+                            Instruction::CheckNonZero { result, operand } => {
+                                Instruction::CheckNonZero {
+                                    result: value(*result),
+                                    operand: value(*operand),
+                                }
+                            }
                             Instruction::And {
                                 result,
                                 left,
@@ -986,6 +998,7 @@ impl Function {
                             | Instruction::Not { result, .. }
                             | Instruction::And { result, .. }
                             | Instruction::Or { result, .. }
+                            | Instruction::CheckNonZero { result, .. }
                             | Instruction::Phi { result, .. } => *result,
                         }
                     }
@@ -1803,6 +1816,10 @@ impl Function {
                     result: value(*result),
                     operand: value(*operand),
                 },
+                Instruction::CheckNonZero { result, operand } => Instruction::CheckNonZero {
+                    result: value(*result),
+                    operand: value(*operand),
+                },
                 Instruction::And {
                     result,
                     left,
@@ -1858,6 +1875,7 @@ impl Function {
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
                 | Instruction::Or { result, .. }
+                | Instruction::CheckNonZero { result, .. }
                 | Instruction::Phi { result, .. } => *result,
             }
         }
@@ -2613,6 +2631,10 @@ impl Function {
                     operand: s(*operand),
                 },
                 Instruction::Not { result, operand } => Instruction::Not {
+                    result: s(*result),
+                    operand: s(*operand),
+                },
+                Instruction::CheckNonZero { result, operand } => Instruction::CheckNonZero {
                     result: s(*result),
                     operand: s(*operand),
                 },
@@ -4548,14 +4570,25 @@ impl Function {
                 value: step,
             });
         }
+        let step_value = match step {
+            RangeStep::Static(_) => ValueId(8),
+            RangeStep::Dynamic(_) => ValueId(17),
+        };
         body_instructions.push(Instruction::Add {
             result: ValueId(7),
             left: ValueId(3),
-            right: ValueId(8),
+            right: step_value,
         });
         let step_instruction = match &step {
             RangeStep::Static(_) => None,
             RangeStep::Dynamic(instruction) => Some(instruction.clone()),
+        };
+        let step_check_instruction = match step {
+            RangeStep::Static(_) => None,
+            RangeStep::Dynamic(_) => Some(Instruction::CheckNonZero {
+                result: ValueId(17),
+                operand: ValueId(8),
+            }),
         };
         let header_condition_instructions = match step {
             RangeStep::Static(step) if step > 0 => vec![Instruction::CmpLt {
@@ -4575,7 +4608,7 @@ impl Function {
                 },
                 Instruction::CmpGt {
                     result: ValueId(5),
-                    left: ValueId(8),
+                    left: ValueId(17),
                     right: ValueId(10),
                 },
                 Instruction::CmpLt {
@@ -4590,7 +4623,7 @@ impl Function {
                 },
                 Instruction::CmpLt {
                     result: ValueId(13),
-                    left: ValueId(8),
+                    left: ValueId(17),
                     right: ValueId(10),
                 },
                 Instruction::CmpGt {
@@ -4614,9 +4647,19 @@ impl Function {
             RangeStep::Dynamic(_) => ValueId(16),
             RangeStep::Static(_) => ValueId(5),
         };
+        let return_instructions = match step {
+            RangeStep::Static(_) => Vec::new(),
+            RangeStep::Dynamic(_) => vec![Instruction::CheckNonZero {
+                result: ValueId(18),
+                operand: ValueId(17),
+            }],
+        };
         let mut entry_instructions =
             vec![stop_instruction, start_instruction, accumulator_instruction];
         if let Some(instruction) = step_instruction {
+            entry_instructions.push(instruction);
+        }
+        if let Some(instruction) = step_check_instruction {
             entry_instructions.push(instruction);
         }
         let function = Self {
@@ -4656,7 +4699,7 @@ impl Function {
                 },
                 Block {
                     id: BlockId(3),
-                    instructions: Vec::new(),
+                    instructions: return_instructions,
                     terminator: Terminator::Return(Some(ValueId(4))),
                 },
             ],
@@ -4883,7 +4926,7 @@ impl Function {
                     },
                     Instruction::CmpGt {
                         result: ValueId(3),
-                        left: ValueId(5),
+                        left: ValueId(13),
                         right: ValueId(6),
                     },
                     Instruction::CmpLt {
@@ -4898,7 +4941,7 @@ impl Function {
                     },
                     Instruction::CmpLt {
                         result: ValueId(9),
-                        left: ValueId(5),
+                        left: ValueId(13),
                         right: ValueId(6),
                     },
                     Instruction::CmpGt {
@@ -4928,9 +4971,15 @@ impl Function {
         if let Some(instruction) = step_instruction {
             entry_instructions.push(instruction);
         }
+        if matches!(step, RangeStep::Dynamic(_)) {
+            entry_instructions.push(Instruction::CheckNonZero {
+                result: ValueId(13),
+                operand: ValueId(5),
+            });
+        }
         let step_value = match step {
             RangeStep::Static(_) => ValueId(5),
-            RangeStep::Dynamic(_) => ValueId(5),
+            RangeStep::Dynamic(_) => ValueId(13),
         };
         let body_step_instruction = match step {
             RangeStep::Static(step) => Some(Instruction::ConstInt {
@@ -4938,6 +4987,13 @@ impl Function {
                 value: step,
             }),
             RangeStep::Dynamic(_) => None,
+        };
+        let return_instructions = match step {
+            RangeStep::Static(_) => Vec::new(),
+            RangeStep::Dynamic(_) => vec![Instruction::CheckNonZero {
+                result: ValueId(14),
+                operand: ValueId(13),
+            }],
         };
         let function = Self {
             entry: BlockId(0),
@@ -4978,7 +5034,7 @@ impl Function {
                 },
                 Block {
                     id: BlockId(3),
-                    instructions: Vec::new(),
+                    instructions: return_instructions,
                     terminator: Terminator::Return(None),
                 },
             ],
@@ -5649,6 +5705,7 @@ impl Function {
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
                 | Instruction::Or { result, .. }
+                | Instruction::CheckNonZero { result, .. }
                 | Instruction::Phi { result, .. } => *result,
             }
         }
@@ -9204,6 +9261,7 @@ impl Function {
                     Instruction::Not { result, .. } => result,
                     Instruction::And { result, .. }
                     | Instruction::Or { result, .. }
+                    | Instruction::CheckNonZero { result, .. }
                     | Instruction::Phi { result, .. } => result,
                 };
                 if !values.insert(*result) {
@@ -9360,7 +9418,8 @@ impl Function {
                     }
                     Instruction::Neg { operand, .. }
                     | Instruction::BitNot { operand, .. }
-                    | Instruction::Not { operand, .. } => {
+                    | Instruction::Not { operand, .. }
+                    | Instruction::CheckNonZero { operand, .. } => {
                         require_operand(block.id, index, *operand)?
                     }
                     Instruction::And { left, right, .. } | Instruction::Or { left, right, .. } => {
@@ -9682,6 +9741,13 @@ impl Function {
                         right,
                     } => {
                         values.insert(*result, i64::from(values[left] != 0 || values[right] != 0));
+                    }
+                    Instruction::CheckNonZero { result, operand } => {
+                        let value = values[operand];
+                        if value == 0 {
+                            return Err(ExecuteError::RangeStepZero);
+                        }
+                        values.insert(*result, value);
                     }
                     Instruction::Phi { result, incomings } => {
                         let predecessor = previous.ok_or({
@@ -11192,6 +11258,10 @@ return total
         .expect("dynamic-step range accumulation should lower");
         assert_eq!(function.execute_with_args(&[0, 6, 2]), Ok(Some(6)));
         assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(Some(9)));
+        assert_eq!(
+            function.execute_with_args(&[0, 6, 0]),
+            Err(ExecuteError::RangeStepZero)
+        );
 
         let module = lucid_syntax::parse(
             r#"stride = step
@@ -11209,6 +11279,10 @@ return total
         .expect("local dynamic-step range accumulation should lower");
         assert_eq!(function.execute_with_args(&[0, 6, 2]), Ok(Some(6)));
         assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(Some(9)));
+        assert_eq!(
+            function.execute_with_args(&[0, 6, 0]),
+            Err(ExecuteError::RangeStepZero)
+        );
 
         let module = lucid_syntax::parse(
             r#"for i in range(n):
@@ -11274,6 +11348,10 @@ for i in range(n, stop, stride):
         .expect("void dynamic-step range loop should lower");
         assert_eq!(function.execute_with_args(&[0, 6, 2]), Ok(None));
         assert_eq!(function.execute_with_args(&[5, 0, -2]), Ok(None));
+        assert_eq!(
+            function.execute_with_args(&[0, 6, 0]),
+            Err(ExecuteError::RangeStepZero)
+        );
 
         let module = lucid_syntax::parse(
             r#"total = 0
