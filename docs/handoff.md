@@ -1175,6 +1175,8 @@ diverged:
   patterns fail while unreachable arms for singleton subjects remain valid.
   Inside a literal arm, the subject name or `match ... as` alias now narrows to
   the exact literal type.
+  Named and explicit type patterns are checked against the subject type as
+  well, while union subjects accept a pattern that can match any variant.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an

@@ -6933,6 +6933,37 @@ impl TypeChecker {
             });
         }
         match pattern {
+            Pattern::Type(type_expr, _) => {
+                let pattern_type = self.resolve_type_expr(type_expr)?;
+                if pattern_type_may_match(&pattern_type, subject_type, &self.env) {
+                    Ok(())
+                } else {
+                    Err(TypeError {
+                        message: format!(
+                            "type pattern {:?} cannot match subject type {:?}",
+                            pattern_type, subject_type
+                        ),
+                        span,
+                    })
+                }
+            }
+            Pattern::Ident(name, _) => {
+                if let Some(pattern_type) = self.named_pattern_type(name) {
+                    if pattern_type_may_match(&pattern_type, subject_type, &self.env) {
+                        Ok(())
+                    } else {
+                        Err(TypeError {
+                            message: format!(
+                                "type pattern {:?} cannot match subject type {:?}",
+                                pattern_type, subject_type
+                            ),
+                            span,
+                        })
+                    }
+                } else {
+                    Ok(())
+                }
+            }
             Pattern::Literal(value, _) => {
                 let pattern_type = literal_value_type(value, &self.env);
                 if pattern_type_may_match(&pattern_type, subject_type, &self.env) {
@@ -12697,6 +12728,23 @@ def render(s: Shape) -> int:
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&incompatible_literal).unwrap_err();
         assert!(err.message.contains("cannot match subject type"));
+
+        let incompatible_type_pattern = parse(
+            "def render(s: int) -> int:\n    match s:\n        case str:\n            return 0\n        case _:\n            return 1\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker
+            .check_module(&incompatible_type_pattern)
+            .unwrap_err();
+        assert!(err.message.contains("cannot match subject type"));
+
+        let compatible_type_union = parse(
+            "type Shape = int | str\ndef render(s: Shape) -> int:\n    match s:\n        case int:\n            return 1\n        case str:\n            return 2\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&compatible_type_union).is_ok());
 
         let missing_alias = parse(
             "def render(value: int) -> int:\n    match value + 1:\n        case _:\n            return value\n",
