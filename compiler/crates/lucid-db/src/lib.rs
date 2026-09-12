@@ -1806,6 +1806,73 @@ pub fn lower_function_body(
                 }
             }
         }
+        if arms.len() >= 2
+            && arms[..arms.len() - 1]
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+            && matches!(
+                arms.last().map(|arm| &arm.pattern),
+                Some(lucid_syntax::Pattern::Wildcard(_))
+            )
+            && arms.last().is_some_and(match_arm_is_void)
+        {
+            let values = arms[..arms.len() - 1]
+                .iter()
+                .map(match_arm_value)
+                .collect::<Option<Vec<_>>>();
+            if let Some(values) = values {
+                let conditions = arms[..arms.len() - 1]
+                    .iter()
+                    .map(|arm| {
+                        let lucid_syntax::Pattern::Literal(literal, span) = &arm.pattern else {
+                            return None;
+                        };
+                        match literal {
+                            lucid_syntax::LiteralValue::Int(_)
+                            | lucid_syntax::LiteralValue::Bool(_) => {
+                                Some(lucid_syntax::Expr::Binary {
+                                    op: lucid_syntax::BinaryOp::Eq,
+                                    left: Box::new(subject.clone()),
+                                    right: Box::new(lucid_syntax::Expr::Literal {
+                                        value: literal.clone(),
+                                        span: *span,
+                                    }),
+                                    span: *span,
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                    && let Some((first_value, elif_values)) = values.split_first()
+                {
+                    if elif_conditions.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_optional(
+                            first_condition,
+                            first_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported pass fallback match expression"));
+                    }
+                    let elif_pairs = elif_conditions
+                        .iter()
+                        .zip(elif_values.iter())
+                        .map(|(condition, value)| (condition, *value))
+                        .collect::<Vec<_>>();
+                    return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                        first_condition,
+                        first_value,
+                        &elif_pairs,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported pass fallback match chain"));
+                }
+            }
+        }
         if !arms.is_empty() {
             let explicit_end = if matches!(
                 arms.last().map(|arm| &arm.pattern),
@@ -5192,6 +5259,27 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("multi-arm optional match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "pass-fallback-match-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return value + 10\n        case _:\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("pass fallback match should lower through optional CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "pass-fallback-match-chain-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = value + 10\n            return selected\n        case 2:\n            doubled = value * 10\n            return doubled\n        case _:\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm pass fallback match should lower through optional CIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
