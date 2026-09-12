@@ -45,6 +45,7 @@ pub enum Type {
     Union(Vec<Type>),
     Intersection(Vec<Type>),
     Negation(Box<Type>),
+    Exact(Box<Type>),
     Shape(Vec<Option<i64>>),
     View {
         mutability: MutabilityView,
@@ -92,6 +93,7 @@ impl Type {
             },
             Type::Future(inner) => Type::Future(Box::new(inner.canonical())),
             Type::Negation(inner) => Type::Negation(Box::new(inner.canonical())),
+            Type::Exact(inner) => Type::Exact(Box::new(inner.canonical())),
             Type::Record { fields, is_open } => Type::Record {
                 fields: fields
                     .iter()
@@ -275,6 +277,7 @@ impl Type {
                     .join(",")
             ),
             Type::Negation(inner) => format!("not({})", inner.canonical_string()),
+            Type::Exact(inner) => format!("exact({})", inner.canonical_string()),
             Type::Shape(dimensions) => format!(
                 "shape({})",
                 dimensions
@@ -321,6 +324,14 @@ impl Type {
     pub fn is_subtype_of(&self, target: &Type, env: &TypeEnvironment) -> bool {
         if self == target {
             return true;
+        }
+
+        if let Type::Exact(inner) = self {
+            return inner.is_subtype_of(target, env);
+        }
+
+        if let Type::Exact(inner) = target {
+            return types_are_exactly_same_class(self, inner);
         }
 
         // Literal types retain exact identity for equality above, then widen
@@ -937,6 +948,7 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
                 .collect(),
         ),
         Type::Negation(inner) => Type::Negation(Box::new(substitute_type(inner, substitutions))),
+        Type::Exact(inner) => Type::Exact(Box::new(substitute_type(inner, substitutions))),
         Type::View { mutability, inner } => Type::View {
             mutability: mutability.clone(),
             inner: Box::new(substitute_type(inner, substitutions)),
@@ -5223,15 +5235,20 @@ impl TypeChecker {
                     if name == "_" {
                         return Ok(());
                     }
+                    let exact_target_class = exact_class_name_from_type(&target_type);
                     self.env
                         .variables
-                        .insert(name.clone(), (target_type, MutabilityView::Mutable));
+                        .insert(name.clone(), (target_type.clone(), MutabilityView::Mutable));
                     if let Some(value) = value {
                         if let Some(class_name) = self.exact_class_of_expr(value) {
+                            self.env.exact_variables.insert(name.clone(), class_name);
+                        } else if let Some(class_name) = exact_target_class {
                             self.env.exact_variables.insert(name.clone(), class_name);
                         } else {
                             self.env.exact_variables.remove(name);
                         }
+                    } else if let Some(class_name) = exact_target_class {
+                        self.env.exact_variables.insert(name.clone(), class_name);
                     } else {
                         self.env.exact_variables.remove(name);
                     }
@@ -10242,6 +10259,19 @@ impl TypeChecker {
                         }
                     }
                     "__shape_cond__" => Ok(Type::make_union(resolved_args)),
+                    "__final__" => {
+                        if let [inner] = resolved_args.as_slice() {
+                            Ok(Type::Exact(Box::new(inner.clone())))
+                        } else {
+                            Err(TypeError {
+                                message: format!(
+                                    "final expects exactly one type argument, got {}",
+                                    resolved_args.len()
+                                ),
+                                span: texpr.span(),
+                            })
+                        }
+                    }
                     "__shape_slice__" => {
                         if let [Type::Shape(values), start, stop, step] = resolved_args.as_slice() {
                             let to_index = |value: &Type| match value {
@@ -11085,7 +11115,54 @@ fn count_yields(statements: &[Stmt]) -> usize {
         .sum()
 }
 
+fn exact_class_name_from_type(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Exact(inner) => match inner.as_ref() {
+            Type::Class { name, .. } => Some(name.clone()),
+            Type::Int => Some("int".into()),
+            Type::Float => Some("float".into()),
+            Type::Bool => Some("bool".into()),
+            Type::Str => Some("str".into()),
+            Type::None => Some("none".into()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn types_are_exactly_same_class(left: &Type, right: &Type) -> bool {
+    match (left, right) {
+        (
+            Type::Class {
+                name: left_name, ..
+            },
+            Type::Class {
+                name: right_name, ..
+            },
+        ) => left_name == right_name,
+        (Type::Int, Type::Int)
+        | (Type::Float, Type::Float)
+        | (Type::Bool, Type::Bool)
+        | (Type::Str, Type::Str)
+        | (Type::None, Type::None) => true,
+        (Type::LiteralInt(_), Type::Int)
+        | (Type::LiteralFloat(_), Type::Float)
+        | (Type::LiteralBool(_), Type::Bool)
+        | (Type::LiteralStr(_), Type::Str) => true,
+        _ => false,
+    }
+}
+
 fn types_may_overlap(left: &Type, right: &Type, env: &TypeEnvironment) -> bool {
+    if let Type::Exact(inner) = left {
+        if let Type::Exact(other) = right {
+            return types_are_exactly_same_class(inner, other);
+        }
+        return inner.is_subtype_of(right, env);
+    }
+    if let Type::Exact(inner) = right {
+        return types_are_exactly_same_class(left, inner);
+    }
     if let Type::View { inner, .. } = left {
         return types_may_overlap(inner, right, env);
     }
@@ -11215,6 +11292,30 @@ class Child(Reusable, Base1, Base2):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("final and cannot be inherited"));
+    }
+
+    #[test]
+    fn final_type_annotation_requires_exact_class() {
+        let module =
+            parse("class A:\n    pass\nclass B(A):\n    pass\n\na: final A = A()\n").unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("an exact A annotation should accept an A value");
+
+        let module =
+            parse("class A:\n    pass\nclass B(A):\n    pass\n\na: final A = B()\n").unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("type mismatch in variable definition"));
+    }
+
+    #[test]
+    fn exact_class_instance_checks_reject_subclasses() {
+        let module = parse(
+            "class A:\n    pass\nclass B(A):\n    pass\n\ndef f(a: final A, b: B):\n    if a is B:\n        pass\n",
+        )
+        .unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("can never succeed"));
     }
 
     #[test]

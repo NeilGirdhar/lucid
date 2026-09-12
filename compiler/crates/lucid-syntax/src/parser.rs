@@ -2935,7 +2935,13 @@ impl Parser {
         let tok = self.peek().clone();
 
         if self.match_tok(&TokenKind::Final) {
-            return self.parse_type_primary();
+            let inner = self.parse_type_primary()?;
+            let span = tok.span.merge(inner.span());
+            return Ok(TypeExpr::Named {
+                name: "__final__".to_string(),
+                args: vec![inner],
+                span,
+            });
         }
 
         if self.match_tok(&TokenKind::Minus) {
