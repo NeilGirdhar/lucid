@@ -447,6 +447,9 @@ diverged:
   void fall-through.
   A no-`else` conditional whose `elif` guards are all statically false now
   follows the same typed optional path.
+  Dynamic void conditionals now accept `pass` and bare `return` in either arm,
+  including mixed `elif` chains, because both forms lower to the same verified
+  void branch terminator.
 * Primitive literal `match` functions now lower through verified CIR decision
   chains: two-arm matches support expression results, while larger matches
   support literal results followed by a wildcard. More complex patterns remain

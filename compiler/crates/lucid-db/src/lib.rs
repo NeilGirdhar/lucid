@@ -1461,6 +1461,12 @@ pub fn lower_function_body(
             "dispatch overload set bodies require a selected overload for CIR lowering",
         ));
     }
+    let branch_is_single_void = |branch: &[lucid_syntax::Stmt]| {
+        matches!(
+            branch,
+            [lucid_syntax::Stmt::Return { value: None, .. }] | [lucid_syntax::Stmt::Pass(_)]
+        )
+    };
     // Route the canonical parameter-backed induction loop through CIR before
     // considering the older linear/function-body adapters. This emits a real
     // back-edge and header Phi; it never unrolls or executes the AST.
@@ -3510,13 +3516,10 @@ pub fn lower_function_body(
         && elif_branches.is_empty()
         && static_truth(condition).is_none()
         && has_identifier(condition)
-        && matches!(
-            then_branch.as_slice(),
-            [lucid_syntax::Stmt::Return { value: None, .. }]
-        )
+        && branch_is_single_void(then_branch)
         && else_branch
             .as_ref()
-            .is_none_or(|branch| matches!(branch.as_slice(), [lucid_syntax::Stmt::Pass(_)]))
+            .is_none_or(|branch| branch_is_single_void(branch))
     {
         if function.is_async {
             return Err(Arc::from(
@@ -3548,23 +3551,14 @@ pub fn lower_function_body(
         && elif_branches
             .iter()
             .all(|(elif_condition, _)| has_identifier(elif_condition))
-        && matches!(
-            then_branch.as_slice(),
-            [lucid_syntax::Stmt::Return { value: None, .. }]
-        )
+        && branch_is_single_void(then_branch)
         && else_branch
             .as_ref()
-            .is_none_or(|branch| matches!(branch.as_slice(), [lucid_syntax::Stmt::Pass(_)]))
+            .is_none_or(|branch| branch_is_single_void(branch))
     {
         let Some(elif_conditions) = elif_branches
             .iter()
-            .map(|(condition, branch)| {
-                matches!(
-                    branch.as_slice(),
-                    [lucid_syntax::Stmt::Return { value: None, .. }]
-                )
-                .then_some(condition)
-            })
+            .map(|(condition, branch)| branch_is_single_void(branch).then_some(condition))
             .collect::<Option<Vec<_>>>()
         else {
             return Err(Arc::from("unsupported optional dynamic void elif chain"));
@@ -3594,14 +3588,8 @@ pub fn lower_function_body(
         && elif_branches.is_empty()
         && static_truth(condition).is_none()
         && has_identifier(condition)
-        && matches!(
-            then_branch.as_slice(),
-            [lucid_syntax::Stmt::Return { value: None, .. }]
-        )
-        && matches!(
-            else_branch.as_slice(),
-            [lucid_syntax::Stmt::Return { value: None, .. }]
-        )
+        && branch_is_single_void(then_branch)
+        && branch_is_single_void(else_branch)
     {
         if function.is_async {
             return Err(Arc::from(
@@ -3633,24 +3621,12 @@ pub fn lower_function_body(
         && elif_branches
             .iter()
             .all(|(elif_condition, _)| has_identifier(elif_condition))
-        && matches!(
-            then_branch.as_slice(),
-            [lucid_syntax::Stmt::Return { value: None, .. }]
-        )
-        && matches!(
-            else_branch.as_slice(),
-            [lucid_syntax::Stmt::Return { value: None, .. }]
-        )
+        && branch_is_single_void(then_branch)
+        && branch_is_single_void(else_branch)
     {
         let Some(elif_conditions) = elif_branches
             .iter()
-            .map(|(condition, branch)| {
-                matches!(
-                    branch.as_slice(),
-                    [lucid_syntax::Stmt::Return { value: None, .. }]
-                )
-                .then_some(condition)
-            })
+            .map(|(condition, branch)| branch_is_single_void(branch).then_some(condition))
             .collect::<Option<Vec<_>>>()
         else {
             return Err(Arc::from("unsupported dynamic void elif chain"));
@@ -6688,6 +6664,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-1]), Ok(None));
 
         let file = db.add_file(
+            "parameterized-then-pass-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        pass\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("then-pass dynamic void conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
             "parameterized-void-elif.lucid",
             "def answer(value: int):\n    if value > 10:\n        return\n    elif value > 0:\n        return\n    elif value < 0:\n        return\n    else:\n        return\n",
         );
@@ -6718,6 +6704,18 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("pass dynamic void elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-mixed-pass-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        pass\n    elif value > 0:\n        return\n    elif value < 0:\n        pass\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("mixed pass dynamic void elif chain should lower through CIR");
         assert_eq!(function.execute_with_args(&[15]), Ok(None));
         assert_eq!(function.execute_with_args(&[5]), Ok(None));
         assert_eq!(function.execute_with_args(&[-5]), Ok(None));
