@@ -3574,7 +3574,7 @@ impl Interpreter {
                 func: bytearray_fn,
             },
         );
-        let memoryview_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+        let memoryview_fn = Rc::new(|args: &[Value], interp: &mut Interpreter| {
             if args.len() != 1 {
                 return Err(RuntimeError {
                     message: "memoryview() takes exactly 1 argument".into(),
@@ -3599,6 +3599,37 @@ impl Interpreter {
                     stride: 1,
                     read_only: true,
                 }),
+                Value::Object { fields, .. } => {
+                    let method = fields.borrow().get("__buffer__").cloned().ok_or_else(|| {
+                        RuntimeError {
+                            message: "memoryview() cannot convert object".into(),
+                            span: Span::default(),
+                        }
+                    })?;
+                    match interp.invoke_value(method, vec![(None, args[0].clone())], Span::default())? {
+                        buffer @ Value::MemoryView { .. } => Ok(buffer),
+                        Value::List(items) => Ok(Value::MemoryView {
+                            data: Rc::clone(&items),
+                            start: 0,
+                            len: items.borrow().len() as i64,
+                            stride: 1,
+                            read_only: false,
+                        }),
+                        Value::Bytes(bytes) => Ok(Value::MemoryView {
+                            data: Rc::new(RefCell::new(
+                                bytes.iter().map(|byte| Value::Int(*byte as i64)).collect(),
+                            )),
+                            start: 0,
+                            len: bytes.len() as i64,
+                            stride: 1,
+                            read_only: true,
+                        }),
+                        other => Err(RuntimeError {
+                            message: format!("__buffer__ returned {}", other.type_name()),
+                            span: Span::default(),
+                        }),
+                    }
+                }
                 other => Err(RuntimeError {
                     message: format!("memoryview() cannot convert {}", other.type_name()),
                     span: Span::default(),
@@ -11829,6 +11860,29 @@ readonly_tail_first = readonly[1:][0]
             .eval_module(&module)
             .expect_err("read-only memoryview mutation should fail");
         assert!(error.message.contains("read-only memoryview"));
+    }
+
+    #[test]
+    fn test_user_defined_buffer_protocol_feeds_memoryview() {
+        let module = parse(
+            r#"
+class Packet:
+    storage: ByteArray
+    def __buffer__(self) -> MemoryView:
+        return memoryview(self.storage)
+
+packet = Packet(bytearray(b"hi"))
+view = memoryview(packet)
+view[0] = 72
+first = packet.storage[0]
+second = view[1]
+"#,
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("first"), Some(Value::Int(72)));
+        assert_eq!(interp.env.borrow().get("second"), Some(Value::Int(105)));
     }
 
     #[test]

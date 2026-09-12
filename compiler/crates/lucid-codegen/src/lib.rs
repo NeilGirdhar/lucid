@@ -1554,6 +1554,7 @@ typedef LucidVal (*LucidObjectGetItem)(void*, LucidVal);
 typedef void (*LucidObjectSetItem)(void*, LucidVal, LucidVal);
 typedef LucidVal (*LucidObjectIter)(void*);
 typedef LucidVal (*LucidObjectNext)(void*);
+typedef LucidVal (*LucidObjectBuffer)(void*);
 // First-class function values use a stable erased call ABI.  The environment
 // is owned by the closure and remains valid until the closure is released;
 // generated closures may use it for captured locals while non-capturing
@@ -1562,11 +1563,11 @@ typedef LucidVal (*LucidObjectNext)(void*);
 // list to preserve the language's dynamic argument conventions.
 typedef LucidVal (*LucidClosureCall)(void*, LucidList*, LucidDict*);
 typedef void (*LucidClosureDrop)(void*);
-typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; LucidObjectGetItem getitem; LucidObjectSetItem setitem; LucidObjectIter iter; LucidObjectNext next; LucidObjectIter reversed; } LucidObjectTag;
+typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; LucidObjectGetItem getitem; LucidObjectSetItem setitem; LucidObjectIter iter; LucidObjectNext next; LucidObjectIter reversed; LucidObjectBuffer buffer; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
 static size_t lucid_object_tag_count = 0;
 static size_t lucid_object_tag_capacity = 0;
-static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name, LucidObjectLe le, const char* le_class_name, LucidObjectGt gt, const char* gt_class_name, LucidObjectGe ge, const char* ge_class_name, LucidObjectContains contains, LucidObjectGetItem getitem, LucidObjectSetItem setitem, LucidObjectIter iter, LucidObjectNext next, LucidObjectIter reversed) {
+static inline void lucid_register_object(void* ptr, const char* class_name, LucidObjectFreezer freezer, LucidObjectTruthy truthy, LucidObjectRepr repr, LucidObjectHash hash, LucidObjectEq eq, const char* eq_class_name, LucidObjectLt lt, const char* lt_class_name, LucidObjectLe le, const char* le_class_name, LucidObjectGt gt, const char* gt_class_name, LucidObjectGe ge, const char* ge_class_name, LucidObjectContains contains, LucidObjectGetItem getitem, LucidObjectSetItem setitem, LucidObjectIter iter, LucidObjectNext next, LucidObjectIter reversed, LucidObjectBuffer buffer) {
     if (!ptr) return;
     if (lucid_object_tag_count == SIZE_MAX) {
         fprintf(stderr, "too many registered objects\n"); exit(1);
@@ -1584,7 +1585,7 @@ static inline void lucid_register_object(void* ptr, const char* class_name, Luci
         lucid_object_tags = grown;
         lucid_object_tag_capacity = next;
     }
-    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name, le, le_class_name, gt, gt_class_name, ge, ge_class_name, contains, getitem, setitem, iter, next, reversed};
+    lucid_object_tags[lucid_object_tag_count++] = (LucidObjectTag){ptr, class_name, false, freezer, truthy, repr, hash, eq, eq_class_name, lt, lt_class_name, le, le_class_name, gt, gt_class_name, ge, ge_class_name, contains, getitem, setitem, iter, next, reversed, buffer};
 }
 static inline bool lucid_object_is(void* ptr, const char* class_name) {
     // A derived object has one registry entry for its concrete class and one
@@ -1692,6 +1693,12 @@ static inline LucidObjectIter lucid_object_reversed(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i)
         if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].reversed)
             return lucid_object_tags[i].reversed;
+    return NULL;
+}
+static inline LucidObjectBuffer lucid_object_buffer(void* ptr) {
+    for (size_t i = 0; i < lucid_object_tag_count; ++i)
+        if (lucid_object_tags[i].ptr == ptr && lucid_object_tags[i].buffer)
+            return lucid_object_tags[i].buffer;
     return NULL;
 }
 static int64_t lucid_dynamic_len(LucidVal value);
@@ -2378,6 +2385,10 @@ static inline LucidVal lucid_list_get(LucidList* l, int64_t idx);
 static inline void lucid_list_set(LucidList* l, int64_t idx, LucidVal v);
 static inline LucidVal lucid_memoryview(LucidVal value) {
     if (value.type == LUCID_TYPE_MEMORYVIEW) return value;
+    if (value.type == LUCID_TYPE_PTR && value.ptr) {
+        LucidObjectBuffer buffer = lucid_object_buffer(value.ptr);
+        if (buffer) return lucid_memoryview(buffer(value.ptr));
+    }
     if ((value.type != LUCID_TYPE_LIST || !value.list) && (value.type != LUCID_TYPE_BYTES || !value.bytes)) {
         fprintf(stderr, "memoryview() cannot convert value\n"); exit(1);
     }
@@ -4238,9 +4249,9 @@ static inline void lucid_print_val(LucidVal v) {
                 // tagged runtime value rather than becoming an undefined C
                 // pointer type (`object*`).
                 "object" | "Any" => "LucidVal".to_string(),
-                "Bytes" | "ByteArray" | "MemoryView" | "SourceLocation" | "VarName" => {
-                    "const char*".to_string()
-                }
+                "Bytes" | "MemoryView" => "LucidVal".to_string(),
+                "ByteArray" => "LucidList*".to_string(),
+                "SourceLocation" | "VarName" => "const char*".to_string(),
                 other => format!("{other}*"),
             },
             // A union has no single C layout.  Preserve the full Lucid value
@@ -5406,6 +5417,15 @@ static inline void lucid_print_val(LucidVal v) {
                     .cloned()?;
                 (return_type != "void").then_some((owner, return_type))
             });
+        let buffer_owner = self
+            .method_owner(name, "__buffer__")
+            .and_then(|owner| {
+                let return_type = self
+                    .known_method_return_types
+                    .get(&(owner.clone(), "__buffer__".to_string()))
+                    .cloned()?;
+                (return_type != "void").then_some((owner, return_type))
+            });
         if let Some((owner, is_bool)) = &truthy_owner {
             let ret_ty = if *is_bool { "bool" } else { "int64_t" };
             self.emit_line(&format!(
@@ -5588,6 +5608,14 @@ static inline void lucid_print_val(LucidVal v) {
                 "static LucidVal {name}_reversed_callback(void* raw) {{ return lucid_wrap({owner}___reversed__(({owner}*)raw)); }}"
             ));
         }
+        if let Some((owner, return_type)) = &buffer_owner {
+            self.emit_line(&format!(
+                "{return_type} {owner}___buffer__({owner}* self);"
+            ));
+            self.emit_line(&format!(
+                "static LucidVal {name}_buffer(void* raw) {{ return lucid_wrap({owner}___buffer__(({owner}*)raw)); }}"
+            ));
+        }
 
         self.emit_line(&format!("static const char* {name}_repr(void* raw) {{"));
         self.indent += 1;
@@ -5670,8 +5698,12 @@ static inline void lucid_print_val(LucidVal v) {
             .as_ref()
             .map(|_| format!("(LucidObjectIter){name}_reversed_callback"))
             .unwrap_or_else(|| "NULL".to_string());
+        let buffer_callback = buffer_owner
+            .as_ref()
+            .map(|_| format!("(LucidObjectBuffer){name}_buffer"))
+            .unwrap_or_else(|| "NULL".to_string());
         self.emit_line(&format!(
-            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {}, {le_callback}, {}, {gt_callback}, {}, {ge_callback}, {}, {contains_callback}, {getitem_callback}, {setitem_callback}, {iter_callback}, {next_callback}, {reversed_callback});",
+            "lucid_register_object(self, \"{name}\", {name}_freeze, {truthy_callback}, {name}_repr, {hash_callback}, {eq_callback}, {}, {lt_callback}, {}, {le_callback}, {}, {gt_callback}, {}, {ge_callback}, {}, {contains_callback}, {getitem_callback}, {setitem_callback}, {iter_callback}, {next_callback}, {reversed_callback}, {buffer_callback});",
             eq_owner
                 .as_ref()
                 .and_then(|(_, _, dispatch_class)| dispatch_class.as_deref())
@@ -5708,7 +5740,7 @@ static inline void lucid_print_val(LucidVal v) {
                 break;
             }
             self.emit_line(&format!(
-                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
+                "lucid_register_object(self, \"{parent}\", {parent}_freeze, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
@@ -15844,6 +15876,36 @@ print(readonly[1:][0])
             "read-only memoryview mutation should fail"
         );
         assert!(String::from_utf8_lossy(&run.stderr).contains("read-only memoryview"));
+    }
+
+    #[test]
+    fn native_user_defined_buffer_protocol_feeds_memoryview() {
+        let source = r#"
+class Packet:
+    storage: ByteArray
+    def __buffer__(self) -> MemoryView:
+        return memoryview(self.storage)
+
+def identity(value: Any) -> Any:
+    return value
+
+packet = Packet(bytearray(b"hi"))
+view = memoryview(identity(packet))
+view[0] = 72
+print(packet.storage[0])
+print(view[1])
+"#;
+        let module = parse(source).expect("buffer protocol source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_user_buffer_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("buffer protocol source should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "72\n105\n");
     }
 
     #[test]
