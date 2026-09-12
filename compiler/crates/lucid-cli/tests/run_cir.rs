@@ -594,6 +594,37 @@ fn run_cir_executes_parameter_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_counted_while_with_pass_pass_tail() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_while_pass_pass_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def countdown(n: int):\n    while n > 0:\n        n -= 1\n        pass\n        pass\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "countdown",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir pass/pass loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+}
+
+#[test]
 fn run_cir_executes_local_bound_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_bound_while_{}.lucid",

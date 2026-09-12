@@ -2716,6 +2716,16 @@ impl Function {
         Ok(function)
     }
 
+    fn canonical_loop_tail(tail: &[lucid_syntax::Stmt]) -> bool {
+        match tail {
+            [] => true,
+            [lucid_syntax::Stmt::Continue(_)] | [lucid_syntax::Stmt::Pass(_)] => true,
+            statements => statements
+                .iter()
+                .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_))),
+        }
+    }
+
     /// Recognize and lower `while x > 0: x -= 1; return x`-style integer
     /// induction loops. The initial value must be a positional parameter;
     /// the body must contain exactly one augmented assignment to that same
@@ -2907,14 +2917,7 @@ impl Function {
         // edge after the induction update, so the canonical lowering can
         // safely accept those forms too. `pass` is likewise a no-op and does
         // not alter the loop's observable behavior.
-        if body.is_empty()
-            || body.len() > 2
-            || (body.len() == 2
-                && !matches!(
-                    &body[1],
-                    lucid_syntax::Stmt::Continue(_) | lucid_syntax::Stmt::Pass(_)
-                ))
-        {
+        if body.is_empty() || body.len() > 3 || !Self::canonical_loop_tail(&body[1..]) {
             return None;
         }
         // This canonical loop shape contains no `break`; reaching the end of
@@ -3350,12 +3353,8 @@ impl Function {
         };
         if return_name != acc_name
             || body.len() < 2
-            || body.len() > 3
-            || (body.len() == 3
-                && !matches!(
-                    &body[2],
-                    lucid_syntax::Stmt::Continue(_) | lucid_syntax::Stmt::Pass(_)
-                ))
+            || body.len() > 4
+            || !Self::canonical_loop_tail(&body[2..])
         {
             return None;
         }
@@ -3737,12 +3736,8 @@ impl Function {
         };
         if return_name != acc_name
             || body.is_empty()
-            || body.len() > 2
-            || (body.len() == 2
-                && !matches!(
-                    &body[1],
-                    lucid_syntax::Stmt::Continue(_) | lucid_syntax::Stmt::Pass(_)
-                ))
+            || body.len() > 3
+            || !Self::canonical_loop_tail(&body[1..])
             || !(1..=3).contains(&args.len())
             || !matches!(func.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == "range")
         {
@@ -9075,6 +9070,19 @@ return n
             .expect("trailing continue should lower with the induction loop");
         assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
 
+        let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= 1
+    pass
+    pass
+return n
+"#,
+        )
+        .expect("pass-pass loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("pass/pass tail should lower with the induction loop");
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
+
         let module = lucid_syntax::parse("while n > 0:\n    n -= 1\n    pass\nreturn n\n")
             .expect("pass loop fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
@@ -9174,6 +9182,21 @@ return total
             .expect("while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(4)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += 1
+    n -= 1
+    pass
+    pass
+return total
+"#,
+        )
+        .expect("while accumulator pass-pass fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("while accumulator pass/pass tail should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(4)));
 
         let module = lucid_syntax::parse(
             r#"total = seed
@@ -9335,6 +9358,20 @@ return total
         .expect("range continue fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("trailing continue in range loop should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total += i
+    pass
+    pass
+return total
+"#,
+        )
+        .expect("range pass-pass fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("trailing pass/pass in range loop should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(

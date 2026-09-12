@@ -558,6 +558,9 @@ diverged:
   because the accepted loop shape has no `break` path. Range accumulators
   support both additive and subtractive induction updates with checked CIR
   arithmetic.
+  Counted loop recognizers now accept repeated `pass` tails after the update,
+  while `continue` remains accepted only as a single final tail statement,
+  matching the public checker boundary.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from an integer literal or parameter, then updated before the
   induction update. The accumulator step can be a literal or the current
