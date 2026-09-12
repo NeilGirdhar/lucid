@@ -1795,6 +1795,8 @@ diverged:
   A no-`else` final dynamic `if` can also lower when the prefix has a value to
   use as the fall-through Phi input; a selected branch with no produced value
   remains an explicit `NoLowerableAssignment` error.
+  Branches that contain only proven no-ops now preserve that incoming value
+  instead of forcing a missing-assignment error.
 * The same diamond accepts one statically selected `elif` arm, preserving
   branch selection without lowering an incomplete conditional chain.
 * The compiler database now exposes an incremental resolved-module HIR

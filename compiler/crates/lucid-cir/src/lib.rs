@@ -4635,13 +4635,14 @@ impl Function {
             let condition_value = lower(condition, bindings, instructions, next)?;
             let mut then_bindings = bindings.clone();
             let mut then_instructions = Vec::new();
-            let mut then_last = None;
+            let mut then_last = fallthrough_value;
+            let mut then_produced_value = false;
             for statement in then_branch {
                 if statement_static_noop(statement, bindings, instructions) {
                     continue;
                 }
                 if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
-                    && then_last.is_some()
+                    && then_produced_value
                 {
                     continue;
                 }
@@ -4652,18 +4653,19 @@ impl Function {
                     next,
                     &mut then_last,
                 )?;
+                then_produced_value |= then_last.is_some();
             }
             let mut else_bindings = bindings.clone();
             let mut else_instructions = Vec::new();
             let mut else_last = fallthrough_value;
+            let mut else_produced_value = false;
             if let Some(else_branch) = else_branch {
-                else_last = None;
                 for statement in else_branch {
                     if statement_static_noop(statement, bindings, instructions) {
                         continue;
                     }
                     if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
-                        && else_last.is_some()
+                        && else_produced_value
                     {
                         continue;
                     }
@@ -4674,6 +4676,7 @@ impl Function {
                         next,
                         &mut else_last,
                     )?;
+                    else_produced_value |= else_last.is_some();
                 }
             }
             let then_value = then_last.ok_or(LowerError::NoLowerableAssignment)?;
@@ -9765,8 +9768,24 @@ return total
         );
         let module = lucid_syntax::parse("flag = true\nvalue = 1\nif flag:\n    pass\n").unwrap();
         assert_eq!(
-            Function::from_module_linear(&module),
-            Err(LowerError::NoLowerableAssignment)
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(1))
+        );
+        let module = lucid_syntax::parse(
+            "flag = true\nvalue = 1\nif flag:\n    pass\nelse:\n    value = 2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(1))
+        );
+        let module = lucid_syntax::parse(
+            "flag = false\nvalue = 1\nif flag:\n    value = 2\nelse:\n    pass\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(1))
         );
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
