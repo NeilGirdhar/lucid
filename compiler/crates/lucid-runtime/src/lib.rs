@@ -4675,25 +4675,75 @@ impl Interpreter {
     }
 
     pub fn eval_module(&mut self, module: &Module) -> Result<Value, RuntimeError> {
-        let mut last_val = Value::None;
-        for stmt in &module.statements {
-            if let Stmt::Yield { value, .. } = stmt {
-                return Err(RuntimeError {
-                    message: "yield is only valid in a contextmanager definition".into(),
-                    span: value.span(),
-                });
+        // Entry modules are evaluated directly rather than through
+        // `load_module`. Publish their environment first so a recursive
+        // import observes the same declaration set and cannot re-enter the
+        // module with a second activation.
+        let root_path = self
+            .current_file
+            .as_ref()
+            .filter(|path| path.is_file())
+            .and_then(|path| std::fs::canonicalize(path).ok());
+        let root_was_cached = root_path
+            .as_ref()
+            .is_some_and(|path| self.module_cache.contains_key(path));
+        if let Some(path) = root_path.as_ref().filter(|_| !root_was_cached) {
+            for statement in &module.statements {
+                let statement = match statement {
+                    Stmt::Export(inner) => inner.as_ref(),
+                    other => other,
+                };
+                match statement {
+                    Stmt::ClassDef { name, .. } => {
+                        self.env
+                            .borrow_mut()
+                            .set(name.clone(), Value::ClassRef(name.clone()));
+                    }
+                    Stmt::Function(function) => {
+                        self.env.borrow_mut().set(
+                            function.name.clone(),
+                            Value::Function {
+                                name: function.name.clone(),
+                                params: function.params.clone(),
+                                body: function.body.clone(),
+                                closure: Rc::clone(&self.env),
+                                is_contextmanager: false,
+                                is_async: function.is_async,
+                            },
+                        );
+                    }
+                    _ => {}
+                }
             }
-            last_val = self.eval_statement(stmt)?;
-            if let Value::Return(v) = last_val {
-                let _ = v;
-                return Err(RuntimeError {
-                    message: "return is only valid inside a function".into(),
-                    span: Span::default(),
-                });
-            }
+            self.module_cache
+                .insert(path.clone(), Rc::clone(&self.env));
+            self.module_loading.insert(path.clone());
         }
-        self.validate_class_hierarchy()?;
-        Ok(last_val)
+        let result = (|| {
+            let mut last_val = Value::None;
+            for stmt in &module.statements {
+                if let Stmt::Yield { value, .. } = stmt {
+                    return Err(RuntimeError {
+                        message: "yield is only valid in a contextmanager definition".into(),
+                        span: value.span(),
+                    });
+                }
+                last_val = self.eval_statement(stmt)?;
+                if let Value::Return(v) = last_val {
+                    let _ = v;
+                    return Err(RuntimeError {
+                        message: "return is only valid inside a function".into(),
+                        span: Span::default(),
+                    });
+                }
+            }
+            self.validate_class_hierarchy()?;
+            Ok(last_val)
+        })();
+        if let Some(path) = root_path {
+            self.module_loading.remove(&path);
+        }
+        result
     }
 
     /// Invoke a function or builtin bound in the current environment by name.
