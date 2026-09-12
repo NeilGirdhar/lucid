@@ -1048,6 +1048,7 @@ pub struct TypeEnvironment {
     pub interface_bounds: HashMap<String, Vec<Option<Type>>>,
     pub trait_bounds: HashMap<String, Vec<Option<Type>>>,
     pub obligations: HashMap<String, HashSet<String>>,
+    pub final_obligations: HashMap<String, HashSet<String>>,
     pub sealed_subclasses: HashMap<String, Vec<String>>,
     pub current_return_type: Option<Type>,
     pub current_class: Option<String>,
@@ -2622,15 +2623,14 @@ impl TypeChecker {
                             name: member_name,
                             type_annotation,
                             is_final,
-                            span,
+                            ..
                         } => {
                             if *is_final {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "final member '{member_name}' must have an implementation"
-                                    ),
-                                    span: *span,
-                                });
+                                self.env
+                                    .final_obligations
+                                    .entry(name.clone())
+                                    .or_default()
+                                    .insert(member_name.clone());
                             }
                             required.insert(member_name.clone());
                             let field_type = self.resolve_type_expr(type_annotation)?;
@@ -2702,15 +2702,6 @@ impl TypeChecker {
                         Self::reject_removed_member(member_name, member_span)?;
                     }
                     match member {
-                        TraitMember::Field(field) if field.is_final => {
-                            return Err(TypeError {
-                                message: format!(
-                                    "final member '{}' must have an implementation",
-                                    field.name
-                                ),
-                                span: field.span,
-                            });
-                        }
                         TraitMember::Method(method) | TraitMember::ClassMethod(method)
                             if method.body.is_empty() =>
                         {
@@ -2724,6 +2715,13 @@ impl TypeChecker {
                         }
                         TraitMember::Field(field) if field.default.is_none() => {
                             required.insert(field.name.clone());
+                            if field.is_final {
+                                self.env
+                                    .final_obligations
+                                    .entry(name.clone())
+                                    .or_default()
+                                    .insert(field.name.clone());
+                            }
                         }
                         _ => {}
                     }
@@ -3325,6 +3323,7 @@ impl TypeChecker {
                     }
                 }
                 let mut required = HashSet::new();
+                let mut final_required = HashSet::new();
                 for base in bases {
                     if let TypeExpr::Named {
                         name: base_name, ..
@@ -3332,8 +3331,10 @@ impl TypeChecker {
                     {
                         if self.env.interfaces.contains_key(base_name) {
                             required.extend(self.interface_obligation_names(base_name));
+                            final_required.extend(self.final_obligation_names(base_name));
                         } else if self.env.traits.contains_key(base_name) {
                             required.extend(self.trait_obligation_names(base_name));
+                            final_required.extend(self.final_obligation_names(base_name));
                         }
                     }
                 }
@@ -3370,10 +3371,40 @@ impl TypeChecker {
                         span: *span,
                     });
                 }
+                if let Some(missing) = final_required
+                    .iter()
+                    .find(|member| !self.class_has_final_field(name, member))
+                {
+                    return Err(TypeError {
+                        message: format!(
+                            "class '{name}' does not implement final required member '{missing}'"
+                        ),
+                        span: *span,
+                    });
+                }
                 Ok(())
             }
             _ => Ok(()),
         }
+    }
+
+    fn class_has_final_field(&self, class_name: &str, field: &str) -> bool {
+        if self
+            .env
+            .final_fields
+            .get(class_name)
+            .is_some_and(|fields| fields.contains(field))
+        {
+            return true;
+        }
+        self.env
+            .classes
+            .get(class_name)
+            .and_then(|class| match class {
+                Type::Class { parent, .. } => parent.as_deref(),
+                _ => None,
+            })
+            .is_some_and(|parent| self.class_has_final_field(parent, field))
     }
 
     fn inherited_member_names(&self, class_name: &str) -> HashSet<String> {
@@ -3430,6 +3461,26 @@ impl TypeChecker {
         if let Some(bases) = self.env.trait_bases.get(trait_name) {
             for base in bases {
                 names.extend(self.trait_obligation_names(base));
+            }
+        }
+        names
+    }
+
+    fn final_obligation_names(&self, obligation_name: &str) -> HashSet<String> {
+        let mut names = self
+            .env
+            .final_obligations
+            .get(obligation_name)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(bases) = self.env.trait_bases.get(obligation_name) {
+            for base in bases {
+                names.extend(self.final_obligation_names(base));
+            }
+        }
+        if let Some(bases) = self.env.interface_bases.get(obligation_name) {
+            for base in bases {
+                names.extend(self.final_obligation_names(base));
             }
         }
         names
@@ -10306,20 +10357,21 @@ class Child(Reusable, Base1, Base2):
     }
 
     #[test]
-    fn test_final_obligation_fields_are_rejected() {
-        let module = parse("trait Named:\n    final name: str\n").unwrap();
+    fn test_final_obligation_fields_require_final_fields() {
+        let module =
+            parse("trait Named:\n    final name: str\n\nclass Person(Named):\n    final name: str\n")
+                .unwrap();
         let mut checker = TypeChecker::new();
-        let err = checker.check_module(&module).unwrap_err();
-        assert!(err
-            .message
-            .contains("final member 'name' must have an implementation"));
+        checker
+            .check_module(&module)
+            .expect("final fields should satisfy final trait obligations");
 
-        let module = parse("interface Named:\n    final name: str\n").unwrap();
+        let module =
+            parse("trait Named:\n    final name: str\n\nclass Person(Named):\n    getter name(self) -> str:\n        return \"Ada\"\n")
+                .unwrap();
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
-        assert!(err
-            .message
-            .contains("final member 'name' must have an implementation"));
+        assert!(err.message.contains("final required member 'name'"));
     }
 
     #[test]
