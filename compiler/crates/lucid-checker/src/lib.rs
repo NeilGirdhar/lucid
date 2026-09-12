@@ -646,6 +646,7 @@ impl Type {
                         |(index, (source, expected))| match variances
                             .and_then(|items| items.get(index))
                         {
+                            _ if matches!(source, Type::Never) => true,
                             Some(Variance::Covariant) => source.is_subtype_of(expected, env),
                             Some(Variance::Contravariant) => expected.is_subtype_of(source, env),
                             _ => source == expected,
@@ -12410,6 +12411,23 @@ def reject(value: not int) -> none:
                 .unwrap(),
             )
             .expect("immutable dict literals should type as frozendict");
+    }
+
+    #[test]
+    fn test_empty_collection_literals_flow_to_annotated_container_types() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class Cat:\n    pass\nanimals: dict[str, Cat] = {:}\nvalues: list[int] = []\nitems: set[str] = {}\n",
+                )
+                .unwrap(),
+            )
+            .expect("empty collection literals should satisfy annotated element types");
+
+        let error = TypeChecker::new()
+            .check_module(&parse("values: list[int] = [\"x\"]\n").unwrap())
+            .expect_err("non-empty mismatched literals must still fail");
+        assert!(error.message.contains("type mismatch"));
     }
 
     #[test]
