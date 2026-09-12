@@ -6260,6 +6260,16 @@ impl TypeChecker {
                                     || argument.is_dict_spread
                                     || argument.is_gather_spread
                             })
+                            && !params.last().is_some_and(|parameter| {
+                                matches!(
+                                    parameter,
+                                    Type::Class { name, .. }
+                                        if name == "Arguments"
+                                            || name == "Parameters"
+                                            || name.ends_with("Arguments")
+                                            || name.ends_with("Parameters")
+                                )
+                            })
                             && args
                                 .iter()
                                 .filter(|argument| !matches!(argument.value, Expr::Skip(_)))
@@ -10757,6 +10767,7 @@ def reject(value: not int) -> none:
         .unwrap();
         let error = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(error.message.contains("method accepts fewer arguments"));
+
     }
 
     #[test]
