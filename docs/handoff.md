@@ -495,6 +495,8 @@ diverged:
   A statically false leading `if` arm no longer blocks branch-local assignment
   lowering when the remaining dynamic `elif`/`else` arms all assign the returned
   local.
+  The same dead-leading-arm lowering now applies to initialized locals, where
+  pass-only dynamic arms preserve the initialized value.
   Single-statement static branches whose selected arm is `pass`, including
   selected `elif` and `else` arms, now lower to verified void CIR; dynamic
   `elif` guards still block this fold.
