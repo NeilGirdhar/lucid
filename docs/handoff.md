@@ -461,7 +461,7 @@ diverged:
   skipped before lowering, preserving the live dynamic conditions.
 * Primitive literal `match` functions now lower through verified CIR decision
   chains: two-arm matches and larger literal chains support primitive
-  expression results followed by a wildcard. Optional larger literal chains
+  expression results followed by a wildcard. Optional literal chains
   without a wildcard, or with a no-op wildcard fallback such as `pass`, now use
   the same typed-HIR/CIR seam and return `None` when no value arm matches. More
   complex patterns remain explicit lowering work rather than being silently

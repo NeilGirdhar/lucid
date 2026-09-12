@@ -1298,7 +1298,7 @@ fn collect_typed_body<'db>(
                     }
                 }
                 let optional_value_arms =
-                    if arms.len() >= 2 && arms.iter().all(|arm| arm.guard.is_none()) {
+                    if !arms.is_empty() && arms.iter().all(|arm| arm.guard.is_none()) {
                         if matches!(
                             arms.last().map(|arm| &arm.pattern),
                             Some(lucid_syntax::Pattern::Wildcard(_))
@@ -1319,7 +1319,7 @@ fn collect_typed_body<'db>(
                         None
                     };
                 if let Some(value_arms) = optional_value_arms.filter(|value_arms| {
-                    value_arms.len() >= 2
+                    !value_arms.is_empty()
                         && value_arms
                             .iter()
                             .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
@@ -7646,6 +7646,15 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("single-arm optional match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("single-arm optional match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
