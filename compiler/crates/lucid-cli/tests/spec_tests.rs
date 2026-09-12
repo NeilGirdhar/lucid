@@ -666,6 +666,22 @@ fn test_sum_rejects_nonnumeric_elements() {
     }
 }
 
+#[test]
+fn test_strings_require_chars_for_iterable_builtins() {
+    for source in [
+        "letters = list(\"abc\")\n",
+        "def f(x: str) -> str:\n    return x\nletters = map(f, \"abc\")\n",
+        "pairs = zip(\"ab\", [1, 2])\n",
+        "letters = reversed(\"abc\")\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+    }
+
+    let (chk, _evl) = run_lucid("letters = list(\"abc\".chars)\n");
+    assert!(chk.is_ok(), "str.chars should be iterable: {:?}", chk.err());
+}
+
 // ---------------------------------------------------------------------------
 // 22. Multi-file Module Imports
 // ---------------------------------------------------------------------------

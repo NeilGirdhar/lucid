@@ -3267,11 +3267,11 @@ impl TypeChecker {
             Type::View { inner, .. } => inner.as_ref(),
             other => other,
         };
-        if matches!(base, Type::Str)
-            || matches!(base, Type::Class { name, .. } if name == "str")
-            || matches!(base, Type::Shape(_))
-        {
+        if matches!(base, Type::Shape(_)) {
             return true;
+        }
+        if matches!(base, Type::Str) || matches!(base, Type::Class { name, .. } if name == "str") {
+            return false;
         }
         matches!(
             base,
@@ -5938,8 +5938,7 @@ impl TypeChecker {
                                 && !argument.is_gather_spread
                             {
                                 let argument_type = self.type_of_expr(&argument.value)?;
-                                let accepts_string = matches!(argument_type, Type::Str);
-                                if !accepts_string && !self.is_iterable_type(&argument_type) {
+                                if !self.is_iterable_type(&argument_type) {
                                     return Err(TypeError {
                                         message: format!(
                                             "{}() argument must be iterable, got {:?}",
@@ -6030,8 +6029,7 @@ impl TypeChecker {
                             }
                             if let Some(argument) = args.get(1) {
                                 let argument_type = self.type_of_expr(&argument.value)?;
-                                let accepts_string = matches!(argument_type, Type::Str);
-                                if !accepts_string && !self.is_iterable_type(&argument_type) {
+                                if !self.is_iterable_type(&argument_type) {
                                     return Err(TypeError {
                                         message: format!(
                                             "map() iterable argument must be iterable, got {:?}",
@@ -6086,8 +6084,7 @@ impl TypeChecker {
                     if name == "zip" {
                         for argument in args {
                             let argument_type = self.type_of_expr(&argument.value)?;
-                            let accepts_string = matches!(argument_type, Type::Str);
-                            if !accepts_string && !self.is_iterable_type(&argument_type) {
+                            if !self.is_iterable_type(&argument_type) {
                                 return Err(TypeError {
                                     message: format!(
                                         "zip() arguments must be iterable, got {:?}",
@@ -11013,9 +11010,7 @@ def reject(value: not int) -> none:
         ));
         let mut checker = TypeChecker::new();
         checker
-            .check_module(
-                &parse("values = list([1])\nunique = set({1})\nletters = list(\"abc\")\n").unwrap(),
-            )
+            .check_module(&parse("values = list([1])\nunique = set({1})\n").unwrap())
             .unwrap();
         assert!(matches!(
             checker.env.variables.get("values").map(|(ty, _)| ty),
@@ -11026,11 +11021,6 @@ def reject(value: not int) -> none:
             checker.env.variables.get("unique").map(|(ty, _)| ty),
             Some(Type::Class { name, type_args, .. })
                 if name == "set" && type_args == &vec![Type::Int]
-        ));
-        assert!(matches!(
-            checker.env.variables.get("letters").map(|(ty, _)| ty),
-            Some(Type::Class { name, type_args, .. })
-                if name == "list" && type_args == &vec![Type::Str]
         ));
         let mut checker = TypeChecker::new();
         checker
@@ -11056,6 +11046,28 @@ def reject(value: not int) -> none:
             checker.env.variables.get("e").map(|(ty, _)| ty),
             Some(Type::Float)
         ));
+    }
+
+    #[test]
+    fn string_is_not_accepted_as_iterable_or_reversible() {
+        for (source, message) in [
+            ("letters = list(\"abc\")\n", "argument must be iterable"),
+            (
+                "def f(x: str) -> str:\n    return x\nletters = map(f, \"abc\")\n",
+                "iterable argument must be iterable",
+            ),
+            ("pairs = zip(\"ab\", [1, 2])\n", "arguments must be iterable"),
+            ("letters = reversed(\"abc\")\n", "not reversible"),
+        ] {
+            let error = TypeChecker::new()
+                .check_module(&parse(source).unwrap())
+                .expect_err("plain str must not satisfy iterable/reversible builtins");
+            assert!(error.message.contains(message), "{}", error.message);
+        }
+
+        TypeChecker::new()
+            .check_module(&parse("letters = list(\"abc\".chars)\n").unwrap())
+            .expect("str.chars should satisfy iterable builtins");
     }
 
     #[test]
