@@ -189,6 +189,7 @@ pub struct CCodeGenerator {
     known_classes: HashMap<String, Vec<String>>,
     known_without_traits: HashMap<String, HashSet<String>>,
     known_capabilities: HashMap<String, HashSet<String>>,
+    known_class_traits: HashMap<String, HashSet<String>>,
     known_parents: HashMap<String, String>,
     known_class_members: HashMap<String, Vec<String>>,
     implementation_methods: HashMap<String, Vec<FunctionDef>>,
@@ -314,6 +315,7 @@ impl CCodeGenerator {
             known_classes: HashMap::new(),
             known_without_traits: HashMap::new(),
             known_capabilities: HashMap::new(),
+            known_class_traits: HashMap::new(),
             known_parents: HashMap::new(),
             known_class_members: HashMap::new(),
             implementation_methods: HashMap::new(),
@@ -568,6 +570,25 @@ impl CCodeGenerator {
             current = self.known_parents.get(&name).cloned();
         }
         generated
+    }
+
+    fn class_has_trait(&self, class: &str, trait_name: &str) -> bool {
+        let mut current = Some(class.to_string());
+        let mut seen = HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name.clone()) {
+                break;
+            }
+            if self
+                .known_class_traits
+                .get(&name)
+                .is_some_and(|traits| traits.contains(trait_name))
+            {
+                return true;
+            }
+            current = self.known_parents.get(&name).cloned();
+        }
+        false
     }
 
     /// Materialize a user iterator in native code.  Iterator termination is a
@@ -942,6 +963,12 @@ impl CCodeGenerator {
                         .or_default()
                         .insert(interface_name.clone());
                 }
+                if let TypeExpr::Named { name: interface_name, .. } = interface {
+                    self.known_class_traits
+                        .entry(target_name.clone())
+                        .or_default()
+                        .insert(interface_name.clone());
+                }
                 for function in body {
                     self.known_class_members
                         .entry(target_name.clone())
@@ -972,6 +999,19 @@ impl CCodeGenerator {
                 _ => None,
             }) {
                 self.known_parents.insert(name.clone(), parent);
+            }
+            for base in bases {
+                if let TypeExpr::Named {
+                    name: base_name, ..
+                } = base
+                {
+                    if !self.known_classes.contains_key(base_name) {
+                        self.known_class_traits
+                            .entry(name.clone())
+                            .or_default()
+                            .insert(base_name.clone());
+                    }
+                }
             }
         }
 
@@ -5971,6 +6011,20 @@ static inline void lucid_print_val(LucidVal v) {
             ));
             ancestor = self.known_parents.get(&parent).cloned();
         }
+        let mut trait_sources = vec![name.to_string()];
+        trait_sources.extend(seen_ancestors.iter().cloned());
+        let mut seen_traits = HashSet::new();
+        for source in trait_sources {
+            if let Some(traits) = self.known_class_traits.get(&source).cloned() {
+                for trait_name in traits {
+                    if seen_traits.insert(trait_name.clone()) {
+                        self.emit_line(&format!(
+                            "lucid_register_object(self, \"{trait_name}\", NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);"
+                        ));
+                    }
+                }
+            }
+        }
         for (fname, _) in &fields {
             self.emit_line(&format!("self->{fname} = {fname};"));
         }
@@ -10029,7 +10083,22 @@ static inline void lucid_print_val(LucidVal v) {
                                         )
                                     }
                                 }
-                                _ => "((bool)0)".into(),
+                                name => {
+                                    if left_ty.ends_with('*') {
+                                        format!(
+                                            "((bool){})",
+                                            self.class_has_trait(
+                                                left_ty.trim_end_matches('*'),
+                                                name
+                                            )
+                                        )
+                                    } else {
+                                        format!(
+                                            "lucid_object_is(lucid_as_ptr(lucid_wrap({l_str})), \"{}\")",
+                                            c_escape_string(name)
+                                        )
+                                    }
+                                }
                             };
                             Ok(condition)
                         } else {
@@ -10253,7 +10322,22 @@ static inline void lucid_print_val(LucidVal v) {
                                         )
                                     }
                                 }
-                                _ => "((bool)1)".into(),
+                                name => {
+                                    if left_ty.ends_with('*') {
+                                        format!(
+                                            "((bool){})",
+                                            !self.class_has_trait(
+                                                left_ty.trim_end_matches('*'),
+                                                name
+                                            )
+                                        )
+                                    } else {
+                                        format!(
+                                            "(!lucid_object_is(lucid_as_ptr(lucid_wrap({l_str})), \"{}\"))",
+                                            c_escape_string(name)
+                                        )
+                                    }
+                                }
                             };
                             Ok(condition)
                         } else {
@@ -16560,6 +16644,46 @@ print(z is complex)
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
             "true\ntrue\nfalse\ntrue\ntrue\n"
+        );
+    }
+
+    #[test]
+    fn native_trait_instance_checks_follow_declared_traits() {
+        let source = r#"
+trait Named:
+    def name(self) -> str:
+        ...
+
+class User(Named):
+    value: str
+    override def name(self) -> str:
+        return self.value
+
+def identity(value: Any) -> Any:
+    return value
+
+user = User("Ada")
+erased = identity(user)
+print(user is Named)
+print(user is not Named)
+print(erased is Named)
+print(erased is not Named)
+"#;
+        let module = parse(source).expect("trait identity program should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_trait_identity_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("trait identity program should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled trait identity program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "true\nfalse\ntrue\nfalse\n"
         );
     }
 
