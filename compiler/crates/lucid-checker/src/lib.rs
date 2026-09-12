@@ -9391,7 +9391,51 @@ impl TypeChecker {
             } => {
                 let mut names = HashSet::new();
                 let mut resolved = Vec::with_capacity(fields.len());
+                let mut saw_variadic_positional = false;
+                let mut saw_keyword_only = false;
+                let mut saw_variadic_keyword = false;
                 for field in fields {
+                    if saw_variadic_keyword {
+                        return Err(TypeError {
+                            message:
+                                "no record or parameter-shape field may follow variadic keyword tail"
+                                    .into(),
+                            span: field.type_expr.span(),
+                        });
+                    }
+                    if field.is_keyword_only {
+                        saw_keyword_only = true;
+                    }
+                    if saw_variadic_positional && !saw_keyword_only {
+                        return Err(TypeError {
+                            message:
+                                "no fixed positional field may follow variadic positional tail"
+                                    .into(),
+                            span: field.type_expr.span(),
+                        });
+                    }
+                    if field.is_variadic_positional {
+                        if saw_variadic_positional {
+                            return Err(TypeError {
+                                message:
+                                    "record or parameter shape may have only one variadic positional tail"
+                                        .into(),
+                                span: field.type_expr.span(),
+                            });
+                        }
+                        saw_variadic_positional = true;
+                    }
+                    if field.is_variadic_keyword {
+                        if saw_variadic_keyword {
+                            return Err(TypeError {
+                                message:
+                                    "record or parameter shape may have only one variadic keyword tail"
+                                        .into(),
+                                span: field.type_expr.span(),
+                            });
+                        }
+                        saw_variadic_keyword = true;
+                    }
                     if let Some(name) = &field.name {
                         if !names.insert(name.clone()) {
                             return Err(TypeError {
@@ -10503,6 +10547,33 @@ def reject(value: not int) -> none:
         };
         let error = checker.resolve_type_expr(&negative).unwrap_err();
         assert!(error.message.contains("cannot be negative"));
+    }
+
+    #[test]
+    fn parameter_shape_variadic_zones_are_ordered() {
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(
+                &parse("type Shape = (c: int, /, a: int, int, ..., *, b: int, _: int, ...)\n")
+                    .unwrap(),
+            )
+            .expect("documented parameter shape should check");
+
+        let mut checker = TypeChecker::new();
+        let error = checker
+            .check_module(&parse("type Bad = (int, ..., bool)\n").unwrap())
+            .unwrap_err();
+        assert!(error
+            .message
+            .contains("no fixed positional field may follow"));
+
+        let mut checker = TypeChecker::new();
+        let error = checker
+            .check_module(&parse("type Bad = (*, _: int, ..., b: int)\n").unwrap())
+            .unwrap_err();
+        assert!(error
+            .message
+            .contains("no record or parameter-shape field may follow"));
     }
 
     #[test]
