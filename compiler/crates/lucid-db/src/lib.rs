@@ -1013,35 +1013,70 @@ fn collect_typed_body<'db>(
                     }
                 }
 
+                fn typed_match_noop_statement(statement: &lucid_syntax::Stmt) -> bool {
+                    fn pure_expr(expr: &lucid_syntax::Expr) -> bool {
+                        match expr {
+                            lucid_syntax::Expr::Literal { .. }
+                            | lucid_syntax::Expr::Ident { .. } => true,
+                            lucid_syntax::Expr::Unary { expr, .. } => pure_expr(expr),
+                            lucid_syntax::Expr::Binary { left, right, .. } => {
+                                pure_expr(left) && pure_expr(right)
+                            }
+                            lucid_syntax::Expr::IfExpr {
+                                condition,
+                                then_branch,
+                                else_branch,
+                                ..
+                            } => {
+                                pure_expr(condition)
+                                    && pure_expr(then_branch)
+                                    && pure_expr(else_branch)
+                            }
+                            _ => false,
+                        }
+                    }
+                    matches!(statement, lucid_syntax::Stmt::Pass(_))
+                        || matches!(statement, lucid_syntax::Stmt::Expr(expr) if pure_expr(expr))
+                }
                 fn match_arm_result(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
-                    match arm.body.as_slice() {
-                        [
+                    let mut meaningful = arm
+                        .body
+                        .iter()
+                        .filter(|statement| !typed_match_noop_statement(statement));
+                    let first = meaningful.next()?;
+                    let second = meaningful.next();
+                    if meaningful.next().is_some() {
+                        return None;
+                    }
+                    match (first, second) {
+                        (
                             lucid_syntax::Stmt::Return {
                                 value: Some(value), ..
                             },
-                        ] => Some(value),
-                        [
+                            None,
+                        ) => Some(value),
+                        (
                             lucid_syntax::Stmt::Assignment {
                                 target: lucid_syntax::Expr::Ident { name, .. },
                                 value,
                                 ..
                             },
-                            lucid_syntax::Stmt::Return {
+                            Some(lucid_syntax::Stmt::Return {
                                 value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
                                 ..
-                            },
-                        ] if name == returned => Some(value),
-                        [
+                            }),
+                        )
+                        | (
                             lucid_syntax::Stmt::VarDef {
                                 pattern: lucid_syntax::Pattern::Ident(name, _),
                                 value: Some(value),
                                 ..
                             },
-                            lucid_syntax::Stmt::Return {
+                            Some(lucid_syntax::Stmt::Return {
                                 value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
                                 ..
-                            },
-                        ] if name == returned => Some(value),
+                            }),
+                        ) if name == returned => Some(value),
                         _ => None,
                     }
                 }
@@ -6520,6 +6555,17 @@ mod tests {
         }));
 
         let file = db.add_file(
+            "match-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 3\n        case _:\n            value + 1\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid no-op match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
             "try-local-hir.lucid",
             "def choose(value: int):\n    try:\n        selected = value + 1\n        return selected\n    except str as error:\n        fallback = 0\n        return fallback\n",
         );
@@ -7022,6 +7068,26 @@ mod tests {
             typed_module(&db, file)
                 .as_ref()
                 .expect("multi-arm match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 11\n        case 2:\n            value + 1\n            return 22\n        case _:\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with no-op setup should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm no-op match should type check")
                 .functions[0]
                 .body_expressions
                 .iter()
