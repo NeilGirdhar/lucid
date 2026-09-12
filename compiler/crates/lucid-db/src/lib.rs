@@ -1468,6 +1468,22 @@ pub fn lower_function_body(
                 lucid_syntax::Stmt::Assert { condition, .. }
                     if static_truth(condition) == Some(true)
             )
+            || matches!(
+                statement,
+                lucid_syntax::Stmt::While {
+                    condition,
+                    if_broken: None,
+                    ..
+                } if static_truth(condition) == Some(false)
+            )
+            || matches!(
+                statement,
+                lucid_syntax::Stmt::For {
+                    iterable,
+                    if_broken: None,
+                    ..
+                } if lucid_cir::is_const_empty_iterable(iterable)
+            )
     }
     let branch_is_single_void = |branch: &[lucid_syntax::Stmt]| {
         let Some((last, prefix)) = branch.split_last() else {
@@ -7200,6 +7216,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
 
         let file = db.add_file(
+            "dynamic-nested-branch-dead-loop-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            while false:\n                return 0\n            selected = value + 1\n            return selected\n        else:\n            for item in []:\n                return 0\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-loop local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
             "dynamic-nested-elif-branch-else-return.lucid",
             "def answer(value: int):\n    if true:\n        if value > 10:\n            return 100\n        elif value > 0:\n            return 1\n        else:\n            return -1\n    else:\n        return 0\n",
         );
@@ -7270,6 +7296,16 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("selected dynamic nested assert-padded void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-dead-loop-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            while false:\n                return value\n            return\n        else:\n            for item in []:\n                return value\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-loop void branch should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(None));
         assert_eq!(function.execute_with_args(&[-41]), Ok(None));
 
