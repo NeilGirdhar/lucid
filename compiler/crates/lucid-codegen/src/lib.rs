@@ -6753,6 +6753,28 @@ static inline void lucid_print_val(LucidVal v) {
                         || class_name == "Parameters"
                         || class_name.ends_with("Arguments")
                         || class_name.ends_with("Parameters");
+                    if !is_bundle {
+                        self.emit_line(&format!(
+                            "if (args && args->len > {} ) {{ fprintf(stderr, \"too many arguments for anonymous gathered class\\n\"); exit(1); }}",
+                            index + fields.len()
+                        ));
+                        let allowed_names = params[..index]
+                            .iter()
+                            .filter(|param| !param.is_variadic_keyword && !param.is_gather)
+                            .map(|param| c_escape_string(&param.name))
+                            .chain(fields.iter().map(|field| c_escape_string(field)))
+                            .collect::<Vec<_>>();
+                        let unexpected = allowed_names
+                            .iter()
+                            .map(|name| format!("strcmp(lucid_as_str(kwargs->keys[_anonymous_i]), \"{name}\") != 0"))
+                            .collect::<Vec<_>>()
+                            .join(" && ");
+                        if !unexpected.is_empty() {
+                            self.emit_line(&format!(
+                                "for (int64_t _anonymous_i = 0; kwargs && _anonymous_i < kwargs->len; ++_anonymous_i) if ({unexpected}) {{ fprintf(stderr, \"unknown keyword for anonymous gathered class\\n\"); exit(1); }}"
+                            ));
+                        }
+                    }
                     self.emit_line(&format!(
                         "LucidList* _anonymous_gather_vpargs = lucid_list_new(args ? args->len - {index} : 0);"
                     ));
@@ -15622,6 +15644,24 @@ print(z is complex)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "prefixed anonymous gather failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "13\n");
+    }
+
+    #[test]
+    fn native_anonymous_class_gather_rejects_surplus_arguments() {
+        let source = "class Options:\n    retries: int\nf = def(***rest: Options): rest.retries\nprint(f(1, 2))\n";
+        let module = parse(source).expect("surplus gather source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_surplus_gather_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("surplus gather should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run surplus anonymous gather");
+        let _ = fs::remove_file(&output);
+        assert!(!run.status.success(), "surplus gather unexpectedly succeeded");
+        assert!(String::from_utf8_lossy(&run.stderr).contains("too many arguments"));
     }
 
     #[test]
