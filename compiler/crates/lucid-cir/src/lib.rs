@@ -3892,6 +3892,19 @@ impl Function {
                 _ => None,
             }
         }
+        #[derive(Clone, Copy)]
+        enum RangeAccumulatorOperand {
+            Literal(i64),
+            Induction,
+        }
+        let accumulator_operand = |expr: &lucid_syntax::Expr| -> Option<RangeAccumulatorOperand> {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
+                    Some(RangeAccumulatorOperand::Induction)
+                }
+                _ => int_literal(expr).map(RangeAccumulatorOperand::Literal),
+            }
+        };
         let accumulator_update = match &body[0] {
             lucid_syntax::Stmt::AugAssign {
                 target:
@@ -3899,9 +3912,9 @@ impl Function {
                         name: update_name, ..
                     },
                 op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
-                value: lucid_syntax::Expr::Ident { name: add_name, .. },
+                value,
                 ..
-            } if update_name == acc_name && add_name == index_name => Some(update_op.clone()),
+            } if update_name == acc_name => Some((update_op.clone(), accumulator_operand(value)?)),
             lucid_syntax::Stmt::Assignment {
                 target:
                     lucid_syntax::Expr::Ident {
@@ -3916,20 +3929,26 @@ impl Function {
                     },
                 ..
             } => {
-                let ordinary_update = matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
-                    && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name);
+                let ordinary_update =
+                    matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name)
+                        .then(|| accumulator_operand(right.as_ref()))
+                        .flatten();
                 let commuted_add = *update_op == lucid_syntax::BinaryOp::Add
-                    && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
                     && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == acc_name);
-                if update_name == acc_name && (ordinary_update || commuted_add) {
-                    Some(update_op.clone())
+                let commuted_update = commuted_add
+                    .then(|| accumulator_operand(left.as_ref()))
+                    .flatten();
+                if update_name == acc_name {
+                    ordinary_update
+                        .or(commuted_update)
+                        .map(|operand| (update_op.clone(), operand))
                 } else {
                     None
                 }
             }
             _ => None,
         };
-        let accumulator_update = accumulator_update?;
+        let (accumulator_update, accumulator_operand) = accumulator_update?;
         let zero = lucid_syntax::Expr::Literal {
             value: lucid_syntax::LiteralValue::Int(0),
             span: func.span(),
@@ -3990,6 +4009,40 @@ impl Function {
         let start_instruction = operand(start_expr, ValueId(1))?;
         let stop_instruction = operand(stop_expr, ValueId(0))?;
         let accumulator_instruction = operand(initial_expr, ValueId(2))?;
+        let accumulator_operand_value = match accumulator_operand {
+            RangeAccumulatorOperand::Literal(_) => ValueId(9),
+            RangeAccumulatorOperand::Induction => ValueId(3),
+        };
+        let accumulator_update_instruction = match accumulator_update {
+            lucid_syntax::BinaryOp::Add => Instruction::Add {
+                result: ValueId(6),
+                left: ValueId(4),
+                right: accumulator_operand_value,
+            },
+            lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                result: ValueId(6),
+                left: ValueId(4),
+                right: accumulator_operand_value,
+            },
+            _ => return None,
+        };
+        let mut body_instructions = Vec::new();
+        if let RangeAccumulatorOperand::Literal(value) = accumulator_operand {
+            body_instructions.push(Instruction::ConstInt {
+                result: ValueId(9),
+                value,
+            });
+        }
+        body_instructions.push(accumulator_update_instruction);
+        body_instructions.push(Instruction::ConstInt {
+            result: ValueId(8),
+            value: step,
+        });
+        body_instructions.push(Instruction::Add {
+            result: ValueId(7),
+            left: ValueId(3),
+            right: ValueId(8),
+        });
         let function = Self {
             entry: BlockId(0),
             blocks: vec![
@@ -4035,30 +4088,7 @@ impl Function {
                 },
                 Block {
                     id: BlockId(2),
-                    instructions: vec![
-                        match accumulator_update {
-                            lucid_syntax::BinaryOp::Add => Instruction::Add {
-                                result: ValueId(6),
-                                left: ValueId(4),
-                                right: ValueId(3),
-                            },
-                            lucid_syntax::BinaryOp::Sub => Instruction::Sub {
-                                result: ValueId(6),
-                                left: ValueId(4),
-                                right: ValueId(3),
-                            },
-                            _ => return None,
-                        },
-                        Instruction::ConstInt {
-                            result: ValueId(8),
-                            value: step,
-                        },
-                        Instruction::Add {
-                            result: ValueId(7),
-                            left: ValueId(3),
-                            right: ValueId(8),
-                        },
-                    ],
+                    instructions: body_instructions,
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
@@ -9515,6 +9545,18 @@ return total
         .expect("commuted range accumulation fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("commuted range accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total += 2
+return total
+"#,
+        )
+        .expect("literal-step range accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("literal-step range accumulation should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
