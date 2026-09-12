@@ -2917,6 +2917,16 @@ static inline LucidVal lucid_add_value(LucidVal left, LucidVal right) {
         return lucid_bigint_binop(left, right, '+');
     if (left.type == LUCID_TYPE_STR && right.type == LUCID_TYPE_STR)
         return lucid_str(lucid_str_concat(left.s, right.s));
+    if (left.type == LUCID_TYPE_BYTES && right.type == LUCID_TYPE_BYTES) {
+        int64_t left_len = left.bytes ? left.bytes->len : 0;
+        int64_t right_len = right.bytes ? right.bytes->len : 0;
+        if (right_len > INT64_MAX - left_len) { fprintf(stderr, "bytes concat length overflow\n"); exit(1); }
+        LucidVal result = lucid_bytes_from_data(NULL, left_len + right_len);
+        if (left_len > 0) memcpy(result.bytes->data, left.bytes->data, (size_t)left_len);
+        if (right_len > 0) memcpy(result.bytes->data + left_len, right.bytes->data, (size_t)right_len);
+        result.bytes->data[left_len + right_len] = '\0';
+        return result;
+    }
     if (left.type == LUCID_TYPE_LIST && right.type == LUCID_TYPE_LIST)
         return lucid_list_val(lucid_list_concat(left.list, right.list));
     if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_INT)
@@ -5154,6 +5164,12 @@ static inline void lucid_print_val(LucidVal v) {
                     return "LucidList*".to_string();
                 }
                 if *op == BinaryOp::Add && l_ty == "LucidVal" && r_ty == "LucidVal" {
+                    return "LucidVal".to_string();
+                }
+                if *op == BinaryOp::Add
+                    && self.expr_is_bytes_value(left)
+                    && self.expr_is_bytes_value(right)
+                {
                     return "LucidVal".to_string();
                 }
                 if *op == BinaryOp::Mul && l_ty == "LucidVal" && r_ty == "LucidVal" {
@@ -10348,6 +10364,11 @@ static inline void lucid_print_val(LucidVal v) {
                             Ok(format!("lucid_str_concat({l_str}, {r_str})"))
                         } else if l_ty == "LucidList*" && r_ty == "LucidList*" {
                             Ok(format!("lucid_list_concat({l_str}, {r_str})"))
+                        } else if self.expr_is_bytes_value(left) && self.expr_is_bytes_value(right)
+                        {
+                            Ok(format!(
+                                "lucid_add_value(lucid_wrap({l_str}), lucid_wrap({r_str}))"
+                            ))
                         } else if self.expr_is_dynamic_value(left)
                             && self.expr_is_dynamic_value(right)
                         {
@@ -20532,7 +20553,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_bytes_repeat_preserves_bytes() {
-        let source = "data = b\"AB\"\nleft = data * 2\nright = 2 * data\nempty = data * -1\nprint(len(left))\nprint(left[2])\nprint(len(right))\nprint(right[3])\nprint(len(empty))\ndef identity(value: Any) -> Any:\n    return value\nerased = identity(data) * identity(2)\nprint(len(erased))\nprint(erased[2])\n";
+        let source = "data = b\"AB\"\nleft = data * 2\nright = 2 * data\nempty = data * -1\njoined = data + b\"CD\"\nprint(len(left))\nprint(left[2])\nprint(len(right))\nprint(right[3])\nprint(len(empty))\nprint(len(joined))\nprint(joined[3])\ndef identity(value: Any) -> Any:\n    return value\nerased = identity(data) * identity(2)\nerased_joined = identity(data) + identity(b\"CD\")\nprint(len(erased))\nprint(erased[2])\nprint(len(erased_joined))\nprint(erased_joined[3])\n";
         let module = parse(source).expect("bytes repeat source should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_bytes_repeat_{}", std::process::id()));
@@ -20545,7 +20566,7 @@ print(all({1, 2}))
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "4\n65\n4\n66\n0\n4\n65\n"
+            "4\n65\n4\n66\n0\n4\n68\n4\n65\n4\n68\n"
         );
     }
 

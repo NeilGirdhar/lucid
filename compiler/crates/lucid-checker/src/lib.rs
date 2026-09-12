@@ -8003,6 +8003,11 @@ impl TypeChecker {
                         } else if matches!(op, BinaryOp::Add) && lt == Type::Str && rt == Type::Str
                         {
                             Ok(Type::Str)
+                        } else if matches!(op, BinaryOp::Add)
+                            && matches!(&lt, Type::Class { name, .. } if name == "Bytes")
+                            && matches!(&rt, Type::Class { name, .. } if name == "Bytes")
+                        {
+                            Ok(lt)
                         } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
                             && matches!(&lt, Type::Class { name, .. } if name == "promote")
                             && lt == rt
@@ -13863,6 +13868,7 @@ view_is_sequence = view is Sequence
 repeated: Bytes = data * 2
 reflected: Bytes = 2 * data
 empty: Bytes = data * -1
+joined: Bytes = data + b"CD"
 "#,
         )
         .unwrap();

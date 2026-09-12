@@ -211,6 +211,9 @@ binary membership as byte-value membership.
 `Bytes` repetition now preserves the immutable byte payload in both operand
 orders (`data * n` and `n * data`) across the checker, interpreter, and native
 backend, including negative counts producing empty `Bytes`.
+`Bytes` concatenation also preserves the `Bytes` result for static and erased
+values, so `left + right` joins raw byte payloads instead of falling through to
+numeric or string coercion.
 
 ## Verified baseline
 

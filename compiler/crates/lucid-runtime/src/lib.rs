@@ -951,6 +951,13 @@ fn repeat_bytes(bytes: &[u8], count: i64) -> Vec<u8> {
     repeated
 }
 
+fn concat_bytes(left: &[u8], right: &[u8]) -> Vec<u8> {
+    let mut joined = Vec::with_capacity(left.len().saturating_add(right.len()));
+    joined.extend_from_slice(left);
+    joined.extend_from_slice(right);
+    joined
+}
+
 pub struct Interpreter {
     pub env: Rc<RefCell<Environment>>,
     pub classes: HashMap<String, ClassDef>,
@@ -1239,6 +1246,7 @@ impl Interpreter {
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
+                (Value::Bytes(a), Value::Bytes(b)) => Ok(Value::Bytes(concat_bytes(a, b))),
                 (Value::Str(a), Value::Str(b)) => Ok(Value::Str(format!("{a}{b}"))),
                 (Value::List(a), Value::List(b)) => {
                     let mut combined = a.borrow().clone();
@@ -12762,6 +12770,7 @@ sorted_first = sorted(bytes([66, 65]))[0]
 repeated = data * 2
 reflected = 2 * data
 empty_repeat = data * -1
+joined = data + b"CD"
 is_iterable = data is Iterable
 is_collection = data is Collection
 is_sequence = data is Sequence
@@ -12819,6 +12828,10 @@ view_is_sequence = view is Sequence
         assert_eq!(
             interp.env.borrow().get("empty_repeat"),
             Some(Value::Bytes(Vec::new()))
+        );
+        assert_eq!(
+            interp.env.borrow().get("joined"),
+            Some(Value::Bytes(vec![65, 66, 67, 68]))
         );
         assert_eq!(
             interp.env.borrow().get("is_iterable"),
