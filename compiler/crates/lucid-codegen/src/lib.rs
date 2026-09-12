@@ -10768,6 +10768,48 @@ static inline void lucid_print_val(LucidVal v) {
                         return Ok(format!("{name}_new({})", c_args.join(", ")));
                     }
 
+                    // A local or global binding can hold a callable even when
+                    // its static spelling is not a declared function name
+                    // (for example a loop variable iterating over a list of
+                    // closures). Dispatch it through the erased closure ABI
+                    // before attempting the named-function fast paths below.
+                    if self.var_types.contains_key(name) || self.global_vars.contains_key(name) {
+                        let callable = self.emit_expr(func)?;
+                        let call_args = self.new_temp();
+                        let call_kwargs = self.new_temp();
+                        let has_keywords = args.iter().any(|arg| arg.name.is_some());
+                        let mut parts = vec![format!(
+                            "LucidList* {call_args} = lucid_list_new({});",
+                            args.iter()
+                                .filter(|arg| !matches!(arg.value, Expr::Skip(_)) && arg.name.is_none())
+                                .count()
+                        )];
+                        if has_keywords {
+                            parts.push(format!("LucidDict* {call_kwargs} = lucid_dict_new(0);"));
+                        }
+                        for arg in args {
+                            if matches!(arg.value, Expr::Skip(_)) {
+                                continue;
+                            }
+                            let value = self.emit_expr(&arg.value)?;
+                            if let Some(arg_name) = &arg.name {
+                                parts.push(format!(
+                                    "lucid_dict_set({call_kwargs}, lucid_str(\"{}\"), lucid_wrap({value}));",
+                                    c_escape_string(arg_name)
+                                ));
+                            } else {
+                                parts.push(format!(
+                                    "lucid_list_append({call_args}, lucid_wrap({value}));"
+                                ));
+                            }
+                        }
+                        parts.push(format!(
+                            "LucidVal _call_result = lucid_call_with_kwargs(lucid_wrap({callable}), {call_args}, {}); _call_result;",
+                            if has_keywords { call_kwargs.as_str() } else { "NULL" }
+                        ));
+                        return Ok(format!("({{ {} }})", parts.join(" ")));
+                    }
+
                     // User function call
                     // A runtime list spread can still target a statically
                     // known fixed-arity function.  Materialize each element
@@ -12365,7 +12407,16 @@ static inline void lucid_print_val(LucidVal v) {
                 // ABI.  This covers values retrieved from containers and
                 // values crossing an `Any` boundary, where a typed C entry
                 // point cannot be selected statically.
-                if self.expr_is_val(func) || self.infer_expr_type(func, &HashMap::new()) == "LucidVal" {
+                let dynamic_binding = matches!(
+                    &**func,
+                    Expr::Ident { name, .. }
+                        if self.var_types.contains_key(name)
+                            || self.global_vars.contains_key(name)
+                );
+                if dynamic_binding
+                    || self.expr_is_val(func)
+                    || self.infer_expr_type(func, &HashMap::new()) == "LucidVal"
+                {
                     let callable = self.emit_expr(func)?;
                     let call_args = self.new_temp();
                     let call_kwargs = self.new_temp();
@@ -18233,6 +18284,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "escaping closure failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "12\n");
+    }
+
+    #[test]
+    fn native_loop_closures_capture_fresh_iteration_bindings() {
+        let source = "fns = []\nfor i in [1, 2, 3]:\n    fns.append(def() -> int: i)\nfor f in fns:\n    print(f())\n";
+        let module = parse(source).expect("loop closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_loop_closure_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("loop closure should compile");
+        let run = Command::new(&output).output().expect("run loop closure");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "loop closure failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n2\n3\n");
     }
 
     #[test]
