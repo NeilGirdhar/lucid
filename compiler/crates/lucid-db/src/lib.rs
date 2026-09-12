@@ -2078,6 +2078,89 @@ pub fn lower_function_body(
             elif_branches,
             ..
         },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        if let (Some((then_name, then_value)), Some((else_name, else_value))) =
+            (assigned_value(then_branch), assigned_value(else_branch))
+            && then_name == returned
+            && else_name == returned
+            && let Some(elif_values) = elif_branches
+                .iter()
+                .map(|(condition, branch)| {
+                    assigned_value(branch)
+                        .and_then(|(name, value)| (name == returned).then_some((condition, value)))
+                })
+                .collect::<Option<Vec<_>>>()
+        {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            if function.is_dispatch {
+                return Err(Arc::from(
+                    "dispatch function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                condition,
+                then_value,
+                &elif_values,
+                else_value,
+                &function.parameter_names,
+            )
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported dynamic local elif chain"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
     ] = source_function.body.as_slice()
         && elif_branches.is_empty()
         && static_truth(condition).is_none()
@@ -4601,6 +4684,18 @@ mod tests {
             .expect("pass around branch-local assignment should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "parameterized-local-elif.lucid",
+            "def choose(value: int):\n    if value > 10:\n        result = 100\n    elif value > 0:\n        pass\n        result = 1\n    elif value < 0:\n        result = -1\n        pass\n    else:\n        result = 0\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("branch-local elif assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
 
         let file = db.add_file(
             "parameterized-void-conditional.lucid",
