@@ -7436,6 +7436,19 @@ static inline void lucid_print_val(LucidVal v) {
             });
         }
 
+        let arg_codes = effective_args
+            .iter()
+            .map(|arg| self.emit_expr(&arg.value))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.emit_nested_block_call_values(parameter_specs, body, &arg_codes)
+    }
+
+    fn emit_nested_block_call_values(
+        &mut self,
+        parameter_specs: &[(String, String)],
+        body: &[Stmt],
+        arg_codes: &[String],
+    ) -> Result<String, CodegenError> {
         let old_buffer = std::mem::take(&mut self.buffer);
         let old_indent = self.indent;
         let old_types = self.var_types.clone();
@@ -7443,8 +7456,7 @@ static inline void lucid_print_val(LucidVal v) {
         self.buffer = String::new();
         self.indent = 0;
 
-        for ((name, ty), arg) in parameter_specs.iter().zip(effective_args.iter()) {
-            let argument = self.emit_expr(&arg.value)?;
+        for ((name, ty), argument) in parameter_specs.iter().zip(arg_codes.iter()) {
             let converted = match ty.as_str() {
                 "int64_t" => format!("lucid_as_int(lucid_wrap({argument}))"),
                 "double" => format!("lucid_as_float(lucid_wrap({argument}))"),
@@ -9521,6 +9533,11 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "map() takes exactly two arguments".to_string(),
                                 });
                             }
+                            enum MapBody {
+                                Expression(String, Expr),
+                                Block(Vec<(String, String)>, Vec<Stmt>),
+                                Named(String),
+                            }
                             let (parameter_types, call_body) = match &args[0].value {
                                 Expr::Ident {
                                     name: function_name,
@@ -9542,7 +9559,16 @@ static inline void lucid_print_val(LucidVal v) {
                                                 message: "native map() requires a unary function"
                                                     .into(),
                                             })?;
-                                        (vec![parameter_type], Some((param_name, body_expr)))
+                                        (vec![parameter_type], MapBody::Expression(param_name, body_expr))
+                                    } else if let Some((specs, body)) =
+                                        self.anonymous_block_bindings.get(function_name).cloned()
+                                    {
+                                        if specs.len() != 1 {
+                                            return Err(CodegenError {
+                                                message: "native map() requires a unary function".into(),
+                                            });
+                                        }
+                                        (vec![specs[0].1.clone()], MapBody::Block(specs, body))
                                     } else {
                                         let resolved = self
                                             .function_aliases
@@ -9564,7 +9590,7 @@ static inline void lucid_print_val(LucidVal v) {
                                                     .to_string(),
                                             });
                                         }
-                                        (parameter_types, None)
+                                        (parameter_types, MapBody::Named(resolved.to_string()))
                                     }
                                 }
                                 Expr::AnonymousDef { params, body, .. } => {
@@ -9588,7 +9614,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     };
                                     let parameter_type =
                                         self.map_type_expr(params[0].type_annotation.as_ref());
-                                    (vec![parameter_type], Some((params[0].name.clone(), expr)))
+                                    (vec![parameter_type], MapBody::Expression(params[0].name.clone(), expr))
                                 }
                                 _ => {
                                     return Err(CodegenError {
@@ -9646,7 +9672,7 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 _ => format!("{source_tmp}->items[{index_tmp}]"),
                             };
-                            let call = if let Some((param_name, body_expr)) = &call_body {
+                            let call = if let MapBody::Expression(param_name, body_expr) = &call_body {
                                 let param_type = &parameter_types[0];
                                 let binding = format!("lucid_var_{param_name}");
                                 let converted = match param_type.as_str() {
@@ -9684,21 +9710,14 @@ static inline void lucid_print_val(LucidVal v) {
                                     self.var_types.remove(param_name);
                                 }
                                 body
+                            } else if let MapBody::Block(specs, body) = &call_body {
+                                self.emit_nested_block_call_values(specs, body, &[argument.clone()])?
                             } else {
-                                let function_name = match &args[0].value {
-                                    Expr::Ident { name, .. } => name,
-                                    _ => {
-                                        return Err(CodegenError {
-                                            message: "function reference must be an identifier"
-                                                .to_string(),
-                                        });
-                                    }
+                                let MapBody::Named(function_name) = &call_body else {
+                                    return Err(CodegenError {
+                                        message: "invalid native map function body".into(),
+                                    });
                                 };
-                                let function_name = self
-                                    .function_aliases
-                                    .get(function_name)
-                                    .map(String::as_str)
-                                    .unwrap_or(function_name.as_str());
                                 format!("lucid_fn_{function_name}({argument})")
                             };
                             self.emit_line(&format!(
@@ -17495,6 +17514,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "nested block function failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "14\n");
+    }
+
+    #[test]
+    fn native_map_accepts_named_nested_block_function() {
+        let source = "def run(offset: int) -> int:\n    def add(x: int) -> int:\n        let y = x + offset\n        return y * 2\n    return map(add, [1, 2])[1]\nprint(run(4))\n";
+        let module = parse(source).expect("nested map block source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_nested_map_block_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("nested map block should compile");
+        let run = Command::new(&output).output().expect("run nested map block");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "nested map block failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "12\n");
     }
 
     #[test]
