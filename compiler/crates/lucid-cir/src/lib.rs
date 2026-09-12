@@ -3043,28 +3043,116 @@ impl Function {
         module: &lucid_syntax::Module,
         parameter_names: &[String],
     ) -> Option<Result<Self, LowerError>> {
-        let [lucid_syntax::Stmt::Assignment {
-            target: lucid_syntax::Expr::Ident { name: acc_name, .. },
-            value: initial_expr,
-            ..
+        fn initialized_ident(
+            statement: &lucid_syntax::Stmt,
+        ) -> Option<(&String, &lucid_syntax::Expr)> {
+            match statement {
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(value),
+                    ..
+                } => Some((name, value)),
+                _ => None,
+            }
         }
-        | lucid_syntax::Stmt::VarDef {
-            pattern: lucid_syntax::Pattern::Ident(acc_name, _),
-            value: Some(initial_expr),
-            ..
-        }, lucid_syntax::Stmt::While {
-            condition,
-            body,
-            if_broken,
-            ..
-        }, lucid_syntax::Stmt::Return {
-            value:
-                Some(lucid_syntax::Expr::Ident {
-                    name: return_name, ..
+        fn initializer_instruction(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            parameter_names: &[String],
+        ) -> Option<Instruction> {
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(value),
+                    ..
+                } => Some(Instruction::ConstInt {
+                    result,
+                    value: *value,
                 }),
-            ..
-        }] = module.statements.as_slice()
-        else {
+                lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
+                    result,
+                    index: parameter_names
+                        .iter()
+                        .position(|parameter| parameter == name)? as u32,
+                }),
+                _ => None,
+            }
+        }
+        let statements = module.statements.as_slice();
+        let (acc_name, initial_expr, induction_initial, condition, body, if_broken, return_name) =
+            match statements {
+                [acc_statement, while_statement, return_statement] => {
+                    let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
+                    let lucid_syntax::Stmt::While {
+                        condition,
+                        body,
+                        if_broken,
+                        ..
+                    } = while_statement
+                    else {
+                        return None;
+                    };
+                    let lucid_syntax::Stmt::Return {
+                        value:
+                            Some(lucid_syntax::Expr::Ident {
+                                name: return_name, ..
+                            }),
+                        ..
+                    } = return_statement
+                    else {
+                        return None;
+                    };
+                    (
+                        acc_name,
+                        initial_expr,
+                        None,
+                        condition,
+                        body,
+                        if_broken,
+                        return_name,
+                    )
+                }
+                [acc_statement, induction_statement, while_statement, return_statement] => {
+                    let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
+                    let lucid_syntax::Stmt::While {
+                        condition,
+                        body,
+                        if_broken,
+                        ..
+                    } = while_statement
+                    else {
+                        return None;
+                    };
+                    let lucid_syntax::Stmt::Return {
+                        value:
+                            Some(lucid_syntax::Expr::Ident {
+                                name: return_name, ..
+                            }),
+                        ..
+                    } = return_statement
+                    else {
+                        return None;
+                    };
+                    (
+                        acc_name,
+                        initial_expr,
+                        Some(induction_statement),
+                        condition,
+                        body,
+                        if_broken,
+                        return_name,
+                    )
+                }
+                _ => return None,
+            };
+        if induction_initial
+            .and_then(initialized_ident)
+            .is_some_and(|(name, _)| name == acc_name)
+        {
             return None;
         };
         if return_name != acc_name
@@ -3092,27 +3180,23 @@ impl Function {
         else {
             return None;
         };
-        let accumulator_instruction = match initial_expr {
-            lucid_syntax::Expr::Literal {
-                value: lucid_syntax::LiteralValue::Int(value),
-                ..
-            } => Instruction::ConstInt {
-                result: ValueId(1),
-                value: *value,
-            },
-            lucid_syntax::Expr::Ident { name, .. } => Instruction::Param {
-                result: ValueId(1),
+        let accumulator_instruction =
+            initializer_instruction(initial_expr, ValueId(1), parameter_names)?;
+        let induction_instruction = match induction_initial {
+            Some(statement) => {
+                let (target_name, initial_expr) = initialized_ident(statement)?;
+                if target_name != induction_name {
+                    return None;
+                }
+                initializer_instruction(initial_expr, ValueId(0), parameter_names)?
+            }
+            None => Instruction::Param {
+                result: ValueId(0),
                 index: parameter_names
                     .iter()
-                    .position(|parameter| parameter == name)? as u32,
+                    .position(|parameter| parameter == induction_name)?
+                    as u32,
             },
-            _ => return None,
-        };
-        let induction_instruction = Instruction::Param {
-            result: ValueId(0),
-            index: parameter_names
-                .iter()
-                .position(|parameter| parameter == induction_name)? as u32,
         };
         let bound_instruction = match right.as_ref() {
             lucid_syntax::Expr::Literal {
@@ -8911,6 +8995,37 @@ return total
                 .expect("parameter-bound while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+value = n
+while value > 0:
+    total += value
+    value -= 1
+return total
+"#,
+        )
+        .expect("local-induction while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("local-induction while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = seed
+let value = n
+while value > limit:
+    total = total + value
+    value = value - 1
+return total
+"#,
+        )
+        .expect("parameter-bound local-induction accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "seed".into()],
+        )
+        .expect("parameter-bound local-induction accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2, 10]), Ok(Some(22)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
