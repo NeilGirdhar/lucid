@@ -8018,6 +8018,16 @@ impl TypeChecker {
                             && matches!(&rt, Type::Class { name, .. } if name == "list")
                         {
                             Ok(rt)
+                        } else if matches!(op, BinaryOp::Mul)
+                            && matches!(&lt, Type::Class { name, .. } if name == "Bytes")
+                            && rt.is_subtype_of(&Type::Int, &self.env)
+                        {
+                            Ok(lt)
+                        } else if matches!(op, BinaryOp::Mul)
+                            && lt.is_subtype_of(&Type::Int, &self.env)
+                            && matches!(&rt, Type::Class { name, .. } if name == "Bytes")
+                        {
+                            Ok(rt)
                         } else if !is_numeric(&lt) || !is_numeric(&rt) {
                             Err(TypeError {
                                 message: format!(
@@ -13850,6 +13860,9 @@ is_sequence = data is Sequence
 is_reversible = data is Reversible
 buffer_is_sequence = buffer is Sequence
 view_is_sequence = view is Sequence
+repeated: Bytes = data * 2
+reflected: Bytes = 2 * data
+empty: Bytes = data * -1
 "#,
         )
         .unwrap();

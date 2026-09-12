@@ -208,6 +208,9 @@ capability checks, comprehensions, and reversible use for `Bytes`,
 `ByteArray`, and `MemoryView`; the interpreter and native backend materialize
 byte values as `int` elements for loops and iterable builtins while preserving
 binary membership as byte-value membership.
+`Bytes` repetition now preserves the immutable byte payload in both operand
+orders (`data * n` and `n * data`) across the checker, interpreter, and native
+backend, including negative counts producing empty `Bytes`.
 
 ## Verified baseline
 

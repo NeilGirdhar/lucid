@@ -942,6 +942,15 @@ fn binary_sequence_items(value: &Value) -> Option<Vec<Value>> {
     }
 }
 
+fn repeat_bytes(bytes: &[u8], count: i64) -> Vec<u8> {
+    let count = count.max(0) as usize;
+    let mut repeated = Vec::with_capacity(bytes.len().saturating_mul(count));
+    for _ in 0..count {
+        repeated.extend_from_slice(bytes);
+    }
+    repeated
+}
+
 pub struct Interpreter {
     pub env: Rc<RefCell<Environment>>,
     pub classes: HashMap<String, ClassDef>,
@@ -1292,6 +1301,8 @@ impl Interpreter {
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 * b)),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * *b as f64)),
                 (Value::Str(s), Value::Int(n)) => Ok(Value::Str(s.repeat((*n).max(0) as usize))),
+                (Value::Bytes(bytes), Value::Int(n)) => Ok(Value::Bytes(repeat_bytes(bytes, *n))),
+                (Value::Int(n), Value::Bytes(bytes)) => Ok(Value::Bytes(repeat_bytes(bytes, *n))),
                 (Value::List(items), Value::Int(n)) => {
                     let count = (*n).max(0) as usize;
                     let inner = items.borrow();
@@ -12748,6 +12759,9 @@ view_sum = sum(view)
 largest = max(data)
 first_enumerated = enumerate(data)[0][1]
 sorted_first = sorted(bytes([66, 65]))[0]
+repeated = data * 2
+reflected = 2 * data
+empty_repeat = data * -1
 is_iterable = data is Iterable
 is_collection = data is Collection
 is_sequence = data is Sequence
@@ -12793,6 +12807,18 @@ view_is_sequence = view is Sequence
         assert_eq!(
             interp.env.borrow().get("sorted_first"),
             Some(Value::Int(65))
+        );
+        assert_eq!(
+            interp.env.borrow().get("repeated"),
+            Some(Value::Bytes(vec![65, 66, 65, 66]))
+        );
+        assert_eq!(
+            interp.env.borrow().get("reflected"),
+            Some(Value::Bytes(vec![65, 66, 65, 66]))
+        );
+        assert_eq!(
+            interp.env.borrow().get("empty_repeat"),
+            Some(Value::Bytes(Vec::new()))
         );
         assert_eq!(
             interp.env.borrow().get("is_iterable"),

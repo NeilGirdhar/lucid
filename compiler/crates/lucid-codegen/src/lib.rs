@@ -254,6 +254,7 @@ pub struct CCodeGenerator {
     module_aliases: HashMap<String, String>,
     from_imports: HashMap<String, String>,
     bigint_names: HashSet<String>,
+    bytes_bindings: HashSet<String>,
     /// Source-level names removed by `del` in the current emission scope.
     deleted_bindings: HashSet<String>,
     alive_declarations: HashSet<String>,
@@ -323,6 +324,35 @@ impl CCodeGenerator {
         if !self.alive_declarations.contains(name) {
             self.emit_line(&format!("bool lucid_alive_{name} = false;"));
             self.alive_declarations.insert(name.to_string());
+        }
+    }
+
+    fn type_expr_is_bytes(ty: Option<&TypeExpr>) -> bool {
+        matches!(ty, Some(TypeExpr::Named { name, .. }) if name == "Bytes" || name == "bytes")
+    }
+
+    fn expr_is_bytes_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Literal {
+                value: LiteralValue::Bytes(_),
+                ..
+            } => true,
+            Expr::Ident { name, .. } => self.bytes_bindings.contains(name),
+            Expr::Call { func, .. } => {
+                matches!(&**func, Expr::Ident { name, .. } if name == "bytes")
+            }
+            Expr::Binary {
+                left,
+                op: BinaryOp::Mul,
+                right,
+                ..
+            } => {
+                (self.expr_is_bytes_value(left)
+                    && self.infer_expr_type(right, &HashMap::new()) == "int64_t")
+                    || (self.infer_expr_type(left, &HashMap::new()) == "int64_t"
+                        && self.expr_is_bytes_value(right))
+            }
+            _ => false,
         }
     }
 
@@ -402,6 +432,7 @@ impl CCodeGenerator {
             module_aliases: HashMap::new(),
             from_imports: HashMap::new(),
             bigint_names: HashSet::new(),
+            bytes_bindings: HashSet::new(),
             deleted_bindings: HashSet::new(),
             alive_declarations: HashSet::new(),
         }
@@ -4166,6 +4197,16 @@ static inline const char* lucid_str_repeat(const char* value, int64_t count) {
     result[total] = '\0';
     return result;
 }
+static inline LucidVal lucid_bytes_repeat(LucidBytes* value, int64_t count) {
+    if (!value || count <= 0) return lucid_bytes_from_data(NULL, 0);
+    if (value->len > INT64_MAX / count) { fprintf(stderr, "bytes repeat length overflow\n"); exit(1); }
+    int64_t total = value->len * count;
+    LucidVal result = lucid_bytes_from_data(NULL, total);
+    for (int64_t i = 0; i < count; ++i)
+        memcpy(result.bytes->data + (i * value->len), value->data, (size_t)value->len);
+    result.bytes->data[total] = '\0';
+    return result;
+}
 static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
     if (left.type == LUCID_TYPE_COMPLEX || right.type == LUCID_TYPE_COMPLEX)
         return lucid_complex_mul(left, right);
@@ -4174,7 +4215,7 @@ static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
         return lucid_bigint_binop(left, right, '*');
     LucidVal sequence = left;
     LucidVal count_value = right;
-    if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_LIST) {
+    if (left.type == LUCID_TYPE_INT && (right.type == LUCID_TYPE_LIST || right.type == LUCID_TYPE_BYTES)) {
         sequence = right;
         count_value = left;
     }
@@ -4182,6 +4223,8 @@ static inline LucidVal lucid_mul_value(LucidVal left, LucidVal right) {
         return lucid_str(lucid_str_repeat(sequence.s, count_value.i));
     if (sequence.type == LUCID_TYPE_LIST && count_value.type == LUCID_TYPE_INT)
         return lucid_list_val(lucid_list_repeat_value(sequence.list, count_value.i));
+    if (sequence.type == LUCID_TYPE_BYTES && count_value.type == LUCID_TYPE_INT)
+        return lucid_bytes_repeat(sequence.bytes, count_value.i);
     if (left.type == LUCID_TYPE_INT && right.type == LUCID_TYPE_INT)
         return lucid_int(lucid_checked_mul(left.i, right.i));
     if ((left.type == LUCID_TYPE_INT || left.type == LUCID_TYPE_FLOAT) &&
@@ -5116,6 +5159,12 @@ static inline void lucid_print_val(LucidVal v) {
                 if *op == BinaryOp::Mul && l_ty == "LucidVal" && r_ty == "LucidVal" {
                     return "LucidVal".to_string();
                 }
+                if *op == BinaryOp::Mul
+                    && ((self.expr_is_bytes_value(left) && r_ty == "int64_t")
+                        || (l_ty == "int64_t" && self.expr_is_bytes_value(right)))
+                {
+                    return "LucidVal".to_string();
+                }
                 if matches!(
                     op,
                     BinaryOp::Sub | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
@@ -5301,6 +5350,13 @@ static inline void lucid_print_val(LucidVal v) {
                         "LucidVal".to_string()
                     };
                     self.record_list_element_class(name, value.as_ref(), type_annotation.as_ref());
+                    if Self::type_expr_is_bytes(type_annotation.as_ref())
+                        || value
+                            .as_ref()
+                            .is_some_and(|expr| self.expr_is_bytes_value(expr))
+                    {
+                        self.bytes_bindings.insert(name.clone());
+                    }
                     if let Some(val) = value {
                         if self.expr_is_complex(val) {
                             self.complex_names.insert(name.clone());
@@ -5345,6 +5401,11 @@ static inline void lucid_print_val(LucidVal v) {
                     if !vars.contains_key(name) {
                         let ty = self.infer_expr_type(value, vars);
                         self.record_list_element_class(name, Some(value), None);
+                        if self.expr_is_bytes_value(value) {
+                            self.bytes_bindings.insert(name.clone());
+                        } else {
+                            self.bytes_bindings.remove(name);
+                        }
                         if self.expr_is_complex(value) {
                             self.complex_names.insert(name.clone());
                         }
@@ -8428,7 +8489,12 @@ static inline void lucid_print_val(LucidVal v) {
 
     fn emit_stmt(&mut self, stmt: &Stmt) -> Result<(), CodegenError> {
         match stmt {
-            Stmt::VarDef { pattern, value, .. } => {
+            Stmt::VarDef {
+                pattern,
+                type_annotation,
+                value,
+                ..
+            } => {
                 if let Pattern::Ident(name, _) = pattern {
                     self.deleted_bindings.remove(name);
                     if let Some(Expr::Attribute {
@@ -8551,6 +8617,13 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                     }
                     if let Some(val_expr) = value {
+                        if Self::type_expr_is_bytes(type_annotation.as_ref())
+                            || self.expr_is_bytes_value(val_expr)
+                        {
+                            self.bytes_bindings.insert(name.clone());
+                        } else {
+                            self.bytes_bindings.remove(name);
+                        }
                         let previous = self.capture_assignment.replace(name.clone());
                         let val_code = self.emit_expr(val_expr)?;
                         self.capture_assignment = previous;
@@ -8713,6 +8786,11 @@ static inline void lucid_print_val(LucidVal v) {
                         let previous = self.capture_assignment.replace(name.clone());
                         let val_code = self.emit_expr(value)?;
                         self.capture_assignment = previous;
+                        if self.expr_is_bytes_value(value) {
+                            self.bytes_bindings.insert(name.clone());
+                        } else {
+                            self.bytes_bindings.remove(name);
+                        }
                         let var_ty = self
                             .var_types
                             .get(name)
@@ -10295,6 +10373,12 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                     BinaryOp::Mul => {
                         if self.expr_is_dynamic_value(left) && self.expr_is_dynamic_value(right) {
+                            Ok(format!(
+                                "lucid_mul_value(lucid_wrap({l_str}), lucid_wrap({r_str}))"
+                            ))
+                        } else if (self.expr_is_bytes_value(left) && r_ty == "int64_t")
+                            || (l_ty == "int64_t" && self.expr_is_bytes_value(right))
+                        {
                             Ok(format!(
                                 "lucid_mul_value(lucid_wrap({l_str}), lucid_wrap({r_str}))"
                             ))
@@ -20444,6 +20528,25 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "hahaha\n\n");
+    }
+
+    #[test]
+    fn native_bytes_repeat_preserves_bytes() {
+        let source = "data = b\"AB\"\nleft = data * 2\nright = 2 * data\nempty = data * -1\nprint(len(left))\nprint(left[2])\nprint(len(right))\nprint(right[3])\nprint(len(empty))\ndef identity(value: Any) -> Any:\n    return value\nerased = identity(data) * identity(2)\nprint(len(erased))\nprint(erased[2])\n";
+        let module = parse(source).expect("bytes repeat source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_bytes_repeat_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("bytes repeat should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("compiled bytes repeat program should run");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "4\n65\n4\n66\n0\n4\n65\n"
+        );
     }
 
     #[test]
