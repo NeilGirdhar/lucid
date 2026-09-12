@@ -565,7 +565,10 @@ diverged:
   commuted additive spelling `x = y + x`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
   and accumulator Phis. Cranelift result-ABI coverage now executes the same
-  countdown-sum CFG natively.
+  countdown-sum CFG natively. Plain counted loops and accumulator loops now
+  also accept a distinct positional parameter as the comparison bound, such as
+  `while n > limit`, with both CIR interpretation and native result-ABI
+  coverage for the accumulator form.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable
@@ -842,7 +845,9 @@ diverged:
   must be an integer literal or parameter, and the induction update must use a
   literal self-update. The accumulator update may use either a literal or the
   current induction value, so countdown sums such as `total += n` execute on
-  the same verified CFG.
+  the same verified CFG. The loop condition bound may be an integer literal or
+  a distinct positional parameter, so `while n > limit` no longer falls out of
+  this CFG path.
   The induction recognizer also accepts `!=` conditions and lowers them to
   the same checked back-edge shape.
   It rejects empty or multi-statement bodies without indexing assumptions and

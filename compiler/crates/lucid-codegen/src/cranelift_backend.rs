@@ -2306,6 +2306,29 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_parameter_bound_while_accumulation_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > limit:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("parameter-bound while accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into()],
+        )
+        .expect("parameter-bound while accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile parameter-bound while accumulation CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 12);
+    }
+
+    #[test]
     fn lowers_verified_integer_cir_to_machine_code() {
         let function = Function {
             entry: lucid_cir::BlockId(0),

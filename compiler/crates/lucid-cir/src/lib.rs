@@ -2763,13 +2763,6 @@ impl Function {
         if return_name
             .as_ref()
             .is_some_and(|name| *name != condition_name)
-            || !matches!(
-                right.as_ref(),
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(_),
-                    ..
-                }
-            )
         {
             return None;
         }
@@ -2917,6 +2910,36 @@ impl Function {
             },
             Some(_) => return None,
         };
+        let bound_instruction = match right.as_ref() {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(Instruction::ConstInt {
+                result: ValueId(2),
+                value: *value,
+            }),
+            lucid_syntax::Expr::Ident { .. } => None,
+            _ => return None,
+        };
+        let mut entry_instructions = vec![initial_instruction];
+        match right.as_ref() {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(_),
+                ..
+            } => {}
+            lucid_syntax::Expr::Ident {
+                name: bound_name, ..
+            } if bound_name != name => {
+                entry_instructions.push(Instruction::Param {
+                    result: ValueId(2),
+                    index: parameter_names
+                        .iter()
+                        .position(|parameter| parameter == bound_name)?
+                        as u32,
+                });
+            }
+            _ => return None,
+        }
         let comparison = match op {
             lucid_syntax::BinaryOp::NotEq
             | lucid_syntax::BinaryOp::NotIdentity
@@ -2965,28 +2988,22 @@ impl Function {
             blocks: vec![
                 Block {
                     id: BlockId(0),
-                    instructions: vec![initial_instruction],
+                    instructions: entry_instructions,
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
                     id: BlockId(1),
-                    instructions: vec![
-                        Instruction::Phi {
+                    instructions: {
+                        let mut instructions = vec![Instruction::Phi {
                             result: ValueId(1),
                             incomings: vec![(BlockId(0), ValueId(0)), (BlockId(2), ValueId(5))],
-                        },
-                        Instruction::ConstInt {
-                            result: ValueId(2),
-                            value: match right.as_ref() {
-                                lucid_syntax::Expr::Literal {
-                                    value: lucid_syntax::LiteralValue::Int(value),
-                                    ..
-                                } => *value,
-                                _ => return None,
-                            },
-                        },
-                        comparison,
-                    ],
+                        }];
+                        if let Some(bound_instruction) = bound_instruction {
+                            instructions.push(bound_instruction);
+                        }
+                        instructions.push(comparison);
+                        instructions
+                    },
                     terminator: Terminator::Branch {
                         condition: ValueId(3),
                         then_block: BlockId(2),
@@ -3075,13 +3092,6 @@ impl Function {
         else {
             return None;
         };
-        let lucid_syntax::Expr::Literal {
-            value: lucid_syntax::LiteralValue::Int(bound),
-            ..
-        } = right.as_ref()
-        else {
-            return None;
-        };
         let accumulator_instruction = match initial_expr {
             lucid_syntax::Expr::Literal {
                 value: lucid_syntax::LiteralValue::Int(value),
@@ -3104,6 +3114,31 @@ impl Function {
                 .iter()
                 .position(|parameter| parameter == induction_name)? as u32,
         };
+        let bound_instruction = match right.as_ref() {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(Instruction::ConstInt {
+                result: ValueId(4),
+                value: *value,
+            }),
+            lucid_syntax::Expr::Ident {
+                name: bound_name, ..
+            } if bound_name != induction_name => None,
+            _ => return None,
+        };
+        let mut entry_instructions = vec![induction_instruction, accumulator_instruction];
+        if let lucid_syntax::Expr::Ident {
+            name: bound_name, ..
+        } = right.as_ref()
+        {
+            entry_instructions.push(Instruction::Param {
+                result: ValueId(4),
+                index: parameter_names
+                    .iter()
+                    .position(|parameter| parameter == bound_name)? as u32,
+            });
+        }
         #[derive(Clone, Copy)]
         enum AccumulatorOperand {
             Literal(i64),
@@ -3315,26 +3350,28 @@ impl Function {
             blocks: vec![
                 Block {
                     id: BlockId(0),
-                    instructions: vec![induction_instruction, accumulator_instruction],
+                    instructions: entry_instructions,
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
                     id: BlockId(1),
-                    instructions: vec![
-                        Instruction::Phi {
-                            result: ValueId(2),
-                            incomings: vec![(BlockId(0), ValueId(0)), (BlockId(2), ValueId(9))],
-                        },
-                        Instruction::Phi {
-                            result: ValueId(3),
-                            incomings: vec![(BlockId(0), ValueId(1)), (BlockId(2), ValueId(7))],
-                        },
-                        Instruction::ConstInt {
-                            result: ValueId(4),
-                            value: *bound,
-                        },
-                        comparison,
-                    ],
+                    instructions: {
+                        let mut instructions = vec![
+                            Instruction::Phi {
+                                result: ValueId(2),
+                                incomings: vec![(BlockId(0), ValueId(0)), (BlockId(2), ValueId(9))],
+                            },
+                            Instruction::Phi {
+                                result: ValueId(3),
+                                incomings: vec![(BlockId(0), ValueId(1)), (BlockId(2), ValueId(7))],
+                            },
+                        ];
+                        if let Some(bound_instruction) = bound_instruction {
+                            instructions.push(bound_instruction);
+                        }
+                        instructions.push(comparison);
+                        instructions
+                    },
                     terminator: Terminator::Branch {
                         condition: ValueId(5),
                         then_block: BlockId(2),
@@ -8758,6 +8795,19 @@ return n
         assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
 
         let module = lucid_syntax::parse(
+            r#"while n > limit:
+    n -= 1
+return n
+"#,
+        )
+        .expect("parameter-bound loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("parameter-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
             r#"while n > 0:
     n -= 1
 "#,
@@ -8846,6 +8896,21 @@ return total
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("commuted induction accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > limit:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("parameter-bound while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("parameter-bound while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(0)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
