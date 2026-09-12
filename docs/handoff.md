@@ -1169,7 +1169,8 @@ diverged:
   Membership operators now validate their right-hand container and known
   element/key types, while allowing user-defined `__contains__` protocols.
   Match exhaustiveness now ignores guarded arms unless an unguarded wildcard
-  covers the remaining space.
+  covers the remaining space. Literal `int`, `bool`, `float`, and `str`
+  patterns now cover their corresponding literal union variants.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an

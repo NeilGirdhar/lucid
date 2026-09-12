@@ -6586,6 +6586,18 @@ impl TypeChecker {
         arms: &[MatchArm],
         span: Span,
     ) -> Result<(), TypeError> {
+        fn literal_pattern_covers_type(pattern: &LiteralValue, ty: &Type) -> bool {
+            match (pattern, ty) {
+                (LiteralValue::Int(left), Type::LiteralInt(right)) => left == right,
+                (LiteralValue::Bool(left), Type::LiteralBool(right)) => left == right,
+                (LiteralValue::Float(left), Type::LiteralFloat(right)) => {
+                    left.to_bits() == right.to_bits()
+                }
+                (LiteralValue::Str(left), Type::LiteralStr(right)) => left == right,
+                (LiteralValue::None, Type::None) => true,
+                _ => false,
+            }
+        }
         let has_wildcard = arms
             .iter()
             .any(|arm| arm.guard.is_none() && matches!(arm.pattern, Pattern::Wildcard(_)));
@@ -6620,6 +6632,10 @@ impl TypeChecker {
                         }
                         Pattern::Wildcard(_) => {
                             uncovered.clear();
+                        }
+                        Pattern::Literal(value, _) => {
+                            uncovered
+                                .retain(|variant| !literal_pattern_covers_type(value, variant));
                         }
                         _ => {}
                     }
@@ -12540,6 +12556,28 @@ def render(s: Shape) -> int:
         .unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&aliased).is_ok());
+
+        let literal_ints = parse(
+            "type Choice = 1 | 2\ndef render(s: Choice) -> int:\n    match s:\n        case 1:\n            return 10\n        case 2:\n            return 20\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&literal_ints).is_ok());
+
+        let literal_mixed = parse(
+            "type Choice = true | 1.5 | \"ok\"\ndef render(s: Choice) -> int:\n    match s:\n        case true:\n            return 1\n        case 1.5:\n            return 2\n        case \"ok\":\n            return 3\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&literal_mixed).is_ok());
+
+        let guarded_literal = parse(
+            "type Choice = 1 | 2\ndef render(s: Choice) -> int:\n    match s:\n        case 1:\n            return 10\n        case 2 if true:\n            return 20\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&guarded_literal).unwrap_err();
+        assert!(err.message.contains("non-exhaustive match"));
 
         let missing_alias = parse(
             "def render(value: int) -> int:\n    match value + 1:\n        case _:\n            return value\n",
