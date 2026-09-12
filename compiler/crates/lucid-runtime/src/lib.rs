@@ -2014,14 +2014,14 @@ impl Interpreter {
                 _ => Ok(Value::Bool(lval != rval)),
             },
             BinaryOp::And => {
-                if !self.is_truthy(&lval) {
+                if !self.to_bool(&lval, *span)? {
                     Ok(lval)
                 } else {
                     Ok(rval)
                 }
             }
             BinaryOp::Or => {
-                if self.is_truthy(&lval) {
+                if self.to_bool(&lval, *span)? {
                     Ok(lval)
                 } else {
                     Ok(rval)
@@ -2159,7 +2159,7 @@ impl Interpreter {
                             vec![(None, rval.clone()), (None, lval.clone())],
                             *span,
                         )?;
-                        return Ok(Value::Bool(!self.is_truthy(&result)));
+                        return Ok(Value::Bool(!self.to_bool(&result, *span)?));
                     }
                 }
                 let contains = match &rval {
@@ -2559,9 +2559,23 @@ impl Interpreter {
                     }
                 };
                 let result = if want_any {
-                    values.iter().any(|value| interp.is_truthy(value))
+                    let mut result = false;
+                    for value in &values {
+                        if interp.to_bool(value, Span::default())? {
+                            result = true;
+                            break;
+                        }
+                    }
+                    result
                 } else {
-                    values.iter().all(|value| interp.is_truthy(value))
+                    let mut result = true;
+                    for value in &values {
+                        if !interp.to_bool(value, Span::default())? {
+                            result = false;
+                            break;
+                        }
+                    }
+                    result
                 };
                 Ok(Value::Bool(result))
             });
@@ -4044,7 +4058,7 @@ impl Interpreter {
                     span: Span::default(),
                 });
             }
-            Ok(Value::Bool(interp.is_truthy(&args[0])))
+            Ok(Value::Bool(interp.to_bool(&args[0], Span::default())?))
         });
         self.env.borrow_mut().set(
             "bool".to_string(),
@@ -6084,13 +6098,13 @@ impl Interpreter {
             } => {
                 let cond_val = self.eval_expr(condition)?;
                 Self::reject_skip_value(&cond_val, "if condition", condition.span())?;
-                if self.is_truthy(&cond_val) {
+                if self.to_bool(&cond_val, condition.span())? {
                     return self.eval_block(then_branch);
                 }
                 for (elif_cond, elif_body) in elif_branches {
                     let elif_val = self.eval_expr(elif_cond)?;
                     Self::reject_skip_value(&elif_val, "elif condition", elif_cond.span())?;
-                    if self.is_truthy(&elif_val) {
+                    if self.to_bool(&elif_val, elif_cond.span())? {
                         return self.eval_block(elif_body);
                     }
                 }
@@ -6264,7 +6278,7 @@ impl Interpreter {
                 loop {
                     let cond = self.eval_expr(condition)?;
                     Self::reject_skip_value(&cond, "while condition", condition.span())?;
-                    if !self.is_truthy(&cond) {
+                    if !self.to_bool(&cond, condition.span())? {
                         break;
                     }
                     let res = self.eval_loop_body(body);
@@ -6309,7 +6323,7 @@ impl Interpreter {
                         self.bind_match_pattern(&arm.pattern, subj_val.clone(), *span)?;
                         if let Some(guard) = &arm.guard {
                             let guard_value = self.eval_expr(guard)?;
-                            if !self.is_truthy(&guard_value) {
+                            if !self.to_bool(&guard_value, guard.span())? {
                                 let mut env = self.env.borrow_mut();
                                 env.bindings = saved_bindings;
                                 env.binding_order = saved_binding_order;
@@ -6343,7 +6357,7 @@ impl Interpreter {
             } => {
                 let condition_value = self.eval_expr(condition)?;
                 Self::reject_skip_value(&condition_value, "assert condition", condition.span())?;
-                if !self.is_truthy(&condition_value) {
+                if !self.to_bool(&condition_value, condition.span())? {
                     let detail = if let Some(message) = message {
                         let message_value = self.eval_expr(message)?;
                         Self::reject_skip_value(&message_value, "assert message", message.span())?;
@@ -6872,7 +6886,7 @@ impl Interpreter {
                 // their right-hand side when the left-hand truth value already
                 // determines the result.
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
-                    let left_truthy = self.is_truthy(&lval);
+                    let left_truthy = self.to_bool(&lval, left.span())?;
                     if matches!(op, BinaryOp::And) {
                         return if left_truthy {
                             self.eval_expr(right)
@@ -6916,7 +6930,7 @@ impl Interpreter {
                             span: *span,
                         }),
                     },
-                    UnaryOp::Not => Ok(Value::Bool(!self.is_truthy(&val))),
+                    UnaryOp::Not => Ok(Value::Bool(!self.to_bool(&val, *span)?)),
                     UnaryOp::Invert => match val {
                         Value::Int(n) => Ok(Value::Int(!n)),
                         // Two's-complement inversion is defined for arbitrary
@@ -8924,7 +8938,7 @@ impl Interpreter {
                 ..
             } => {
                 let cond_val = self.eval_expr(condition)?;
-                if self.is_truthy(&cond_val) {
+                if self.to_bool(&cond_val, condition.span())? {
                     self.eval_expr(then_branch)
                 } else {
                     self.eval_expr(else_branch)
@@ -8953,7 +8967,7 @@ impl Interpreter {
                         self.bind_pattern(target, item, Span::default())?;
                         let keep = if let Some(cond) = condition {
                             let c = self.eval_expr(cond)?;
-                            self.is_truthy(&c)
+                            self.to_bool(&c, cond.span())?
                         } else {
                             true
                         };
@@ -8991,7 +9005,7 @@ impl Interpreter {
                         self.bind_pattern(target, item, Span::default())?;
                         let keep = if let Some(cond) = condition {
                             let c = self.eval_expr(cond)?;
-                            self.is_truthy(&c)
+                            self.to_bool(&c, cond.span())?
                         } else {
                             true
                         };
@@ -9030,7 +9044,7 @@ impl Interpreter {
                         self.bind_pattern(target, item, Span::default())?;
                         let keep = if let Some(cond) = condition {
                             let c = self.eval_expr(cond)?;
-                            self.is_truthy(&c)
+                            self.to_bool(&c, cond.span())?
                         } else {
                             true
                         };
@@ -10195,56 +10209,34 @@ impl Interpreter {
         }
     }
 
-    fn is_truthy(&mut self, val: &Value) -> bool {
+    fn to_bool(&mut self, val: &Value, span: Span) -> Result<bool, RuntimeError> {
         match val {
-            Value::Bool(b) => *b,
-            Value::Int(n) => *n != 0,
-            Value::BigInt(n) => !n.is_zero(),
-            Value::Float(f) => *f != 0.0,
-            Value::Complex(real, imag) => *real != 0.0 || *imag != 0.0,
-            Value::Str(s) => !s.is_empty(),
-            Value::None => false,
-            Value::List(l) => !l.borrow().is_empty(),
-            Value::MemoryView { len, .. } => *len > 0,
-            Value::Dict(d) => !d.borrow().is_empty(),
-            Value::Set(s) => !s.borrow().is_empty(),
-            Value::Range { start, stop, step } => {
-                if *step > 0 {
-                    start < stop
-                } else if *step < 0 {
-                    start > stop
-                } else {
-                    false
-                }
-            }
-            Value::Skip => false,
+            Value::Bool(b) => Ok(*b),
             Value::Object { fields, .. } => {
                 if let Some(method) = fields.borrow().get("__bool__").cloned() {
-                    return match self.invoke_value(
-                        method,
-                        vec![(None, val.clone())],
-                        Span::default(),
-                    ) {
-                        Ok(Value::Bool(value)) => value,
-                        Ok(Value::Int(value)) => value != 0,
-                        Ok(other) => self.is_truthy(&other),
-                        Err(_) => false,
+                    return match self.invoke_value(method, vec![(None, val.clone())], span)? {
+                        Value::Bool(value) => Ok(value),
+                        other => Err(RuntimeError {
+                            message: format!("__bool__ returned {}, not bool", other.type_name()),
+                            span,
+                        }),
                     };
                 }
-                if let Some(method) = fields.borrow().get("__len__").cloned() {
-                    return match self.invoke_value(
-                        method,
-                        vec![(None, val.clone())],
-                        Span::default(),
-                    ) {
-                        Ok(Value::Int(value)) => value != 0,
-                        Ok(other) => self.is_truthy(&other),
-                        Err(_) => false,
-                    };
-                }
-                true
+                Err(RuntimeError {
+                    message: format!(
+                        "{} does not define truth behavior; use a bool or define __bool__",
+                        val.type_name()
+                    ),
+                    span,
+                })
             }
-            _ => true,
+            _ => Err(RuntimeError {
+                message: format!(
+                    "{} does not define truth behavior; use a bool or define __bool__",
+                    val.type_name()
+                ),
+                span,
+            }),
         }
     }
 
@@ -10674,8 +10666,8 @@ if_broken:
     }
 
     #[test]
-    fn test_truthiness_uses_custom_bool_and_len() {
-        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nclass Sized:\n    items: list[int]\n    def __len__(self) -> int:\n        return len(self.items)\nif Flag(false):\n    print(1)\nelse:\n    print(0)\nif Sized([]):\n    print(1)\nelse:\n    print(0)\n";
+    fn test_truthiness_uses_custom_bool() {
+        let source = "class Flag:\n    value: bool\n    def __bool__(self) -> bool:\n        return self.value\nif Flag(false):\n    print(1)\nelse:\n    print(0)\n";
         let module = parse(source).expect("custom truthiness source should parse");
         let mut interp = Interpreter::new();
         interp
@@ -10684,19 +10676,25 @@ if_broken:
     }
 
     #[test]
-    fn test_builtin_truthiness_handles_empty_collections_and_numeric_zero() {
-        let source = "if 0:\n    result = 1\nelse:\n    result = 0\nif complex(0, 0):\n    complex_result = 1\nelse:\n    complex_result = 0\nif {}:\n    dict_result = 1\nelse:\n    dict_result = 0\nif set():\n    set_result = 1\nelse:\n    set_result = 0\nif 100000000000000000000 - 100000000000000000000:\n    bigint_result = 1\nelse:\n    bigint_result = 0\n";
-        let module = parse(source).expect("builtin truthiness source should parse");
-        let mut interp = Interpreter::new();
-        interp
-            .eval_module(&module)
-            .expect("builtin truthiness should run");
-        let env = interp.env.borrow();
-        assert_eq!(env.get("result"), Some(Value::Int(0)));
-        assert_eq!(env.get("complex_result"), Some(Value::Int(0)));
-        assert_eq!(env.get("dict_result"), Some(Value::Int(0)));
-        assert_eq!(env.get("set_result"), Some(Value::Int(0)));
-        assert_eq!(env.get("bigint_result"), Some(Value::Int(0)));
+    fn test_condition_truthiness_rejects_builtin_fallbacks() {
+        for source in [
+            "if 0:\n    pass\n",
+            "if complex(0, 0):\n    pass\n",
+            "if {}:\n    pass\n",
+            "if set():\n    pass\n",
+            "if 100000000000000000000 - 100000000000000000000:\n    pass\n",
+            "class Sized:\n    items: list[int]\n    def __len__(self) -> int:\n        return len(self.items)\nif Sized([]):\n    pass\n",
+        ] {
+            let module = parse(source).expect("truthiness source should parse");
+            let mut interp = Interpreter::new();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("truthiness fallback must fail");
+            assert!(
+                error.message.contains("does not define truth behavior"),
+                "{source}: {error:?}"
+            );
+        }
     }
 
     #[test]
@@ -11408,8 +11406,6 @@ s = sum(r)
         assert_eq!(interp.env.borrow().get("m1").unwrap(), Value::Int(0));
         assert_eq!(interp.env.borrow().get("m2").unwrap(), Value::Int(4));
         assert_eq!(interp.env.borrow().get("s").unwrap(), Value::Int(10));
-        let empty = interp.env.borrow().get("empty").unwrap().clone();
-        assert!(!interp.is_truthy(&empty));
     }
 
     #[test]
@@ -11724,7 +11720,9 @@ s = sum(r)
 
     #[test]
     fn test_iterable_builtins_accept_strings_and_sets() {
-        let module = parse("a = reversed(\"abc\".chars)\nb = enumerate({4, 5}, 7)\nc = zip(\"ab\".chars, {8, 9})\nd = any(\"\".chars)\ne = all({1, 2})\n").unwrap();
+        let module =
+            parse("a = reversed(\"abc\".chars)\nb = enumerate({4, 5}, 7)\nc = zip(\"ab\".chars, {8, 9})\nd = any(\"\".chars)\n")
+                .unwrap();
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(
@@ -11751,7 +11749,26 @@ s = sum(r)
         );
         assert!(matches!(interp.env.borrow().get("c"), Some(Value::List(_))));
         assert_eq!(interp.env.borrow().get("d"), Some(Value::Bool(false)));
-        assert_eq!(interp.env.borrow().get("e"), Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn iterable_predicates_reject_non_bool_elements() {
+        for source in [
+            "any(\"a\".chars)\n",
+            "all({1, 2})\n",
+            "d = {\"a\": 1, \"b\": 2}\nany(d)\n",
+            "d = {\"a\": 1, \"b\": 2}\nall(d)\n",
+        ] {
+            let module = parse(source).unwrap();
+            let mut interp = Interpreter::new();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("iterable predicates must reject non-bool elements");
+            assert!(
+                error.message.contains("does not define truth behavior"),
+                "{source}: {error:?}"
+            );
+        }
     }
 
     #[test]
@@ -13365,15 +13382,6 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             interp.env.borrow().get("result"),
             Some(Value::Str("0-1-2".into()))
         );
-    }
-
-    #[test]
-    fn test_predicates_iterate_dict_keys() {
-        let module = parse("d = {\"a\": 1, \"b\": 2}\na = any(d)\nb = all(d)\n").unwrap();
-        let mut interp = Interpreter::new();
-        interp.eval_module(&module).unwrap();
-        assert_eq!(interp.env.borrow().get("a"), Some(Value::Bool(true)));
-        assert_eq!(interp.env.borrow().get("b"), Some(Value::Bool(true)));
     }
 
     #[test]
