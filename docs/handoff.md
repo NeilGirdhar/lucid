@@ -478,6 +478,9 @@ diverged:
   all known, while a dynamic `elif` stops selection instead of falling through
   to a later `else`. The same recursive collection feeds bare-return lowering,
   so void functions keep validated setup expressions before returning no value.
+  Single-statement static branches whose selected arm is `pass`, including
+  selected `elif` and `else` arms, now lower to verified void CIR; dynamic
+  `elif` guards still block this fold.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking

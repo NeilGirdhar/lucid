@@ -4246,6 +4246,28 @@ pub fn lower_function_body(
     // sequence of simple
     // local definitions/assignments followed by `return name` is also SSA-
     // representable: each name resolves to its latest defining expression.
+    let void_function = || {
+        let function = lucid_cir::Function {
+            entry: lucid_cir::BlockId(0),
+            blocks: vec![lucid_cir::Block {
+                id: lucid_cir::BlockId(0),
+                instructions: function
+                    .parameter_names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| lucid_cir::Instruction::Param {
+                        result: lucid_cir::ValueId(index as u32),
+                        index: index as u32,
+                    })
+                    .collect(),
+                terminator: lucid_cir::Terminator::Return(None),
+            }],
+        };
+        function
+            .verify()
+            .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+        Ok(Arc::new(function))
+    };
     let (root_span, local_specs): (lucid_syntax::Span, Vec<(String, lucid_syntax::Span)>) =
         match source_function.body.as_slice() {
             [
@@ -4269,59 +4291,21 @@ pub fn lower_function_body(
                     else_branch.as_ref(),
                 ) {
                     (span, Vec::new())
-                } else if static_truth(condition) == Some(true)
-                    && matches!(then_branch.as_slice(), [lucid_syntax::Stmt::Pass(_)])
-                {
-                    let function = lucid_cir::Function {
-                        entry: lucid_cir::BlockId(0),
-                        blocks: vec![lucid_cir::Block {
-                            id: lucid_cir::BlockId(0),
-                            instructions: function
-                                .parameter_names
-                                .iter()
-                                .enumerate()
-                                .map(|(index, _)| lucid_cir::Instruction::Param {
-                                    result: lucid_cir::ValueId(index as u32),
-                                    index: index as u32,
-                                })
-                                .collect(),
-                            terminator: lucid_cir::Terminator::Return(None),
-                        }],
-                    };
-                    function
-                        .verify()
-                        .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
-                    return Ok(Arc::new(function));
-                } else if static_truth(condition) == Some(false)
-                    && elif_branches
-                        .iter()
-                        .all(|(condition, _)| static_truth(condition) == Some(false))
-                    && else_branch.is_none()
-                {
-                    let function = lucid_cir::Function {
-                        entry: lucid_cir::BlockId(0),
-                        blocks: vec![lucid_cir::Block {
-                            id: lucid_cir::BlockId(0),
-                            instructions: function
-                                .parameter_names
-                                .iter()
-                                .enumerate()
-                                .map(|(index, _)| lucid_cir::Instruction::Param {
-                                    result: lucid_cir::ValueId(index as u32),
-                                    index: index as u32,
-                                })
-                                .collect(),
-                            terminator: lucid_cir::Terminator::Return(None),
-                        }],
-                    };
-                    function
-                        .verify()
-                        .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
-                    return Ok(Arc::new(function));
                 } else {
-                    return Err(Arc::from(
-                        "constant function branch has no lowerable return",
-                    ));
+                    match static_branch_selection(
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch.as_ref(),
+                    ) {
+                        StaticBranch::Selected([lucid_syntax::Stmt::Pass(_)])
+                        | StaticBranch::Empty => return void_function(),
+                        StaticBranch::Selected(_) | StaticBranch::Unknown => {
+                            return Err(Arc::from(
+                                "constant function branch has no lowerable return",
+                            ));
+                        }
+                    }
                 }
             }
             statements if statements.len() >= 2 => {
@@ -5746,6 +5730,33 @@ mod tests {
             .as_ref()
             .expect("constant pass branch should lower to void CIR");
         assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-else-pass-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant else pass branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-elif-pass-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    elif true:\n        pass\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant elif pass branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-elif-pass-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    elif value > 0:\n        pass\n    else:\n        return 0\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("dynamic elif pass branch must not be folded to void");
+        assert!(error.contains("constant function branch"));
 
         let file = db.add_file(
             "constant-unary-branch.lucid",
