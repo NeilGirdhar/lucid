@@ -129,8 +129,9 @@ nested-function alias.
 The native runtime uses the tagged closure value and packed-argument call
 primitives for anonymous closures stored in containers, returned from
 functions, and invoked through loop bindings. Recursive closure binding cells,
-mutual recursion and rebinding cells, environment reclamation, and the shared
-CIR closure representation remain open.
+mutual recursion, and typed captured slots now work in the native closure
+adapter. Rebinding cells, environment reclamation, and the shared CIR closure
+representation remain open.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
