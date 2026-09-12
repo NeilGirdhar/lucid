@@ -551,6 +551,82 @@ impl CCodeGenerator {
         )
     }
 
+    fn is_builtin_callable(name: &str) -> bool {
+        matches!(
+            name,
+            "abs"
+                | "all"
+                | "any"
+                | "bool"
+                | "bytes"
+                | "bytearray"
+                | "chr"
+                | "dict"
+                | "enumerate"
+                | "env_var"
+                | "fields"
+                | "float"
+                | "freeze"
+                | "format"
+                | "getattr"
+                | "hasattr"
+                | "hash"
+                | "help"
+                | "int"
+                | "iter"
+                | "len"
+                | "list"
+                | "locals"
+                | "map"
+                | "max"
+                | "memoryview"
+                | "min"
+                | "ord"
+                | "pow"
+                | "print"
+                | "range"
+                | "repr"
+                | "reversed"
+                | "round"
+                | "set"
+                | "setattr"
+                | "slice"
+                | "sorted"
+                | "str"
+                | "sum"
+                | "time"
+                | "trust"
+                | "type"
+                | "read_file"
+                | "write_file"
+                | "zip"
+        )
+    }
+
+    fn is_known_callable_binding(&self, name: &str) -> bool {
+        self.known_fns.contains_key(name)
+            || self.function_aliases.contains_key(name)
+            || self.anonymous_bindings.contains_key(name)
+            || self.partial_bindings.contains_key(name)
+            || Self::is_builtin_callable(name)
+    }
+
+    fn callable_metadata_name(&self, name: &str) -> Option<String> {
+        if self.known_fns.contains_key(name)
+            || self.anonymous_bindings.contains_key(name)
+            || self.partial_bindings.contains_key(name)
+            || Self::is_builtin_callable(name)
+        {
+            return Some(name.to_string());
+        }
+        self.function_aliases.get(name).map(|target| {
+            target
+                .strip_prefix("__str_base_")
+                .unwrap_or(target)
+                .to_string()
+        })
+    }
+
     fn class_has_capability(&self, class: &str, capability: &str) -> bool {
         let generated = matches!(capability, "Eq" | "Ord" | "Hashable");
         let mut current = Some(class.to_string());
@@ -4929,6 +5005,13 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Expr::Attribute { value, attr, .. } => {
                 if let Expr::Ident { name, .. } = &**value {
+                    if self.callable_metadata_name(name).is_some() {
+                        match attr.as_str() {
+                            "__name__" | "__path__" => return "const char*".to_string(),
+                            "__doc__" => return "LucidVal".to_string(),
+                            _ => {}
+                        }
+                    }
                     if name == "float" && (attr == "inf" || attr == "nan") {
                         return "double".to_string();
                     }
@@ -9997,53 +10080,6 @@ static inline void lucid_print_val(LucidVal v) {
                             let left_ty = self.infer_expr_type(left, &HashMap::new());
                             let condition = match type_name {
                                 "Callable" => {
-                                    const BUILTINS: &[&str] = &[
-                                        "abs",
-                                        "all",
-                                        "any",
-                                        "bool",
-                                        "bytes",
-                                        "bytearray",
-                                        "chr",
-                                        "dict",
-                                        "enumerate",
-                                        "env_var",
-                                        "fields",
-                                        "float",
-                                        "freeze",
-                                        "format",
-                                        "getattr",
-                                        "hasattr",
-                                        "hash",
-                                        "help",
-                                        "int",
-                                        "iter",
-                                        "len",
-                                        "list",
-                                        "locals",
-                                        "map",
-                                        "max",
-                                        "memoryview",
-                                        "min",
-                                        "ord",
-                                        "pow",
-                                        "print",
-                                        "range",
-                                        "repr",
-                                        "reversed",
-                                        "round",
-                                        "set",
-                                        "setattr",
-                                        "slice",
-                                        "sorted",
-                                        "str",
-                                        "sum",
-                                        "time",
-                                        "trust",
-                                        "read_file",
-                                        "write_file",
-                                        "zip",
-                                    ];
                                     if self.infer_expr_type(left, &HashMap::new()) == "LucidVal"
                                         && self.expr_is_val(left)
                                     {
@@ -10061,11 +10097,7 @@ static inline void lucid_print_val(LucidVal v) {
                                             true
                                         }
                                         Expr::Ident { name, .. } => {
-                                            self.known_fns.contains_key(name)
-                                                || self.function_aliases.contains_key(name)
-                                                || self.anonymous_bindings.contains_key(name)
-                                                || self.partial_bindings.contains_key(name)
-                                                || BUILTINS.contains(&name.as_str())
+                                            self.is_known_callable_binding(name)
                                         }
                                         _ => false,
                                     };
@@ -10351,53 +10383,6 @@ static inline void lucid_print_val(LucidVal v) {
                             let left_ty = self.infer_expr_type(left, &HashMap::new());
                             let condition = match type_name {
                                 "Callable" => {
-                                    const BUILTINS: &[&str] = &[
-                                        "abs",
-                                        "all",
-                                        "any",
-                                        "bool",
-                                        "bytes",
-                                        "bytearray",
-                                        "chr",
-                                        "dict",
-                                        "enumerate",
-                                        "env_var",
-                                        "fields",
-                                        "float",
-                                        "freeze",
-                                        "format",
-                                        "getattr",
-                                        "hasattr",
-                                        "hash",
-                                        "help",
-                                        "int",
-                                        "iter",
-                                        "len",
-                                        "list",
-                                        "locals",
-                                        "map",
-                                        "max",
-                                        "memoryview",
-                                        "min",
-                                        "ord",
-                                        "pow",
-                                        "print",
-                                        "range",
-                                        "repr",
-                                        "reversed",
-                                        "round",
-                                        "set",
-                                        "setattr",
-                                        "slice",
-                                        "sorted",
-                                        "str",
-                                        "sum",
-                                        "time",
-                                        "trust",
-                                        "read_file",
-                                        "write_file",
-                                        "zip",
-                                    ];
                                     if self.infer_expr_type(left, &HashMap::new()) == "LucidVal"
                                         && self.expr_is_val(left)
                                     {
@@ -10415,11 +10400,7 @@ static inline void lucid_print_val(LucidVal v) {
                                             true
                                         }
                                         Expr::Ident { name, .. } => {
-                                            self.known_fns.contains_key(name)
-                                                || self.function_aliases.contains_key(name)
-                                                || self.anonymous_bindings.contains_key(name)
-                                                || self.partial_bindings.contains_key(name)
-                                                || BUILTINS.contains(&name.as_str())
+                                            self.is_known_callable_binding(name)
                                         }
                                         _ => false,
                                     };
@@ -14404,6 +14385,15 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Expr::Attribute { value, attr, .. } => {
                 if let Expr::Ident { name, .. } = &**value {
+                    if let Some(function_name) = self.callable_metadata_name(name) {
+                        match attr.as_str() {
+                            "__name__" | "__path__" => {
+                                return Ok(format!("\"{}\"", c_escape_string(&function_name)));
+                            }
+                            "__doc__" => return Ok("lucid_none()".to_string()),
+                            _ => {}
+                        }
+                    }
                     match (name.as_str(), attr.as_str()) {
                         ("float", "inf") => return Ok("INFINITY".to_string()),
                         ("float", "nan") => return Ok("NAN".to_string()),
@@ -15272,6 +15262,25 @@ print(" ".join(capitalized))
             .output()
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "15");
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_function_values_expose_identity_metadata() {
+        let source = "def answer(value: int) -> int:\n    return value + 1\nalias = answer\nprint(answer.__name__)\nprint(alias.__name__)\nprint(len.__name__)\nprint(str.hex(31))\nprint(answer.__doc__)\n";
+        let module = parse(source).expect("function metadata source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_function_metadata_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("function metadata should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout).trim(),
+            "answer\nanswer\nlen\n0x1f\nnone"
+        );
         let _ = std::fs::remove_file(output);
     }
 

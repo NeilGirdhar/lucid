@@ -7169,6 +7169,15 @@ impl Interpreter {
                 }
                 let obj = self.eval_expr(value)?;
                 match obj {
+                    Value::Function { name, .. } => match attr.as_str() {
+                        "__name__" => Ok(Value::Str(name)),
+                        "__doc__" => Ok(Value::None),
+                        "__path__" => Ok(Value::Str(name)),
+                        _ => Err(RuntimeError {
+                            message: format!("function has no attribute '{attr}'"),
+                            span: *span,
+                        }),
+                    },
                     Value::ClassRef(class_name) => {
                         self.check_private_access(&class_name, attr, *span)?;
                         if let Some(value) = self.class_var_get(&class_name, attr) {
@@ -7413,6 +7422,15 @@ impl Interpreter {
                             }),
                         })
                     }
+                    Value::BuiltinFunction { name, .. } => match attr.as_str() {
+                        "__name__" => Ok(Value::Str(name)),
+                        "__doc__" => Ok(Value::None),
+                        "__path__" => Ok(Value::Str(name)),
+                        _ => Err(RuntimeError {
+                            message: format!("function has no attribute '{attr}'"),
+                            span: *span,
+                        }),
+                    },
                     Value::Complex(real, _) if attr == "real" => Ok(Value::Float(real)),
                     Value::Complex(_, imag) if attr == "imag" => Ok(Value::Float(imag)),
                     Value::Str(s) => {
@@ -12619,6 +12637,19 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
         assert!(error.message.contains("private"));
         let error = interp.call_named("bad name", &[]).unwrap_err();
         assert!(error.message.contains("invalid callable name"));
+    }
+
+    #[test]
+    fn function_values_expose_identity_metadata() {
+        let module =
+            parse("def answer(value: int):\n    return value + 1\nname = answer.__name__\n")
+                .unwrap();
+        let mut interp = Interpreter::default();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(
+            interp.env.borrow().get("name"),
+            Some(Value::Str("answer".into()))
+        );
     }
 
     #[test]
