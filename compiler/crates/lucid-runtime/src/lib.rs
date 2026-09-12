@@ -133,6 +133,9 @@ fn hash_runtime_value(value: &Value) -> Option<i64> {
         Value::Str(value) => Some(value.bytes().fold(0i64, |acc, byte| {
             acc.wrapping_mul(31).wrapping_add(byte as i64)
         })),
+        Value::Bytes(value) => Some(value.iter().fold(0i64, |acc, byte| {
+            acc.wrapping_mul(31).wrapping_add(*byte as i64)
+        })),
         Value::None => Some(0),
         Value::List(values) if container_is_frozen(Rc::as_ptr(values) as usize) => {
             values.borrow().iter().try_fold(1i64, |acc, value| {
@@ -285,6 +288,7 @@ pub enum Value {
     Complex(f64, f64),
     Bool(bool),
     Str(String),
+    Bytes(Vec<u8>),
     None,
     List(Rc<RefCell<Vec<Value>>>),
     Dict(Rc<RefCell<HashMap<String, Value>>>),
@@ -342,6 +346,7 @@ impl Value {
             Value::Complex(_, _) => "complex",
             Value::Bool(_) => "bool",
             Value::Str(_) => "str",
+            Value::Bytes(_) => "Bytes",
             Value::None => "none",
             Value::List(_) => "list",
             Value::Dict(_) => "dict",
@@ -449,6 +454,7 @@ impl PartialEq for Value {
             (Value::Complex(ar, ai), Value::Complex(br, bi)) => ar == br && ai == bi,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Bytes(a), Value::Bytes(b)) => a == b,
             (Value::None, Value::None) => true,
             (Value::Skip, Value::Skip) => true,
             (Value::Sentinel(a), Value::Sentinel(b)) => a == b,
@@ -505,6 +511,7 @@ impl fmt::Debug for Value {
             Value::Complex(real, imag) => write!(f, "({real}+{imag}j)"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Str(s) => write!(f, "\"{s}\""),
+            Value::Bytes(bytes) => write!(f, "b\"{}\"", String::from_utf8_lossy(bytes)),
             Value::None => write!(f, "none"),
             Value::Skip => write!(f, "skip"),
             Value::Range { start, stop, step } => {
@@ -2017,6 +2024,7 @@ impl Interpreter {
                 .iter()
                 .map(|a| match a {
                     Value::Str(text) => text.clone(),
+                    Value::Bytes(bytes) => String::from_utf8_lossy(bytes).into_owned(),
                     other => format!("{:?}", other),
                 })
                 .collect();
@@ -2143,6 +2151,7 @@ impl Interpreter {
             }
             match &args[0] {
                 Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
+                Value::Bytes(bytes) => Ok(Value::Int(bytes.len() as i64)),
                 Value::List(l) => Ok(Value::Int(l.borrow().len() as i64)),
                 Value::Dict(d) => Ok(Value::Int(d.borrow().len() as i64)),
                 Value::Set(s) => Ok(Value::Int(s.borrow().len() as i64)),
@@ -3400,6 +3409,7 @@ impl Interpreter {
             }
             match &args[0] {
                 Value::Str(s) => Ok(Value::Str(s.clone())),
+                Value::Bytes(bytes) => Ok(Value::Str(String::from_utf8_lossy(bytes).into_owned())),
                 Value::Int(n) => Ok(Value::Str(n.to_string())),
                 Value::Float(f) => Ok(Value::Str(f.to_string())),
                 Value::Bool(b) => Ok(Value::Str(b.to_string())),
@@ -3415,9 +3425,8 @@ impl Interpreter {
             },
         );
 
-        // Immutable byte conversion.  Byte literals and `bytes(...)` share
-        // the runtime's immutable string storage; bytearray/memoryview below
-        // expose the mutable/aliased forms.
+        // Immutable byte conversion. Mutable bytearray/memoryview values
+        // still use integer-list storage, but Bytes has its own runtime tag.
         let bytes_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
             if args.len() != 1 {
                 return Err(RuntimeError {
@@ -3426,9 +3435,10 @@ impl Interpreter {
                 });
             }
             match &args[0] {
-                Value::Str(s) => Ok(Value::Str(s.clone())),
+                Value::Bytes(bytes) => Ok(Value::Bytes(bytes.clone())),
+                Value::Str(s) => Ok(Value::Bytes(s.bytes().collect())),
                 Value::List(items) => {
-                    let mut out = String::new();
+                    let mut out = Vec::with_capacity(items.borrow().len());
                     for item in items.borrow().iter() {
                         let n = match item {
                             Value::Int(n) if (0..=255).contains(n) => *n as u8,
@@ -3451,9 +3461,9 @@ impl Interpreter {
                                 })
                             }
                         };
-                        out.push(n as char);
+                        out.push(n);
                     }
-                    Ok(Value::Str(out))
+                    Ok(Value::Bytes(out))
                 }
                 other => Err(RuntimeError {
                     message: format!("bytes() cannot convert {}", other.type_name()),
@@ -3479,6 +3489,7 @@ impl Interpreter {
                 });
             }
             let bytes = match &args[0] {
+                Value::Bytes(bytes) => bytes.iter().map(|b| Value::Int(*b as i64)).collect(),
                 Value::Str(s) => s.bytes().map(|b| Value::Int(b as i64)).collect(),
                 Value::List(items) => {
                     let mut bytes = Vec::with_capacity(items.borrow().len());
@@ -3679,6 +3690,9 @@ impl Interpreter {
                 }
                 Value::Str(s) => Ok(Value::List(Rc::new(RefCell::new(
                     s.chars().map(|c| Value::Str(c.to_string())).collect(),
+                )))),
+                Value::Bytes(bytes) => Ok(Value::List(Rc::new(RefCell::new(
+                    bytes.iter().map(|b| Value::Int(*b as i64)).collect(),
                 )))),
                 Value::Object { fields, .. } => {
                     let method =
@@ -6097,6 +6111,7 @@ impl Interpreter {
             Value::List(values) => Ok(values.borrow().clone()),
             Value::Set(values) => Ok(values.borrow().clone()),
             Value::Dict(values) => Ok(values.borrow().keys().cloned().map(Value::Str).collect()),
+            Value::Bytes(bytes) => Ok(bytes.into_iter().map(|byte| Value::Int(byte as i64)).collect()),
             Value::Range { start, stop, step } => Ok(materialize_range(start, stop, step)),
             Value::Object {
                 class_name,
@@ -6163,9 +6178,7 @@ impl Interpreter {
                 LiteralValue::Complex(imag) => Value::Complex(0.0, *imag),
                 LiteralValue::Bool(b) => Value::Bool(*b),
                 LiteralValue::Str(s) => Value::Str(s.clone()),
-                LiteralValue::Bytes(bytes) => {
-                    Value::Str(String::from_utf8_lossy(bytes).into_owned())
-                }
+                LiteralValue::Bytes(bytes) => Value::Bytes(bytes.clone()),
                 LiteralValue::None => Value::None,
                 LiteralValue::Sentinel(s) => Value::Sentinel(s.clone()),
                 LiteralValue::Ellipsis => Value::None,
@@ -6236,6 +6249,7 @@ impl Interpreter {
                             "Sized" => matches!(
                                 lval,
                                 Value::Str(_)
+                                    | Value::Bytes(_)
                                     | Value::List(_)
                                     | Value::Set(_)
                                     | Value::Dict(_)
@@ -6245,6 +6259,7 @@ impl Interpreter {
                             "Container" => matches!(
                                 lval,
                                 Value::Str(_)
+                                    | Value::Bytes(_)
                                     | Value::List(_)
                                     | Value::Set(_)
                                     | Value::Dict(_)
@@ -6263,7 +6278,9 @@ impl Interpreter {
                                 matches!(lval, Value::List(_) | Value::Range { .. })
                             }
                             "Set" => matches!(lval, Value::Set(_)),
-                            "Buffer" => matches!(lval, Value::Str(_) | Value::List(_)),
+                            "Buffer" => {
+                                matches!(lval, Value::Bytes(_) | Value::Str(_) | Value::List(_))
+                            }
                             "Shape" => matches!(lval, Value::List(_)),
                             "Eq" | "Ord" | "Hashable" => match &lval {
                                 Value::None => false,
@@ -7959,6 +7976,52 @@ impl Interpreter {
                             }
                             return Ok(Value::Str(res));
                         }
+                        Value::Bytes(bytes) => {
+                            let len = bytes.len() as i64;
+                            let mut cur = start_val
+                                .map(|st| {
+                                    if st < 0 {
+                                        (len + st).max(0)
+                                    } else {
+                                        st.min(len)
+                                    }
+                                })
+                                .unwrap_or(if step_val > 0 { 0 } else { len - 1 });
+                            let end = stop_val
+                                .map(|st| {
+                                    if st < 0 {
+                                        (len + st).max(0)
+                                    } else {
+                                        st.min(len)
+                                    }
+                                })
+                                .unwrap_or(if step_val > 0 { len } else { -1 });
+                            let mut res = Vec::new();
+                            if step_val > 0 {
+                                while cur < end && cur < len {
+                                    res.push(bytes[cur as usize]);
+                                    let Some(next) = cur.checked_add(step_val) else {
+                                        return Err(RuntimeError {
+                                            message: "slice step overflow".into(),
+                                            span: slice_span,
+                                        });
+                                    };
+                                    cur = next;
+                                }
+                            } else {
+                                while cur > end && cur >= 0 {
+                                    res.push(bytes[cur as usize]);
+                                    let Some(next) = cur.checked_add(step_val) else {
+                                        return Err(RuntimeError {
+                                            message: "slice step overflow".into(),
+                                            span: slice_span,
+                                        });
+                                    };
+                                    cur = next;
+                                }
+                            }
+                            return Ok(Value::Bytes(res));
+                        }
                         _ => {
                             return Err(RuntimeError {
                                 message: format!("slice not supported on {}", obj.type_name()),
@@ -8010,6 +8073,16 @@ impl Interpreter {
                             });
                         }
                         Ok(Value::Str(chars[actual_idx as usize].to_string()))
+                    }
+                    (Value::Bytes(bytes), Value::Int(i)) => {
+                        let actual_idx = if i < 0 { bytes.len() as i64 + i } else { i };
+                        if actual_idx < 0 || actual_idx as usize >= bytes.len() {
+                            return Err(RuntimeError {
+                                message: format!("index {i} out of range"),
+                                span: *span,
+                            });
+                        }
+                        Ok(Value::Int(bytes[actual_idx as usize] as i64))
                     }
                     (Value::Dict(dict), Value::Str(k)) => {
                         dict.borrow().get(&k).cloned().ok_or_else(|| RuntimeError {
@@ -11519,15 +11592,46 @@ first = view[0]
 
     #[test]
     fn test_bytes_conversion_is_immutable_payload() {
-        let module = parse("data = bytes([65, 66]); print(data)").unwrap();
+        let module = parse(
+            "data = bytes([65, 66])\n\
+             print(data)\n\
+             first = data[0]\n\
+             tail = data[1:]\n\
+             values = list(data)\n\
+             mutable = bytearray(data)\n",
+        )
+        .unwrap();
         let mut interp = Interpreter::new();
         let value = interp
             .eval_module(&module)
             .expect("bytes conversion should evaluate");
-        assert!(matches!(value, Value::None));
+        assert_eq!(
+            value,
+            Value::List(Rc::new(RefCell::new(vec![Value::Int(65), Value::Int(66)])))
+        );
         assert_eq!(
             interp.env.borrow().get("data"),
-            Some(Value::Str("AB".into()))
+            Some(Value::Bytes(vec![65, 66]))
+        );
+        assert_eq!(interp.output, vec!["AB"]);
+        assert_eq!(interp.env.borrow().get("first"), Some(Value::Int(65)));
+        assert_eq!(
+            interp.env.borrow().get("tail"),
+            Some(Value::Bytes(vec![66]))
+        );
+        assert_eq!(
+            interp.env.borrow().get("values"),
+            Some(Value::List(Rc::new(RefCell::new(vec![
+                Value::Int(65),
+                Value::Int(66)
+            ]))))
+        );
+        assert_eq!(
+            interp.env.borrow().get("mutable"),
+            Some(Value::List(Rc::new(RefCell::new(vec![
+                Value::Int(65),
+                Value::Int(66)
+            ]))))
         );
     }
 

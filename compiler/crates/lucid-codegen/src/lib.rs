@@ -1422,8 +1422,9 @@ impl CCodeGenerator {
             self.indent -= 1;
             self.emit_line("}");
         }
-        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR;");
-        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0 || strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR;");
+        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0 || strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_LIST;");
         self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0 || strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;");
         self.emit_line("if (strcmp(capability, \"Set\") == 0) return value.type == LUCID_TYPE_SET;");
         self.emit_line("if (strcmp(capability, \"Eq\") == 0 || strcmp(capability, \"Ord\") == 0 || strcmp(capability, \"Hashable\") == 0) return value.type != LUCID_TYPE_NONE;");
@@ -1719,6 +1720,7 @@ typedef enum {
     LUCID_TYPE_BIGINT,
     LUCID_TYPE_BOOL,
     LUCID_TYPE_STR,
+    LUCID_TYPE_BYTES,
     LUCID_TYPE_LIST,
     LUCID_TYPE_DICT,
     LUCID_TYPE_SET,
@@ -2143,6 +2145,9 @@ static inline LucidVal lucid_bool(bool b) {
 static inline LucidVal lucid_str(const char* s) {
     LucidVal v = {0}; v.type = LUCID_TYPE_STR; v.s = s; v.ptr = (void*)s; return v;
 }
+static inline LucidVal lucid_bytes_val(const char* s) {
+    LucidVal v = {0}; v.type = LUCID_TYPE_BYTES; v.s = s; v.ptr = (void*)s; return v;
+}
 static inline LucidVal lucid_env_var(LucidVal name, bool has_default, LucidVal fallback) {
     if (name.type != LUCID_TYPE_STR || !name.s) {
         fprintf(stderr, "env_var() name must be a string\n");
@@ -2474,7 +2479,7 @@ static inline bool lucid_as_bool(LucidVal v) {
         return *digits != '\0';
     }
     if (v.type == LUCID_TYPE_COMPLEX) return v.real != 0.0 || v.imag != 0.0;
-    if (v.type == LUCID_TYPE_STR) return v.s && v.s[0] != '\0';
+    if (v.type == LUCID_TYPE_STR || v.type == LUCID_TYPE_BYTES) return v.s && v.s[0] != '\0';
     if (v.type == LUCID_TYPE_LIST) return v.list && v.list->len > 0;
     if (v.type == LUCID_TYPE_DICT) return v.dict && v.dict->len > 0;
     if (v.type == LUCID_TYPE_SET) return v.set && v.set->len > 0;
@@ -2482,12 +2487,12 @@ static inline bool lucid_as_bool(LucidVal v) {
     return v.type != LUCID_TYPE_NONE;
 }
 static inline const char* lucid_as_str(LucidVal v) {
-    if (v.type == LUCID_TYPE_STR) return v.s ? v.s : "";
+    if (v.type == LUCID_TYPE_STR || v.type == LUCID_TYPE_BYTES) return v.s ? v.s : "";
     if (v.type == LUCID_TYPE_BIGINT) return v.bigint ? v.bigint : "0";
     return "";
 }
 static inline const char* lucid_to_str(LucidVal v) {
-    if (v.type == LUCID_TYPE_STR) return v.s ? v.s : "";
+    if (v.type == LUCID_TYPE_STR || v.type == LUCID_TYPE_BYTES) return v.s ? v.s : "";
     char* buf = (char*)malloc(64);
     if (!buf) return "";
     if (v.type == LUCID_TYPE_INT) {
@@ -2645,7 +2650,7 @@ static inline LucidVal lucid_hash(LucidVal value) {
         hash = (int64_t)real_bits * 31 + (int64_t)imag_bits;
     }
     else if (value.type == LUCID_TYPE_BOOL) hash = value.b ? 1 : 0;
-    else if (value.type == LUCID_TYPE_STR) {
+    else if (value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES) {
         for (const unsigned char* p = (const unsigned char*)(value.s ? value.s : ""); *p; ++p)
             hash = hash * 31 + (int64_t)*p;
     } else if (value.type == LUCID_TYPE_LIST && value.list && value.list->frozen) {
@@ -2720,7 +2725,7 @@ static inline LucidVal lucid_format_value(LucidVal value, const char* spec) {
         LucidObjectRepr repr = lucid_object_repr(value.ptr);
         if (repr) { free(out); return lucid_str(repr(value.ptr)); }
         snprintf(out, 128, "<value>");
-    } else if (value.type == LUCID_TYPE_STR && *spec == '\0') snprintf(out, 128, "%s", value.s ? value.s : "");
+    } else if ((value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_BYTES) && *spec == '\0') snprintf(out, 128, "%s", value.s ? value.s : "");
     else if (value.type == LUCID_TYPE_BOOL && *spec == '\0') snprintf(out, 128, "%s", value.b ? "true" : "false");
     else if (value.type == LUCID_TYPE_NONE && *spec == '\0') snprintf(out, 128, "none");
     else { fprintf(stderr, "unsupported format specifier '%s'\n", spec); exit(1); }
@@ -2730,6 +2735,7 @@ static inline LucidVal lucid_repr_value(LucidVal value) {
     char* out = (char*)malloc(256);
     if (!out) { fprintf(stderr, "out of memory rendering value\n"); exit(1); }
     if (value.type == LUCID_TYPE_STR) snprintf(out, 256, "\"%s\"", value.s ? value.s : "");
+    else if (value.type == LUCID_TYPE_BYTES) snprintf(out, 256, "b\"%s\"", value.s ? value.s : "");
     else if (value.type == LUCID_TYPE_INT) {
         if (value.i == INT64_MAX) snprintf(out, 256, "int.inf");
         else if (value.i == INT64_MIN + 1) snprintf(out, 256, "-int.inf");
@@ -2892,6 +2898,7 @@ static inline bool _is_none_ptr(void* p) { return p == NULL; }
 static inline bool lucid_eq(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_NONE && b.type == LUCID_TYPE_NONE) return true;
     if (a.type == LUCID_TYPE_STR && b.type == LUCID_TYPE_STR) return strcmp(a.s, b.s) == 0;
+    if (a.type == LUCID_TYPE_BYTES && b.type == LUCID_TYPE_BYTES) return strcmp(a.s ? a.s : "", b.s ? b.s : "") == 0;
     if (a.type == LUCID_TYPE_FLOAT || b.type == LUCID_TYPE_FLOAT) return a.f == b.f;
     if (a.type == LUCID_TYPE_COMPLEX && b.type == LUCID_TYPE_COMPLEX) return a.real == b.real && a.imag == b.imag;
     if (a.type == LUCID_TYPE_BIGINT || b.type == LUCID_TYPE_BIGINT) return lucid_bigint_cmp(a, b) == 0;
@@ -2941,7 +2948,7 @@ static inline bool lucid_identity(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_LIST) return a.list == b.list;
     if (a.type == LUCID_TYPE_SET) return a.set == b.set;
     if (a.type == LUCID_TYPE_DICT) return a.dict == b.dict;
-    if (a.type == LUCID_TYPE_STR) return strcmp(a.s ? a.s : "", b.s ? b.s : "") == 0;
+    if (a.type == LUCID_TYPE_STR || a.type == LUCID_TYPE_BYTES) return strcmp(a.s ? a.s : "", b.s ? b.s : "") == 0;
     if (a.type == LUCID_TYPE_INT) return a.i == b.i;
     if (a.type == LUCID_TYPE_FLOAT) return a.f == b.f;
     if (a.type == LUCID_TYPE_BOOL) return a.b == b.b;
@@ -3071,10 +3078,10 @@ static inline void lucid_list_remove(LucidList* l, LucidVal value) {
 }
 
 static inline LucidList* lucid_bytearray(LucidVal value) {
-    if (value.type != LUCID_TYPE_STR && value.type != LUCID_TYPE_LIST) {
+    if (value.type != LUCID_TYPE_BYTES && value.type != LUCID_TYPE_STR && value.type != LUCID_TYPE_LIST) {
         fprintf(stderr, "bytearray() cannot convert value\n"); exit(1);
     }
-    if (value.type == LUCID_TYPE_STR) {
+    if (value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_STR) {
         const char* s = value.s ? value.s : "";
         LucidList* out = lucid_list_new((int64_t)strlen(s));
         for (const unsigned char* p = (const unsigned char*)s; *p; ++p)
@@ -3100,7 +3107,8 @@ static inline LucidList* lucid_bytearray(LucidVal value) {
     return out;
 }
 static inline LucidVal lucid_bytes(LucidVal value) {
-    if (value.type == LUCID_TYPE_STR) return value;
+    if (value.type == LUCID_TYPE_BYTES) return value;
+    if (value.type == LUCID_TYPE_STR) return lucid_bytes_val(value.s ? value.s : "");
     if (value.type != LUCID_TYPE_LIST || !value.list) {
         fprintf(stderr, "bytes() cannot convert value\n"); exit(1);
     }
@@ -3118,7 +3126,7 @@ static inline LucidVal lucid_bytes(LucidVal value) {
         }
         out[i] = (char)(unsigned char)n;
     }
-    out[l->len] = '\0'; return lucid_str(out);
+    out[l->len] = '\0'; return lucid_bytes_val(out);
 }
 
 static inline LucidDict* lucid_dict_new(int64_t cap) {
@@ -3311,6 +3319,12 @@ static inline bool lucid_contains_value(LucidVal container, LucidVal needle) {
     if (container.type == LUCID_TYPE_SET) return lucid_set_contains(container.set, needle);
     if (container.type == LUCID_TYPE_DICT) return lucid_dict_contains(container.dict, needle);
     if (container.type == LUCID_TYPE_STR) return lucid_str_contains(container.s, needle);
+    if (container.type == LUCID_TYPE_BYTES) {
+        if (needle.type != LUCID_TYPE_INT) return false;
+        const unsigned char* s = (const unsigned char*)(container.s ? container.s : "");
+        for (; *s; ++s) if ((int64_t)*s == needle.i) return true;
+        return false;
+    }
     fprintf(stderr, "'in' operator not supported for value\n");
     exit(1);
 }
@@ -3350,6 +3364,9 @@ static inline LucidSet* lucid_set_from_value(LucidVal value) {
     } else if (value.type == LUCID_TYPE_STR) {
         LucidList* chars = lucid_iterable_to_list(value);
         for (int64_t i = 0; i < chars->len; ++i) lucid_set_add(out, chars->items[i]);
+    } else if (value.type == LUCID_TYPE_BYTES) {
+        LucidList* bytes = lucid_iterable_to_list(value);
+        for (int64_t i = 0; i < bytes->len; ++i) lucid_set_add(out, bytes->items[i]);
     } else if (value.type == LUCID_TYPE_DICT) {
         LucidList* keys = lucid_dict_keys(value.dict);
         for (int64_t i = 0; i < keys->len; ++i) lucid_set_add(out, keys->items[i]);
@@ -3408,6 +3425,16 @@ static inline LucidVal lucid_get_index(LucidVal container, int64_t idx) {
     if (container.type == LUCID_TYPE_STR) {
         return lucid_str(lucid_str_index(container.s, idx));
     }
+    if (container.type == LUCID_TYPE_BYTES) {
+        const unsigned char* s = (const unsigned char*)(container.s ? container.s : "");
+        int64_t len = (int64_t)strlen((const char*)s);
+        if (idx < 0) idx += len;
+        if (idx < 0 || idx >= len) {
+            fprintf(stderr, "index %lld out of range\n", (long long)idx);
+            exit(1);
+        }
+        return lucid_int((int64_t)s[idx]);
+    }
     fprintf(stderr, "indexing not supported\n");
     exit(1);
 }
@@ -3428,7 +3455,7 @@ static inline LucidVal lucid_get_index_value(LucidVal container, LucidVal index)
     }
     if (container.type == LUCID_TYPE_DICT)
         return lucid_get_key(container, index);
-    if (container.type == LUCID_TYPE_LIST || container.type == LUCID_TYPE_STR) {
+    if (container.type == LUCID_TYPE_LIST || container.type == LUCID_TYPE_STR || container.type == LUCID_TYPE_BYTES) {
         if (index.type != LUCID_TYPE_INT) {
             fprintf(stderr, "indices must be integers\n");
             exit(1);
@@ -3458,8 +3485,8 @@ static inline void lucid_set_index_value(LucidVal container, LucidVal index, Luc
         lucid_list_set(container.list, index.i, value);
         return;
     }
-    if (container.type == LUCID_TYPE_STR)
-        fprintf(stderr, "cannot assign to string index\n");
+    if (container.type == LUCID_TYPE_STR || container.type == LUCID_TYPE_BYTES)
+        fprintf(stderr, "cannot assign to immutable sequence index\n");
     else
         fprintf(stderr, "index assignment not supported\n");
     exit(1);
@@ -3678,6 +3705,12 @@ static inline LucidList* lucid_iterable_to_list(LucidVal value) {
         }
         return out;
     }
+    if (value.type == LUCID_TYPE_BYTES && value.s) {
+        LucidList* out = lucid_list_new((int64_t)strlen(value.s));
+        for (const unsigned char* p = (const unsigned char*)value.s; *p; ++p)
+            lucid_list_append(out, lucid_int((int64_t)*p));
+        return out;
+    }
     fprintf(stderr, "value is not iterable\n"); exit(1);
 }
 static inline LucidList* lucid_iter_value(LucidVal value) {
@@ -3864,9 +3897,40 @@ static inline const char* lucid_str_slice(const char* source, int64_t start, int
     out[pos] = '\0';
     return out;
 }
+static inline const char* lucid_bytes_slice(const char* source, int64_t start, int64_t stop, int64_t step) {
+    if (!source) return "";
+    if (step == 0) { fprintf(stderr, "slice step cannot be zero\n"); exit(1); }
+    int64_t len = (int64_t)strlen(source);
+    bool default_start = start == INT64_MIN;
+    bool default_stop = stop == INT64_MIN;
+    if (default_start) start = step > 0 ? 0 : len - 1;
+    if (default_stop) stop = step > 0 ? len : -1;
+    if (start < 0) start += len;
+    if (stop < 0 && !(default_stop && step < 0)) stop += len;
+    if (step > 0) {
+        if (start < 0) start = 0; if (start > len) start = len;
+        if (stop < 0) stop = 0; if (stop > len) stop = len;
+    } else {
+        if (start >= len) start = len - 1; if (start < -1) start = -1;
+        if (stop >= len) stop = len - 1;
+    }
+    char* out = (char*)malloc((size_t)len + 1);
+    if (!out) { fprintf(stderr, "out of memory slicing bytes\n"); exit(1); }
+    int64_t pos = 0;
+    for (int64_t i = start; (step > 0 ? i < stop : i > stop); ) {
+        out[pos++] = source[i];
+        int64_t next;
+        if (!lucid_checked_range_advance(i, step, &next)) break;
+        i = next;
+    }
+    out[pos] = '\0';
+    return out;
+}
 static inline LucidVal lucid_slice_value(LucidVal value, int64_t start, int64_t stop, int64_t step) {
     if (value.type == LUCID_TYPE_STR)
         return lucid_str(lucid_str_slice(value.s, start, stop, step));
+    if (value.type == LUCID_TYPE_BYTES)
+        return lucid_bytes_val(lucid_bytes_slice(value.s, start, stop, step));
     if (value.type == LUCID_TYPE_LIST)
         return lucid_list_val(lucid_list_slice(value.list, start, stop, step));
     fprintf(stderr, "slicing not supported\n");
@@ -3882,6 +3946,7 @@ static inline int64_t _len_str(const char* s) {
 static inline int64_t _len_val(LucidVal v) {
     if (v.type == LUCID_TYPE_LIST) return v.list ? v.list->len : 0;
     if (v.type == LUCID_TYPE_STR) return _len_str(v.s);
+    if (v.type == LUCID_TYPE_BYTES) return v.s ? (int64_t)strlen(v.s) : 0;
     if (v.type == LUCID_TYPE_DICT) return v.dict ? v.dict->len : 0;
     if (v.type == LUCID_TYPE_SET) return v.set ? v.set->len : 0;
     if (v.type == LUCID_TYPE_PTR && v.ptr) return lucid_dynamic_len(v);
@@ -3979,6 +4044,7 @@ static inline void lucid_print_val(LucidVal v) {
         case LUCID_TYPE_BIGINT: printf("%s", v.bigint ? v.bigint : "0"); break;
         case LUCID_TYPE_BOOL: printf("%s", v.b ? "true" : "false"); break;
         case LUCID_TYPE_STR: printf("%s", v.s ? v.s : ""); break;
+        case LUCID_TYPE_BYTES: printf("%s", v.s ? v.s : ""); break;
         case LUCID_TYPE_NONE: printf("none"); break;
         case LUCID_TYPE_LIST: printf("[list len=%ld]", v.list ? v.list->len : 0); break;
         case LUCID_TYPE_DICT: printf("[dict len=%ld]", v.dict ? v.dict->len : 0); break;
@@ -4142,6 +4208,7 @@ static inline void lucid_print_val(LucidVal v) {
                 LiteralValue::Complex(_) => "LucidVal".to_string(),
                 LiteralValue::Bool(_) => "bool".to_string(),
                 LiteralValue::Str(_) => "const char*".to_string(),
+                LiteralValue::Bytes(_) => "LucidVal".to_string(),
                 LiteralValue::None => "LucidVal".to_string(),
                 _ => "LucidVal".to_string(),
             },
@@ -4640,6 +4707,7 @@ static inline void lucid_print_val(LucidVal v) {
                 "float" => format!("{subject}.type == LUCID_TYPE_FLOAT"),
                 "bool" => format!("{subject}.type == LUCID_TYPE_BOOL"),
                 "str" => format!("{subject}.type == LUCID_TYPE_STR"),
+                "bytes" | "Bytes" => format!("{subject}.type == LUCID_TYPE_BYTES"),
                 "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
                 name if self.known_classes.contains_key(name) => {
                     let names = self.class_pattern_names(name);
@@ -8630,7 +8698,7 @@ static inline void lucid_print_val(LucidVal v) {
                 LiteralValue::Str(s) => format!("\"{}\"", c_escape_string(s)),
                 LiteralValue::Bytes(bytes) => {
                     let value = String::from_utf8_lossy(bytes);
-                    format!("\"{}\"", c_escape_string(&value))
+                    format!("lucid_bytes_val(\"{}\")", c_escape_string(&value))
                 }
                 LiteralValue::Bool(b) => {
                     if *b {
@@ -9441,6 +9509,9 @@ static inline void lucid_print_val(LucidVal v) {
                                         format!("(lucid_wrap({l_str}).type == LUCID_TYPE_STR)")
                                     }
                                 }
+                                "bytes" | "Bytes" => {
+                                    format!("(lucid_wrap({l_str}).type == LUCID_TYPE_BYTES)")
+                                }
                                 name if self.known_classes.contains_key(name) => {
                                     if left_ty.ends_with('*') {
                                         format!(
@@ -9642,6 +9713,9 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "bool" => format!("(lucid_wrap({l_str}).type != LUCID_TYPE_BOOL)"),
                                 "str" => format!("(lucid_wrap({l_str}).type != LUCID_TYPE_STR)"),
+                                "bytes" | "Bytes" => {
+                                    format!("(lucid_wrap({l_str}).type != LUCID_TYPE_BYTES)")
+                                }
                                 name if self.known_classes.contains_key(name) => {
                                     if left_ty.ends_with('*') {
                                         format!(
@@ -15563,6 +15637,12 @@ print(view[1])
         let source = r#"
 data = bytes([65, 66])
 print(data)
+print(data[0])
+print(data[1:])
+print(list(data)[1])
+print(bytearray(data)[0])
+value: Any = data
+print(value is Bytes)
 "#;
         let module = parse(source).expect("source should parse");
         let output =
@@ -15571,7 +15651,10 @@ print(data)
         let result = std::process::Command::new(&output)
             .output()
             .expect("run native binary");
-        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "AB");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            "AB\n65\nB\n66\n65\ntrue\n"
+        );
         let _ = std::fs::remove_file(output);
     }
 
