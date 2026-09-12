@@ -469,7 +469,8 @@ diverged:
   A wildcard in the middle of a value-returning literal chain now becomes the
   typed fallback arm, so later unreachable arms are ignored before CIR lowering.
   Literal void matches now also have a typed-HIR node and lower to a CIR
-  decision ladder whose selected and fall-through blocks return `None`.
+  decision ladder whose selected and fall-through blocks return `None`,
+  including when a no-op wildcard makes later void arms unreachable.
   The supported two-arm shape now carries its subject, arm results, and
   literal discriminator as one typed-HIR node before CIR lowering, including
   the simple branch-local assignment-and-return form.
