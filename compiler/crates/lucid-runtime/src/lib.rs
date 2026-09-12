@@ -952,6 +952,7 @@ impl Interpreter {
                 | "list"
                 | "set"
                 | "dict"
+                | "range"
                 | "DottedPath"
                 | "none"
                 | "None"
@@ -9902,6 +9903,7 @@ impl Interpreter {
                 Value::List(_) if name == "list" => true,
                 Value::Set(_) if name == "set" => true,
                 Value::Dict(_) if name == "dict" => true,
+                Value::Range { .. } if name == "range" => true,
                 Value::DottedPath(_) if name == "DottedPath" => true,
                 Value::None if matches!(name.as_str(), "none" | "None") => true,
                 Value::Object { class_name, .. }
@@ -9927,6 +9929,7 @@ impl Interpreter {
                     Value::List(_) if name == "list" => true,
                     Value::Set(_) if name == "set" => true,
                     Value::Dict(_) if name == "dict" => true,
+                    Value::Range { .. } if name == "range" => true,
                     Value::Bytes(_) if matches!(name.as_str(), "bytes" | "Bytes") => true,
                     Value::MemoryView { .. } if name == "MemoryView" => true,
                     Value::DottedPath(_) if name == "DottedPath" => true,
@@ -10108,6 +10111,7 @@ mod tests {
         assert!(!Interpreter::pattern_identifier_binds("list"));
         assert!(!Interpreter::pattern_identifier_binds("set"));
         assert!(!Interpreter::pattern_identifier_binds("dict"));
+        assert!(!Interpreter::pattern_identifier_binds("range"));
         assert!(!Interpreter::pattern_identifier_binds("DottedPath"));
         assert!(!Interpreter::pattern_identifier_binds("_"));
         assert!(Interpreter::pattern_identifier_binds("value"));
@@ -10667,6 +10671,13 @@ match mapping:
     case _:
         dict_result = 0
 
+span = range(3)
+match span:
+    case range:
+        range_result = 1
+    case _:
+        range_result = 0
+
 def sample() -> int:
     return 1
 path = sample.__path__
@@ -10693,6 +10704,7 @@ match doc:
         assert_eq!(env.get("list_result"), Some(Value::Int(1)));
         assert_eq!(env.get("set_result"), Some(Value::Int(1)));
         assert_eq!(env.get("dict_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("range_result"), Some(Value::Int(1)));
         assert_eq!(env.get("path_result"), Some(Value::Int(1)));
         assert_eq!(env.get("none_result"), Some(Value::Int(1)));
     }

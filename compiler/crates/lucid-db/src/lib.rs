@@ -618,6 +618,7 @@ fn pattern_identifier_binds(name: &str) -> bool {
             | "list"
             | "set"
             | "dict"
+            | "range"
             | "DottedPath"
             | "none"
             | "None"
@@ -6861,6 +6862,7 @@ mod tests {
         assert!(!pattern_identifier_binds("list"));
         assert!(!pattern_identifier_binds("set"));
         assert!(!pattern_identifier_binds("dict"));
+        assert!(!pattern_identifier_binds("range"));
         assert!(!pattern_identifier_binds("DottedPath"));
         assert!(!pattern_identifier_binds("_"));
         assert!(pattern_identifier_binds("value"));

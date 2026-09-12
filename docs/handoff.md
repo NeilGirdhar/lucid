@@ -1190,6 +1190,10 @@ diverged:
   Runtime and native `case bytes`/`case MemoryView`/`case list`/`case set`/
   `case dict`/`case DottedPath` now test those value kinds the same way, and
   uppercase `case None` matches the singleton consistently in both backends.
+  Interpreter `case range` now matches first-class `Value::Range` values and
+  no longer binds a local named `range`; the checker and typed-HIR local scans
+  follow the same non-binding rule. Native `case range` now fails explicitly
+  until native `range(...)` expressions stop lowering directly to lists.
   Generic builtin type patterns such as `case list[int]`, `case set[int]`,
   and `case dict[str, int]` now use those value-kind tests instead of falling
   through as native match-all arms for non-container subjects. `range` remains

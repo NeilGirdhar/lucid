@@ -6804,6 +6804,7 @@ impl TypeChecker {
                         | "list"
                         | "set"
                         | "dict"
+                        | "range"
                         | "DottedPath"
                         | "none"
                         | "None"
@@ -11994,6 +11995,7 @@ fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
                     | "list"
                     | "set"
                     | "dict"
+                    | "range"
                     | "DottedPath"
                     | "none"
                     | "None"
@@ -12452,6 +12454,7 @@ mod tests {
                     Pattern::Ident("list".into(), Span::default()),
                     Pattern::Ident("set".into(), Span::default()),
                     Pattern::Ident("dict".into(), Span::default()),
+                    Pattern::Ident("range".into(), Span::default()),
                     Pattern::Ident("DottedPath".into(), Span::default()),
                 ],
                 Span::default(),
@@ -12467,6 +12470,7 @@ mod tests {
         assert!(!names.contains("list"));
         assert!(!names.contains("set"));
         assert!(!names.contains("dict"));
+        assert!(!names.contains("range"));
         assert!(!names.contains("DottedPath"));
         assert!(names.contains("value"));
     }
@@ -12801,6 +12805,13 @@ def render(s: Shape) -> int:
         .unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&bytes_alias).is_ok());
+
+        let range_variant = parse(
+            "def render(s: range | int) -> int:\n    match s:\n        case range:\n            return 1\n        case int:\n            return 2\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&range_variant).is_ok());
 
         let literal_ints = parse(
             "type Choice = 1 | 2\ndef render(s: Choice) -> int:\n    match s:\n        case 1:\n            exact: 1 = s\n            return exact\n        case 2:\n            exact: 2 = s\n            return exact\n",

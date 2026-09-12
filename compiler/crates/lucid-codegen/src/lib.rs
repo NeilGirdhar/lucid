@@ -280,6 +280,7 @@ impl CCodeGenerator {
                 | "list"
                 | "set"
                 | "dict"
+                | "range"
                 | "DottedPath"
                 | "none"
                 | "None"
@@ -5440,6 +5441,12 @@ static inline void lucid_print_val(LucidVal v) {
                 "list" => format!("{subject}.type == LUCID_TYPE_LIST"),
                 "set" => format!("{subject}.type == LUCID_TYPE_SET"),
                 "dict" => format!("{subject}.type == LUCID_TYPE_DICT"),
+                "range" => {
+                    return Err(CodegenError {
+                        message: "native range patterns require first-class native ranges"
+                            .to_string(),
+                    });
+                }
                 "DottedPath" => format!("{subject}.type == LUCID_TYPE_DOTTED_PATH"),
                 "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
                 name if self.known_classes.contains_key(name) => {
@@ -15287,6 +15294,7 @@ mod tests {
         assert!(!CCodeGenerator::pattern_identifier_binds("list"));
         assert!(!CCodeGenerator::pattern_identifier_binds("set"));
         assert!(!CCodeGenerator::pattern_identifier_binds("dict"));
+        assert!(!CCodeGenerator::pattern_identifier_binds("range"));
         assert!(!CCodeGenerator::pattern_identifier_binds("DottedPath"));
         assert!(!CCodeGenerator::pattern_identifier_binds("_"));
         assert!(CCodeGenerator::pattern_identifier_binds("value"));
@@ -15688,6 +15696,24 @@ print(" ".join(capitalized))
         let error =
             compile_to_native(&module, &output, 0).expect_err("unsupported type pattern must fail");
         assert!(error.message.contains("unsupported type pattern 'Unknown'"));
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_match_rejects_range_pattern_until_ranges_are_first_class() {
+        let source = "value = range(3)\nmatch value:\n    case range:\n        print(1)\n    case _:\n        print(0)\n";
+        let module = parse(source).expect("range match pattern source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_range_match_pattern_{}",
+            std::process::id()
+        ));
+        let error = compile_to_native(&module, &output, 0)
+            .expect_err("native range pattern must fail until ranges are first class");
+        assert!(
+            error
+                .message
+                .contains("native range patterns require first-class native ranges")
+        );
         let _ = std::fs::remove_file(output);
     }
 
