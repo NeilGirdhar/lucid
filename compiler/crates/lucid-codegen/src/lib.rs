@@ -6417,7 +6417,8 @@ static inline void lucid_print_val(LucidVal v) {
         let has_variadic = params
             .iter()
             .any(|param| param.is_variadic_positional || param.is_variadic_keyword);
-        if captures.is_empty() && !has_variadic {
+        let has_default = params.iter().any(|param| param.default.is_some());
+        if captures.is_empty() && !has_variadic && !has_default {
             return Ok(false);
         }
         let recursive = captures.remove(name);
@@ -6646,6 +6647,14 @@ static inline void lucid_print_val(LucidVal v) {
             ));
             self.indent += 1;
             self.emit_line(&format!("{env_type}* env = ({env_type}*)_env; (void)kwargs;"));
+            let required_count = params
+                .iter()
+                .filter(|param| {
+                    !param.is_variadic_positional
+                        && !param.is_variadic_keyword
+                        && param.default.is_none()
+                })
+                .count();
             let fixed_count = params
                 .iter()
                 .filter(|param| !param.is_variadic_positional && !param.is_variadic_keyword)
@@ -6654,11 +6663,11 @@ static inline void lucid_print_val(LucidVal v) {
             let has_keyword_variadic = params.iter().any(|param| param.is_variadic_keyword);
             if has_positional_variadic {
                 self.emit_line(&format!(
-                    "if (!args || args->len < {fixed_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
+                    "if (!args || args->len < {required_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
                 ));
             } else {
                 self.emit_line(&format!(
-                    "if (!args || args->len != {fixed_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
+                    "if (!args || args->len < {required_count} || args->len > {fixed_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
                 ));
             }
             if has_keyword_variadic {
@@ -6721,16 +6730,22 @@ static inline void lucid_print_val(LucidVal v) {
                     continue;
                 }
                 let ty = self.map_type_expr(param.type_annotation.as_ref());
+                let source = if let Some(default) = &param.default {
+                    let default_code = self.emit_expr(default)?;
+                    format!("(args->len > {index} ? args->items[{index}] : lucid_wrap({default_code}))")
+                } else {
+                    format!("args->items[{index}]")
+                };
                 let value = match ty.as_str() {
-                    "int64_t" => format!("lucid_as_int(args->items[{index}])"),
-                    "double" => format!("lucid_as_float(args->items[{index}])"),
-                    "bool" => format!("lucid_as_bool(args->items[{index}])"),
-                    "const char*" => format!("lucid_as_str(args->items[{index}])"),
-                    "LucidList*" => format!("lucid_as_list(args->items[{index}])"),
-                    "LucidDict*" => format!("lucid_as_dict(args->items[{index}])"),
-                    "LucidSet*" => format!("lucid_as_set(args->items[{index}])"),
-                    "LucidVal" => format!("args->items[{index}]"),
-                    other => format!("({other})lucid_as_ptr(args->items[{index}])"),
+                    "int64_t" => format!("lucid_as_int({source})"),
+                    "double" => format!("lucid_as_float({source})"),
+                    "bool" => format!("lucid_as_bool({source})"),
+                    "const char*" => format!("lucid_as_str({source})"),
+                    "LucidList*" => format!("lucid_as_list({source})"),
+                    "LucidDict*" => format!("lucid_as_dict({source})"),
+                    "LucidSet*" => format!("lucid_as_set({source})"),
+                    "LucidVal" => source,
+                    other => format!("({other})lucid_as_ptr({source})"),
                 };
                 self.var_types.insert(param.name.clone(), ty.clone());
                 self.emit_line(&format!("{ty} lucid_var_{} = {value};", param.name));
@@ -18580,6 +18595,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous keyword variadic failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+    }
+
+    #[test]
+    fn native_anonymous_function_supports_default_arguments() {
+        let source = "f = def(x: int, y: int = 5) -> int: x + y\nprint(f(3))\n";
+        let module = parse(source).expect("anonymous default source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_default_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("anonymous default should compile");
+        let run = Command::new(&output).output().expect("run anonymous default");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "anonymous default failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
     }
 
     #[test]
