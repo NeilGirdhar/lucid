@@ -5417,6 +5417,7 @@ static inline void lucid_print_val(LucidVal v) {
                 "float" => format!("{subject}.type == LUCID_TYPE_FLOAT"),
                 "bool" => format!("{subject}.type == LUCID_TYPE_BOOL"),
                 "str" => format!("{subject}.type == LUCID_TYPE_STR"),
+                "complex" => format!("{subject}.type == LUCID_TYPE_COMPLEX"),
                 "bytes" | "Bytes" => format!("{subject}.type == LUCID_TYPE_BYTES"),
                 "MemoryView" => format!("{subject}.type == LUCID_TYPE_MEMORYVIEW"),
                 "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
@@ -15545,6 +15546,23 @@ print(" ".join(capitalized))
             .output()
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "15");
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_match_complex_pattern_tests_complex_values() {
+        let source = "value = complex(1, 2)\nmatch value:\n    case complex:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case complex:\n        print(1)\n    case _:\n        print(0)\n";
+        let module = parse(source).expect("complex match pattern source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_complex_match_pattern_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("complex match pattern should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert!(result.status.success(), "native program failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "1\n0");
         let _ = std::fs::remove_file(output);
     }
 

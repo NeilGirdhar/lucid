@@ -1184,6 +1184,8 @@ diverged:
   Runtime and native codegen use the same binding predicate for pattern-local
   variables, so type/class patterns no longer synthesize bogus runtime
   bindings or `lucid_var_*` locals in generated C.
+  Native `case complex` now emits a real `LUCID_TYPE_COMPLEX` condition
+  instead of falling through as an unbound match-all identifier.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
