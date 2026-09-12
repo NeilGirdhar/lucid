@@ -542,8 +542,8 @@ diverged:
   void or fall-through completion.
   The typed-HIR match node collector now recognizes the same simple no-op setup
   for primitive two-arm and literal-chain match results, including `assert(true)`
-  and statically false `while` setup, keeping those shapes on the typed graph
-  path.
+  statically false `while` setup, and statically empty `for` setup, keeping
+  those shapes on the typed graph path.
   Static selected branches that fall through after supported setup work now
   lower through the void path as well for selected `then`, `elif`, and `else`
   arms, while effectful discarded setup remains rejected.
