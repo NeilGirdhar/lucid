@@ -1036,9 +1036,13 @@ impl Interpreter {
             let (name, span) = match member {
                 ClassMember::Method(method) | ClassMember::ClassMethod(method) => {
                     Self::reject_removed_decorators(method)?;
+                    Self::reject_nonfinal_gather(&method.params, "method")?;
                     (&method.name, method.span)
                 }
-                ClassMember::Factory(factory) => (&factory.name, factory.span),
+                ClassMember::Factory(factory) => {
+                    Self::reject_nonfinal_gather(&factory.params, "method")?;
+                    (&factory.name, factory.span)
+                }
                 ClassMember::Getter(getter) => (&getter.name, getter.span),
                 ClassMember::Setter(setter) => (&setter.name, setter.span),
                 ClassMember::Field(field) | ClassMember::ClassVar(field) => {
@@ -1062,6 +1066,7 @@ impl Interpreter {
             let (name, span) = match member {
                 TraitMember::Method(method) | TraitMember::ClassMethod(method) => {
                     Self::reject_removed_decorators(method)?;
+                    Self::reject_nonfinal_gather(&method.params, "method")?;
                     (&method.name, method.span)
                 }
                 TraitMember::Getter(getter) => (&getter.name, getter.span),
@@ -1082,11 +1087,20 @@ impl Interpreter {
     fn validate_interface_member_names(body: &[InterfaceMember]) -> Result<(), RuntimeError> {
         for member in body {
             let (name, span) = match member {
-                InterfaceMember::MethodSig { name, span, .. }
-                | InterfaceMember::GetterSig { name, span, .. }
+                InterfaceMember::MethodSig {
+                    name, params, span, ..
+                }
+                | InterfaceMember::ClassMethodSig {
+                    name, params, span, ..
+                }
+                | InterfaceMember::FactorySig {
+                    name, params, span, ..
+                } => {
+                    Self::reject_nonfinal_gather(params, "method")?;
+                    (name, *span)
+                }
+                InterfaceMember::GetterSig { name, span, .. }
                 | InterfaceMember::SetterSig { name, span, .. }
-                | InterfaceMember::ClassMethodSig { name, span, .. }
-                | InterfaceMember::FactorySig { name, span, .. }
                 | InterfaceMember::FieldSig { name, span, .. }
                 | InterfaceMember::AssociatedTypeSig { name, span, .. } => (name, *span),
                 InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => continue,
@@ -1095,6 +1109,22 @@ impl Interpreter {
                 return Err(RuntimeError {
                     message: message.into(),
                     span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn reject_nonfinal_gather(params: &[Param], context: &str) -> Result<(), RuntimeError> {
+        if let Some((index, gather)) = params.iter().enumerate().find(|(_, param)| param.is_gather)
+        {
+            if index + 1 != params.len() || params.iter().skip(index + 1).any(|p| p.is_gather) {
+                return Err(RuntimeError {
+                    message: format!(
+                        "gather parameter '{}' must be the {context}'s final parameter",
+                        gather.name
+                    ),
+                    span: gather.span,
                 });
             }
         }
@@ -5755,6 +5785,7 @@ impl Interpreter {
             }
             Stmt::Function(func) => {
                 Self::reject_removed_decorators(func)?;
+                Self::reject_nonfinal_gather(&func.params, "function")?;
                 let mut func_val = Value::Function {
                     name: func.name.clone(),
                     params: func.params.clone(),
@@ -14198,6 +14229,31 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             .eval_module(&module)
             .expect_err("failed assertion should report string detail");
         assert_eq!(error.message, "failure detail");
+    }
+
+    #[test]
+    fn runtime_rejects_nonfinal_gather_parameters() {
+        for (source, expected) in [
+            (
+                "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef invalid(***rest: Arguments, tail: int) -> int:\n    return tail\n",
+                "must be the function's final parameter",
+            ),
+            (
+                "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\nclass Worker:\n    def invalid(self, ***rest: Arguments, tail: int) -> int:\n        return tail\n",
+                "must be the method's final parameter",
+            ),
+        ] {
+            let module = parse(source).expect("nonfinal gather source should parse");
+            let mut interp = Interpreter::default();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("nonfinal gather parameter must fail at runtime");
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

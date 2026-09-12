@@ -310,9 +310,11 @@ impl CCodeGenerator {
             match member {
                 ClassMember::Method(method) | ClassMember::ClassMethod(method) => {
                     Self::reject_removed_decorators(method)?;
+                    Self::reject_nonfinal_gather(&method.params, "method")?;
                     Self::validate_removed_member(&method.name)?;
                 }
                 ClassMember::Factory(factory) => {
+                    Self::reject_nonfinal_gather(&factory.params, "method")?;
                     Self::validate_removed_member(&factory.name)?;
                 }
                 ClassMember::Getter(getter) => {
@@ -338,6 +340,7 @@ impl CCodeGenerator {
             match member {
                 TraitMember::Method(method) | TraitMember::ClassMethod(method) => {
                     Self::reject_removed_decorators(method)?;
+                    Self::reject_nonfinal_gather(&method.params, "method")?;
                     Self::validate_removed_member(&method.name)?;
                 }
                 TraitMember::Getter(getter) => {
@@ -358,16 +361,34 @@ impl CCodeGenerator {
     fn validate_interface_member_names(body: &[InterfaceMember]) -> Result<(), CodegenError> {
         for member in body {
             match member {
-                InterfaceMember::MethodSig { name, .. }
-                | InterfaceMember::GetterSig { name, .. }
+                InterfaceMember::MethodSig { name, params, .. }
+                | InterfaceMember::ClassMethodSig { name, params, .. }
+                | InterfaceMember::FactorySig { name, params, .. } => {
+                    Self::reject_nonfinal_gather(params, "method")?;
+                    Self::validate_removed_member(name)?;
+                }
+                InterfaceMember::GetterSig { name, .. }
                 | InterfaceMember::SetterSig { name, .. }
-                | InterfaceMember::ClassMethodSig { name, .. }
-                | InterfaceMember::FactorySig { name, .. }
                 | InterfaceMember::FieldSig { name, .. }
                 | InterfaceMember::AssociatedTypeSig { name, .. } => {
                     Self::validate_removed_member(name)?;
                 }
                 InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn reject_nonfinal_gather(params: &[Param], context: &str) -> Result<(), CodegenError> {
+        if let Some((index, gather)) = params.iter().enumerate().find(|(_, param)| param.is_gather)
+        {
+            if index + 1 != params.len() || params.iter().skip(index + 1).any(|p| p.is_gather) {
+                return Err(CodegenError {
+                    message: format!(
+                        "gather parameter '{}' must be the {context}'s final parameter",
+                        gather.name
+                    ),
+                });
             }
         }
         Ok(())
@@ -479,7 +500,10 @@ impl CCodeGenerator {
             Stmt::ClassDef { body, .. } => Self::validate_class_member_names(body),
             Stmt::TraitDef { body, .. } => Self::validate_trait_member_names(body),
             Stmt::InterfaceDef { body, .. } => Self::validate_interface_member_names(body),
-            Stmt::Function(function) => Self::reject_removed_decorators(function),
+            Stmt::Function(function) => {
+                Self::reject_removed_decorators(function)?;
+                Self::reject_nonfinal_gather(&function.params, "function")
+            }
             _ => Ok(()),
         }
     }
@@ -23327,6 +23351,31 @@ print(result[1])
         let _ = fs::remove_file(&output);
         compile_to_native(&module, &output, 0).expect("valid lazy assert should compile");
         let _ = fs::remove_file(&output);
+    }
+
+    #[test]
+    fn native_rejects_nonfinal_gather_parameters() {
+        for (source, expected) in [
+            (
+                "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef invalid(***rest: Arguments, tail: int) -> int:\n    return tail\n",
+                "must be the function's final parameter",
+            ),
+            (
+                "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\nclass Worker:\n    def invalid(self, ***rest: Arguments, tail: int) -> int:\n        return tail\n",
+                "must be the method's final parameter",
+            ),
+        ] {
+            let module = parse(source).expect("nonfinal gather source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_native_nonfinal_gather_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("nonfinal gather parameter must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
+        }
     }
 
     #[test]
