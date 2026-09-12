@@ -4618,31 +4618,6 @@ impl Function {
                         if is_const_empty_iterable(iterable)
                 )
         }
-        fn branch_binding<'a>(
-            statements: &'a [lucid_syntax::Stmt],
-            bindings: &HashMap<String, ValueId>,
-            instructions: &[Instruction],
-        ) -> Result<&'a str, LowerError> {
-            let statement = statements
-                .iter()
-                .rev()
-                .find(|statement| !statement_static_noop(statement, bindings, instructions));
-            match statement {
-                Some(lucid_syntax::Stmt::Assignment {
-                    target: lucid_syntax::Expr::Ident { name, .. },
-                    ..
-                })
-                | Some(lucid_syntax::Stmt::VarDef {
-                    pattern: lucid_syntax::Pattern::Ident(name, _),
-                    value: Some(_),
-                    ..
-                }) => Ok(name),
-                Some(lucid_syntax::Stmt::Export(inner)) => {
-                    branch_binding(std::slice::from_ref(inner.as_ref()), bindings, instructions)
-                }
-                _ => Err(LowerError::UnsupportedExpression),
-            }
-        }
         fn lower_dynamic_if(
             prefix: &[lucid_syntax::Stmt],
             condition: &lucid_syntax::Expr,
@@ -4657,11 +4632,6 @@ impl Function {
                 visit(statement, bindings, instructions, next, &mut last)?;
             }
             let condition_value = lower(condition, bindings, instructions, next)?;
-            let then_name = branch_binding(then_branch, bindings, instructions)?;
-            let else_name = branch_binding(else_branch, bindings, instructions)?;
-            if then_name != else_name {
-                return Err(LowerError::UnsupportedExpression);
-            }
             let mut then_bindings = bindings.clone();
             let mut then_instructions = Vec::new();
             let mut then_last = None;
@@ -9747,6 +9717,20 @@ return total
         assert_eq!(
             Function::from_module_linear(&module).unwrap().execute(),
             Ok(Some(2))
+        );
+        let module = lucid_syntax::parse(
+            "flag = true\nif flag:\n    x = 2\n    assert(x)\nelse:\n    x = 3\n    assert(x)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(2))
+        );
+        let module =
+            lucid_syntax::parse("flag = false\nif flag:\n    x = 2\nelse:\n    y = 3\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(3))
         );
         let module = lucid_syntax::parse(
             "flag = false\nchecked = true\nkeep_going = false\nif flag:\n    x = 2\n    assert(checked)\nelse:\n    x = 3\n    while keep_going:\n        x = 9\n",

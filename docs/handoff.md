@@ -1786,6 +1786,9 @@ diverged:
   Branch-local assignments in that diamond may now be followed by proven no-op
   statements such as `pass`, statically true `assert`, dead `while`, and empty
   `for`, matching the no-op handling used by straight-line lowering.
+  The final-statement diamond now merges each branch's lowered result value,
+  so branches no longer need to assign the same source name when no later
+  statement observes that name.
 * The same diamond accepts one statically selected `elif` arm, preserving
   branch selection without lowering an incomplete conditional chain.
 * The compiler database now exposes an incremental resolved-module HIR
