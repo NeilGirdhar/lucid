@@ -6720,6 +6720,30 @@ impl TypeChecker {
     }
 
     fn match_pattern_narrowed_type(&self, pattern: &Pattern, subject_type: &Type) -> Type {
+        fn literal_narrowed_type(value: &LiteralValue, env: &TypeEnvironment) -> Type {
+            match value {
+                LiteralValue::Int(value) => Type::LiteralInt(*value),
+                LiteralValue::BigInt(_) => Type::Int,
+                LiteralValue::Float(value) => Type::LiteralFloat(*value),
+                LiteralValue::Complex(_) => {
+                    env.classes.get("complex").cloned().unwrap_or(Type::Float)
+                }
+                LiteralValue::Str(value) => Type::LiteralStr(value.clone()),
+                LiteralValue::Bytes(_) => Type::Class {
+                    name: "Bytes".into(),
+                    type_args: Vec::new(),
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: vec!["Buffer".into(), "Sized".into(), "Container".into()],
+                    fields: HashMap::new(),
+                    is_sealed: true,
+                },
+                LiteralValue::Bool(value) => Type::LiteralBool(*value),
+                LiteralValue::None => Type::None,
+                LiteralValue::Sentinel(_) => Type::TypeVar("Sentinel".into()),
+                LiteralValue::Ellipsis => Type::Never,
+            }
+        }
         match pattern {
             Pattern::Type(type_expr, _) => self
                 .resolve_type_expr(type_expr)
@@ -6730,6 +6754,7 @@ impl TypeChecker {
             Pattern::Ident(name, _) => self
                 .named_pattern_type(name)
                 .unwrap_or_else(|| subject_type.clone()),
+            Pattern::Literal(value, _) => literal_narrowed_type(value, &self.env),
             _ => subject_type.clone(),
         }
     }
@@ -7691,12 +7716,14 @@ impl TypeChecker {
                 span: _,
             } => {
                 let lt = match self.type_of_expr(left)? {
+                    Type::LiteralInt(_) => Type::Int,
                     Type::LiteralStr(_) => Type::Str,
                     Type::LiteralFloat(_) => Type::Float,
                     Type::LiteralBool(_) => Type::Bool,
                     other => other,
                 };
                 let rt = match self.type_of_expr(right)? {
+                    Type::LiteralInt(_) => Type::Int,
                     Type::LiteralStr(_) => Type::Str,
                     Type::LiteralFloat(_) => Type::Float,
                     Type::LiteralBool(_) => Type::Bool,
@@ -12642,14 +12669,14 @@ def render(s: Shape) -> int:
         assert!(checker.check_module(&aliased).is_ok());
 
         let literal_ints = parse(
-            "type Choice = 1 | 2\ndef render(s: Choice) -> int:\n    match s:\n        case 1:\n            return 10\n        case 2:\n            return 20\n",
+            "type Choice = 1 | 2\ndef render(s: Choice) -> int:\n    match s:\n        case 1:\n            exact: 1 = s\n            return exact\n        case 2:\n            exact: 2 = s\n            return exact\n",
         )
         .unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&literal_ints).is_ok());
 
         let literal_mixed = parse(
-            "type Choice = true | 1.5 | \"ok\"\ndef render(s: Choice) -> int:\n    match s:\n        case true:\n            return 1\n        case 1.5:\n            return 2\n        case \"ok\":\n            return 3\n",
+            "type Choice = true | 1.5 | \"ok\"\ndef render(s: Choice) -> int:\n    match s as subject:\n        case true:\n            exact: true = subject\n            return 1\n        case 1.5:\n            exact: 1.5 = subject\n            return 2\n        case \"ok\":\n            exact: \"ok\" = subject\n            return 3\n",
         )
         .unwrap();
         let mut checker = TypeChecker::new();

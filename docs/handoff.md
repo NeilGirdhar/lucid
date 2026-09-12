@@ -1173,6 +1173,8 @@ diverged:
   patterns now cover their corresponding literal union variants. Literal match
   patterns are also checked against the subject type, so cross-category literal
   patterns fail while unreachable arms for singleton subjects remain valid.
+  Inside a literal arm, the subject name or `match ... as` alias now narrows to
+  the exact literal type.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
