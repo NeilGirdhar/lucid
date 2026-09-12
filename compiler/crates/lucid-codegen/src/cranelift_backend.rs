@@ -2769,6 +2769,29 @@ return n
     }
 
     #[test]
+    fn result_abi_executes_local_init_local_step_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"value = n
+tick = step
+while value > 0:
+    value -= tick
+return value
+"#,
+        )
+        .expect("local-init local-step counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into()],
+        )
+        .expect("local-init local-step counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile local-init local-step counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[10, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, -2);
+    }
+
+    #[test]
     fn result_abi_executes_void_local_bound_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"value = n

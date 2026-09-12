@@ -594,8 +594,10 @@ diverged:
   lower through the counted path. Additive induction updates also accept the
   commuted spelling `n = -1 + n`, and the induction step may be a positional
   parameter or a pre-loop local alias of a literal or parameter instead of only
-  a signed literal, as in `tick = step; while n > 0: n -= tick`. The
-  accumulator step can be a signed literal, positional parameter, or the
+  a signed literal, as in `tick = step; while n > 0: n -= tick`. Plain counted
+  loops can seed a local induction variable and a local step alias together, in
+  either setup order, before lowering the same Phi-backed CFG. The accumulator
+  step can be a signed literal, positional parameter, or the
   current induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
   commuted additive spelling `x = y + x`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
