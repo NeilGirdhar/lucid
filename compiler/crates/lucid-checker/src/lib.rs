@@ -3017,22 +3017,30 @@ impl TypeChecker {
                 value,
                 ..
             } => {
+                let saved_type_var_bounds = self.env.type_var_bounds.clone();
                 self.env.type_alias_params.insert(
                     name.clone(),
                     type_params.iter().map(|param| param.name.clone()).collect(),
                 );
-                self.env.type_alias_bounds.insert(
-                    name.clone(),
-                    type_params
-                        .iter()
-                        .map(|param| {
-                            param
-                                .bound
-                                .as_ref()
-                                .and_then(|bound| self.resolve_type_expr(bound).ok())
-                        })
-                        .collect(),
-                );
+                let alias_bounds = type_params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .bound
+                            .as_ref()
+                            .map(|bound| self.resolve_type_expr(bound))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.env
+                    .type_alias_bounds
+                    .insert(name.clone(), alias_bounds.clone());
+                for (param, bound) in type_params.iter().zip(alias_bounds.iter()) {
+                    self.env.type_var_bounds.insert(
+                        param.name.clone(),
+                        bound.clone().unwrap_or(Type::TypeVar("Any".into())),
+                    );
+                }
                 match value {
                     TypeAliasValue::Direct(texpr) => {
                         let t = self.resolve_type_expr(texpr)?;
@@ -3050,6 +3058,7 @@ impl TypeChecker {
                         }
                     }
                 }
+                self.env.type_var_bounds = saved_type_var_bounds;
                 Ok(())
             }
             Stmt::Function(func) => {
@@ -11324,6 +11333,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("Float32 should satisfy DataType-bounded array dtype parameters");
+    }
+
+    #[test]
+    fn type_alias_bounds_are_in_scope_for_shape_alias_bodies() {
+        let module = parse(
+            "type Get[S: Shape, I: int] = S[I]\ntype InsertAt[S: Shape, I: int, D: int] = S[:I] + shape[D] + S[I:]\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("type alias bounds should be active while resolving alias bodies");
     }
 
     #[test]
