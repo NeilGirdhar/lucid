@@ -8690,6 +8690,18 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
 
         let file = db.add_file(
+            "mixed-match-without-fallback.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case 2:\n            return\n        case 3:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed match without fallback should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
             "mixed-bool-match.lucid",
             "def choose(flag: bool):\n    match flag:\n        case true:\n            return 11\n        case false:\n            return\n",
         );
