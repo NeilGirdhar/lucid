@@ -6095,6 +6095,15 @@ static inline void lucid_print_val(LucidVal v) {
         {
             return Ok(());
         }
+        if f.is_dispatch
+            && matches!(
+                Self::dispatch_operator_key(&f.name).as_str(),
+                "+" | "-" | "*" | "/" | "//" | "%" | "**" | "&" | "|" | "^"
+                    | "<<" | ">>" | "==" | "!=" | "<" | "<=" | ">" | ">="
+            )
+        {
+            return Ok(());
+        }
         let adapter = Self::closure_adapter_name(f);
         if prototype {
             self.emit_line(&format!("static LucidVal {adapter}(void*, LucidList*);"));
