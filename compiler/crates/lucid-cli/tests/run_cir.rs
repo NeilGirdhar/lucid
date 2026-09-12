@@ -842,6 +842,37 @@ fn run_cir_executes_local_bound_while_accumulator() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_local_bound_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int):\n    total = 0\n    limit = n\n    for i in range(limit):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
 fn run_cir_executes_conditional_return_expression() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_conditional_expr_{}.lucid",

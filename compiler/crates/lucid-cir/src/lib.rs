@@ -3709,30 +3709,107 @@ impl Function {
         module: &lucid_syntax::Module,
         parameter_names: &[String],
     ) -> Option<Result<Self, LowerError>> {
-        let [lucid_syntax::Stmt::Assignment {
-            target: lucid_syntax::Expr::Ident { name: acc_name, .. },
-            value: initial_expr,
-            ..
+        fn initialized_ident(
+            statement: &lucid_syntax::Stmt,
+        ) -> Option<(&String, &lucid_syntax::Expr)> {
+            match statement {
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(value),
+                    ..
+                } => Some((name, value)),
+                _ => None,
+            }
         }
-        | lucid_syntax::Stmt::VarDef {
-            pattern: lucid_syntax::Pattern::Ident(acc_name, _),
-            value: Some(initial_expr),
-            ..
-        }, lucid_syntax::Stmt::For {
-            target: lucid_syntax::Pattern::Ident(index_name, _),
-            iterable: lucid_syntax::Expr::Call { func, args, .. },
+        let (
+            acc_name,
+            initial_expr,
+            bound_alias,
+            index_name,
+            func,
+            args,
             body,
             if_broken,
-            ..
-        }, lucid_syntax::Stmt::Return {
-            value:
-                Some(lucid_syntax::Expr::Ident {
-                    name: return_name, ..
-                }),
-            ..
-        }] = module.statements.as_slice()
-        else {
-            return None;
+            return_name,
+        ) = match module.statements.as_slice() {
+            [acc_statement, for_statement, return_statement] => {
+                let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
+                let lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Ident(index_name, _),
+                    iterable: lucid_syntax::Expr::Call { func, args, .. },
+                    body,
+                    if_broken,
+                    ..
+                } = for_statement
+                else {
+                    return None;
+                };
+                let lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: return_name, ..
+                        }),
+                    ..
+                } = return_statement
+                else {
+                    return None;
+                };
+                (
+                    acc_name,
+                    initial_expr,
+                    None,
+                    index_name,
+                    func,
+                    args,
+                    body,
+                    if_broken,
+                    return_name,
+                )
+            }
+            [acc_statement, alias_statement, for_statement, return_statement] => {
+                let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
+                let (alias_name, _) = initialized_ident(alias_statement)?;
+                let lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Ident(index_name, _),
+                    iterable: lucid_syntax::Expr::Call { func, args, .. },
+                    body,
+                    if_broken,
+                    ..
+                } = for_statement
+                else {
+                    return None;
+                };
+                let lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: return_name, ..
+                        }),
+                    ..
+                } = return_statement
+                else {
+                    return None;
+                };
+                if alias_name == acc_name || alias_name == index_name {
+                    return None;
+                }
+                (
+                    acc_name,
+                    initial_expr,
+                    Some(alias_statement),
+                    index_name,
+                    func,
+                    args,
+                    body,
+                    if_broken,
+                    return_name,
+                )
+            }
+            _ => return None,
         };
         if return_name != acc_name
             || body.is_empty()
@@ -3805,6 +3882,28 @@ impl Function {
             _ => return None,
         };
         let operand = |expr: &lucid_syntax::Expr, result: ValueId| -> Option<Instruction> {
+            if let Some(statement) = bound_alias {
+                let (alias_name, value) = initialized_ident(statement)?;
+                if matches!(expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name) {
+                    return match value {
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Int(value),
+                            ..
+                        } => Some(Instruction::ConstInt {
+                            result,
+                            value: *value,
+                        }),
+                        lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
+                            result,
+                            index: parameter_names
+                                .iter()
+                                .position(|parameter| parameter == name)?
+                                as u32,
+                        }),
+                        _ => None,
+                    };
+                }
+            }
             match expr {
                 lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Int(value),
@@ -3822,6 +3921,14 @@ impl Function {
                 _ => None,
             }
         };
+        if let Some(statement) = bound_alias {
+            let (alias_name, _) = initialized_ident(statement)?;
+            if !matches!(start_expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name)
+                && !matches!(stop_expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name)
+            {
+                return None;
+            }
+        }
         let start_instruction = operand(start_expr, ValueId(1))?;
         let stop_instruction = operand(stop_expr, ValueId(0))?;
         let accumulator_instruction = operand(initial_expr, ValueId(2))?;
@@ -9338,6 +9445,19 @@ return total
         .expect("range accumulation fixture should parse");
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("range accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+limit = n
+for i in range(limit):
+    total += i
+return total
+"#,
+        )
+        .expect("range alias accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
 
         let module =
