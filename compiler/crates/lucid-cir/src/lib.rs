@@ -11449,6 +11449,35 @@ return total
         assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(15)));
 
         let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += -step
+    n -= 1
+return total
+"#,
+        )
+        .expect("unary accumulator-step while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("unary accumulator-step while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(-15)));
+
+        let module = lucid_syntax::parse(
+            r#"tick = -step
+total = 0
+while n > 0:
+    total += tick
+    n -= 1
+return total
+"#,
+        )
+        .expect("local unary accumulator-step while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("local unary accumulator-step while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(-15)));
+
+        let module = lucid_syntax::parse(
             r#"value = n
 tick = step
 total = 0
@@ -11900,6 +11929,33 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
                 .expect("range accumulator local step alias should lower");
         assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(15)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total += -step
+return total
+"#,
+        )
+        .expect("range accumulator unary parameter step fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("range accumulator unary parameter step should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(-15)));
+
+        let module = lucid_syntax::parse(
+            r#"inc = -step
+total = 0
+for i in range(n):
+    total += inc
+return total
+"#,
+        )
+        .expect("range accumulator local unary step alias fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("range accumulator local unary step alias should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(-15)));
 
         let module = lucid_syntax::parse(
             r#"total = 0

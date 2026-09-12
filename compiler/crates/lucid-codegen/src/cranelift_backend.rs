@@ -2782,6 +2782,28 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_unary_accumulator_step_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total += -step
+return total
+"#,
+        )
+        .expect("unary accumulator-step range accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into()],
+        )
+        .expect("unary accumulator-step range accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile unary accumulator-step range CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, -15);
+    }
+
+    #[test]
     fn result_abi_executes_void_range_with_local_aliases_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit
@@ -3239,6 +3261,29 @@ return total
         let result = unsafe { compiled.call_result_with_args(&[10, 2, 3]) };
         assert!(result.is_ok());
         assert_eq!(result.value, 9);
+    }
+
+    #[test]
+    fn result_abi_executes_unary_accumulator_step_counted_while_accumulator_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += -step
+    n -= 1
+return total
+"#,
+        )
+        .expect("unary accumulator-step counted while accumulator fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into()],
+        )
+        .expect("unary accumulator-step counted while accumulator should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile unary accumulator-step counted accumulator CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, -15);
     }
 
     #[test]

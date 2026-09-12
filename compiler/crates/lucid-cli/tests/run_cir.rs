@@ -2516,6 +2516,37 @@ fn run_cir_executes_range_accumulator_with_unary_dynamic_step() {
 }
 
 #[test]
+fn run_cir_executes_range_accumulator_with_unary_accumulator_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_unary_accumulator_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_penalty(n: int, step: int):\n    total = 0\n    for i in range(n):\n        total += -step\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_penalty",
+            "--args",
+            "5,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir unary accumulator-step range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-15");
+}
+
+#[test]
 fn run_cir_executes_void_range_with_local_aliases() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_void_range_aliases_{}.lucid",
