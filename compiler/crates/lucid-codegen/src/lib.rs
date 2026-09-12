@@ -11367,14 +11367,22 @@ static inline void lucid_print_val(LucidVal v) {
                                 let value = self.emit_expr(&arg.value)?;
                                 let bundle_type = self.infer_expr_type(&arg.value, &HashMap::new());
                                 let bundle_name = bundle_type.trim_end_matches('*');
+                                let object = format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
                                 let is_bundle = bundle_name == "Arguments"
                                     || bundle_name == "Parameters"
                                     || bundle_name.ends_with("Arguments")
                                     || bundle_name.ends_with("Parameters");
                                 if !is_bundle {
-                                    return Err(CodegenError { message: "gather spread requires an Arguments or Parameters value".into() });
+                                    if let Some(fields) = self.known_classes.get(bundle_name).cloned() {
+                                        for field in fields {
+                                            parts.push(format!(
+                                                "lucid_list_append({call_args}, lucid_wrap({object}->{field}));"
+                                            ));
+                                        }
+                                        continue;
+                                    }
+                                    return Err(CodegenError { message: "gather spread requires a declared bundle or class value".into() });
                                 }
-                                let object = format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
                                 if self
                                     .known_classes
                                     .get(bundle_name)
@@ -13041,14 +13049,20 @@ static inline void lucid_print_val(LucidVal v) {
                             let value = self.emit_expr(&arg.value)?;
                             let bundle_type = self.infer_expr_type(&arg.value, &HashMap::new());
                             let bundle_name = bundle_type.trim_end_matches('*');
+                            let object = format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
                             let is_bundle = bundle_name == "Arguments"
                                 || bundle_name == "Parameters"
                                 || bundle_name.ends_with("Arguments")
                                 || bundle_name.ends_with("Parameters");
                             if !is_bundle {
-                                return Err(CodegenError { message: "gather spread requires an Arguments or Parameters value".into() });
+                                if let Some(fields) = self.known_classes.get(bundle_name).cloned() {
+                                    for field in fields {
+                                        parts.push(format!("lucid_list_append({call_args}, lucid_wrap({object}->{field}));"));
+                                    }
+                                    continue;
+                                }
+                                return Err(CodegenError { message: "gather spread requires a declared bundle or class value".into() });
                             }
-                            let object = format!("(({bundle_name}*)lucid_as_ptr(lucid_wrap({value})))");
                             if self.known_classes.get(bundle_name).is_some_and(|fields| fields.iter().any(|field| field == "pargs")) {
                                 parts.push(format!("for (int64_t _i = 0; {object}->pargs && _i < {object}->pargs->len; ++_i) lucid_list_append({call_args}, {object}->pargs->items[_i]);"));
                             }
@@ -19794,6 +19808,25 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "parameters spread value failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
+    }
+
+    #[test]
+    fn native_named_class_gather_value_accepts_gather_spread() {
+        let source = "class Options:\n    retries: int\n    label: str\ndef render(***rest: Options) -> int:\n    return rest.retries + len(rest.label)\nfs = [render]\noptions = Options(3, \"ok\")\nprint(fs[0](***options))\n";
+        let module = parse(source).expect("class gather spread value source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_named_class_gather_spread_value_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("class gather spread value should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run class gather spread value");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "class gather spread value failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
     #[test]
