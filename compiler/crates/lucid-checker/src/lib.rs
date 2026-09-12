@@ -5480,7 +5480,7 @@ impl TypeChecker {
                     .as_ref()
                     .map(|te| self.resolve_type_expr(te))
                     .transpose()
-                    .map(|ty| ty.unwrap_or(Type::None))
+                    .map(|ty| ty.unwrap_or(Type::TypeVar("Any".into())))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
         let declared_return = return_type
@@ -5668,19 +5668,30 @@ impl TypeChecker {
                 let is_numeric = |ty: &Type| {
                     matches!(ty, Type::Int | Type::LiteralInt(_) | Type::Float)
                         || matches!(ty, Type::Class { name, .. } if name == "complex")
-                        || matches!(ty, Type::None | Type::Never)
+                        || matches!(ty, Type::Never)
                         || matches!(ty, Type::TypeVar(name) if name == "Any")
                 };
                 match op {
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
                         let unknown = |ty: &Type| {
-                            matches!(ty, Type::Never | Type::None)
+                            matches!(ty, Type::Never)
                                 || matches!(ty, Type::TypeVar(name) if name == "Any")
                         };
                         let complex = matches!(&lt, Type::Class { name, .. } if name == "complex")
                             || matches!(&rt, Type::Class { name, .. } if name == "complex");
                         if unknown(&lt) || unknown(&rt) {
                             Ok(Type::TypeVar("Any".into()))
+                        } else if matches!(op, BinaryOp::Add) && lt == Type::Str && rt == Type::Str
+                        {
+                            Ok(Type::Str)
+                        } else if !is_numeric(&lt) || !is_numeric(&rt) {
+                            Err(TypeError {
+                                message: format!(
+                                    "unsupported operands for {:?}: {:?} and {:?}",
+                                    op, lt, rt
+                                ),
+                                span: left.span(),
+                            })
                         } else if complex {
                             Ok(self
                                 .env
@@ -5692,8 +5703,6 @@ impl TypeChecker {
                             Ok(Type::Int)
                         } else if lt == Type::Float || rt == Type::Float {
                             Ok(Type::Float)
-                        } else if lt == rt {
-                            Ok(lt)
                         } else {
                             Err(TypeError {
                                 message: format!(
@@ -9535,6 +9544,31 @@ class Child(Base):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("unsupported operands for /"));
+    }
+
+    #[test]
+    fn arithmetic_rejects_bool_none_and_unrelated_same_types() {
+        let valid = parse("number = 1 + 2\ntext = \"a\" + \"b\"\nfloaty = 1 + 2.0\n").unwrap();
+        TypeChecker::new()
+            .check_module(&valid)
+            .expect("numeric arithmetic and string concatenation should type check");
+
+        for source in [
+            "value = true + true\n",
+            "value = true - false\n",
+            "value = true * false\n",
+            "value = none + none\n",
+            "value = {1} + {2}\n",
+            "value = {\"a\": 1} + {\"b\": 2}\n",
+        ] {
+            let module = parse(source).unwrap();
+            let err = TypeChecker::new().check_module(&module).unwrap_err();
+            assert!(
+                err.message.contains("unsupported operands"),
+                "{source}: {}",
+                err.message
+            );
+        }
     }
 
     #[test]
