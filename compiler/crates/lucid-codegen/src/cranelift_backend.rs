@@ -3170,6 +3170,28 @@ return n
     }
 
     #[test]
+    fn result_abi_executes_unary_dynamic_step_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"tick = -step
+while n < limit:
+    n -= tick
+return n
+"#,
+        )
+        .expect("unary dynamic-step counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("unary dynamic-step counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile unary dynamic-step counted loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[1, 10, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 10);
+    }
+
+    #[test]
     fn result_abi_executes_dynamic_arithmetic_counted_while_accumulator_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0

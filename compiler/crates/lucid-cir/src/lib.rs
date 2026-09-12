@@ -2942,6 +2942,26 @@ impl Function {
                         operand_instruction(value, result, parameter_names, None)?;
                     Some((instructions, true))
                 }
+                lucid_syntax::Expr::Unary { op, expr, .. }
+                    if matches!(op, lucid_syntax::UnaryOp::Pos | lucid_syntax::UnaryOp::Neg) =>
+                {
+                    let (instruction, used_alias) =
+                        atom_instruction(expr.as_ref(), ValueId(6), parameter_names, step_initial)?;
+                    match op {
+                        lucid_syntax::UnaryOp::Pos => Some((vec![instruction], used_alias)),
+                        lucid_syntax::UnaryOp::Neg => Some((
+                            vec![
+                                instruction,
+                                Instruction::Neg {
+                                    result,
+                                    operand: ValueId(6),
+                                },
+                            ],
+                            used_alias,
+                        )),
+                        _ => None,
+                    }
+                }
                 lucid_syntax::Expr::Binary {
                     op, left, right, ..
                 } if matches!(
@@ -3051,6 +3071,26 @@ impl Function {
                         None,
                     )?;
                     Some((instructions, true))
+                }
+                lucid_syntax::Expr::Unary { op, expr, .. }
+                    if matches!(op, lucid_syntax::UnaryOp::Pos | lucid_syntax::UnaryOp::Neg) =>
+                {
+                    let (instruction, used_alias) =
+                        atom_instruction(expr.as_ref(), left_temp, parameter_names, bound_initial)?;
+                    match op {
+                        lucid_syntax::UnaryOp::Pos => Some((vec![instruction], used_alias)),
+                        lucid_syntax::UnaryOp::Neg => Some((
+                            vec![
+                                instruction,
+                                Instruction::Neg {
+                                    result,
+                                    operand: left_temp,
+                                },
+                            ],
+                            used_alias,
+                        )),
+                        _ => None,
+                    }
                 }
                 lucid_syntax::Expr::Binary {
                     op, left, right, ..
@@ -3867,6 +3907,26 @@ impl Function {
                         None,
                     )?;
                     Some((instructions, true))
+                }
+                lucid_syntax::Expr::Unary { op, expr, .. }
+                    if matches!(op, lucid_syntax::UnaryOp::Pos | lucid_syntax::UnaryOp::Neg) =>
+                {
+                    let (instruction, used_alias) =
+                        atom_instruction(expr.as_ref(), left_temp, parameter_names, alias_initial)?;
+                    match op {
+                        lucid_syntax::UnaryOp::Pos => Some((vec![instruction], used_alias)),
+                        lucid_syntax::UnaryOp::Neg => Some((
+                            vec![
+                                instruction,
+                                Instruction::Neg {
+                                    result,
+                                    operand: left_temp,
+                                },
+                            ],
+                            used_alias,
+                        )),
+                        _ => None,
+                    }
                 }
                 lucid_syntax::Expr::Binary {
                     op, left, right, ..
@@ -11010,6 +11070,18 @@ return n
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
 
         let module = lucid_syntax::parse(
+            r#"while n > -limit:
+    n -= 1
+return n
+"#,
+        )
+        .expect("unary dynamic-bound counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("unary dynamic-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(-2)));
+
+        let module = lucid_syntax::parse(
             r#"while n > 1 + 1:
     n -= 1
 return n
@@ -11114,6 +11186,35 @@ return n
             Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
                 .expect("local dynamic arithmetic-step counted loop should lower");
         assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(-2)));
+
+        let module = lucid_syntax::parse(
+            r#"while n < limit:
+    n -= -step
+return n
+"#,
+        )
+        .expect("unary dynamic-step counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("unary dynamic-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[1, 10, 3]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"tick = -step
+while n < limit:
+    n -= tick
+return n
+"#,
+        )
+        .expect("local unary dynamic-step counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local unary dynamic-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[1, 10, 3]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
             r#"tick = 1 + 1
@@ -11538,6 +11639,23 @@ return total
         .expect("local alias arithmetic-bound accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(Some(9)));
         assert_eq!(function.execute_with_args(&[1, 2, 3]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+tick = -step
+while n < limit:
+    total += 1
+    n -= tick
+return total
+"#,
+        )
+        .expect("local unary dynamic-step accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local unary dynamic-step accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 10, 3]), Ok(Some(3)));
 
         let module = lucid_syntax::parse(
             r#"total = 0

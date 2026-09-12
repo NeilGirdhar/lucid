@@ -621,11 +621,13 @@ diverged:
   parameter or a pre-loop local alias of a literal, checked constant
   expression, or parameter instead of only a signed literal, as in
   `tick = step; while n > 0: n -= tick`. Step expressions may also combine
-  parameter or local-alias atoms with `+`, `-`, or `*`, so both
-  `n -= step + 1` and `tick = step + 1; n -= tick` lower through the counted
-  CFG. Comparison bounds use the same loop-invariant integer-expression subset:
-  checked constants, parameters, local aliases, and `+`, `-`, or `*`
-  combinations lower through the counted path, so `while n > limit + 1`,
+  parameter or local-alias atoms with unary `+`/`-` or binary `+`, `-`, or `*`,
+  so `n -= step + 1`, `tick = step + 1; n -= tick`, and
+  `tick = -step; while n < limit: n -= tick` lower through the counted CFG.
+  Comparison bounds use the same loop-invariant integer-expression subset:
+  checked constants, parameters, local aliases, unary `+`/`-`, and binary
+  `+`, `-`, or `*` combinations lower through the counted path, so
+  `while n > limit + 1`, `while n > -limit`,
   `stop = limit + 1; while n > stop`, `stop = limit; while n > stop + 1`,
   and `while n > 1 + 1` all share the same Phi-backed CFG. Plain counted loops
   can also keep the induction value as a parameter while seeding the comparison
@@ -636,7 +638,7 @@ diverged:
   or checked constant expressions, in any setup order, before lowering the same
   Phi-backed CFG. The accumulator
   update can use the current induction value, a signed literal, a positional
-  parameter, or the same `+`, `-`, and `*` integer-expression subset, using
+  parameter, or the same unary/binary integer-expression subset, using
   `+=`, `-=`, `x = x + y`, `x = x - y`, or the commuted additive spelling
   `x = y + x`; the same local alias slot can also feed the accumulator loop's
   induction update, including when the loop also seeds local induction and
