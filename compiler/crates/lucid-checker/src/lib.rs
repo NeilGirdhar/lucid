@@ -3110,6 +3110,53 @@ impl TypeChecker {
         )
     }
 
+    fn is_buffer_type(&self, value: &Type) -> bool {
+        let base = match value {
+            Type::View { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        if matches!(base, Type::TypeVar(name) if name == "Any") {
+            return true;
+        }
+        if base.is_subtype_of(
+            &Type::Trait {
+                name: "Buffer".into(),
+                type_args: Vec::new(),
+                methods: HashSet::new(),
+            },
+            &self.env,
+        ) {
+            return true;
+        }
+        matches!(base, Type::Class { name, .. }
+            if matches!(name.as_str(), "Bytes" | "ByteArray" | "MemoryView")
+                || self.env.class_members.get(name).is_some_and(|members| members.contains("__buffer__")))
+    }
+
+    fn is_byte_conversion_input(&self, value: &Type) -> bool {
+        let base = match value {
+            Type::View { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        if matches!(base, Type::Str | Type::LiteralStr(_))
+            || matches!(base, Type::Class { name, .. } if name == "str")
+        {
+            return true;
+        }
+        if matches!(base, Type::Class { name, type_args, .. }
+            if name == "list"
+                && type_args
+                    .first()
+                    .is_none_or(|item| item.is_subtype_of(&Type::Int, &self.env)))
+        {
+            return true;
+        }
+        if matches!(base, Type::Shape(_)) {
+            return true;
+        }
+        self.is_buffer_type(base)
+    }
+
     fn class_getter_type(&self, class_name: &str, name: &str) -> Option<Type> {
         if let Some(getter) = self
             .env
@@ -5730,6 +5777,31 @@ impl TypeChecker {
                                 return Err(TypeError {
                                     message: format!(
                                         "zip() arguments must be iterable, got {:?}",
+                                        argument_type
+                                    ),
+                                    span: argument.value.span(),
+                                });
+                            }
+                        }
+                    }
+                    if matches!(name.as_str(), "bytes" | "bytearray" | "memoryview") {
+                        if let Some(argument) = args.first() {
+                            let argument_type = self.type_of_expr(&argument.value)?;
+                            let accepted = if name == "memoryview" {
+                                self.is_buffer_type(&argument_type)
+                            } else {
+                                self.is_byte_conversion_input(&argument_type)
+                            };
+                            if !accepted {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "{}() argument must be a buffer{}got {:?}",
+                                        name,
+                                        if name == "memoryview" {
+                                            ", "
+                                        } else {
+                                            ", string, or integer list, "
+                                        },
                                         argument_type
                                     ),
                                     span: argument.value.span(),
@@ -9072,6 +9144,49 @@ u.id = 2
             .check_module(&readonly)
             .expect_err("read-only views must reject indexed assignment");
         assert!(error.message.contains("read-only or immutable view"));
+    }
+
+    #[test]
+    fn binary_conversion_builtins_require_supported_inputs() {
+        let valid = parse(
+            r#"
+class Packet:
+    storage: ByteArray
+    def __buffer__(self) -> MemoryView:
+        return memoryview(self.storage)
+
+packet = Packet(bytearray([65]))
+view: MemoryView = memoryview(packet)
+raw: Bytes = bytes(view)
+mutable: ByteArray = bytearray(packet)
+from_text: Bytes = bytes("A")
+"#,
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&valid)
+            .expect("buffer conversions should check");
+
+        let mut checker = TypeChecker::new();
+        let bad_bytes = parse("bad = bytes(1)\n").unwrap();
+        let error = checker
+            .check_module(&bad_bytes)
+            .expect_err("bytes() should reject non-buffer scalars");
+        assert!(error.message.contains("bytes() argument must be"));
+
+        let mut checker = TypeChecker::new();
+        let bad_memoryview = parse("bad = memoryview(\"abc\")\n").unwrap();
+        let error = checker
+            .check_module(&bad_memoryview)
+            .expect_err("memoryview() should reject strings");
+        assert!(error.message.contains("memoryview() argument must be a buffer"));
+
+        let mut checker = TypeChecker::new();
+        let bad_list = parse("bad = bytearray([\"x\"])\n").unwrap();
+        let error = checker
+            .check_module(&bad_list)
+            .expect_err("bytearray() should reject non-integer lists");
+        assert!(error.message.contains("bytearray() argument must be"));
     }
 
     #[test]
