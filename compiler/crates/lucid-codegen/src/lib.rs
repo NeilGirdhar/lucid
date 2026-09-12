@@ -1506,7 +1506,7 @@ typedef LucidVal (*LucidObjectNext)(void*);
 // functions pass NULL.  `drop_env` is optional so static environments need
 // no allocation, and the call entry point always receives a packed argument
 // list to preserve the language's dynamic argument conventions.
-typedef LucidVal (*LucidClosureCall)(void*, LucidList*);
+typedef LucidVal (*LucidClosureCall)(void*, LucidList*, LucidDict*);
 typedef void (*LucidClosureDrop)(void*);
 typedef struct { void* ptr; const char* class_name; bool frozen; LucidObjectFreezer freezer; LucidObjectTruthy truthy; LucidObjectRepr repr; LucidObjectHash hash; LucidObjectEq eq; const char* eq_class_name; LucidObjectLt lt; const char* lt_class_name; LucidObjectLe le; const char* le_class_name; LucidObjectGt gt; const char* gt_class_name; LucidObjectGe ge; const char* ge_class_name; LucidObjectContains contains; LucidObjectGetItem getitem; LucidObjectSetItem setitem; LucidObjectIter iter; LucidObjectNext next; LucidObjectIter reversed; } LucidObjectTag;
 static LucidObjectTag* lucid_object_tags = NULL;
@@ -1794,19 +1794,22 @@ static inline bool lucid_is_callable(LucidVal value) {
     return value.type == LUCID_TYPE_FUNCTION && value.ptr != NULL &&
            ((LucidClosure*)value.ptr)->call != NULL;
 }
-static inline LucidVal lucid_call(LucidVal value, LucidList* args) {
+static inline LucidVal lucid_call_with_kwargs(LucidVal value, LucidList* args, LucidDict* kwargs) {
     if (!lucid_is_callable(value)) {
         fprintf(stderr, "value is not callable\n"); exit(1);
     }
     LucidClosure* closure = (LucidClosure*)value.ptr;
-    return closure->call(closure->env, args);
+    return closure->call(closure->env, args, kwargs);
+}
+static inline LucidVal lucid_call(LucidVal value, LucidList* args) {
+    return lucid_call_with_kwargs(value, args, NULL);
 }
 static inline LucidVal lucid_partial_hole(void) {
     LucidVal value = {0};
     value.type = LUCID_TYPE_FUNCTION;
     return value;
 }
-static inline LucidVal lucid_partial_call(void* raw, LucidList* args) {
+static inline LucidVal lucid_partial_call(void* raw, LucidList* args, LucidDict* kwargs) {
     LucidPartialEnv* env = (LucidPartialEnv*)raw;
     if (!env || !env->bound || !args) { fprintf(stderr, "invalid partial call\n"); exit(1); }
     LucidList* merged = lucid_list_new(env->bound->len + args->len);
@@ -1821,7 +1824,7 @@ static inline LucidVal lucid_partial_call(void* raw, LucidList* args) {
         }
     }
     if (next != args->len) { fprintf(stderr, "partial function called with too many arguments\n"); exit(1); }
-    return lucid_call(env->base, merged);
+    return lucid_call_with_kwargs(env->base, merged, kwargs);
 }
 static inline LucidVal lucid_partial(LucidVal base, LucidList* bound) {
     LucidPartialEnv* env = (LucidPartialEnv*)malloc(sizeof(LucidPartialEnv));
@@ -6173,7 +6176,7 @@ static inline void lucid_print_val(LucidVal v) {
         }
         let adapter = Self::closure_adapter_name(f);
         if prototype {
-            self.emit_line(&format!("static LucidVal {adapter}(void*, LucidList*);"));
+            self.emit_line(&format!("static LucidVal {adapter}(void*, LucidList*, LucidDict*);"));
             return Ok(());
         }
         if f.is_dispatch {
@@ -6181,9 +6184,10 @@ static inline void lucid_print_val(LucidVal v) {
                 "lucid_dynamic_dispatch_{}",
                 Self::mangle_component(&f.name)
             );
-            self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args) {{"));
+            self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args, LucidDict* kwargs) {{"));
             self.indent += 1;
             self.emit_line("(void)_env;");
+            self.emit_line("(void)kwargs;");
             self.emit_line(&format!("return {helper}(args);"));
             self.indent -= 1;
             self.emit_line("}");
@@ -6191,7 +6195,7 @@ static inline void lucid_print_val(LucidVal v) {
         }
         let fn_name = self.dispatch_name(f, &f.name);
         let ret_ty = self.map_type_expr(f.return_type.as_ref());
-        self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args) {{"));
+        self.emit_line(&format!("static LucidVal {adapter}(void* _env, LucidList* args, LucidDict* kwargs) {{"));
         self.indent += 1;
         self.emit_line("(void)_env;");
         let required = f
@@ -6217,9 +6221,18 @@ static inline void lucid_print_val(LucidVal v) {
             ));
         } else {
             self.emit_line(&format!(
-                "if (!args || args->len < {required} || args->len > {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
+                "if (!args || args->len > {}) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
                 f.params.len()
             ));
+        for (index, param) in f.params.iter().enumerate() {
+            if param.is_variadic_positional || param.default.is_some() {
+                continue;
+            }
+            self.emit_line(&format!(
+                "if ((!args || args->len <= {index}) && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))) {{ fprintf(stderr, \"callable argument count mismatch\\n\"); exit(1); }}",
+                c_escape_string(&param.name)
+            ));
+        }
         }
         let mut call_args = Vec::new();
         for (index, param) in f.params.iter().enumerate() {
@@ -6232,20 +6245,25 @@ static inline void lucid_print_val(LucidVal v) {
                 call_args.push("_closure_varargs".to_string());
                 continue;
             }
+            let source = format!(
+                "((kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\"))) ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args && args->len > {index} ? args->items[{index}] : lucid_none()))",
+                c_escape_string(&param.name),
+                c_escape_string(&param.name)
+            );
             let supplied = match ty.as_str() {
-                "int64_t" => format!("lucid_as_int(args->items[{index}])"),
-                "double" => format!("lucid_as_float(args->items[{index}])"),
-                "bool" => format!("lucid_as_bool(args->items[{index}])"),
-                "const char*" => format!("lucid_as_str(args->items[{index}])"),
-                "LucidList*" => format!("lucid_as_list(args->items[{index}])"),
-                "LucidDict*" => format!("lucid_as_dict(args->items[{index}])"),
-                "LucidSet*" => format!("lucid_as_set(args->items[{index}])"),
-                "LucidVal" => format!("args->items[{index}]"),
-                other => format!("({other})lucid_as_ptr(args->items[{index}])"),
+                "int64_t" => format!("lucid_as_int({source})"),
+                "double" => format!("lucid_as_float({source})"),
+                "bool" => format!("lucid_as_bool({source})"),
+                "const char*" => format!("lucid_as_str({source})"),
+                "LucidList*" => format!("lucid_as_list({source})"),
+                "LucidDict*" => format!("lucid_as_dict({source})"),
+                "LucidSet*" => format!("lucid_as_set({source})"),
+                "LucidVal" => source,
+                other => format!("({other})lucid_as_ptr({source})"),
             };
             let expression = if let Some(default) = &param.default {
                 let default_code = self.emit_expr(default)?;
-                format!("(args->len > {index} ? {supplied} : {default_code})")
+                format!("((args && args->len > {index}) || (kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\"))) ? {supplied} : {default_code})", c_escape_string(&param.name))
             } else {
                 supplied
             };
@@ -12041,21 +12059,36 @@ static inline void lucid_print_val(LucidVal v) {
                 if self.expr_is_val(func) || self.infer_expr_type(func, &HashMap::new()) == "LucidVal" {
                     let callable = self.emit_expr(func)?;
                     let call_args = self.new_temp();
+                    let call_kwargs = self.new_temp();
+                    let has_keywords = args.iter().any(|arg| arg.name.is_some());
                     let mut parts = vec![format!(
                         "LucidList* {call_args} = lucid_list_new({});",
-                        args.iter().filter(|arg| !matches!(arg.value, Expr::Skip(_))).count()
+                        args.iter()
+                            .filter(|arg| !matches!(arg.value, Expr::Skip(_)) && arg.name.is_none())
+                            .count()
                     )];
+                    if has_keywords {
+                        parts.push(format!("LucidDict* {call_kwargs} = lucid_dict_new(0);"));
+                    }
                     for arg in args {
                         if matches!(arg.value, Expr::Skip(_)) {
                             continue;
                         }
                         let value = self.emit_expr(&arg.value)?;
-                        parts.push(format!(
-                            "lucid_list_append({call_args}, lucid_wrap({value}));"
-                        ));
+                        if let Some(name) = &arg.name {
+                            parts.push(format!(
+                                "lucid_dict_set({call_kwargs}, lucid_str(\"{}\"), lucid_wrap({value}));",
+                                c_escape_string(name)
+                            ));
+                        } else {
+                            parts.push(format!(
+                                "lucid_list_append({call_args}, lucid_wrap({value}));"
+                            ));
+                        }
                     }
                     parts.push(format!(
-                        "LucidVal _call_result = lucid_call(lucid_wrap({callable}), {call_args}); _call_result;"
+                        "LucidVal _call_result = lucid_call_with_kwargs(lucid_wrap({callable}), {call_args}, {}); _call_result;",
+                        if has_keywords { call_kwargs.as_str() } else { "NULL" }
                     ));
                     return Ok(format!("({{ {} }})", parts.join(" ")));
                 }
@@ -17748,6 +17781,23 @@ print(result[1])
         let _ = std::fs::remove_file(output);
         assert!(result.status.success(), "function alias value failed: {result:?}");
         assert_eq!(String::from_utf8_lossy(&result.stdout), "true\n42\n");
+    }
+
+    #[test]
+    fn native_erased_function_value_preserves_keyword_arguments() {
+        let source = "def combine(a: int, b: int) -> int:\n    return a * 10 + b\nfs = [combine]\nprint(fs[0](b=3, a=4))\n";
+        let module = parse(source).expect("keyword closure source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_function_value_keywords_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("keyword closure should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run keyword closure");
+        let _ = std::fs::remove_file(output);
+        assert!(result.status.success(), "keyword closure failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout), "43\n");
     }
 
     #[test]
