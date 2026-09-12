@@ -4910,7 +4910,7 @@ impl TypeChecker {
                     self.env.class_type_params.get(name).cloned(),
                     self.env.class_bounds.get(name).cloned(),
                 ) {
-                    for (param, bound) in params.into_iter().zip(bounds.into_iter()) {
+                    for (param, bound) in params.into_iter().zip(bounds) {
                         self.env
                             .type_var_bounds
                             .insert(param, bound.unwrap_or(Type::TypeVar("Any".into())));
@@ -7997,40 +7997,26 @@ impl TypeChecker {
                         };
                         let complex = matches!(&lt, Type::Class { name, .. } if name == "complex")
                             || matches!(&rt, Type::Class { name, .. } if name == "complex");
+                        let returns_left_operand = (matches!(op, BinaryOp::Add)
+                            && matches!(&lt, Type::Class { name, .. } if name == "Bytes")
+                            && matches!(&rt, Type::Class { name, .. } if name == "Bytes"))
+                            || (matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                                && matches!(&lt, Type::Class { name, .. } if name == "promote")
+                                && lt == rt)
+                            || (matches!(op, BinaryOp::Mul)
+                                && matches!(&lt, Type::Class { name, .. } if matches!(name.as_str(), "list" | "Bytes"))
+                                && rt.is_subtype_of(&Type::Int, &self.env));
+                        let returns_right_operand = matches!(op, BinaryOp::Mul)
+                            && lt.is_subtype_of(&Type::Int, &self.env)
+                            && matches!(&rt, Type::Class { name, .. } if matches!(name.as_str(), "list" | "Bytes"));
                         if unknown(&lt) || unknown(&rt) {
                             Ok(Type::TypeVar("Any".into()))
                         } else if matches!(op, BinaryOp::Add) && lt == Type::Str && rt == Type::Str
                         {
                             Ok(Type::Str)
-                        } else if matches!(op, BinaryOp::Add)
-                            && matches!(&lt, Type::Class { name, .. } if name == "Bytes")
-                            && matches!(&rt, Type::Class { name, .. } if name == "Bytes")
-                        {
+                        } else if returns_left_operand {
                             Ok(lt)
-                        } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
-                            && matches!(&lt, Type::Class { name, .. } if name == "promote")
-                            && lt == rt
-                        {
-                            Ok(lt)
-                        } else if matches!(op, BinaryOp::Mul)
-                            && matches!(&lt, Type::Class { name, .. } if name == "list")
-                            && rt.is_subtype_of(&Type::Int, &self.env)
-                        {
-                            Ok(lt)
-                        } else if matches!(op, BinaryOp::Mul)
-                            && lt.is_subtype_of(&Type::Int, &self.env)
-                            && matches!(&rt, Type::Class { name, .. } if name == "list")
-                        {
-                            Ok(rt)
-                        } else if matches!(op, BinaryOp::Mul)
-                            && matches!(&lt, Type::Class { name, .. } if name == "Bytes")
-                            && rt.is_subtype_of(&Type::Int, &self.env)
-                        {
-                            Ok(lt)
-                        } else if matches!(op, BinaryOp::Mul)
-                            && lt.is_subtype_of(&Type::Int, &self.env)
-                            && matches!(&rt, Type::Class { name, .. } if name == "Bytes")
-                        {
+                        } else if returns_right_operand {
                             Ok(rt)
                         } else if !is_numeric(&lt) || !is_numeric(&rt) {
                             Err(TypeError {
@@ -12293,24 +12279,24 @@ fn type_is_hashable_key(ty: &Type, env: &TypeEnvironment) -> bool {
                 name, type_args, ..
             } if matches!(name.as_str(), "list" | "set") => type_args
                 .first()
-                .map_or(true, |element| type_is_hashable_key(element, env)),
+                .is_none_or(|element| type_is_hashable_key(element, env)),
             Type::Class {
                 name, type_args, ..
             } if name == "dict" => type_args
                 .first()
-                .map_or(true, |key| type_is_hashable_key(key, env)),
+                .is_none_or(|key| type_is_hashable_key(key, env)),
             other => type_has_hashable_capability(other, env),
         },
         Type::Class {
             name, type_args, ..
         } if name == "frozenset" => type_args
             .first()
-            .map_or(true, |element| type_is_hashable_key(element, env)),
+            .is_none_or(|element| type_is_hashable_key(element, env)),
         Type::Class {
             name, type_args, ..
         } if name == "frozendict" => type_args
             .first()
-            .map_or(true, |key| type_is_hashable_key(key, env)),
+            .is_none_or(|key| type_is_hashable_key(key, env)),
         Type::Class { name, .. } => matches!(
             name.as_str(),
             "str"

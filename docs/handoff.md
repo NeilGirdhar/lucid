@@ -292,6 +292,11 @@ diverged:
   invalid `len`, `reversed`, `sorted`, `zip`, `round`, `sum`, `min`/`max`,
   `list`, `set`, and `dict` calls at lowering time instead of emitting a
   program that fails later in generated runtime helpers.
+* The all-features clippy gate is clean again with `-D warnings`. The cleanup
+  kept semantics unchanged while removing stale lint blockers in parser
+  reserved-name rejection, CIR match-chain lowering, checker arithmetic and
+  hashability helpers, database branch selection, runtime truthiness naming,
+  and CLI diagnostic emission.
 * Truthiness now agrees across the interpreter and native backend for empty
   lists, dictionaries, sets, strings, and ranges, as well as zero BigInts and
   zero complex values. Native typed collection and string conditions use

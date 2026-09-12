@@ -2386,14 +2386,14 @@ impl Interpreter {
                 }
             }
             BinaryOp::And => {
-                if !self.to_bool(&lval, *span)? {
+                if !self.truth_value(&lval, *span)? {
                     Ok(lval)
                 } else {
                     Ok(rval)
                 }
             }
             BinaryOp::Or => {
-                if self.to_bool(&lval, *span)? {
+                if self.truth_value(&lval, *span)? {
                     Ok(lval)
                 } else {
                     Ok(rval)
@@ -2531,7 +2531,7 @@ impl Interpreter {
                             vec![(None, rval.clone()), (None, lval.clone())],
                             *span,
                         )?;
-                        return Ok(Value::Bool(!self.to_bool(&result, *span)?));
+                        return Ok(Value::Bool(!self.truth_value(&result, *span)?));
                     }
                 }
                 let contains = match &rval {
@@ -2945,7 +2945,7 @@ impl Interpreter {
                 let result = if want_any {
                     let mut result = false;
                     for value in &values {
-                        if interp.to_bool(value, Span::default())? {
+                        if interp.truth_value(value, Span::default())? {
                             result = true;
                             break;
                         }
@@ -2954,7 +2954,7 @@ impl Interpreter {
                 } else {
                     let mut result = true;
                     for value in &values {
-                        if !interp.to_bool(value, Span::default())? {
+                        if !interp.truth_value(value, Span::default())? {
                             result = false;
                             break;
                         }
@@ -4511,7 +4511,7 @@ impl Interpreter {
                     span: Span::default(),
                 });
             }
-            Ok(Value::Bool(interp.to_bool(&args[0], Span::default())?))
+            Ok(Value::Bool(interp.truth_value(&args[0], Span::default())?))
         });
         self.env.borrow_mut().set(
             "bool".to_string(),
@@ -6578,13 +6578,13 @@ impl Interpreter {
             } => {
                 let cond_val = self.eval_expr(condition)?;
                 Self::reject_skip_value(&cond_val, "if condition", condition.span())?;
-                if self.to_bool(&cond_val, condition.span())? {
+                if self.truth_value(&cond_val, condition.span())? {
                     return self.eval_block(then_branch);
                 }
                 for (elif_cond, elif_body) in elif_branches {
                     let elif_val = self.eval_expr(elif_cond)?;
                     Self::reject_skip_value(&elif_val, "elif condition", elif_cond.span())?;
-                    if self.to_bool(&elif_val, elif_cond.span())? {
+                    if self.truth_value(&elif_val, elif_cond.span())? {
                         return self.eval_block(elif_body);
                     }
                 }
@@ -6758,7 +6758,7 @@ impl Interpreter {
                 loop {
                     let cond = self.eval_expr(condition)?;
                     Self::reject_skip_value(&cond, "while condition", condition.span())?;
-                    if !self.to_bool(&cond, condition.span())? {
+                    if !self.truth_value(&cond, condition.span())? {
                         break;
                     }
                     let res = self.eval_loop_body(body);
@@ -6803,7 +6803,7 @@ impl Interpreter {
                         self.bind_match_pattern(&arm.pattern, subj_val.clone(), *span)?;
                         if let Some(guard) = &arm.guard {
                             let guard_value = self.eval_expr(guard)?;
-                            if !self.to_bool(&guard_value, guard.span())? {
+                            if !self.truth_value(&guard_value, guard.span())? {
                                 let mut env = self.env.borrow_mut();
                                 env.bindings = saved_bindings;
                                 env.binding_order = saved_binding_order;
@@ -6837,7 +6837,7 @@ impl Interpreter {
             } => {
                 let condition_value = self.eval_expr(condition)?;
                 Self::reject_skip_value(&condition_value, "assert condition", condition.span())?;
-                if !self.to_bool(&condition_value, condition.span())? {
+                if !self.truth_value(&condition_value, condition.span())? {
                     let detail = if let Some(message) = message {
                         let message_value = self.eval_expr(message)?;
                         Self::reject_skip_value(&message_value, "assert message", message.span())?;
@@ -7383,7 +7383,7 @@ impl Interpreter {
                 // their right-hand side when the left-hand truth value already
                 // determines the result.
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
-                    let left_truthy = self.to_bool(&lval, left.span())?;
+                    let left_truthy = self.truth_value(&lval, left.span())?;
                     if matches!(op, BinaryOp::And) {
                         return if left_truthy {
                             self.eval_expr(right)
@@ -7427,7 +7427,7 @@ impl Interpreter {
                             span: *span,
                         }),
                     },
-                    UnaryOp::Not => Ok(Value::Bool(!self.to_bool(&val, *span)?)),
+                    UnaryOp::Not => Ok(Value::Bool(!self.truth_value(&val, *span)?)),
                     UnaryOp::Invert => match val {
                         Value::Int(n) => Ok(Value::Int(!n)),
                         // Two's-complement inversion is defined for arbitrary
@@ -9441,7 +9441,7 @@ impl Interpreter {
                 ..
             } => {
                 let cond_val = self.eval_expr(condition)?;
-                if self.to_bool(&cond_val, condition.span())? {
+                if self.truth_value(&cond_val, condition.span())? {
                     self.eval_expr(then_branch)
                 } else {
                     self.eval_expr(else_branch)
@@ -9470,7 +9470,7 @@ impl Interpreter {
                         self.bind_pattern(target, item, Span::default())?;
                         let keep = if let Some(cond) = condition {
                             let c = self.eval_expr(cond)?;
-                            self.to_bool(&c, cond.span())?
+                            self.truth_value(&c, cond.span())?
                         } else {
                             true
                         };
@@ -9508,7 +9508,7 @@ impl Interpreter {
                         self.bind_pattern(target, item, Span::default())?;
                         let keep = if let Some(cond) = condition {
                             let c = self.eval_expr(cond)?;
-                            self.to_bool(&c, cond.span())?
+                            self.truth_value(&c, cond.span())?
                         } else {
                             true
                         };
@@ -9547,7 +9547,7 @@ impl Interpreter {
                         self.bind_pattern(target, item, Span::default())?;
                         let keep = if let Some(cond) = condition {
                             let c = self.eval_expr(cond)?;
-                            self.to_bool(&c, cond.span())?
+                            self.truth_value(&c, cond.span())?
                         } else {
                             true
                         };
@@ -10750,7 +10750,7 @@ impl Interpreter {
         }
     }
 
-    fn to_bool(&mut self, val: &Value, span: Span) -> Result<bool, RuntimeError> {
+    fn truth_value(&mut self, val: &Value, span: Span) -> Result<bool, RuntimeError> {
         match val {
             Value::Bool(b) => Ok(*b),
             Value::Object { fields, .. } => {

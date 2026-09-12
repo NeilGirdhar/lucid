@@ -2510,9 +2510,7 @@ pub fn lower_function_body(
                         break;
                     }
                 }
-                if pattern_literal(&arm.pattern).is_none() {
-                    return None;
-                }
+                pattern_literal(&arm.pattern)?;
             }
             selected
         });
@@ -3355,7 +3353,7 @@ pub fn lower_function_body(
                 if unknown {
                     None
                 } else {
-                    selected.or_else(|| else_branch.as_deref())
+                    selected.or(else_branch.as_deref())
                 }
             }
             None => None,
@@ -3484,7 +3482,7 @@ pub fn lower_function_body(
             }
             if !unsupported_void_elif
                 && branch_is_single_void(inner_then)
-                && selected_void_fallback.is_none_or(|branch| branch_is_single_void(branch))
+                && selected_void_fallback.is_none_or(branch_is_single_void)
             {
                 if function.is_async {
                     return Err(Arc::from(

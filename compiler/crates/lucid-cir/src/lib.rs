@@ -702,7 +702,7 @@ impl Function {
                 if matches!(
                     node.kind.as_str(),
                     "match-chain" | "optional-match-chain" | "void-match-chain"
-                ) && node.children.len() >= 1
+                ) && !node.children.is_empty()
                 {
                     let optional_chain = node.kind == "optional-match-chain";
                     let void_chain = node.kind == "void-match-chain";

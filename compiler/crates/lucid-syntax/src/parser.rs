@@ -138,14 +138,14 @@ impl Parser {
     }
 
     fn reject_reserved_module_binding(stmt: &Stmt) -> Result<(), ParseError> {
-        if let Some((name, span)) = Self::reserved_module_binding(stmt) {
-            if name == "__all__" {
-                return Err(ParseError {
-                    message: "__all__ is not supported; Lucid uses leading '_' for module privacy"
-                        .into(),
-                    span,
-                });
-            }
+        if let Some((name, span)) = Self::reserved_module_binding(stmt)
+            && name == "__all__"
+        {
+            return Err(ParseError {
+                message: "__all__ is not supported; Lucid uses leading '_' for module privacy"
+                    .into(),
+                span,
+            });
         }
         Ok(())
     }

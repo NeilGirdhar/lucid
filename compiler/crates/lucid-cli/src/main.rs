@@ -388,7 +388,7 @@ fn run_file(path_str: &str, entry: Option<&str>) {
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_database_diagnostics(&database, file, path_str, &diagnostics);
+        emit_database_diagnostics(&database, file, path_str, diagnostics);
         exit(1);
     }
     let module = match lucid_db::parse_ast(&database, file).as_ref() {
@@ -770,7 +770,7 @@ fn check_file(path_str: &str) {
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_database_diagnostics(&database, file, path_str, &diagnostics);
+        emit_database_diagnostics(&database, file, path_str, diagnostics);
         exit(1);
     }
     println!("✓ Type check passed: no errors found in {path_str}");
@@ -792,7 +792,7 @@ fn validate_file_with_database(path: &Path) {
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_database_diagnostics(&database, file, &path.display().to_string(), &diagnostics);
+        emit_database_diagnostics(&database, file, &path.display().to_string(), diagnostics);
         exit(1);
     }
 }
@@ -847,7 +847,7 @@ fn eval_string(source: &str) {
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_database_diagnostics(&database, file, "<eval>", &diagnostics);
+        emit_database_diagnostics(&database, file, "<eval>", diagnostics);
         exit(1);
     }
     let module = match lucid_db::parse_ast(&database, file).as_ref() {
