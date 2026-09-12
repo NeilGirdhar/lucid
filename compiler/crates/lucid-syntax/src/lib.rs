@@ -300,6 +300,20 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn type_record_positional_only_marker_applies_to_prior_fields() {
+        let module = parse("type F = (x: int, /, y: int)\n").unwrap();
+        let Stmt::TypeAlias {
+            value: TypeAliasValue::Direct(TypeExpr::Record { fields, .. }),
+            ..
+        } = &module.statements[0]
+        else {
+            panic!("expected record function type alias");
+        };
+        assert!(fields[0].is_positional_only);
+        assert!(!fields[1].is_positional_only);
+    }
+
+    #[test]
     fn recovering_parser_keeps_later_statements() {
         let (module, errors) = parse_recovering("first = 1\nbad =\nlast = 3\n").unwrap();
         assert_eq!(errors.len(), 1);

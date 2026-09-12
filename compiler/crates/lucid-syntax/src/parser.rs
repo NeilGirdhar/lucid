@@ -2973,7 +2973,10 @@ impl Parser {
 
             while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
                 if self.match_tok(&TokenKind::Slash) {
-                    is_positional_only = true;
+                    for field in &mut fields {
+                        field.is_positional_only = true;
+                    }
+                    is_positional_only = false;
                     self.match_tok(&TokenKind::Comma);
                     continue;
                 }
