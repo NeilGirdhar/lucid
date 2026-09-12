@@ -1460,6 +1460,37 @@ fn run_cir_executes_parameter_bound_while_accumulator() {
 }
 
 #[test]
+fn run_cir_executes_dynamic_arithmetic_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_dynamic_arithmetic_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum(n: int, limit: int, step: int):\n    total = 0\n    stop = limit + 1\n    tick = step + 1\n    while n > stop:\n        total += step + 1\n        n -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum",
+            "--args",
+            "10,2,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir dynamic arithmetic accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
 fn run_cir_executes_constant_bound_while_accumulator() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_constant_bound_while_accumulator_{}.lucid",

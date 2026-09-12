@@ -631,12 +631,13 @@ diverged:
   loops can seed local induction, bound, and step-alias values from parameters
   or checked constant expressions, in any setup order, before lowering the same
   Phi-backed CFG. The accumulator
-  step can be a signed literal, positional parameter, pre-loop local alias, or the
-  current induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
-  commuted additive spelling `x = y + x`; the same local alias slot can also
-  feed the accumulator loop's induction update, including when the loop also
-  seeds local induction and bound variables, as in `stop = limit; total +=
-  value; value -= tick`. The source and CLI
+  update can use the current induction value, a signed literal, a positional
+  parameter, or the same `+`, `-`, and `*` integer-expression subset, using
+  `+=`, `-=`, `x = x + y`, `x = x - y`, or the commuted additive spelling
+  `x = y + x`; the same local alias slot can also feed the accumulator loop's
+  induction update, including when the loop also seeds local induction and
+  dynamic bound variables, as in `stop = limit + 1; tick = step + 1; total +=
+  step + 1; value -= tick`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
   and accumulator Phis. Accumulator loops can also keep the induction value as
   a parameter while seeding a local bound, including a checked

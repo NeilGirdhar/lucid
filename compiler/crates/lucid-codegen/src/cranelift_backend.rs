@@ -3065,6 +3065,31 @@ return n
     }
 
     #[test]
+    fn result_abi_executes_dynamic_arithmetic_counted_while_accumulator_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = limit + 1
+tick = step + 1
+while n > stop:
+    total += step + 1
+    n -= tick
+return total
+"#,
+        )
+        .expect("dynamic arithmetic counted while accumulator fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("dynamic arithmetic counted while accumulator should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile dynamic arithmetic accumulator CFG");
+        let result = unsafe { compiled.call_result_with_args(&[10, 2, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 9);
+    }
+
+    #[test]
     fn result_abi_executes_local_bound_local_step_parameter_induction_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit

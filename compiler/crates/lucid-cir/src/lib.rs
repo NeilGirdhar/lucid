@@ -3678,12 +3678,6 @@ impl Function {
                 },
             }
         }
-        fn bound_literal_instruction(
-            expr: &lucid_syntax::Expr,
-            result: ValueId,
-        ) -> Option<Instruction> {
-            Function::const_int_expr(expr).map(|value| Instruction::ConstInt { result, value })
-        }
         fn parameter_instruction(
             name: &str,
             result: ValueId,
@@ -3699,31 +3693,149 @@ impl Function {
         fn operand_instruction(
             expr: &lucid_syntax::Expr,
             result: ValueId,
+            left_temp: ValueId,
+            right_temp: ValueId,
             parameter_names: &[String],
             alias_initial: Option<&lucid_syntax::Stmt>,
-        ) -> Option<(Instruction, bool)> {
-            match Function::const_int_expr(expr) {
-                Some(value) => Some((Instruction::ConstInt { result, value }, false)),
-                None => match expr {
-                    lucid_syntax::Expr::Ident { name, .. } => match alias_initial {
-                        Some(statement) => {
-                            let (alias_name, value) = initialized_ident(statement)?;
-                            if alias_name == name {
-                                Some((
-                                    initializer_instruction(value, result, parameter_names)?,
-                                    true,
-                                ))
-                            } else {
+        ) -> Option<(Vec<Instruction>, bool)> {
+            fn atom_instruction(
+                expr: &lucid_syntax::Expr,
+                result: ValueId,
+                parameter_names: &[String],
+                alias_initial: Option<&lucid_syntax::Stmt>,
+            ) -> Option<(Instruction, bool)> {
+                match Function::const_int_expr(expr) {
+                    Some(value) => Some((Instruction::ConstInt { result, value }, false)),
+                    None => match expr {
+                        lucid_syntax::Expr::Ident { name, .. } => match alias_initial {
+                            Some(statement) => {
+                                let (alias_name, _) = initialized_ident(statement)?;
+                                if alias_name == name {
+                                    None
+                                } else {
+                                    Some((
+                                        parameter_instruction(name, result, parameter_names)?,
+                                        false,
+                                    ))
+                                }
+                            }
+                            None => {
                                 Some((parameter_instruction(name, result, parameter_names)?, false))
                             }
-                        }
-                        None => {
-                            Some((parameter_instruction(name, result, parameter_names)?, false))
-                        }
+                        },
+                        _ => None,
                     },
-                    _ => None,
-                },
+                }
             }
+            if let Some((instruction, used_alias)) =
+                atom_instruction(expr, result, parameter_names, alias_initial)
+            {
+                return Some((vec![instruction], used_alias));
+            }
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => {
+                    let statement = alias_initial?;
+                    let (alias_name, value) = initialized_ident(statement)?;
+                    if alias_name != name {
+                        return None;
+                    }
+                    let (instructions, _) = operand_instruction(
+                        value,
+                        result,
+                        left_temp,
+                        right_temp,
+                        parameter_names,
+                        None,
+                    )?;
+                    Some((instructions, true))
+                }
+                lucid_syntax::Expr::Binary {
+                    op, left, right, ..
+                } if matches!(
+                    op,
+                    lucid_syntax::BinaryOp::Add
+                        | lucid_syntax::BinaryOp::Sub
+                        | lucid_syntax::BinaryOp::Mul
+                ) =>
+                {
+                    let (left_instruction, left_used_alias) =
+                        atom_instruction(left.as_ref(), left_temp, parameter_names, alias_initial)?;
+                    let (right_instruction, right_used_alias) = atom_instruction(
+                        right.as_ref(),
+                        right_temp,
+                        parameter_names,
+                        alias_initial,
+                    )?;
+                    let combine = match op {
+                        lucid_syntax::BinaryOp::Add => Instruction::Add {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                            result,
+                            left: left_temp,
+                            right: right_temp,
+                        },
+                        _ => return None,
+                    };
+                    Some((
+                        vec![left_instruction, right_instruction, combine],
+                        left_used_alias || right_used_alias,
+                    ))
+                }
+                _ => None,
+            }
+        }
+        fn entry_operand_instructions(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            parameter_names: &[String],
+            alias_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(Vec<Instruction>, bool)> {
+            operand_instruction(
+                expr,
+                result,
+                ValueId(10),
+                ValueId(11),
+                parameter_names,
+                alias_initial,
+            )
+        }
+        fn accumulator_operand_instructions(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            parameter_names: &[String],
+            alias_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(Vec<Instruction>, bool)> {
+            operand_instruction(
+                expr,
+                result,
+                ValueId(12),
+                ValueId(13),
+                parameter_names,
+                alias_initial,
+            )
+        }
+        fn induction_step_instructions(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            parameter_names: &[String],
+            alias_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(Vec<Instruction>, bool)> {
+            operand_instruction(
+                expr,
+                result,
+                ValueId(14),
+                ValueId(15),
+                parameter_names,
+                alias_initial,
+            )
         }
         let statements = module.statements.as_slice();
         let (
@@ -4061,53 +4173,16 @@ impl Function {
             }
             None => parameter_instruction(induction_name, ValueId(0), parameter_names)?,
         };
-        let bound_instruction = match (right.as_ref(), bound_initial) {
-            (expr, None) if bound_literal_instruction(expr, ValueId(4)).is_some() => {
-                bound_literal_instruction(expr, ValueId(4))
-            }
-            (
-                lucid_syntax::Expr::Ident {
-                    name: bound_name, ..
-                },
-                None,
-            ) if bound_name != induction_name => None,
-            (
-                lucid_syntax::Expr::Ident {
-                    name: bound_name, ..
-                },
-                Some(statement),
-            ) if bound_name != induction_name => {
-                let (target_name, _) = initialized_ident(statement)?;
-                if target_name != bound_name {
-                    return None;
-                }
-                None
-            }
-            _ => return None,
-        };
         let mut entry_instructions = vec![induction_instruction, accumulator_instruction];
-        if let lucid_syntax::Expr::Ident {
-            name: bound_name, ..
-        } = right.as_ref()
-        {
-            if let Some(statement) = bound_initial {
-                let (_, initial_expr) = initialized_ident(statement)?;
-                entry_instructions.push(initializer_instruction(
-                    initial_expr,
-                    ValueId(4),
-                    parameter_names,
-                )?);
-            } else {
-                entry_instructions.push(parameter_instruction(
-                    bound_name,
-                    ValueId(4),
-                    parameter_names,
-                )?);
-            }
+        let (bound_instructions, used_bound_initial) =
+            entry_operand_instructions(right.as_ref(), ValueId(4), parameter_names, bound_initial)?;
+        if bound_initial.is_some() && !used_bound_initial {
+            return None;
         }
+        entry_instructions.extend(bound_instructions);
         #[derive(Clone)]
         enum AccumulatorOperand {
-            Materialized(Instruction),
+            Materialized(Vec<Instruction>),
             Induction,
         }
         fn accumulator_operand(
@@ -4121,9 +4196,13 @@ impl Function {
                     Some((AccumulatorOperand::Induction, false))
                 }
                 _ => {
-                    let (instruction, used_alias) =
-                        operand_instruction(expr, ValueId(6), parameter_names, alias_initial)?;
-                    Some((AccumulatorOperand::Materialized(instruction), used_alias))
+                    let (instructions, used_alias) = accumulator_operand_instructions(
+                        expr,
+                        ValueId(6),
+                        parameter_names,
+                        alias_initial,
+                    )?;
+                    Some((AccumulatorOperand::Materialized(instructions), used_alias))
                 }
             }
         }
@@ -4206,7 +4285,7 @@ impl Function {
             result: ValueId,
             parameter_names: &[String],
             alias_initial: Option<&lucid_syntax::Stmt>,
-        ) -> Option<(lucid_syntax::BinaryOp, Instruction, bool)> {
+        ) -> Option<(lucid_syntax::BinaryOp, Vec<Instruction>, bool)> {
             match statement {
                 lucid_syntax::Stmt::AugAssign {
                     target:
@@ -4217,9 +4296,9 @@ impl Function {
                     value,
                     ..
                 } if update_name == target => {
-                    let (instruction, used_alias) =
-                        operand_instruction(value, result, parameter_names, alias_initial)?;
-                    Some((update_op.clone(), instruction, used_alias))
+                    let (instructions, used_alias) =
+                        induction_step_instructions(value, result, parameter_names, alias_initial)?;
+                    Some((update_op.clone(), instructions, used_alias))
                 }
                 lucid_syntax::Stmt::Assignment {
                     target:
@@ -4238,13 +4317,13 @@ impl Function {
                 } if update_name == target
                     && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
                 {
-                    let (instruction, used_alias) = operand_instruction(
+                    let (instructions, used_alias) = induction_step_instructions(
                         right.as_ref(),
                         result,
                         parameter_names,
                         alias_initial,
                     )?;
-                    Some((update_op.clone(), instruction, used_alias))
+                    Some((update_op.clone(), instructions, used_alias))
                 }
                 lucid_syntax::Stmt::Assignment {
                     target:
@@ -4262,9 +4341,13 @@ impl Function {
                 } if update_name == target
                     && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
                 {
-                    let (instruction, used_alias) =
-                        operand_instruction(left.as_ref(), result, parameter_names, alias_initial)?;
-                    Some((lucid_syntax::BinaryOp::Add, instruction, used_alias))
+                    let (instructions, used_alias) = induction_step_instructions(
+                        left.as_ref(),
+                        result,
+                        parameter_names,
+                        alias_initial,
+                    )?;
+                    Some((lucid_syntax::BinaryOp::Add, instructions, used_alias))
                 }
                 _ => None,
             }
@@ -4276,13 +4359,14 @@ impl Function {
             parameter_names,
             alias_initial,
         )?;
-        let (induction_op, induction_step_instruction, used_induction_alias) = operand_self_update(
-            &body[1],
-            induction_name,
-            ValueId(8),
-            parameter_names,
-            alias_initial,
-        )?;
+        let (induction_op, induction_step_instructions, used_induction_alias) =
+            operand_self_update(
+                &body[1],
+                induction_name,
+                ValueId(8),
+                parameter_names,
+                alias_initial,
+            )?;
         if alias_initial.is_some() && !used_acc_alias && !used_induction_alias {
             return None;
         }
@@ -4347,11 +4431,11 @@ impl Function {
             _ => return None,
         };
         let mut body_instructions = Vec::new();
-        if let AccumulatorOperand::Materialized(instruction) = acc_operand {
-            body_instructions.push(instruction);
+        if let AccumulatorOperand::Materialized(instructions) = acc_operand {
+            body_instructions.extend(instructions);
         }
         body_instructions.push(accumulator_update);
-        body_instructions.push(induction_step_instruction);
+        body_instructions.extend(induction_step_instructions);
         body_instructions.push(induction_update);
         let function = Self {
             entry: BlockId(0),
@@ -4374,9 +4458,6 @@ impl Function {
                                 incomings: vec![(BlockId(0), ValueId(1)), (BlockId(2), ValueId(7))],
                             },
                         ];
-                        if let Some(bound_instruction) = bound_instruction {
-                            instructions.push(bound_instruction);
-                        }
                         instructions.push(comparison);
                         instructions
                     },
@@ -11001,6 +11082,25 @@ return total
                 .expect("parameter-bound while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = limit + 1
+tick = step + 1
+while n > stop:
+    total += step + 1
+    n -= tick
+return total
+"#,
+        )
+        .expect("dynamic arithmetic accumulator counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("dynamic arithmetic accumulator counted loop should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 2, 2]), Ok(Some(9)));
+        assert_eq!(function.execute_with_args(&[1, 2, 2]), Ok(Some(0)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
