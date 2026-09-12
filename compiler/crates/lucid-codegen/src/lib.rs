@@ -5347,6 +5347,27 @@ static inline void lucid_print_val(LucidVal v) {
         Ok(())
     }
 
+    fn reject_late_positional_arguments(args: &[Arg]) -> Result<(), CodegenError> {
+        let mut keyword_section_started = false;
+        for argument in args {
+            if argument.name.is_some() || argument.is_dict_spread {
+                keyword_section_started = true;
+            } else if argument.is_gather_spread {
+                if keyword_section_started {
+                    return Err(CodegenError {
+                        message: "positional argument follows keyword argument".into(),
+                    });
+                }
+                keyword_section_started = true;
+            } else if keyword_section_started {
+                return Err(CodegenError {
+                    message: "positional argument follows keyword argument".into(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn collect_vars_from_stmt(&mut self, stmt: &Stmt, vars: &mut HashMap<String, String>) {
         match stmt {
             Stmt::VarDef {
@@ -11308,6 +11329,7 @@ static inline void lucid_print_val(LucidVal v) {
                 }
             }
             Expr::Call { func, args, span } => {
+                Self::reject_late_positional_arguments(args)?;
                 if let Expr::Attribute { value, attr, .. } = &**func {
                     if matches!(&**value, Expr::Ident { name, .. } if name == "str")
                         && matches!(attr.as_str(), "bin" | "oct" | "hex")
@@ -18669,6 +18691,31 @@ print(getattr(value, "message"))
             .expect("run native binary");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "7");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_calls_reject_positional_after_keyword() {
+        for source in [
+            "def f(a: int, b: int, c: int) -> int:\n    return a + b + c\nprint(f(c=3, *[1, 2]))\n",
+            "def f(a: int, b: int) -> int:\n    return a + b\nprint(f(a=1, 2))\n",
+        ] {
+            let module = parse(source).expect("late positional source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_native_late_positional_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("late positional argument should fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(
+                error
+                    .message
+                    .contains("positional argument follows keyword"),
+                "{}",
+                error.message
+            );
+        }
     }
 
     #[test]
