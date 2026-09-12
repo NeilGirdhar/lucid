@@ -10218,6 +10218,15 @@ static inline void lucid_print_val(LucidVal v) {
                     ));
                 }
 
+                if *op == BinaryOp::Mod
+                    && (matches!(l_ty.as_str(), "const char*" | "char*")
+                        || matches!(r_ty.as_str(), "const char*" | "char*"))
+                {
+                    return Err(CodegenError {
+                        message: "% is not a string operator".to_string(),
+                    });
+                }
+
                 if self.expr_is_complex(left) || self.expr_is_complex(right) {
                     let lhs = format!("lucid_wrap({l_str})");
                     let rhs = format!("lucid_wrap({r_str})");
@@ -22854,6 +22863,21 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "-3\n1\n-3\n-1\n");
+    }
+
+    #[test]
+    fn native_string_percent_formatting_is_rejected() {
+        let source = "print(\"%s\" % \"value\")\n";
+        let module = parse(source).expect("string percent source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_string_percent_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        let error = compile_to_native(&module, &output, 0)
+            .expect_err("string percent formatting must fail native codegen");
+        let _ = fs::remove_file(&output);
+        assert!(error.message.contains("not a string operator"));
     }
 
     #[test]
