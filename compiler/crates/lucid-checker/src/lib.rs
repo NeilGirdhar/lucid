@@ -2372,15 +2372,7 @@ impl TypeChecker {
         self.env
             .classes
             .entry(name.to_string())
-            .or_insert_with(|| Type::Class {
-                name: name.to_string(),
-                type_args: Vec::new(),
-                parent: None,
-                traits: vec!["Eq".into(), "Ord".into(), "Hashable".into()],
-                interfaces: Vec::new(),
-                fields: HashMap::new(),
-                is_sealed: false,
-            });
+            .or_insert_with(|| external_class_placeholder_type(name));
         self.env
             .class_constructor_arity
             .entry(name.to_string())
@@ -7297,7 +7289,7 @@ impl TypeChecker {
                 } else if let Some((t, _)) = self.env.variables.get(name) {
                     Ok(t.clone())
                 } else if let Some(t) = self.env.classes.get(name) {
-                    Ok(t.clone())
+                    Ok(class_object_type(t.clone()))
                 } else if name == "super" {
                     // `super` is resolved against the enclosing class at runtime.
                     // Keep it as an opaque receiver here so attribute lookup and
@@ -7309,6 +7301,8 @@ impl TypeChecker {
                         message: message.into(),
                         span: *span,
                     })
+                } else if looks_like_class_name(name) {
+                    Ok(class_object_type(external_class_placeholder_type(name)))
                 } else {
                     Err(TypeError {
                         message: format!("undefined variable '{name}'"),
@@ -8379,6 +8373,23 @@ impl TypeChecker {
                 let called_member_params = if let Expr::Attribute { value, attr, .. } = &**func {
                     let receiver_type = self.type_of_expr(value)?;
                     match receiver_type {
+                        Type::Class {
+                            name, type_args, ..
+                        } if name == "__class__" => {
+                            if let Some(Type::Class {
+                                name: class_name, ..
+                            }) = type_args.first()
+                            {
+                                if attr == "replace" {
+                                    self.class_replace_signature(class_name)
+                                        .map(|(_, param_names)| param_names)
+                                } else {
+                                    self.class_method_params(class_name, attr)
+                                }
+                            } else {
+                                None
+                            }
+                        }
                         Type::Class { name, .. }
                             if attr == "replace"
                                 && matches!(&**value, Expr::Ident { name: value_name, .. } if value_name == &name && self.env.classes.contains_key(value_name)) =>
@@ -9221,7 +9232,14 @@ impl TypeChecker {
                             }
                         }
                     }
-                    Type::Class { .. } => Ok(ft), // class construction
+                    Type::Class { .. } => {
+                        if let Some(name) = called_name {
+                            if let Some(class_type) = self.env.classes.get(name) {
+                                return Ok(class_type.clone());
+                            }
+                        }
+                        Ok(ft)
+                    } // class construction
                     Type::TypeVar(ref name) if name == "Any" => Ok(ft),
                     Type::Never => Ok(Type::Never),
                     other => Err(TypeError {
@@ -9583,6 +9601,71 @@ impl TypeChecker {
                         ref type_args,
                         ..
                     } => {
+                        if name == "__class__" {
+                            if let Some(Type::Class {
+                                name: class_name,
+                                type_args: class_type_args,
+                                ..
+                            }) = type_args.first()
+                            {
+                                if class_name == "SourceLocation" && attr == "caller" {
+                                    return Ok(Type::Function {
+                                        params: Vec::new(),
+                                        return_type: Box::new(
+                                            self.env
+                                                .classes
+                                                .get("SourceLocation")
+                                                .cloned()
+                                                .unwrap_or(Type::TypeVar("SourceLocation".into())),
+                                        ),
+                                    });
+                                }
+                                if class_name == "VarName" && attr == "from_assignment" {
+                                    return Ok(Type::Function {
+                                        params: Vec::new(),
+                                        return_type: Box::new(
+                                            self.env
+                                                .classes
+                                                .get("VarName")
+                                                .cloned()
+                                                .unwrap_or(Type::TypeVar("VarName".into())),
+                                        ),
+                                    });
+                                }
+                                if attr == "replace" {
+                                    if let Some((signature, _)) =
+                                        self.class_replace_signature(class_name)
+                                    {
+                                        return Ok(signature);
+                                    }
+                                }
+                                if let Some(class_var_type) = self.class_var_type(class_name, attr)
+                                {
+                                    return Ok(class_var_type);
+                                }
+                                if let Some(method_type) = self.class_method_type(class_name, attr)
+                                {
+                                    return Ok(method_type);
+                                }
+                                if let Some(getter_type) = self.class_getter_type(class_name, attr)
+                                {
+                                    return Ok(getter_type);
+                                }
+                                if let Some(field_type) = self.class_field_type(class_name, attr) {
+                                    return Ok(self.instantiate_class_member_type(
+                                        class_name,
+                                        class_type_args,
+                                        field_type,
+                                    ));
+                                }
+                                return Err(TypeError {
+                                    message: format!(
+                                        "class object '{class_name}' has no member '{attr}'"
+                                    ),
+                                    span: expr.span(),
+                                });
+                            }
+                        }
                         if matches!(
                             (name.as_str(), attr.as_str()),
                             ("float", "inf" | "nan") | ("int", "inf" | "nan") | ("complex", "nan")
@@ -11015,15 +11098,14 @@ impl TypeChecker {
                             return Ok(trait_clone);
                         }
                         // Default to TypeVar or forward reference
-                        Ok(Type::Class {
-                            name: other.to_string(),
-                            type_args: resolved_args,
-                            parent: None,
-                            traits: vec!["Eq".into(), "Ord".into(), "Hashable".into()],
-                            interfaces: Vec::new(),
-                            fields: HashMap::new(),
-                            is_sealed: false,
-                        })
+                        let mut placeholder = external_class_placeholder_type(other);
+                        if let Type::Class {
+                            ref mut type_args, ..
+                        } = placeholder
+                        {
+                            *type_args = resolved_args;
+                        }
+                        Ok(placeholder)
                     }
                 }
             }
@@ -11422,6 +11504,34 @@ fn type_has_hashable_capability(ty: &Type, env: &TypeEnvironment) -> bool {
         },
         env,
     ) || matches!(ty, Type::Class { name, .. } if env.class_members.get(name).is_some_and(|members| members.contains("__hash__")))
+}
+
+fn external_class_placeholder_type(name: &str) -> Type {
+    Type::Class {
+        name: name.to_string(),
+        type_args: Vec::new(),
+        parent: None,
+        traits: vec!["Eq".into(), "Ord".into(), "Hashable".into()],
+        interfaces: Vec::new(),
+        fields: HashMap::new(),
+        is_sealed: false,
+    }
+}
+
+fn class_object_type(class_type: Type) -> Type {
+    Type::Class {
+        name: "__class__".into(),
+        type_args: vec![class_type],
+        parent: None,
+        traits: Vec::new(),
+        interfaces: Vec::new(),
+        fields: HashMap::new(),
+        is_sealed: true,
+    }
+}
+
+fn looks_like_class_name(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase)
 }
 
 fn exact_class_name_from_type(ty: &Type) -> Option<String> {
@@ -12399,6 +12509,22 @@ class Child(Base):
         .unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("incompatible type"));
+    }
+
+    #[test]
+    fn class_names_are_ordinary_class_object_values() {
+        let module = parse(
+            "class Handler:\n    pass\nclass JSONHandler(Handler):\n    pass\nhandlers = {\"json\": JSONHandler, \"xml\": XMLHandler}\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("declared and external class names should be usable as class object values");
+
+        let module = parse("class Point:\n    x: int\np: Point = Point(1)\n").unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("class object identifiers should remain callable as constructors");
     }
 
     #[test]
