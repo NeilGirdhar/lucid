@@ -6200,20 +6200,48 @@ static inline void lucid_print_val(LucidVal v) {
         &mut self,
         source: &str,
         args: &[Arg],
+        parameter_names: &[String],
     ) -> Result<String, CodegenError> {
         let bound = self.new_temp();
-        let count = args
-            .iter()
-            .filter(|arg| !matches!(arg.value, Expr::Skip(_)))
-            .count();
-        self.emit_line(&format!("LucidList* {bound} = lucid_list_new({count});"));
-        for arg in args {
-            if matches!(arg.value, Expr::Skip(_)) {
-                continue;
+        let mut slots: Vec<Option<&Arg>> = vec![None; parameter_names.len()];
+        let mut positional = 0usize;
+        for arg in args.iter().filter(|arg| !matches!(arg.value, Expr::Skip(_))) {
+            if let Some(name) = &arg.name {
+                let index = parameter_names
+                    .iter()
+                    .position(|parameter| parameter == name)
+                    .ok_or_else(|| CodegenError {
+                        message: format!("unknown anonymous partial parameter '{name}'"),
+                    })?;
+                if slots[index].is_some() {
+                    return Err(CodegenError {
+                        message: format!("duplicate anonymous partial parameter '{name}'"),
+                    });
+                }
+                slots[index] = Some(arg);
+            } else {
+                while positional < slots.len() && slots[positional].is_some() {
+                    positional += 1;
+                }
+                if positional >= slots.len() {
+                    return Err(CodegenError {
+                        message: "too many anonymous partial arguments".into(),
+                    });
+                }
+                slots[positional] = Some(arg);
+                positional += 1;
             }
-            let value = if matches!(&arg.value, Expr::Ident { name, .. } if name == "_") {
+        }
+        self.emit_line(&format!("LucidList* {bound} = lucid_list_new({});", slots.len()));
+        for slot in slots {
+            let value = if slot
+                .is_some_and(|arg| matches!(&arg.value, Expr::Ident { name, .. } if name == "_"))
+            {
                 "lucid_partial_hole()".to_string()
             } else {
+                let arg = slot.ok_or_else(|| CodegenError {
+                    message: "anonymous partial application requires a value or '_' for every parameter".into(),
+                })?;
                 format!("lucid_wrap({})", self.emit_expr(&arg.value)?)
             };
             self.emit_line(&format!("lucid_list_append({bound}, {value});"));
@@ -7153,7 +7181,12 @@ static inline void lucid_print_val(LucidVal v) {
                             if self.anonymous_bindings.contains_key(source)
                                 && inner_args.iter().any(|arg| matches!(&arg.value, Expr::Ident { name, .. } if name == "_"))
                             {
-                                let partial = self.emit_partial_anonymous_value(source, inner_args)?;
+                                let parameter_names = self
+                                    .anonymous_bindings
+                                    .get(source)
+                                    .map(|(params, _)| params.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>())
+                                    .unwrap_or_default();
+                                let partial = self.emit_partial_anonymous_value(source, inner_args, &parameter_names)?;
                                 self.emit_line(&format!("lucid_var_{name} = {partial};"));
                                 return Ok(());
                             }
@@ -7283,7 +7316,12 @@ static inline void lucid_print_val(LucidVal v) {
                                 if self.anonymous_bindings.contains_key(source)
                                     && inner_args.iter().any(|arg| matches!(&arg.value, Expr::Ident { name, .. } if name == "_"))
                                 {
-                                    let partial = self.emit_partial_anonymous_value(source, inner_args)?;
+                                    let parameter_names = self
+                                        .anonymous_bindings
+                                        .get(source)
+                                        .map(|(params, _)| params.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>())
+                                        .unwrap_or_default();
+                                    let partial = self.emit_partial_anonymous_value(source, inner_args, &parameter_names)?;
                                     self.emit_line(&format!("lucid_var_{name} = {partial};"));
                                     return Ok(());
                                 }
@@ -18766,6 +18804,22 @@ print(result[1])
         let run = Command::new(&output).output().expect("run anonymous partial");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous partial failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "43\n");
+    }
+
+    #[test]
+    fn native_named_partial_application_supports_anonymous_closures() {
+        let source = "f = def(a: int, b: int) -> int: a * 10 + b\npart = f(b=_, a=4)\nprint(part(3))\n";
+        let module = parse(source).expect("named anonymous partial source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_named_anonymous_partial_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("named anonymous partial should compile");
+        let run = Command::new(&output).output().expect("run named anonymous partial");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "named anonymous partial failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "43\n");
     }
 
