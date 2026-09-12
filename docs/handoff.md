@@ -1700,6 +1700,9 @@ diverged:
   handler-bound exception names are seeded before collecting their bodies.
   `with` bodies now receive the same scoped replay, including context-target
   pattern bindings and sequential locals.
+  Typed-HIR graph collection now treats type-like identifier patterns the
+  same way the checker does: uppercase names and primitive type names do not
+  seed new gradual locals in `with`, `for`, or `match` scopes.
 * CIR now exposes an owned typed-HIR input seam for primitive initializer
   graphs. The database records each initializer's expression root and literal
   payload, converts the checked graph without reparsing source, and prefers

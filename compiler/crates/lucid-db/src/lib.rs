@@ -604,6 +604,13 @@ fn collect_typed_exprs<'db>(
 /// Collect every expression-bearing statement in a function body. Keeping
 /// this traversal here makes the HIR independent of parser statement layout
 /// while still preserving all expression nodes needed by later lowering.
+fn pattern_identifier_binds(name: &str) -> bool {
+    !matches!(
+        name,
+        "_" | "int" | "float" | "bool" | "str" | "none" | "None"
+    ) && !name.chars().next().is_some_and(char::is_uppercase)
+}
+
 fn collect_typed_body<'db>(
     db: &'db dyn Db,
     checker: &lucid_checker::TypeChecker,
@@ -644,7 +651,12 @@ fn collect_typed_body<'db>(
                                 );
                             };
                             match pattern {
-                                lucid_syntax::Pattern::Ident(name, _) => bind(checker, name),
+                                lucid_syntax::Pattern::Ident(name, _)
+                                    if pattern_identifier_binds(name) =>
+                                {
+                                    bind(checker, name);
+                                }
+                                lucid_syntax::Pattern::Ident(_, _) => {}
                                 lucid_syntax::Pattern::ClassDestructure { fields, .. }
                                 | lucid_syntax::Pattern::RecordDestructure(fields, _) => {
                                     for (_, nested) in fields {
@@ -824,7 +836,10 @@ fn collect_typed_body<'db>(
                         );
                     };
                     match pattern {
-                        lucid_syntax::Pattern::Ident(name, _) => bind(checker, name),
+                        lucid_syntax::Pattern::Ident(name, _) if pattern_identifier_binds(name) => {
+                            bind(checker, name);
+                        }
+                        lucid_syntax::Pattern::Ident(_, _) => {}
                         lucid_syntax::Pattern::ClassDestructure { fields, .. }
                         | lucid_syntax::Pattern::RecordDestructure(fields, _) => {
                             for (_, nested) in fields {
@@ -909,7 +924,12 @@ fn collect_typed_body<'db>(
                             );
                         };
                         match pattern {
-                            lucid_syntax::Pattern::Ident(name, _) => bind(checker, name),
+                            lucid_syntax::Pattern::Ident(name, _)
+                                if pattern_identifier_binds(name) =>
+                            {
+                                bind(checker, name);
+                            }
+                            lucid_syntax::Pattern::Ident(_, _) => {}
                             lucid_syntax::Pattern::ClassDestructure { fields, .. }
                             | lucid_syntax::Pattern::RecordDestructure(fields, _) => {
                                 for (_, nested) in fields {
@@ -6817,6 +6837,14 @@ mod tests {
     use lucid_syntax::LucidLanguage;
     use rowan::SyntaxNode;
     use salsa::Setter;
+
+    #[test]
+    fn typed_body_pattern_scope_skips_type_like_identifiers() {
+        assert!(!pattern_identifier_binds("Cat"));
+        assert!(!pattern_identifier_binds("int"));
+        assert!(!pattern_identifier_binds("_"));
+        assert!(pattern_identifier_binds("value"));
+    }
 
     #[test]
     fn source_files_parse_incrementally_and_round_trip() {
