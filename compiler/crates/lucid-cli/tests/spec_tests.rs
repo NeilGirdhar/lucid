@@ -564,6 +564,18 @@ def calculate(a: int) -> int:
     assert!(chk.is_ok());
 }
 
+#[test]
+fn test_decorators_reject_python_overload() {
+    for source in [
+        "@overload\ndef parse(value: str) -> int:\n    return 1\n",
+        "@typing.overload\ndef parse(value: str) -> int:\n    return 1\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("overload is not supported"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 18. Project configuration (docs/project-configuration.rst)
 // ---------------------------------------------------------------------------

@@ -2765,10 +2765,18 @@ impl TypeChecker {
 
     fn reject_removed_decorators(function: &FunctionDef) -> Result<(), TypeError> {
         for decorator in &function.decorators {
-            let Expr::Ident { name, span } = decorator else {
-                continue;
+            let (name, span) = match decorator {
+                Expr::Ident { name, span } => (name.as_str(), *span),
+                Expr::Attribute {
+                    value,
+                    attr,
+                    span,
+                } if matches!(&**value, Expr::Ident { name, .. } if name == "typing") => {
+                    (attr.as_str(), *span)
+                }
+                _ => continue,
             };
-            let message = match name.as_str() {
+            let message = match name {
                 "staticmethod" => {
                     "staticmethod is not supported; use a module-level function instead"
                 }
@@ -2776,11 +2784,14 @@ impl TypeChecker {
                     "classmethod is not supported as a decorator; use the classmethod member modifier instead"
                 }
                 "property" => "property is not supported; use getter or setter syntax instead",
+                "overload" => {
+                    "overload is not supported as a decorator; use dispatch definitions instead"
+                }
                 _ => continue,
             };
             return Err(TypeError {
                 message: message.into(),
-                span: *span,
+                span,
             });
         }
         Ok(())
@@ -11197,6 +11208,14 @@ def reject(value: not int) -> none:
             (
                 "@staticmethod\ndef answer() -> int:\n    return 42\n",
                 "staticmethod is not supported",
+            ),
+            (
+                "@overload\ndef parse(value: str) -> int:\n    return 1\n",
+                "overload is not supported",
+            ),
+            (
+                "@typing.overload\ndef parse(value: str) -> int:\n    return 1\n",
+                "overload is not supported",
             ),
         ] {
             let mut checker = TypeChecker::new();
