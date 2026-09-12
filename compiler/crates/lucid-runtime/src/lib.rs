@@ -2858,7 +2858,7 @@ impl Interpreter {
                 func: Rc::new(|args: &[Value], _interp: &mut Interpreter| {
                     if args.len() > 1 {
                         return Err(RuntimeError {
-                            message: "help() takes zero or one argument".into(),
+                            message: "help() accepts at most 1 argument".into(),
                             span: Span::default(),
                         });
                     }
@@ -3378,7 +3378,7 @@ impl Interpreter {
                 func: Rc::new(|args: &[Value], interp: &mut Interpreter| {
                     if !args.is_empty() {
                         return Err(RuntimeError {
-                            message: "locals() takes no arguments".into(),
+                            message: "locals() accepts at most 0 arguments".into(),
                             span: Span::default(),
                         });
                     }
@@ -3505,10 +3505,16 @@ impl Interpreter {
                                 let result = base.modpow(&exp, &modulus);
                                 Ok(Value::BigInt(result))
                             }
-                            _ => Err(RuntimeError { message: "three-argument pow() requires int arguments and a nonzero modulus".into(), span: Span::default() }),
+                            (base, exp, _modulus)
+                                if !matches!(base, Value::Int(_) | Value::BigInt(_) | Value::Float(_))
+                                    || !matches!(exp, Value::Int(_) | Value::BigInt(_) | Value::Float(_)) =>
+                            {
+                                Err(RuntimeError { message: "pow() arguments must be numeric".into(), span: Span::default() })
+                            }
+                            _ => Err(RuntimeError { message: "pow() modulus must be int".into(), span: Span::default() }),
                         }
                     } else if args.len() != 2 {
-                        Err(RuntimeError { message: "pow() takes two or three arguments".into(), span: Span::default() })
+                        Err(RuntimeError { message: if args.is_empty() || args.len() == 1 { "pow() requires at least 2 arguments".into() } else { "pow() accepts at most 3 arguments".into() }, span: Span::default() })
                     } else {
                         match (&args[0], &args[1]) {
                             (Value::Int(base), Value::Int(exp)) if *exp >= 0 => Ok(Value::Int(base.pow(*exp as u32))),
@@ -4371,6 +4377,12 @@ impl Interpreter {
             if args.is_empty() {
                 return Ok(Value::List(Rc::new(RefCell::new(Vec::new()))));
             }
+            if args.len() > 1 {
+                return Err(RuntimeError {
+                    message: "list() accepts at most 1 argument".into(),
+                    span: Span::default(),
+                });
+            }
             match &args[0] {
                 Value::List(l) => Ok(Value::List(Rc::new(RefCell::new(l.borrow().clone())))),
                 Value::MemoryView {
@@ -4466,7 +4478,7 @@ impl Interpreter {
         let set_fn = Rc::new(|args: &[Value], interp: &mut Interpreter| {
             if args.len() > 1 {
                 return Err(RuntimeError {
-                    message: "set() takes zero or one argument".into(),
+                    message: "set() accepts at most 1 argument".into(),
                     span: Span::default(),
                 });
             }
@@ -14127,6 +14139,10 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
     #[test]
     fn runtime_rejects_invalid_builtin_contracts() {
         for (source, expected) in [
+            ("locals(1)\n", "accepts at most 0"),
+            ("pow(1)\n", "requires at least 2"),
+            ("pow(\"x\", 2)\n", "arguments must be numeric"),
+            ("pow(2, 3, 1.0)\n", "modulus must be int"),
             ("range()\n", "requires at least 1"),
             ("range(1, \"bad\")\n", "arguments must be int"),
             ("range(1, 2, 0)\n", "step cannot be zero"),
@@ -14141,6 +14157,9 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             ("enumerate([1], \"bad\")\n", "start must be int"),
             ("complex(\"x\")\n", "arguments must be numeric"),
             ("complex(1, 2, 3)\n", "at most two"),
+            ("list([], [])\n", "accepts at most 1"),
+            ("set([], [])\n", "accepts at most 1"),
+            ("help(1, 2)\n", "accepts at most 1"),
             ("fields()\n", "requires at least 1"),
             ("abs(\"bad\")\n", "argument must be numeric"),
         ] {

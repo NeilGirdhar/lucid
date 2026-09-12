@@ -12481,6 +12481,28 @@ static inline void lucid_print_val(LucidVal v) {
                             return Ok(format!("lucid_sorted(lucid_wrap({value}))"));
                         }
                         "pow" => {
+                            if args.len() < 2 {
+                                return Err(CodegenError {
+                                    message: "pow() requires at least 2 arguments".into(),
+                                });
+                            }
+                            if args.len() > 3 {
+                                return Err(CodegenError {
+                                    message: "pow() accepts at most 3 arguments".into(),
+                                });
+                            }
+                            if !self.expr_may_be_numeric_or_erased(&args[0].value)
+                                || !self.expr_may_be_numeric_or_erased(&args[1].value)
+                            {
+                                return Err(CodegenError {
+                                    message: "pow() arguments must be numeric".into(),
+                                });
+                            }
+                            if args.len() == 3 && !self.expr_may_be_int_or_erased(&args[2].value) {
+                                return Err(CodegenError {
+                                    message: "pow() modulus must be int".into(),
+                                });
+                            }
                             if args.len() == 3 {
                                 let base = self.emit_expr(&args[0].value)?;
                                 let exponent = self.emit_expr(&args[1].value)?;
@@ -12488,11 +12510,6 @@ static inline void lucid_print_val(LucidVal v) {
                                 return Ok(format!(
                                     "lucid_pow_mod(lucid_wrap({base}), lucid_wrap({exponent}), lucid_wrap({modulus}))"
                                 ));
-                            }
-                            if args.len() != 2 {
-                                return Err(CodegenError {
-                                    message: "pow() takes two or three arguments".to_string(),
-                                });
                             }
                             let base = self.emit_expr(&args[0].value)?;
                             let exponent = self.emit_expr(&args[1].value)?;
@@ -12562,7 +12579,7 @@ static inline void lucid_print_val(LucidVal v) {
                         "locals" => {
                             if !args.is_empty() {
                                 return Err(CodegenError {
-                                    message: "locals() takes no arguments".to_string(),
+                                    message: "locals() accepts at most 0 arguments".to_string(),
                                 });
                             }
                             let dict = self.new_temp();
@@ -12591,7 +12608,7 @@ static inline void lucid_print_val(LucidVal v) {
                         "help" => {
                             if args.len() > 1 {
                                 return Err(CodegenError {
-                                    message: "help() takes zero or one argument".into(),
+                                    message: "help() accepts at most 1 argument".into(),
                                 });
                             }
                             return Ok("lucid_none()".into());
@@ -13207,7 +13224,7 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if args.len() != 1 {
                                 return Err(CodegenError {
-                                    message: "list() takes zero or one argument".to_string(),
+                                    message: "list() accepts at most 1 argument".to_string(),
                                 });
                             }
                             if let Some(a) = args.first() {
@@ -13271,7 +13288,7 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             if args.len() != 1 {
                                 return Err(CodegenError {
-                                    message: "set() takes zero or one argument".to_string(),
+                                    message: "set() accepts at most 1 argument".to_string(),
                                 });
                             }
                             self.reject_raw_string_iterable_arg("set", &args[0].value)?;
@@ -23246,6 +23263,10 @@ print(result[1])
     #[test]
     fn native_rejects_invalid_builtin_contracts() {
         for (source, expected) in [
+            ("locals(1)\n", "accepts at most 0"),
+            ("pow(1)\n", "requires at least 2"),
+            ("pow(\"x\", 2)\n", "arguments must be numeric"),
+            ("pow(2, 3, 1.0)\n", "modulus must be int"),
             ("range()\n", "requires at least 1"),
             ("range(1, \"bad\")\n", "arguments must be int"),
             ("range(1, 2, 0)\n", "step cannot be zero"),
@@ -23260,6 +23281,9 @@ print(result[1])
             ("enumerate([1], \"bad\")\n", "start must be int"),
             ("complex(\"x\")\n", "arguments must be numeric"),
             ("complex(1, 2, 3)\n", "at most two"),
+            ("list([], [])\n", "accepts at most 1"),
+            ("set([], [])\n", "accepts at most 1"),
+            ("help(1, 2)\n", "accepts at most 1"),
             ("fields()\n", "requires at least 1"),
             ("abs(\"bad\")\n", "argument must be numeric"),
         ] {
