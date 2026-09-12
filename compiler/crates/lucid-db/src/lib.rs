@@ -3109,6 +3109,34 @@ pub fn module_order(db: &dyn Db, project: Project) -> Result<Arc<[SourceFile]>, 
     let mut state = vec![0u8; files.len()];
     let mut order = Vec::with_capacity(files.len());
 
+    fn declaration_only(db: &dyn Db, file: SourceFile) -> bool {
+        let Ok(module) = parse_ast(db, file) else {
+            return false;
+        };
+        fn statement_is_declaration(statement: &lucid_syntax::Stmt) -> bool {
+            match statement {
+                lucid_syntax::Stmt::Export(inner) => statement_is_declaration(inner),
+                lucid_syntax::Stmt::ClassDef { .. }
+                | lucid_syntax::Stmt::InterfaceDef { .. }
+                | lucid_syntax::Stmt::TraitDef { .. }
+                | lucid_syntax::Stmt::ImplementDef { .. }
+                | lucid_syntax::Stmt::TypeAlias { .. }
+                | lucid_syntax::Stmt::Function(_)
+                | lucid_syntax::Stmt::Import { .. }
+                | lucid_syntax::Stmt::FromImport { .. }
+                | lucid_syntax::Stmt::Pass(_)
+                | lucid_syntax::Stmt::Break(_)
+                | lucid_syntax::Stmt::Continue(_) => true,
+                // An uninitialized annotation reserves a name but performs
+                // no value initialization. Every other statement can read
+                // or mutate a value while the cycle is being initialized.
+                lucid_syntax::Stmt::VarDef { value: None, .. } => true,
+                _ => false,
+            }
+        }
+        module.statements.iter().all(statement_is_declaration)
+    }
+
     fn visit(
         db: &dyn Db,
         project: Project,
@@ -3116,32 +3144,63 @@ pub fn module_order(db: &dyn Db, project: Project) -> Result<Arc<[SourceFile]>, 
         indices: &HashMap<SourceFile, usize>,
         state: &mut [u8],
         order: &mut Vec<SourceFile>,
+        stack: &mut Vec<usize>,
         index: usize,
     ) -> Result<(), Arc<str>> {
         if state[index] == 2 {
             return Ok(());
         }
         if state[index] == 1 {
+            // Import cycles are safe when every module in the cycle only
+            // contributes declarations. Declarations are collected before
+            // initialization, so classes, traits, interfaces, aliases, and
+            // functions can refer to one another without observing a value
+            // before its module runs. A top-level value/assignment/side
+            // effect still makes the cycle an initialization error.
+            let Some(start) = stack.iter().position(|entry| *entry == index) else {
+                return Err(Arc::from(format!(
+                    "cyclic module initialization involving '{}'",
+                    files[index].path(db)
+                )));
+            };
+            if stack[start..]
+                .iter()
+                .copied()
+                .all(|cycle_index| declaration_only(db, files[cycle_index]))
+            {
+                return Ok(());
+            }
             return Err(Arc::from(format!(
                 "cyclic module initialization involving '{}'",
                 files[index].path(db)
             )));
         }
         state[index] = 1;
+        stack.push(index);
         for import in imports(db, files[index]).iter() {
             if let Some(target) = resolve_import(db, project, files[index], import.clone())
                 && let Some(&target_index) = indices.get(target)
             {
-                visit(db, project, files, indices, state, order, target_index)?;
+                visit(db, project, files, indices, state, order, stack, target_index)?;
             }
         }
+        stack.pop();
         state[index] = 2;
         order.push(files[index]);
         Ok(())
     }
 
     for index in 0..files.len() {
-        visit(db, project, &files, &indices, &mut state, &mut order, index)?;
+        visit(
+            db,
+            project,
+            &files,
+            &indices,
+            &mut state,
+            &mut order,
+            &mut Vec::new(),
+            index,
+        )?;
     }
     Ok(Arc::from(order))
 }
@@ -4816,13 +4875,33 @@ mod tests {
             .expect("acyclic project should order");
         assert_eq!(order.as_ref(), &[lib, main]);
 
-        let a = db.add_file("a.lucid", "import b\n");
+        let a = db.add_file("a.lucid", "import b\nvalue = 1\n");
         let b = db.add_file("b.lucid", "import a\n");
         let cyclic = Project::new(&db, vec![a, b]);
         let error = module_order(&db, cyclic)
             .as_ref()
             .expect_err("cycle should be diagnosed");
         assert!(error.contains("cyclic module initialization"));
+    }
+
+    #[test]
+    fn module_order_allows_declaration_only_cycles() {
+        let mut db = CompilerDatabase::default();
+        let a = db.add_file(
+            "decl_a.lucid",
+            "import decl_b\nclass A:\n    pass\ndef make_a():\n    return none\n",
+        );
+        let b = db.add_file(
+            "decl_b.lucid",
+            "import decl_a\ntrait B:\n    pass\ntype Alias = int\n",
+        );
+        let project = Project::new(&db, vec![a, b]);
+        let order = module_order(&db, project)
+            .as_ref()
+            .expect("declaration-only cycles should be safe");
+        assert_eq!(order.len(), 2);
+        assert!(order.contains(&a));
+        assert!(order.contains(&b));
     }
 
     #[test]

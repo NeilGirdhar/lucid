@@ -551,6 +551,11 @@ diverged:
   preventing private members from leaking through plain module imports.
 * The native project loader applies the same private-import rejection before
   flattening local modules for code generation.
+* Module initialization ordering permits import cycles made entirely of
+  declarations (classes, traits, interfaces, aliases, functions, and
+  imports), because those names are collected before execution. Cycles that
+  contain a top-level value, assignment, or other effect remain diagnostics
+  instead of observing a partially initialized module.
 * Shared ABI consumers now use one `NativeResult::from_result` conversion path
   for successful integer values and checked CIR errors.
   The shared `execute_cir` bridge now maps a valid void return to successful
