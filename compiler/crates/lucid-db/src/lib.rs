@@ -2435,6 +2435,15 @@ pub fn lower_function_body(
             }
             return Err(Arc::from("unsupported constant match expression"));
         }
+        if !arms.is_empty()
+            && arms.iter().all(|arm| {
+                arm.guard
+                    .as_ref()
+                    .is_some_and(|guard| static_truth(guard) == Some(false))
+            })
+        {
+            return lower_match_bindings_to_void(&[]);
+        }
         if let Some((live_index, live_arm)) = arms.iter().enumerate().find(|(_, arm)| {
             !arm.guard
                 .as_ref()
@@ -7266,6 +7275,21 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-7]), Ok(None));
 
         let file = db.add_file(
+            "all-false-guarded-match.lucid",
+            "def choose(value: int):\n    match value:\n        case _ if false:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("all-false guarded match should lower to no match");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "all-false guarded value match should not emit dead control flow"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(None));
+
+        let file = db.add_file(
             "guarded-void-match.lucid",
             "def answer(value: int):\n    match value:\n        case 1 if false:\n            return\n        case _:\n            pass\n",
         );
@@ -7276,6 +7300,21 @@ mod tests {
             function.blocks.len(),
             1,
             "statically false guarded void arm should be skipped before lowering"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "all-false-guarded-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case _ if false:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("all-false guarded void match should lower to no match");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "all-false guarded void match should not emit dead control flow"
         );
         assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[7]), Ok(None));
