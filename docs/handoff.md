@@ -817,8 +817,10 @@ diverged:
   Missing signature metadata no longer triggers a first-candidate or synthetic
   `Any` fallback; native code generation reports the unresolved dispatch.
   Parameter reads now become explicit CIR `Param` instructions
-  and execute through the CIR/native argument seams; async and dispatch
-  calling conventions remain rejected until their ABIs exist.
+  and execute through the CIR/native argument seams; a single unambiguous
+  dispatch overload can now lower as an ordinary function body, while
+  dispatch overload sets still require CIR to carry the selected candidate
+  identity. Async calling conventions remain rejected until their ABI exists.
 * Cranelift now emits parameterized integer signatures with argument-aware
   invocation coverage for up to sixteen-argument CIR functions; larger native
   signatures fail explicitly until a general FFI invocation layer is added.

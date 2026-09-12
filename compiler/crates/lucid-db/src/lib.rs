@@ -1456,11 +1456,15 @@ pub fn lower_function_body(
     }) else {
         return Err(Arc::from("function not found"));
     };
+    if function.is_dispatch && function.overload_types.len() != 1 {
+        return Err(Arc::from(
+            "dispatch overload set bodies require a selected overload for CIR lowering",
+        ));
+    }
     // Route the canonical parameter-backed induction loop through CIR before
     // considering the older linear/function-body adapters. This emits a real
     // back-edge and header Phi; it never unrolls or executes the AST.
     if !function.is_async
-        && !function.is_dispatch
         && source_function.body.iter().any(|statement| {
             matches!(
                 statement,
@@ -1484,7 +1488,6 @@ pub fn lower_function_body(
     // statement lowerer so parameter reads and binding dependencies are
     // preserved while the final terminator remains `Return(None)`.
     if !function.is_async
-        && !function.is_dispatch
         && matches!(
             source_function.body.last(),
             Some(lucid_syntax::Stmt::Return { value: None, .. })
@@ -1541,7 +1544,6 @@ pub fn lower_function_body(
         }
     }
     if !function.is_async
-        && !function.is_dispatch
         && matches!(
             source_function.body.last(),
             Some(lucid_syntax::Stmt::Return { .. })
@@ -1566,7 +1568,6 @@ pub fn lower_function_body(
     // rebinding semantics identical without inventing a second function-loop
     // representation; positional parameters are seeded as CIR `Param`s.
     if !function.is_async
-        && !function.is_dispatch
         && source_function.body.iter().any(|statement| {
             matches!(
                 statement,
@@ -1604,7 +1605,6 @@ pub fn lower_function_body(
     // evaluating an effectful expression once per arm; richer patterns stay
     // an explicit unsupported lowering until CIR carries pattern coverage.
     if !function.is_async
-        && !function.is_dispatch
         && let [lucid_syntax::Stmt::Match { subject, arms, .. }] = source_function.body.as_slice()
         && matches!(subject, lucid_syntax::Expr::Ident { .. })
     {
@@ -2298,7 +2298,6 @@ pub fn lower_function_body(
     // path as constant expressions; the AST below remains only a temporary
     // adapter for statement forms that have not reached typed CIR yet.
     if !function.is_async
-        && !function.is_dispatch
         && let Some(root) = function
             .body_expressions
             .iter()
@@ -2372,11 +2371,6 @@ pub fn lower_function_body(
         if function.is_async {
             return Err(Arc::from(
                 "async function bodies are not yet supported by CIR lowering",
-            ));
-        }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
             ));
         }
         let lower = if has_division(then_branch) || has_division(else_branch) {
@@ -2474,11 +2468,6 @@ pub fn lower_function_body(
                     "async function bodies are not yet supported by CIR lowering",
                 ));
             }
-            if function.is_dispatch {
-                return Err(Arc::from(
-                    "dispatch function bodies are not yet supported by CIR lowering",
-                ));
-            }
             return lucid_cir::Function::from_parameterized_if_optional(
                 condition,
                 then_value,
@@ -2503,11 +2492,6 @@ pub fn lower_function_body(
         if function.is_async {
             return Err(Arc::from(
                 "async function bodies are not yet supported by CIR lowering",
-            ));
-        }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
             ));
         }
         let lower = if has_division(then_value) || has_division(else_value) {
@@ -2615,11 +2599,6 @@ pub fn lower_function_body(
                     "async function bodies are not yet supported by CIR lowering",
                 ));
             }
-            if function.is_dispatch {
-                return Err(Arc::from(
-                    "dispatch function bodies are not yet supported by CIR lowering",
-                ));
-            }
             let lower = if has_division(then_value) || has_division(else_value) {
                 lucid_cir::Function::from_parameterized_if_direct(
                     condition,
@@ -2705,11 +2684,6 @@ pub fn lower_function_body(
             if function.is_async {
                 return Err(Arc::from(
                     "async function bodies are not yet supported by CIR lowering",
-                ));
-            }
-            if function.is_dispatch {
-                return Err(Arc::from(
-                    "dispatch function bodies are not yet supported by CIR lowering",
                 ));
             }
             return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
@@ -2825,11 +2799,6 @@ pub fn lower_function_body(
                 if function.is_async {
                     return Err(Arc::from(
                         "async function bodies are not yet supported by CIR lowering",
-                    ));
-                }
-                if function.is_dispatch {
-                    return Err(Arc::from(
-                        "dispatch function bodies are not yet supported by CIR lowering",
                     ));
                 }
                 let lower = if has_division(then_value)
@@ -2972,11 +2941,6 @@ pub fn lower_function_body(
                         "async function bodies are not yet supported by CIR lowering",
                     ));
                 }
-                if function.is_dispatch {
-                    return Err(Arc::from(
-                        "dispatch function bodies are not yet supported by CIR lowering",
-                    ));
-                }
                 return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
                     condition,
                     then_value,
@@ -3092,11 +3056,6 @@ pub fn lower_function_body(
                     "async function bodies are not yet supported by CIR lowering",
                 ));
             }
-            if function.is_dispatch {
-                return Err(Arc::from(
-                    "dispatch function bodies are not yet supported by CIR lowering",
-                ));
-            }
             return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
                 condition,
                 then_value,
@@ -3196,11 +3155,6 @@ pub fn lower_function_body(
                     "async function bodies are not yet supported by CIR lowering",
                 ));
             }
-            if function.is_dispatch {
-                return Err(Arc::from(
-                    "dispatch function bodies are not yet supported by CIR lowering",
-                ));
-            }
             return lucid_cir::Function::from_parameterized_if(
                 condition,
                 then_value,
@@ -3266,11 +3220,6 @@ pub fn lower_function_body(
                 "async function bodies are not yet supported by CIR lowering",
             ));
         }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
-            ));
-        }
         return lucid_cir::Function::from_parameterized_if_optional(
             condition,
             then_value,
@@ -3309,11 +3258,6 @@ pub fn lower_function_body(
         if function.is_async {
             return Err(Arc::from(
                 "async function bodies are not yet supported by CIR lowering",
-            ));
-        }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
             ));
         }
         let lower = if has_division(then_value) || has_division(else_value) {
@@ -3389,11 +3333,6 @@ pub fn lower_function_body(
                 "async function bodies are not yet supported by CIR lowering",
             ));
         }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
-            ));
-        }
         return lucid_cir::Function::from_parameterized_if_optional(
             condition,
             then_value,
@@ -3425,11 +3364,6 @@ pub fn lower_function_body(
         if function.is_async {
             return Err(Arc::from(
                 "async function bodies are not yet supported by CIR lowering",
-            ));
-        }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
             ));
         }
         return lucid_cir::Function::from_parameterized_if_void(
@@ -3483,11 +3417,6 @@ pub fn lower_function_body(
                 "async function bodies are not yet supported by CIR lowering",
             ));
         }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
-            ));
-        }
         return lucid_cir::Function::from_parameterized_if_elif_void_chain(
             condition,
             &elif_conditions,
@@ -3520,11 +3449,6 @@ pub fn lower_function_body(
         if function.is_async {
             return Err(Arc::from(
                 "async function bodies are not yet supported by CIR lowering",
-            ));
-        }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
             ));
         }
         return lucid_cir::Function::from_parameterized_if_void(
@@ -3579,11 +3503,6 @@ pub fn lower_function_body(
                 "async function bodies are not yet supported by CIR lowering",
             ));
         }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
-            ));
-        }
         return lucid_cir::Function::from_parameterized_if_elif_void_chain(
             condition,
             &elif_conditions,
@@ -3634,11 +3553,6 @@ pub fn lower_function_body(
         if function.is_async {
             return Err(Arc::from(
                 "async function bodies are not yet supported by CIR lowering",
-            ));
-        }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
             ));
         }
         return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
@@ -3693,11 +3607,6 @@ pub fn lower_function_body(
         if function.is_async {
             return Err(Arc::from(
                 "async function bodies are not yet supported by CIR lowering",
-            ));
-        }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
             ));
         }
         return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
@@ -3757,11 +3666,6 @@ pub fn lower_function_body(
         if function.is_async {
             return Err(Arc::from(
                 "async function bodies are not yet supported by CIR lowering",
-            ));
-        }
-        if function.is_dispatch {
-            return Err(Arc::from(
-                "dispatch function bodies are not yet supported by CIR lowering",
             ));
         }
         return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
@@ -4379,11 +4283,6 @@ pub fn lower_function_body(
     if function.is_async {
         return Err(Arc::from(
             "async function bodies are not yet supported by CIR lowering",
-        ));
-    }
-    if function.is_dispatch {
-        return Err(Arc::from(
-            "dispatch function bodies are not yet supported by CIR lowering",
         ));
     }
     // A bare return may follow pure, primitive bindings.  Keep this on the
@@ -6644,6 +6543,32 @@ mod tests {
             .expect("statement conditional returns should lower through typed HIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+    }
+
+    #[test]
+    fn database_lowers_unambiguous_dispatch_body_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "single-dispatch.lucid",
+            "dispatch def answer(value: int) -> int:\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a single dispatch overload has an unambiguous body to lower");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn database_rejects_dispatch_overload_set_without_selected_candidate() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "dispatch-overloads.lucid",
+            "dispatch def answer(value: int) -> int:\n    return 1\n\ndispatch def answer(value: bool) -> int:\n    return 0\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("an overload set needs a selected candidate before CIR lowering");
+        assert!(error.contains("selected overload"));
     }
 
     #[test]
