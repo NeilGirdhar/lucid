@@ -5426,7 +5426,11 @@ static inline void lucid_print_val(LucidVal v) {
         Ok(match pattern {
             Pattern::Wildcard(_) => "true".to_string(),
             Pattern::Ident(name, _) => match name.as_str() {
-                "int" => format!("{subject}.type == LUCID_TYPE_INT"),
+                "int" => {
+                    format!(
+                        "({subject}.type == LUCID_TYPE_INT || {subject}.type == LUCID_TYPE_BIGINT)"
+                    )
+                }
                 "float" => format!("{subject}.type == LUCID_TYPE_FLOAT"),
                 "bool" => format!("{subject}.type == LUCID_TYPE_BOOL"),
                 "str" => format!("{subject}.type == LUCID_TYPE_STR"),
@@ -5480,10 +5484,21 @@ static inline void lucid_print_val(LucidVal v) {
             }
             Pattern::Type(type_expr, _) => match type_expr {
                 TypeExpr::Named { name, .. } => match name.as_str() {
-                    "int" => format!("{subject}.type == LUCID_TYPE_INT"),
+                    "int" => {
+                        format!(
+                            "({subject}.type == LUCID_TYPE_INT || {subject}.type == LUCID_TYPE_BIGINT)"
+                        )
+                    }
                     "float" => format!("{subject}.type == LUCID_TYPE_FLOAT"),
                     "bool" => format!("{subject}.type == LUCID_TYPE_BOOL"),
                     "str" => format!("{subject}.type == LUCID_TYPE_STR"),
+                    "complex" => format!("{subject}.type == LUCID_TYPE_COMPLEX"),
+                    "bytes" | "Bytes" => format!("{subject}.type == LUCID_TYPE_BYTES"),
+                    "MemoryView" => format!("{subject}.type == LUCID_TYPE_MEMORYVIEW"),
+                    "list" => format!("{subject}.type == LUCID_TYPE_LIST"),
+                    "set" => format!("{subject}.type == LUCID_TYPE_SET"),
+                    "dict" => format!("{subject}.type == LUCID_TYPE_DICT"),
+                    "DottedPath" => format!("{subject}.type == LUCID_TYPE_DOTTED_PATH"),
                     "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
                     name if self.known_classes.contains_key(name) => self
                         .class_pattern_names(name)
@@ -15606,6 +15621,23 @@ print(" ".join(capitalized))
             String::from_utf8_lossy(&result.stdout).trim(),
             "1\n1\n1\n1\n1\n1\n1\n0"
         );
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_match_generic_type_patterns_check_value_kind() {
+        let source = "items = [1, 2]\nmatch items:\n    case list[int]:\n        print(1)\n    case _:\n        print(0)\nunique = {1, 2}\nmatch unique:\n    case set[int]:\n        print(1)\n    case _:\n        print(0)\nmapping = {\"a\": 1}\nmatch mapping:\n    case dict[str, int]:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case list[int]:\n        print(1)\n    case _:\n        print(0)\n";
+        let module = parse(source).expect("generic type match pattern source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_generic_type_match_pattern_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("generic type match pattern should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert!(result.status.success(), "native program failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "1\n1\n1\n0");
         let _ = std::fs::remove_file(output);
     }
 

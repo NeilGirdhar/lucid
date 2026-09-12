@@ -9925,17 +9925,23 @@ impl Interpreter {
             Pattern::Type(te, _) => match te {
                 TypeExpr::Named { name, .. } => match value {
                     Value::List(_) if name == "list" => true,
+                    Value::Set(_) if name == "set" => true,
                     Value::Dict(_) if name == "dict" => true,
+                    Value::Bytes(_) if matches!(name.as_str(), "bytes" | "Bytes") => true,
+                    Value::MemoryView { .. } if name == "MemoryView" => true,
+                    Value::DottedPath(_) if name == "DottedPath" => true,
                     Value::Object { class_name, .. }
                         if class_name == name || self.is_subclass(class_name, name) =>
                     {
                         true
                     }
                     Value::Int(_) if name == "int" => true,
+                    Value::BigInt(_) if name == "int" => true,
                     Value::Float(_) if name == "float" => true,
                     Value::Complex(_, _) if name == "complex" => true,
                     Value::Str(_) if name == "str" => true,
                     Value::Bool(_) if name == "bool" => true,
+                    Value::None if matches!(name.as_str(), "none" | "None") => true,
                     _ => false,
                 },
                 _ => true,
@@ -10685,6 +10691,47 @@ match doc:
         assert_eq!(env.get("dict_result"), Some(Value::Int(1)));
         assert_eq!(env.get("path_result"), Some(Value::Int(1)));
         assert_eq!(env.get("none_result"), Some(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_match_generic_type_patterns_check_value_kind() {
+        let src = r#"
+items = [1, 2]
+match items:
+    case list[int]:
+        list_result = 1
+    case _:
+        list_result = 0
+
+unique = {1, 2}
+match unique:
+    case set[int]:
+        set_result = 1
+    case _:
+        set_result = 0
+
+mapping = {"a": 1}
+match mapping:
+    case dict[str, int]:
+        dict_result = 1
+    case _:
+        dict_result = 0
+
+other = 3
+match other:
+    case list[int]:
+        other_result = 1
+    case _:
+        other_result = 0
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        let env = interp.env.borrow();
+        assert_eq!(env.get("list_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("set_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("dict_result"), Some(Value::Int(1)));
+        assert_eq!(env.get("other_result"), Some(Value::Int(0)));
     }
 
     #[test]

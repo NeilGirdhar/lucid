@@ -1190,6 +1190,11 @@ diverged:
   Runtime and native `case bytes`/`case MemoryView`/`case list`/`case set`/
   `case dict`/`case DottedPath` now test those value kinds the same way, and
   uppercase `case None` matches the singleton consistently in both backends.
+  Generic builtin type patterns such as `case list[int]`, `case set[int]`,
+  and `case dict[str, int]` now use those value-kind tests instead of falling
+  through as native match-all arms for non-container subjects. `range` remains
+  outside that set until native `range(...)` expressions stop lowering
+  directly to lists in expression contexts.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
