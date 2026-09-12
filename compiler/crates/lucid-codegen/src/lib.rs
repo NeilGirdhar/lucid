@@ -657,7 +657,6 @@ impl CCodeGenerator {
                 | "sum"
                 | "time"
                 | "trust"
-                | "type"
                 | "read_file"
                 | "write_file"
                 | "zip"
@@ -7380,8 +7379,8 @@ static inline void lucid_print_val(LucidVal v) {
     ) {
         const BUILTINS: &[&str] = &[
             "abs", "all", "any", "bool", "bytes", "dict", "float", "int", "len", "list", "max",
-            "min", "pow", "print", "range", "repr", "round", "set", "str", "sum", "type", "none",
-            "None", "true", "false",
+            "min", "pow", "print", "range", "repr", "round", "set", "str", "sum", "none", "None",
+            "true", "false",
         ];
         match expr {
             Expr::Ident { name, .. } => {
@@ -19786,7 +19785,7 @@ print(all({1, 2}))
     }
 
     #[test]
-    fn native_removed_bare_string_builtins_are_rejected() {
+    fn native_removed_bare_builtins_are_rejected() {
         for name in ["chr", "ord", "bin", "oct", "hex"] {
             let source = match name {
                 "chr" => "print(chr(65))\n".to_string(),
