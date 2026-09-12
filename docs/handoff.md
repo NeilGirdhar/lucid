@@ -1825,6 +1825,8 @@ diverged:
   when an incoming local supplies the fall-through value.
   Statically false `elif` arms are skipped before that dynamic-`elif`
   continuation lowering, so dead branches no longer hide a supported ladder.
+  The same continuation lowering now emits a full condition-block ladder for
+  multiple dynamic `elif` arms that assign the same merged local.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,

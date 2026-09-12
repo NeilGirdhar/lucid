@@ -1098,6 +1098,88 @@ fn run_cir_skips_static_false_elif_before_dynamic_continuation() {
 }
 
 #[test]
+fn run_cir_executes_multiple_dynamic_elif_post_diamond_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_multi_elif_post_diamond_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(a: int, b: int, c: int):\n    if a > 0:\n        result = a\n    elif b > 0:\n        result = b\n    elif c > 0:\n        result = c\n    else:\n        result = 0\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let first = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "41,5,9",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let second = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,5,9",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let third = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-2,9",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-2,-3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        first.status.success(),
+        "first branch failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "second branch failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        third.status.success(),
+        "third branch failed: {}",
+        String::from_utf8_lossy(&third.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "else branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), "6");
+    assert_eq!(String::from_utf8_lossy(&third.stdout).trim(), "10");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "1");
+}
+
+#[test]
 fn run_cir_executes_one_sided_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_optional_if_{}.lucid",

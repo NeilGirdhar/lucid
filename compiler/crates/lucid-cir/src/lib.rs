@@ -4623,11 +4623,11 @@ impl Function {
             instructions: &'a mut Vec<Instruction>,
             next: &'a mut u32,
         }
+        type DynamicElifArm<'a> = (&'a lucid_syntax::Expr, &'a [lucid_syntax::Stmt]);
         struct DynamicElifContinuation<'a> {
             condition: &'a lucid_syntax::Expr,
             then_branch: &'a [lucid_syntax::Stmt],
-            elif_condition: &'a lucid_syntax::Expr,
-            elif_branch: &'a [lucid_syntax::Stmt],
+            elif_branches: Vec<DynamicElifArm<'a>>,
             else_branch: Option<&'a [lucid_syntax::Stmt]>,
             suffix: &'a [lucid_syntax::Stmt],
         }
@@ -4786,11 +4786,14 @@ impl Function {
             Ok(function)
         }
 
-        fn lower_dynamic_if_one_elif(
+        fn lower_dynamic_if_elif_ladder(
             prefix: &[lucid_syntax::Stmt],
             ladder: DynamicElifContinuation<'_>,
             state: &mut LinearLoweringState<'_>,
         ) -> Result<Function, LowerError> {
+            if ladder.elif_branches.is_empty() {
+                return Err(LowerError::UnsupportedExpression);
+            }
             fn lower_branch(
                 branch: &[lucid_syntax::Stmt],
                 base_bindings: &HashMap<String, ValueId>,
@@ -4854,20 +4857,24 @@ impl Function {
                 fallthrough_value,
                 state.next,
             )?;
-            let mut elif_condition_instructions = Vec::new();
-            let elif_condition_value = lower(
-                ladder.elif_condition,
-                &base_bindings,
-                &mut elif_condition_instructions,
-                state.next,
-            )?;
-            let elif_lowering = lower_branch(
-                ladder.elif_branch,
-                &base_bindings,
-                &base_instructions,
-                fallthrough_value,
-                state.next,
-            )?;
+            let mut lowered_elifs = Vec::new();
+            for (elif_condition, elif_branch) in &ladder.elif_branches {
+                let mut condition_instructions = Vec::new();
+                let condition_value = lower(
+                    elif_condition,
+                    &base_bindings,
+                    &mut condition_instructions,
+                    state.next,
+                )?;
+                let branch = lower_branch(
+                    elif_branch,
+                    &base_bindings,
+                    &base_instructions,
+                    fallthrough_value,
+                    state.next,
+                )?;
+                lowered_elifs.push((condition_instructions, condition_value, branch));
+            }
             let else_lowering = lower_branch(
                 ladder.else_branch.unwrap_or(&[]),
                 &base_bindings,
@@ -4879,24 +4886,38 @@ impl Function {
                 .bindings
                 .iter()
                 .find_map(|(name, value)| {
-                    (*value == then_lowering.value
-                        && elif_lowering.bindings.get(name).copied() == Some(elif_lowering.value)
-                        && else_lowering.bindings.get(name).copied() == Some(else_lowering.value))
-                    .then(|| name.clone())
+                    if *value != then_lowering.value
+                        || else_lowering.bindings.get(name).copied() != Some(else_lowering.value)
+                    {
+                        return None;
+                    }
+                    lowered_elifs
+                        .iter()
+                        .all(|(_, _, branch)| {
+                            branch.bindings.get(name).copied() == Some(branch.value)
+                        })
+                        .then(|| name.clone())
                 })
                 .ok_or(LowerError::UnsupportedExpression)?;
             let result = ValueId(*state.next);
             *state.next += 1;
             let mut merge_bindings = base_bindings;
             merge_bindings.insert(merged_name, result);
-            let mut merge_instructions = vec![Instruction::Phi {
-                result,
-                incomings: vec![
-                    (BlockId(1), then_lowering.value),
-                    (BlockId(3), elif_lowering.value),
-                    (BlockId(4), else_lowering.value),
-                ],
-            }];
+            let fallback_block = BlockId(
+                2 + u32::try_from(ladder.elif_branches.len())
+                    .map_err(|_| LowerError::UnsupportedExpression)?
+                    * 2,
+            );
+            let merge_block = BlockId(fallback_block.0 + 1);
+            let mut incomings = vec![(BlockId(1), then_lowering.value)];
+            for (index, (_, _, branch)) in lowered_elifs.iter().enumerate() {
+                let arm_block = BlockId(
+                    3 + u32::try_from(index).map_err(|_| LowerError::UnsupportedExpression)? * 2,
+                );
+                incomings.push((arm_block, branch.value));
+            }
+            incomings.push((fallback_block, else_lowering.value));
+            let mut merge_instructions = vec![Instruction::Phi { result, incomings }];
             let mut merge_last = Some(result);
             visit_all(
                 ladder.suffix,
@@ -4905,48 +4926,65 @@ impl Function {
                 state.next,
                 &mut merge_last,
             )?;
+            let first_elif_condition_block = BlockId(2);
+            let mut blocks = vec![
+                Block {
+                    id: BlockId(0),
+                    instructions: std::mem::take(state.instructions),
+                    terminator: Terminator::Branch {
+                        condition: condition_value,
+                        then_block: BlockId(1),
+                        else_block: first_elif_condition_block,
+                    },
+                },
+                Block {
+                    id: BlockId(1),
+                    instructions: then_lowering.instructions,
+                    terminator: Terminator::Jump(merge_block),
+                },
+            ];
+            for (index, (condition_instructions, condition_value, branch)) in
+                lowered_elifs.into_iter().enumerate()
+            {
+                let index = u32::try_from(index).map_err(|_| LowerError::UnsupportedExpression)?;
+                let condition_block = BlockId(2 + index * 2);
+                let arm_block = BlockId(3 + index * 2);
+                let next_false_block = if usize::try_from(index + 1)
+                    .map_err(|_| LowerError::UnsupportedExpression)?
+                    < ladder.elif_branches.len()
+                {
+                    BlockId(2 + (index + 1) * 2)
+                } else {
+                    fallback_block
+                };
+                blocks.push(Block {
+                    id: condition_block,
+                    instructions: condition_instructions,
+                    terminator: Terminator::Branch {
+                        condition: condition_value,
+                        then_block: arm_block,
+                        else_block: next_false_block,
+                    },
+                });
+                blocks.push(Block {
+                    id: arm_block,
+                    instructions: branch.instructions,
+                    terminator: Terminator::Jump(merge_block),
+                });
+            }
+            blocks.push(Block {
+                id: fallback_block,
+                instructions: else_lowering.instructions,
+                terminator: Terminator::Jump(merge_block),
+            });
+            blocks.push(Block {
+                id: merge_block,
+                instructions: merge_instructions,
+                terminator: Terminator::Return(merge_last),
+            });
             let function = Function {
                 entry: BlockId(0),
-                blocks: vec![
-                    Block {
-                        id: BlockId(0),
-                        instructions: std::mem::take(state.instructions),
-                        terminator: Terminator::Branch {
-                            condition: condition_value,
-                            then_block: BlockId(1),
-                            else_block: BlockId(2),
-                        },
-                    },
-                    Block {
-                        id: BlockId(1),
-                        instructions: then_lowering.instructions,
-                        terminator: Terminator::Jump(BlockId(5)),
-                    },
-                    Block {
-                        id: BlockId(2),
-                        instructions: elif_condition_instructions,
-                        terminator: Terminator::Branch {
-                            condition: elif_condition_value,
-                            then_block: BlockId(3),
-                            else_block: BlockId(4),
-                        },
-                    },
-                    Block {
-                        id: BlockId(3),
-                        instructions: elif_lowering.instructions,
-                        terminator: Terminator::Jump(BlockId(5)),
-                    },
-                    Block {
-                        id: BlockId(4),
-                        instructions: else_lowering.instructions,
-                        terminator: Terminator::Jump(BlockId(5)),
-                    },
-                    Block {
-                        id: BlockId(5),
-                        instructions: merge_instructions,
-                        terminator: Terminator::Return(merge_last),
-                    },
-                ],
+                blocks,
             };
             function
                 .verify()
@@ -4984,14 +5022,13 @@ impl Function {
                     None => dynamic_elifs.push((elif_condition, elif_branch.as_slice())),
                 }
             }
-            if let [(elif_condition, elif_branch)] = dynamic_elifs.as_slice() {
-                return lower_dynamic_if_one_elif(
+            if !dynamic_elifs.is_empty() {
+                return lower_dynamic_if_elif_ladder(
                     prefix,
                     DynamicElifContinuation {
                         condition,
                         then_branch,
-                        elif_condition,
-                        elif_branch,
+                        elif_branches: dynamic_elifs,
                         else_branch: selected_static_else,
                         suffix: &module.statements[index + 1..],
                     },
@@ -10301,6 +10338,19 @@ return total
         assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(21)));
         assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(31)));
+        let module = lucid_syntax::parse(
+            "if first:\n    value = 10\nelif second:\n    value = 20\nelif third:\n    value = 30\nelse:\n    value = 40\nvalue = value + 1\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["first".into(), "second".into(), "third".into()],
+        )
+        .expect("multiple dynamic elif continuations should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 1, 1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1, 1]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[0, 0, 1]), Ok(Some(31)));
+        assert_eq!(function.execute_with_args(&[0, 0, 0]), Ok(Some(41)));
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
         )
