@@ -1035,6 +1035,45 @@ fn collect_typed_body<'db>(
                             _ => false,
                         }
                     }
+                    fn static_truth(expr: &lucid_syntax::Expr) -> Option<bool> {
+                        match expr {
+                            lucid_syntax::Expr::Literal {
+                                value: lucid_syntax::LiteralValue::Bool(value),
+                                ..
+                            } => Some(*value),
+                            lucid_syntax::Expr::Literal {
+                                value: lucid_syntax::LiteralValue::Int(value),
+                                ..
+                            } => Some(*value != 0),
+                            lucid_syntax::Expr::Unary {
+                                op: lucid_syntax::UnaryOp::Not,
+                                expr,
+                                ..
+                            } => static_truth(expr).map(|value| !value),
+                            _ => None,
+                        }
+                    }
+                    fn selected_static_branch<'a>(
+                        condition: &lucid_syntax::Expr,
+                        then_branch: &'a [lucid_syntax::Stmt],
+                        elif_branches: &'a [(lucid_syntax::Expr, Vec<lucid_syntax::Stmt>)],
+                        else_branch: Option<&'a Vec<lucid_syntax::Stmt>>,
+                    ) -> Option<Option<&'a [lucid_syntax::Stmt]>> {
+                        match static_truth(condition) {
+                            Some(true) => Some(Some(then_branch)),
+                            Some(false) => {
+                                for (condition, branch) in elif_branches {
+                                    match static_truth(condition) {
+                                        Some(true) => return Some(Some(branch.as_slice())),
+                                        Some(false) => continue,
+                                        None => return None,
+                                    }
+                                }
+                                Some(else_branch.map(Vec::as_slice))
+                            }
+                            None => None,
+                        }
+                    }
                     matches!(statement, lucid_syntax::Stmt::Pass(_))
                         || matches!(statement, lucid_syntax::Stmt::Expr(expr) if pure_expr(expr))
                         || matches!(
@@ -1066,6 +1105,25 @@ fn collect_typed_body<'db>(
                                 ..
                             } if lucid_cir::is_const_empty_iterable(iterable)
                         )
+                        || match statement {
+                            lucid_syntax::Stmt::If {
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch,
+                                ..
+                            } => match selected_static_branch(
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch.as_ref(),
+                            ) {
+                                Some(Some(branch)) => branch.iter().all(typed_match_noop_statement),
+                                Some(None) => true,
+                                None => false,
+                            },
+                            _ => false,
+                        }
                 }
                 fn match_arm_result(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
                     let mut meaningful = arm
@@ -6628,6 +6686,17 @@ mod tests {
         }));
 
         let file = db.add_file(
+            "match-static-noop-if-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if false:\n                return 0\n            return 3\n        case _:\n            if true:\n                pass\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid static no-op branch match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
             "try-local-hir.lucid",
             "def choose(value: int):\n    try:\n        selected = value + 1\n        return selected\n    except str as error:\n        fallback = 0\n        return fallback\n",
         );
@@ -7210,6 +7279,26 @@ mod tests {
             typed_module(&db, file)
                 .as_ref()
                 .expect("multi-arm empty-for match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-static-noop-if-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if false:\n                return 0\n            return 11\n        case 2:\n            if true:\n                pass\n            return 22\n        case _:\n            if false:\n                return 0\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with static no-op branches should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm static no-op branch match should type check")
                 .functions[0]
                 .body_expressions
                 .iter()
