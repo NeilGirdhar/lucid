@@ -2631,6 +2631,29 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_parameter_step_while_accumulation_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += step
+    n -= tick
+return total
+"#,
+        )
+        .expect("parameter-step while accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "tick".into()],
+        )
+        .expect("parameter-step while accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile parameter-step while accumulation CFG");
+        let result = unsafe { compiled.call_result_with_args(&[10, 4, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 16);
+    }
+
+    #[test]
     fn result_abi_executes_local_bound_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"value = n
@@ -2689,6 +2712,27 @@ return n
         let result = unsafe { compiled.call_result_with_args(&[4]) };
         assert!(result.is_ok());
         assert_eq!(result.value, 0);
+    }
+
+    #[test]
+    fn result_abi_executes_parameter_step_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= step
+return n
+"#,
+        )
+        .expect("parameter-step counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into()],
+        )
+        .expect("parameter-step counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile parameter-step counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[10, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, -2);
     }
 
     #[test]

@@ -656,6 +656,37 @@ fn run_cir_executes_signed_update_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_parameter_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def countdown(n: int, step: int):\n    while n > 0:\n        n -= step\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "countdown",
+            "--args",
+            "10,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-2");
+}
+
+#[test]
 fn run_cir_executes_local_bound_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_bound_while_{}.lucid",
@@ -746,6 +777,37 @@ fn run_cir_executes_parameter_counted_while_accumulator() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "4");
+}
+
+#[test]
+fn run_cir_executes_parameter_step_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_by_step(n: int, step: int, tick: int):\n    total = 0\n    while n > 0:\n        total += step\n        n -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_by_step",
+            "--args",
+            "10,4,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "16");
 }
 
 #[test]

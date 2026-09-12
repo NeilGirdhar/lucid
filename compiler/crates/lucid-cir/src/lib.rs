@@ -2808,6 +2808,21 @@ impl Function {
                     .position(|parameter| parameter == name)? as u32,
             })
         }
+        fn operand_instruction(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            parameter_names: &[String],
+        ) -> Option<Instruction> {
+            match Function::int_literal_expr(expr) {
+                Some(value) => Some(Instruction::ConstInt { result, value }),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } => {
+                        parameter_instruction(name, result, parameter_names)
+                    }
+                    _ => None,
+                },
+            }
+        }
         let (initial, bound_initial, while_statement, return_name) =
             match module.statements.as_slice() {
                 [while_statement, lucid_syntax::Stmt::Return {
@@ -2954,7 +2969,7 @@ impl Function {
         // normally.  Lucid's `if_broken` suite therefore cannot run here, so
         // it is safe to leave even effectful suites unlowered.
         let _ = if_broken;
-        let (update_op, step) = match &body[0] {
+        let (update_op, step_instruction) = match &body[0] {
             lucid_syntax::Stmt::AugAssign {
                 target:
                     lucid_syntax::Expr::Ident {
@@ -2969,7 +2984,10 @@ impl Function {
                     lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub
                 ) =>
             {
-                (update_op.clone(), Function::int_literal_expr(value)?)
+                (
+                    update_op.clone(),
+                    operand_instruction(value, ValueId(4), parameter_names)?,
+                )
             }
             lucid_syntax::Stmt::Assignment {
                 target:
@@ -2983,7 +3001,7 @@ impl Function {
                 ..
             } if update_name == name
                 && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name: left_name, .. } if left_name == name)
-                && Function::int_literal_expr(right.as_ref()).is_some() =>
+                && operand_instruction(right.as_ref(), ValueId(4), parameter_names).is_some() =>
             {
                 if !matches!(
                     op,
@@ -2991,7 +3009,10 @@ impl Function {
                 ) {
                     return None;
                 }
-                (op.clone(), Function::int_literal_expr(right.as_ref())?)
+                (
+                    op.clone(),
+                    operand_instruction(right.as_ref(), ValueId(4), parameter_names)?,
+                )
             }
             lucid_syntax::Stmt::Assignment {
                 target:
@@ -3007,12 +3028,12 @@ impl Function {
                     },
                 ..
             } if update_name == name
-                && Function::int_literal_expr(left.as_ref()).is_some()
+                && operand_instruction(left.as_ref(), ValueId(4), parameter_names).is_some()
                 && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name: right_name, .. } if right_name == name) =>
             {
                 (
                     lucid_syntax::BinaryOp::Add,
-                    Function::int_literal_expr(left.as_ref())?,
+                    operand_instruction(left.as_ref(), ValueId(4), parameter_names)?,
                 )
             }
             _ => return None,
@@ -3134,13 +3155,7 @@ impl Function {
                 },
                 Block {
                     id: BlockId(2),
-                    instructions: vec![
-                        Instruction::ConstInt {
-                            result: ValueId(4),
-                            value: step,
-                        },
-                        update,
-                    ],
+                    instructions: vec![step_instruction, update],
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
@@ -3218,6 +3233,21 @@ impl Function {
                     .iter()
                     .position(|parameter| parameter == name)? as u32,
             })
+        }
+        fn operand_instruction(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            parameter_names: &[String],
+        ) -> Option<Instruction> {
+            match Function::int_literal_expr(expr) {
+                Some(value) => Some(Instruction::ConstInt { result, value }),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } => {
+                        parameter_instruction(name, result, parameter_names)
+                    }
+                    _ => None,
+                },
+            }
         }
         let statements = module.statements.as_slice();
         let (
@@ -3463,26 +3493,29 @@ impl Function {
                 )?);
             }
         }
-        #[derive(Clone, Copy)]
+        #[derive(Clone)]
         enum AccumulatorOperand {
-            Literal(i64),
+            Materialized(Instruction),
             Induction,
         }
         fn accumulator_operand(
             expr: &lucid_syntax::Expr,
             induction_name: &str,
+            parameter_names: &[String],
         ) -> Option<AccumulatorOperand> {
             match expr {
                 lucid_syntax::Expr::Ident { name, .. } if name == induction_name => {
                     Some(AccumulatorOperand::Induction)
                 }
-                _ => Function::int_literal_expr(expr).map(AccumulatorOperand::Literal),
+                _ => operand_instruction(expr, ValueId(6), parameter_names)
+                    .map(AccumulatorOperand::Materialized),
             }
         }
         fn accumulator_self_update(
             statement: &lucid_syntax::Stmt,
             target: &str,
             induction_name: &str,
+            parameter_names: &[String],
         ) -> Option<(lucid_syntax::BinaryOp, AccumulatorOperand)> {
             match statement {
                 lucid_syntax::Stmt::AugAssign {
@@ -3495,7 +3528,7 @@ impl Function {
                     ..
                 } if update_name == target => Some((
                     update_op.clone(),
-                    accumulator_operand(value, induction_name)?,
+                    accumulator_operand(value, induction_name, parameter_names)?,
                 )),
                 lucid_syntax::Stmt::Assignment {
                     target:
@@ -3516,7 +3549,7 @@ impl Function {
                 {
                     Some((
                         update_op.clone(),
-                        accumulator_operand(right.as_ref(), induction_name)?,
+                        accumulator_operand(right.as_ref(), induction_name, parameter_names)?,
                     ))
                 }
                 lucid_syntax::Stmt::Assignment {
@@ -3537,16 +3570,18 @@ impl Function {
                 {
                     Some((
                         lucid_syntax::BinaryOp::Add,
-                        accumulator_operand(left.as_ref(), induction_name)?,
+                        accumulator_operand(left.as_ref(), induction_name, parameter_names)?,
                     ))
                 }
                 _ => None,
             }
         }
-        fn literal_self_update(
+        fn operand_self_update(
             statement: &lucid_syntax::Stmt,
             target: &str,
-        ) -> Option<(lucid_syntax::BinaryOp, i64)> {
+            result: ValueId,
+            parameter_names: &[String],
+        ) -> Option<(lucid_syntax::BinaryOp, Instruction)> {
             match statement {
                 lucid_syntax::Stmt::AugAssign {
                     target:
@@ -3556,9 +3591,10 @@ impl Function {
                     op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
                     value,
                     ..
-                } if update_name == target => {
-                    Some((update_op.clone(), Function::int_literal_expr(value)?))
-                }
+                } if update_name == target => Some((
+                    update_op.clone(),
+                    operand_instruction(value, result, parameter_names)?,
+                )),
                 lucid_syntax::Stmt::Assignment {
                     target:
                         lucid_syntax::Expr::Ident {
@@ -3578,7 +3614,7 @@ impl Function {
                 {
                     Some((
                         update_op.clone(),
-                        Function::int_literal_expr(right.as_ref())?,
+                        operand_instruction(right.as_ref(), result, parameter_names)?,
                     ))
                 }
                 lucid_syntax::Stmt::Assignment {
@@ -3599,14 +3635,16 @@ impl Function {
                 {
                     Some((
                         lucid_syntax::BinaryOp::Add,
-                        Function::int_literal_expr(left.as_ref())?,
+                        operand_instruction(left.as_ref(), result, parameter_names)?,
                     ))
                 }
                 _ => None,
             }
         }
-        let (acc_op, acc_operand) = accumulator_self_update(&body[0], acc_name, induction_name)?;
-        let (induction_op, induction_step) = literal_self_update(&body[1], induction_name)?;
+        let (acc_op, acc_operand) =
+            accumulator_self_update(&body[0], acc_name, induction_name, parameter_names)?;
+        let (induction_op, induction_step_instruction) =
+            operand_self_update(&body[1], induction_name, ValueId(8), parameter_names)?;
         let comparison = match op {
             lucid_syntax::BinaryOp::NotEq
             | lucid_syntax::BinaryOp::NotIdentity
@@ -3638,7 +3676,7 @@ impl Function {
             _ => return None,
         };
         let acc_operand_value = match acc_operand {
-            AccumulatorOperand::Literal(_) => ValueId(6),
+            AccumulatorOperand::Materialized(_) => ValueId(6),
             AccumulatorOperand::Induction => ValueId(2),
         };
         let accumulator_update = match acc_op {
@@ -3668,17 +3706,11 @@ impl Function {
             _ => return None,
         };
         let mut body_instructions = Vec::new();
-        if let AccumulatorOperand::Literal(acc_step) = acc_operand {
-            body_instructions.push(Instruction::ConstInt {
-                result: ValueId(6),
-                value: acc_step,
-            });
+        if let AccumulatorOperand::Materialized(instruction) = acc_operand {
+            body_instructions.push(instruction);
         }
         body_instructions.push(accumulator_update);
-        body_instructions.push(Instruction::ConstInt {
-            result: ValueId(8),
-            value: induction_step,
-        });
+        body_instructions.push(induction_step_instruction);
         body_instructions.push(induction_update);
         let function = Self {
             entry: BlockId(0),
@@ -9353,6 +9385,18 @@ return n
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
 
         let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= step
+return n
+"#,
+        )
+        .expect("parameter-step counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("parameter-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(-2)));
+
+        let module = lucid_syntax::parse(
             r#"value = n
 stop = limit
 while value > stop:
@@ -9443,6 +9487,22 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("parameter-seeded while accumulator should lower");
         assert_eq!(function.execute_with_args(&[3, 7]), Ok(Some(13)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += step
+    n -= tick
+return total
+"#,
+        )
+        .expect("parameter-step while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "tick".into()],
+        )
+        .expect("parameter-step while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[10, 4, 3]), Ok(Some(16)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
