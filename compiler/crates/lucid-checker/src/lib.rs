@@ -636,6 +636,26 @@ impl Type {
         }
 
         // Class inheritance and interface implementation subtyping
+        if let (
+            Type::Class {
+                name: source_name,
+                type_args: source_args,
+                ..
+            },
+            Type::Class {
+                name: target_name,
+                type_args: target_args,
+                ..
+            },
+        ) = (self, target)
+        {
+            if source_name == "__class__" && target_name == "__class__" {
+                return match (source_args.as_slice(), target_args.as_slice()) {
+                    ([source], [target]) => source.is_subtype_of(target, env),
+                    _ => source_args.is_empty() || target_args.is_empty(),
+                };
+            }
+        }
         if let Type::Class {
             name: c_name,
             parent,
@@ -6410,6 +6430,21 @@ impl TypeChecker {
     }
 
     fn argument_type_against_parameter(&self, argument: &Arg, parameter: &Type) -> Result<Type, TypeError> {
+        if matches!(parameter, Type::Class { name, .. } if name == "__class__") {
+            if let Expr::Ident { name, .. } = &argument.value {
+                if let Some(class_type) = self.env.classes.get(name) {
+                    return Ok(Type::Class {
+                        name: "__class__".into(),
+                        type_args: vec![class_type.clone()],
+                        parent: None,
+                        traits: Vec::new(),
+                        interfaces: Vec::new(),
+                        fields: HashMap::new(),
+                        is_sealed: true,
+                    });
+                }
+            }
+        }
         if let Expr::AnonymousDef {
             params,
             return_type,
@@ -10017,6 +10052,37 @@ impl TypeChecker {
                                 is_sealed: false,
                             });
                         }
+                        if other == "class" {
+                            if resolved_args.is_empty() {
+                                return Ok(Type::Class {
+                                    name: "class".into(),
+                                    type_args: Vec::new(),
+                                    parent: None,
+                                    traits: Vec::new(),
+                                    interfaces: Vec::new(),
+                                    fields: HashMap::new(),
+                                    is_sealed: true,
+                                });
+                            }
+                            if resolved_args.len() != 1 {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "type 'class' expects 1 argument, got {}",
+                                        resolved_args.len()
+                                    ),
+                                    span: texpr.span(),
+                                });
+                            }
+                            return Ok(Type::Class {
+                                name: "__class__".into(),
+                                type_args: resolved_args,
+                                parent: None,
+                                traits: Vec::new(),
+                                interfaces: Vec::new(),
+                                fields: HashMap::new(),
+                                is_sealed: true,
+                            });
+                        }
                         if let Some(alias) = self.env.type_aliases.get(other) {
                             let params = self
                                 .env
@@ -10998,6 +11064,24 @@ class Child(Base):
         let module = parse("label = Cell(\"x\")\nlabel.value = 1\n").unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("cannot assign type"));
+    }
+
+    #[test]
+    fn class_type_annotations_accept_class_objects() {
+        let module = parse(
+            "class Handler:\n    pass\nclass JSONHandler(Handler):\n    pass\n\ndef register(handler: class[Handler]) -> none:\n    pass\n\nregister(JSONHandler)\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("class[T] should accept class objects for subclasses of T");
+
+        let module = parse(
+            "class Handler:\n    pass\nclass JSONHandler(Handler):\n    pass\n\ndef register(handler: class[Handler]) -> none:\n    pass\n\nregister(JSONHandler())\n",
+        )
+        .unwrap();
+        let err = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(err.message.contains("incompatible type"));
     }
 
     #[test]
