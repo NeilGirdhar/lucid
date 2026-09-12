@@ -4516,25 +4516,36 @@ pub fn lower_function_body(
                 }
             }
             statements if statements.len() >= 2 => {
-                let Some(lucid_syntax::Stmt::Return { .. }) = statements.last() else {
+                let Some(last) = statements.last() else {
                     return Err(Arc::from(
                         "multi-statement function bodies are not yet supported by CIR lowering",
                     ));
                 };
+                if !matches!(
+                    last,
+                    lucid_syntax::Stmt::Return { .. } | lucid_syntax::Stmt::Pass(_)
+                ) {
+                    return Err(Arc::from(
+                        "multi-statement function bodies are not yet supported by CIR lowering",
+                    ));
+                }
                 let mut bindings = Vec::new();
                 for statement in &statements[..statements.len() - 1] {
                     collect_pre_return_binding(statement, &mut bindings)?;
                 }
+                if matches!(
+                    last,
+                    lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)
+                ) {
+                    return lower_bindings_to_void(&bindings);
+                }
                 (
-                    statements
-                        .last()
-                        .and_then(|statement| match statement {
-                            lucid_syntax::Stmt::Return {
-                                value: Some(value), ..
-                            } => Some(value.span()),
-                            _ => None,
-                        })
-                        .unwrap_or_default(),
+                    match last {
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        } => value.span(),
+                        _ => unreachable!("last statement was validated above"),
+                    },
                     bindings,
                 )
             }
@@ -7165,6 +7176,24 @@ mod tests {
             .as_ref()
             .expect("a statically true assertion should be skipped during lowering");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "pure-discard-before-pass.lucid",
+            "def answer(value: int):\n    value + 1\n    pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a pure discarded expression before pass should be skipped during lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+
+        let file = db.add_file(
+            "effectful-discard-before-pass.lucid",
+            "def answer(value: int):\n    str(value)\n    pass\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("effectful discarded expression before pass must not be erased");
+        assert!(error.contains("effectful discarded expression"));
 
         let file = db.add_file(
             "empty-descending-range-before-return.lucid",

@@ -480,6 +480,8 @@ diverged:
   CIR lowering; effectful expressions remain rejected instead of being dropped.
   Their rejection now carries a dedicated diagnostic explaining that an
   effectful discarded expression needs a non-typed-CIR lowering path.
+  The same pure-discard filter now applies before final `pass`, with effectful
+  discarded expressions rejected instead of erased.
   Selected static branches apply the same no-op filter for `assert(true)`,
   statically false loops, empty loops, and nested statically false no-`else`
   conditionals before collecting local bindings.
