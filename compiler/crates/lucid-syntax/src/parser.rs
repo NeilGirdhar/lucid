@@ -372,6 +372,12 @@ impl Parser {
             || self.check(&TokenKind::Dedent)
         {
             Ok(())
+        } else if matches!(self.peek_kind(), TokenKind::Str(_) | TokenKind::Bytes(_)) {
+            Err(ParseError {
+                message: "adjacent string literals are not supported; use explicit + concatenation"
+                    .into(),
+                span: self.peek().span,
+            })
         } else {
             Err(ParseError {
                 message: format!(

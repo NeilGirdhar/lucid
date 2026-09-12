@@ -250,6 +250,14 @@ contextmanager def locked(lock: Lock):
     }
 
     #[test]
+    fn test_parse_rejects_adjacent_string_literals() {
+        for source in ["value = \"a\" \"b\"\n", "value = b\"a\" b\"b\"\n"] {
+            let error = parse(source).expect_err("adjacent string literals must fail in parsing");
+            assert!(error.contains("adjacent string literals are not supported"));
+        }
+    }
+
+    #[test]
     fn test_parse_rejects_field_delete_with_fixed_shape_message() {
         let error = parse("del obj.field\n").expect_err("field delete must fail in parsing");
         assert!(error.contains("fields are fixed, not deletable"));
