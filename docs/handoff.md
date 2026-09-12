@@ -600,7 +600,8 @@ diverged:
   step can be a signed literal, positional parameter, pre-loop local alias, or the
   current induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
   commuted additive spelling `x = y + x`; the same local alias slot can also
-  feed the accumulator loop's induction update. The source and CLI
+  feed the accumulator loop's induction update, including when the loop also
+  seeds a local induction variable. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
   and accumulator Phis. Cranelift result-ABI coverage now executes the same
   countdown-sum CFG natively. Plain counted loops and accumulator loops now

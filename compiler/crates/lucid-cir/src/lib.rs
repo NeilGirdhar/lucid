@@ -3488,15 +3488,6 @@ impl Function {
                 else {
                     return None;
                 };
-                let lucid_syntax::Expr::Ident {
-                    name: bound_name, ..
-                } = right.as_ref()
-                else {
-                    return None;
-                };
-                if bound_name == induction_name {
-                    return None;
-                }
                 let initializers = [
                     initialized_ident(first_statement)?,
                     initialized_ident(second_statement)?,
@@ -3508,28 +3499,54 @@ impl Function {
                 let induction_index = initializers
                     .iter()
                     .position(|(name, _)| *name == induction_name)?;
-                let bound_index = initializers
-                    .iter()
-                    .position(|(name, _)| *name == bound_name)?;
-                if acc_index == induction_index
-                    || acc_index == bound_index
-                    || induction_index == bound_index
-                {
+                if acc_index == induction_index {
                     return None;
                 }
                 let initializer_statements = [first_statement, second_statement, third_statement];
                 let (acc_name, initial_expr) = initializers[acc_index];
-                (
-                    acc_name,
-                    initial_expr,
-                    Some(initializer_statements[induction_index]),
-                    Some(initializer_statements[bound_index]),
-                    None,
-                    condition,
-                    body,
-                    if_broken,
-                    return_name,
-                )
+                match right.as_ref() {
+                    lucid_syntax::Expr::Ident {
+                        name: bound_name, ..
+                    } => {
+                        if bound_name == induction_name {
+                            return None;
+                        }
+                        let bound_index = initializers
+                            .iter()
+                            .position(|(name, _)| *name == bound_name)?;
+                        if acc_index == bound_index || induction_index == bound_index {
+                            return None;
+                        }
+                        (
+                            acc_name,
+                            initial_expr,
+                            Some(initializer_statements[induction_index]),
+                            Some(initializer_statements[bound_index]),
+                            None,
+                            condition,
+                            body,
+                            if_broken,
+                            return_name,
+                        )
+                    }
+                    expr if Function::int_literal_expr(expr).is_some() => {
+                        let alias_index = [0usize, 1, 2]
+                            .into_iter()
+                            .find(|index| *index != acc_index && *index != induction_index)?;
+                        (
+                            acc_name,
+                            initial_expr,
+                            Some(initializer_statements[induction_index]),
+                            None,
+                            Some(initializer_statements[alias_index]),
+                            condition,
+                            body,
+                            if_broken,
+                            return_name,
+                        )
+                    }
+                    _ => return None,
+                }
             }
             _ => return None,
         };
@@ -9716,6 +9733,22 @@ return total
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
                 .expect("local accumulator-step while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(15)));
+
+        let module = lucid_syntax::parse(
+            r#"value = n
+tick = step
+total = 0
+while value > 0:
+    total += tick
+    value -= 1
+return total
+"#,
+        )
+        .expect("local-init local accumulator-step while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("local-init local accumulator-step while accumulator should lower");
         assert_eq!(function.execute_with_args(&[5, 3]), Ok(Some(15)));
 
         let module = lucid_syntax::parse(
