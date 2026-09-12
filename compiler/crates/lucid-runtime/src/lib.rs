@@ -2436,6 +2436,9 @@ impl Interpreter {
                         values.borrow().keys().cloned().map(Value::Str).collect()
                     }
                     Value::Range { start, stop, step } => materialize_range(*start, *stop, *step),
+                    Value::Bytes(bytes) => {
+                        bytes.iter().map(|byte| Value::Int(*byte as i64)).collect()
+                    }
                     Value::Object { fields, .. } => {
                         let method = fields.borrow().get("__iter__").cloned().ok_or_else(|| {
                             RuntimeError {
@@ -2639,6 +2642,10 @@ impl Interpreter {
                         Value::List(values) => values.borrow().clone(),
                         Value::Set(values) => values.borrow().clone(),
                         Value::Range { start, stop, step } => materialize_range(*start, *stop, *step),
+                        Value::Bytes(bytes) => bytes
+                            .iter()
+                            .map(|byte| Value::Int(*byte as i64))
+                            .collect(),
                         Value::Object { .. } if custom_iter.is_some() => {
                             let iterator_function = custom_iter.ok_or_else(|| RuntimeError {
                                 message: "iterable is missing __iter__".into(),
@@ -2686,6 +2693,9 @@ impl Interpreter {
                         Value::Set(values) => values.borrow().clone(),
                         Value::Range { start, stop, step } => {
                             materialize_range(*start, *stop, *step)
+                        }
+                        Value::Bytes(bytes) => {
+                            bytes.iter().map(|byte| Value::Int(*byte as i64)).collect()
                         }
                         Value::Object { fields, .. } => {
                             if let Some(method) = fields.borrow().get("__reversed__").cloned() {
@@ -3088,6 +3098,9 @@ impl Interpreter {
                     let mut values = match &args[0] {
                         Value::List(values) => values.borrow().clone(),
                         Value::Set(values) => values.borrow().clone(),
+                        Value::Bytes(bytes) => {
+                            bytes.iter().map(|byte| Value::Int(*byte as i64)).collect()
+                        }
                         other => {
                             return Err(RuntimeError {
                                 message: format!(
@@ -3278,6 +3291,10 @@ impl Interpreter {
                     let values = match &args[1] {
                         Value::List(values) => values.borrow().clone(),
                         Value::Range { start, stop, step } => materialize_range(*start, *stop, *step),
+                        Value::Bytes(bytes) => bytes
+                            .iter()
+                            .map(|byte| Value::Int(*byte as i64))
+                            .collect(),
                         Value::Object { fields, .. } => {
                             let method = fields.borrow().get("__iter__").cloned().ok_or_else(|| RuntimeError { message: "object is not iterable".into(), span: Span::default() })?;
                             let iterator = interp.invoke_value(method, vec![(None, args[1].clone())], Span::default())?;
@@ -3319,6 +3336,9 @@ impl Interpreter {
                     Value::List(l) => l.borrow().clone(),
                     Value::Set(s) => s.borrow().clone(),
                     Value::Range { start, stop, step } => materialize_range(*start, *stop, *step),
+                    Value::Bytes(bytes) => {
+                        bytes.iter().map(|byte| Value::Int(*byte as i64)).collect()
+                    }
                     Value::Object { .. } => {
                         interp.materialize_iterable(args[0].clone(), Span::default())?
                     }
@@ -3386,6 +3406,9 @@ impl Interpreter {
                     Value::List(l) => l.borrow().clone(),
                     Value::Set(s) => s.borrow().clone(),
                     Value::Range { start, stop, step } => materialize_range(*start, *stop, *step),
+                    Value::Bytes(bytes) => {
+                        bytes.iter().map(|byte| Value::Int(*byte as i64)).collect()
+                    }
                     Value::Object { .. } => {
                         interp.materialize_iterable(args[0].clone(), Span::default())?
                     }
@@ -3452,6 +3475,7 @@ impl Interpreter {
                 Value::List(l) => l.borrow().clone(),
                 Value::Set(s) => s.borrow().clone(),
                 Value::Range { start, stop, step } => materialize_range(*start, *stop, *step),
+                Value::Bytes(bytes) => bytes.iter().map(|byte| Value::Int(*byte as i64)).collect(),
                 Value::Object { fields, .. } => {
                     let method =
                         fields
@@ -4161,6 +4185,9 @@ impl Interpreter {
                     materialize_range(*start, *stop, *step)
                 }
                 Some(Value::Str(s)) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
+                Some(Value::Bytes(bytes)) => {
+                    bytes.iter().map(|byte| Value::Int(*byte as i64)).collect()
+                }
                 Some(Value::Object { fields, .. }) => {
                     let method =
                         fields
@@ -6206,6 +6233,10 @@ impl Interpreter {
                         Value::Dict(items) => {
                             items.borrow().keys().cloned().map(Value::Str).collect()
                         }
+                        Value::Bytes(bytes) => bytes
+                            .into_iter()
+                            .map(|byte| Value::Int(byte as i64))
+                            .collect(),
                         _ => {
                             return Err(RuntimeError {
                                 message: "value is not iterable".to_string(),
@@ -6786,15 +6817,18 @@ impl Interpreter {
                             "Iterable" | "Collection" => {
                                 matches!(
                                     lval,
-                                    Value::List(_)
+                                    Value::Bytes(_)
+                                        | Value::List(_)
                                         | Value::Set(_)
                                         | Value::Dict(_)
                                         | Value::Range { .. }
                                 ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, &name))
                             }
                             "Sequence" | "Reversible" => {
-                                matches!(lval, Value::List(_) | Value::Range { .. })
-                                    || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, &name))
+                                matches!(
+                                    lval,
+                                    Value::Bytes(_) | Value::List(_) | Value::Range { .. }
+                                ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, &name))
                             }
                             "Set" => {
                                 matches!(lval, Value::Set(_))
@@ -12669,6 +12703,63 @@ readonly_tail_first = readonly[1:][0]
         assert_eq!(interp.env.borrow().get("missing"), Some(Value::Bool(false)));
         assert_eq!(interp.env.borrow().get("has_b"), Some(Value::Bool(true)));
         assert_eq!(interp.env.borrow().get("not_zero"), Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_bytes_iterate_as_integer_sequence() {
+        let module = parse(
+            r#"data = b"AB"
+total = 0
+for byte in data:
+    total = total + byte
+copied = list(data)
+rev = reversed(data)
+summed = sum(data)
+largest = max(data)
+first_enumerated = enumerate(data)[0][1]
+sorted_first = sorted(bytes([66, 65]))[0]
+is_iterable = data is Iterable
+is_collection = data is Collection
+is_sequence = data is Sequence
+is_reversible = data is Reversible
+"#,
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("total"), Some(Value::Int(131)));
+        assert!(
+            matches!(interp.env.borrow().get("copied"), Some(Value::List(values)) if *values.borrow() == vec![Value::Int(65), Value::Int(66)])
+        );
+        assert!(
+            matches!(interp.env.borrow().get("rev"), Some(Value::List(values)) if *values.borrow() == vec![Value::Int(66), Value::Int(65)])
+        );
+        assert_eq!(interp.env.borrow().get("summed"), Some(Value::Int(131)));
+        assert_eq!(interp.env.borrow().get("largest"), Some(Value::Int(66)));
+        assert_eq!(
+            interp.env.borrow().get("first_enumerated"),
+            Some(Value::Int(65))
+        );
+        assert_eq!(
+            interp.env.borrow().get("sorted_first"),
+            Some(Value::Int(65))
+        );
+        assert_eq!(
+            interp.env.borrow().get("is_iterable"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            interp.env.borrow().get("is_collection"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            interp.env.borrow().get("is_sequence"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            interp.env.borrow().get("is_reversible"),
+            Some(Value::Bool(true))
+        );
     }
 
     #[test]
