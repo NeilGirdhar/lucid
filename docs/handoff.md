@@ -848,8 +848,8 @@ diverged:
   malformed intermediate state.
 * Database syntax diagnostics now preserve the parser-reported grammar-error
   span, falling back to the lossless CST lexical span only for lexer failures.
-  Recoverable grammar errors are all surfaced instead of truncating diagnostics
-  at the first parser failure.
+  Recoverable grammar and finite lexical errors are all surfaced instead of
+  truncating diagnostics at the first parser or lexer failure.
 * A new `lucid-db` crate provides the first Salsa-backed compiler database,
   with stable source-file inputs and memoized lossless parsing.
 * The database also exposes strict AST parsing and interned top-level symbol

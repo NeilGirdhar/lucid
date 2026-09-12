@@ -4819,7 +4819,6 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
                 errors
                     .into_iter()
                     .filter(|parse_error| parse_error.message.starts_with("lexer error:"))
-                    .take(1)
                     .collect::<Vec<_>>()
             } else {
                 errors
@@ -7036,8 +7035,8 @@ mod tests {
         let file = db.add_file("broken.lucid", "value = `broken`\n");
         let project = Project::new(&db, vec![file]);
         let errors = type_check_project(&db, project);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].starts_with("E0001:"));
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().all(|error| error.starts_with("E0001:")));
     }
 
     #[test]
@@ -7045,11 +7044,31 @@ mod tests {
         let mut db = CompilerDatabase::default();
         let file = db.add_file("broken.lucid", "value = `broken`\n");
         let diagnostics = file_diagnostics(&db, file);
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].code, "E0001");
-        assert!(diagnostics[0].message.contains("lexer error"));
-        assert!(diagnostics[0].span.end > diagnostics[0].span.start);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code == "E0001"
+                    && diagnostic.message.contains("lexer error")
+                    && diagnostic.span.end > diagnostic.span.start
+                    && diagnostic.span.line == 1)
+        );
+    }
+
+    #[test]
+    fn syntax_diagnostics_retain_independent_lexical_errors() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("broken.lucid", "first = $\nsecond = `\nthird = 3\n");
+        let diagnostics = file_diagnostics(&db, file);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code == "E0001"
+                    && diagnostic.message.contains("lexer error"))
+        );
         assert_eq!(diagnostics[0].span.line, 1);
+        assert_eq!(diagnostics[1].span.line, 2);
     }
 
     #[test]
