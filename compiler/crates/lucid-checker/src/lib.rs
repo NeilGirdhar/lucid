@@ -2523,6 +2523,24 @@ impl TypeChecker {
                 Ok(())
             }
             Stmt::Function(func) => {
+                if let Some((gather_index, gather)) = func
+                    .params
+                    .iter()
+                    .enumerate()
+                    .find(|(_, param)| param.is_gather)
+                {
+                    if gather_index + 1 != func.params.len()
+                        || func.params.iter().skip(gather_index + 1).any(|param| param.is_gather)
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "gather parameter '{}' must be the function's final parameter",
+                                gather.name
+                            ),
+                            span: gather.span,
+                        });
+                    }
+                }
                 if func.decorators.iter().any(
                     |decorator| matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"),
                 ) {
@@ -10571,5 +10589,15 @@ def reject(value: not int) -> none:
 
         let callable = parse("def f() -> int:\n    return 1\nresult = f is Callable\n").unwrap();
         assert!(TypeChecker::new().check_module(&callable).is_ok());
+    }
+
+    #[test]
+    fn gather_parameter_must_be_final() {
+        let module = parse(
+            "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\ndef invalid(***rest: Arguments, tail: int) -> int:\n    return tail\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(error.message.contains("must be the function's final parameter"));
     }
 }
