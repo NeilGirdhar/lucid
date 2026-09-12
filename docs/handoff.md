@@ -1215,6 +1215,13 @@ diverged:
   remains list-only.
   Native lowering now rejects unsupported explicit type patterns instead of
   compiling them as unconditional matches.
+  Interpreter type patterns no longer treat internal non-name type forms as
+  catch-all patterns: unions test each member, wrappers delegate to their
+  inner type, wildcard matches, never rejects, literal type forms compare the
+  literal, and unsupported function/record/match type forms do not match.
+  Native type-pattern lowering uses the same union/wrapper/wildcard/never
+  rules where those AST forms reach codegen and still rejects unsupported
+  non-name forms instead of lowering them as catch-all conditions.
   Native `except` handler conditions now follow the same rule: supported value
   handler types lower to explicit tag checks, known classes lower to object
   checks, and unsupported handler types fail codegen instead of becoming

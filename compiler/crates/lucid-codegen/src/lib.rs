@@ -5537,46 +5537,73 @@ static inline void lucid_print_val(LucidVal v) {
                     )
                 }
             }
-            Pattern::Type(type_expr, _) => match type_expr {
-                TypeExpr::Named { name, .. } => match name.as_str() {
-                    "int" => {
-                        format!(
-                            "({subject}.type == LUCID_TYPE_INT || {subject}.type == LUCID_TYPE_BIGINT)"
-                        )
-                    }
-                    "float" => format!("{subject}.type == LUCID_TYPE_FLOAT"),
-                    "bool" => format!("{subject}.type == LUCID_TYPE_BOOL"),
-                    "str" => format!("{subject}.type == LUCID_TYPE_STR"),
-                    "complex" => format!("{subject}.type == LUCID_TYPE_COMPLEX"),
-                    "bytes" | "Bytes" => format!("{subject}.type == LUCID_TYPE_BYTES"),
-                    "MemoryView" => format!("{subject}.type == LUCID_TYPE_MEMORYVIEW"),
-                    "list" => format!("{subject}.type == LUCID_TYPE_LIST"),
-                    "set" => format!("{subject}.type == LUCID_TYPE_SET"),
-                    "dict" => format!("{subject}.type == LUCID_TYPE_DICT"),
-                    "range" => format!("{subject}.type == LUCID_TYPE_RANGE"),
-                    "DottedPath" => format!("{subject}.type == LUCID_TYPE_DOTTED_PATH"),
-                    "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
-                    name if self.known_classes.contains_key(name) => self
-                        .class_pattern_names(name)
-                        .into_iter()
-                        .map(|class_name| {
-                            format!("lucid_object_is(lucid_as_ptr({subject}), \"{class_name}\")")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" || "),
-                    _ => {
-                        return Err(CodegenError {
-                            message: format!("unsupported type pattern '{}'", name),
-                        });
-                    }
-                },
-                _ => {
-                    return Err(CodegenError {
-                        message: "unsupported non-name type pattern".to_string(),
-                    });
-                }
-            },
+            Pattern::Type(type_expr, _) => self.emit_type_pattern_condition(type_expr, subject)?,
         })
+    }
+
+    fn emit_type_pattern_condition(
+        &mut self,
+        type_expr: &TypeExpr,
+        subject: &str,
+    ) -> Result<String, CodegenError> {
+        match type_expr {
+            TypeExpr::Named { name, .. } => match name.as_str() {
+                "int" => Ok(format!(
+                    "({subject}.type == LUCID_TYPE_INT || {subject}.type == LUCID_TYPE_BIGINT)"
+                )),
+                "float" => Ok(format!("{subject}.type == LUCID_TYPE_FLOAT")),
+                "bool" => Ok(format!("{subject}.type == LUCID_TYPE_BOOL")),
+                "str" => Ok(format!("{subject}.type == LUCID_TYPE_STR")),
+                "complex" => Ok(format!("{subject}.type == LUCID_TYPE_COMPLEX")),
+                "bytes" | "Bytes" => Ok(format!("{subject}.type == LUCID_TYPE_BYTES")),
+                "MemoryView" => Ok(format!("{subject}.type == LUCID_TYPE_MEMORYVIEW")),
+                "list" => Ok(format!("{subject}.type == LUCID_TYPE_LIST")),
+                "set" => Ok(format!("{subject}.type == LUCID_TYPE_SET")),
+                "dict" => Ok(format!("{subject}.type == LUCID_TYPE_DICT")),
+                "range" => Ok(format!("{subject}.type == LUCID_TYPE_RANGE")),
+                "DottedPath" => Ok(format!("{subject}.type == LUCID_TYPE_DOTTED_PATH")),
+                "none" | "None" => Ok(format!("{subject}.type == LUCID_TYPE_NONE")),
+                name if self.known_classes.contains_key(name) => Ok(self
+                    .class_pattern_names(name)
+                    .into_iter()
+                    .map(|class_name| {
+                        format!("lucid_object_is(lucid_as_ptr({subject}), \"{class_name}\")")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" || ")),
+                _ => Err(CodegenError {
+                    message: format!("unsupported type pattern '{}'", name),
+                }),
+            },
+            TypeExpr::Union { types, .. } => {
+                let conditions = types
+                    .iter()
+                    .map(|ty| self.emit_type_pattern_condition(ty, subject))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(format!("({})", conditions.join(" || ")))
+            }
+            TypeExpr::View { inner, .. }
+            | TypeExpr::Existential {
+                interface: inner, ..
+            }
+            | TypeExpr::Reification { inner, .. } => {
+                self.emit_type_pattern_condition(inner, subject)
+            }
+            TypeExpr::Wildcard(_) => Ok("true".to_string()),
+            TypeExpr::Never(_) => Ok("false".to_string()),
+            TypeExpr::Literal { value, .. } => {
+                let literal = self.emit_expr(&Expr::Literal {
+                    value: value.clone(),
+                    span: lucid_syntax::token::Span::default(),
+                })?;
+                Ok(format!("lucid_eq({subject}, lucid_wrap({literal}))"))
+            }
+            TypeExpr::Function { .. } | TypeExpr::Record { .. } | TypeExpr::Match { .. } => {
+                Err(CodegenError {
+                    message: "unsupported non-name type pattern".to_string(),
+                })
+            }
+        }
     }
 
     fn class_pattern_names(&self, expected: &str) -> Vec<String> {
@@ -15391,7 +15418,9 @@ pub fn compile_to_native_entry(
 #[cfg(test)]
 mod tests {
     use super::{CCodeGenerator, compile_to_native};
+    use lucid_syntax::ast::TypeExpr;
     use lucid_syntax::parse;
+    use lucid_syntax::token::Span;
     use std::fs;
     use std::process::Command;
 
@@ -15794,6 +15823,54 @@ print(" ".join(capitalized))
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "1\n1\n1\n0");
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_type_pattern_helper_supports_union_and_rejects_function_types() {
+        let span = Span::default();
+        let mut generator = CCodeGenerator::new();
+        let condition = generator
+            .emit_type_pattern_condition(
+                &TypeExpr::Union {
+                    types: vec![
+                        TypeExpr::Named {
+                            name: "int".to_string(),
+                            args: Vec::new(),
+                            span,
+                        },
+                        TypeExpr::Named {
+                            name: "str".to_string(),
+                            args: Vec::new(),
+                            span,
+                        },
+                    ],
+                    span,
+                },
+                "subject",
+            )
+            .expect("union type pattern should lower");
+        assert!(condition.contains("LUCID_TYPE_INT"));
+        assert!(condition.contains("LUCID_TYPE_STR"));
+
+        let error = generator
+            .emit_type_pattern_condition(
+                &TypeExpr::Function {
+                    params: vec![TypeExpr::Named {
+                        name: "int".to_string(),
+                        args: Vec::new(),
+                        span,
+                    }],
+                    return_type: Box::new(TypeExpr::Named {
+                        name: "int".to_string(),
+                        args: Vec::new(),
+                        span,
+                    }),
+                    span,
+                },
+                "subject",
+            )
+            .expect_err("function type patterns should not lower as catch-alls");
+        assert!(error.message.contains("unsupported non-name type pattern"));
     }
 
     #[test]

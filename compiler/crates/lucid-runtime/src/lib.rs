@@ -9949,7 +9949,24 @@ impl Interpreter {
                     Value::None if matches!(name.as_str(), "none" | "None") => true,
                     _ => false,
                 },
-                _ => true,
+                TypeExpr::Union { types, .. } => types
+                    .iter()
+                    .any(|ty| self.matches_pattern(&Pattern::Type(ty.clone(), ty.span()), value)),
+                TypeExpr::View { inner, .. }
+                | TypeExpr::Existential {
+                    interface: inner, ..
+                }
+                | TypeExpr::Reification { inner, .. } => {
+                    self.matches_pattern(&Pattern::Type((**inner).clone(), inner.span()), value)
+                }
+                TypeExpr::Wildcard(_) => true,
+                TypeExpr::Never(_) => false,
+                TypeExpr::Literal { value: literal, .. } => {
+                    self.matches_pattern(&Pattern::Literal(literal.clone(), te.span()), value)
+                }
+                TypeExpr::Function { .. } | TypeExpr::Record { .. } | TypeExpr::Match { .. } => {
+                    false
+                }
             },
             Pattern::Tuple(elements, _) => {
                 let Value::List(items) = value else {
@@ -10750,6 +10767,50 @@ match other:
         assert_eq!(env.get("set_result"), Some(Value::Int(1)));
         assert_eq!(env.get("dict_result"), Some(Value::Int(1)));
         assert_eq!(env.get("other_result"), Some(Value::Int(0)));
+    }
+
+    #[test]
+    fn test_non_name_type_patterns_do_not_match_everything() {
+        let interp = Interpreter::new();
+        let span = Span::default();
+        let function_pattern = Pattern::Type(
+            TypeExpr::Function {
+                params: vec![TypeExpr::Named {
+                    name: "int".to_string(),
+                    args: Vec::new(),
+                    span,
+                }],
+                return_type: Box::new(TypeExpr::Named {
+                    name: "int".to_string(),
+                    args: Vec::new(),
+                    span,
+                }),
+                span,
+            },
+            span,
+        );
+        assert!(!interp.matches_pattern(&function_pattern, &Value::Int(1)));
+
+        let union_pattern = Pattern::Type(
+            TypeExpr::Union {
+                types: vec![
+                    TypeExpr::Named {
+                        name: "int".to_string(),
+                        args: Vec::new(),
+                        span,
+                    },
+                    TypeExpr::Named {
+                        name: "str".to_string(),
+                        args: Vec::new(),
+                        span,
+                    },
+                ],
+                span,
+            },
+            span,
+        );
+        assert!(interp.matches_pattern(&union_pattern, &Value::Str("ok".to_string())));
+        assert!(!interp.matches_pattern(&union_pattern, &Value::Bool(true)));
     }
 
     #[test]
