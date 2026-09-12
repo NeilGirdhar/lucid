@@ -2359,6 +2359,29 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_local_seed_alias_cfg() {
+        let module = lucid_syntax::parse(
+            r#"seeded = seed
+total = seeded
+for i in range(n):
+    total += i
+return total
+"#,
+        )
+        .expect("range seed alias accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "seed".into()],
+        )
+        .expect("range seed alias accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile range seed alias loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 7]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 17);
+    }
+
+    #[test]
     fn result_abi_executes_range_accumulation_with_local_start_alias_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0

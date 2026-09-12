@@ -570,9 +570,10 @@ diverged:
   `begin = seed; stop = limit; for i in range(begin, stop)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
   CIR/native path. The returned accumulator name now identifies the
-  accumulator initializer, so those local range-bound aliases may appear before
-  or after `total = ...`. The range-bound setup resolver can also follow a
-  bounded local alias chain inside that accepted setup, such as
+  accumulator initializer, so setup aliases may feed either range bounds or
+  `total = ...`, and those local aliases may appear before or after the
+  accumulator initializer. The setup resolver can also follow a bounded local
+  alias chain inside that accepted setup, such as
   `start = seed; middle = start; begin = middle; for i in range(begin, n)`,
   while still rejecting unused or cyclic setup aliases; both rejection paths
   now have dedicated lowerer coverage. Range accumulator updates accept

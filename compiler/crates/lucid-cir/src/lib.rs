@@ -3985,6 +3985,7 @@ impl Function {
             let (alias_name, _) = initialized_ident(statement)?;
             if !expr_uses_bound_alias(start_expr, alias_name, &bound_aliases, 0)?
                 && !expr_uses_bound_alias(stop_expr, alias_name, &bound_aliases, 0)?
+                && !expr_uses_bound_alias(initial_expr, alias_name, &bound_aliases, 0)?
             {
                 return None;
             }
@@ -9616,6 +9617,20 @@ return total
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("range accumulation should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"seeded = seed
+total = seeded
+for i in range(n):
+    total += i
+return total
+"#,
+        )
+        .expect("range accumulator seed alias fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
+                .expect("range accumulator seed alias should lower");
+        assert_eq!(function.execute_with_args(&[5, 7]), Ok(Some(17)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
