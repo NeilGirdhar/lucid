@@ -2782,22 +2782,31 @@ impl Function {
             if target_name != target {
                 return None;
             }
-            match value {
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                } => Some(Instruction::ConstInt {
-                    result,
-                    value: *value,
-                }),
-                lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
-                    result,
-                    index: parameter_names
-                        .iter()
-                        .position(|parameter| parameter == name)? as u32,
-                }),
-                _ => None,
+            match Function::int_literal_expr(value) {
+                Some(value) => Some(Instruction::ConstInt { result, value }),
+                None => match value {
+                    lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
+                        result,
+                        index: parameter_names
+                            .iter()
+                            .position(|parameter| parameter == name)?
+                            as u32,
+                    }),
+                    _ => None,
+                },
             }
+        }
+        fn parameter_instruction(
+            name: &str,
+            result: ValueId,
+            parameter_names: &[String],
+        ) -> Option<Instruction> {
+            Some(Instruction::Param {
+                result,
+                index: parameter_names
+                    .iter()
+                    .position(|parameter| parameter == name)? as u32,
+            })
         }
         let (initial, bound_initial, while_statement, return_name) =
             match module.statements.as_slice() {
@@ -2952,11 +2961,7 @@ impl Function {
                         name: update_name, ..
                     },
                 op: update_op,
-                value:
-                    lucid_syntax::Expr::Literal {
-                        value: lucid_syntax::LiteralValue::Int(step),
-                        ..
-                    },
+                value,
                 ..
             } if update_name == name
                 && matches!(
@@ -2964,7 +2969,7 @@ impl Function {
                     lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub
                 ) =>
             {
-                (update_op.clone(), *step)
+                (update_op.clone(), Function::int_literal_expr(value)?)
             }
             lucid_syntax::Stmt::Assignment {
                 target:
@@ -2978,28 +2983,15 @@ impl Function {
                 ..
             } if update_name == name
                 && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name: left_name, .. } if left_name == name)
-                && matches!(
-                    right.as_ref(),
-                    lucid_syntax::Expr::Literal {
-                        value: lucid_syntax::LiteralValue::Int(_),
-                        ..
-                    }
-                ) =>
+                && Function::int_literal_expr(right.as_ref()).is_some() =>
             {
-                let lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(step),
-                    ..
-                } = right.as_ref()
-                else {
-                    return None;
-                };
                 if !matches!(
                     op,
                     lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub
                 ) {
                     return None;
                 }
-                (op.clone(), *step)
+                (op.clone(), Function::int_literal_expr(right.as_ref())?)
             }
             _ => return None,
         };
@@ -3010,36 +3002,24 @@ impl Function {
             return None;
         }
         let initial_instruction = match initial {
-            None => Instruction::Param {
-                result: ValueId(0),
-                index: parameter_names
-                    .iter()
-                    .position(|parameter| parameter == name)? as u32,
-            },
+            None => parameter_instruction(name, ValueId(0), parameter_names)?,
             Some(statement) => {
                 initializer_instruction(statement, name, ValueId(0), parameter_names)?
             }
         };
         let bound_instruction = match (right.as_ref(), bound_initial) {
-            (
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                },
-                None,
-            ) => Some(Instruction::ConstInt {
-                result: ValueId(2),
-                value: *value,
-            }),
+            (expr, None) if Function::int_literal_expr(expr).is_some() => {
+                Some(Instruction::ConstInt {
+                    result: ValueId(2),
+                    value: Function::int_literal_expr(expr)?,
+                })
+            }
             (lucid_syntax::Expr::Ident { .. }, _) => None,
             _ => return None,
         };
         let mut entry_instructions = vec![initial_instruction];
         match right.as_ref() {
-            lucid_syntax::Expr::Literal {
-                value: lucid_syntax::LiteralValue::Int(_),
-                ..
-            } => {}
+            expr if Function::int_literal_expr(expr).is_some() => {}
             lucid_syntax::Expr::Ident {
                 name: bound_name, ..
             } if bound_name != name => {
@@ -3051,13 +3031,11 @@ impl Function {
                         parameter_names,
                     )?);
                 } else {
-                    entry_instructions.push(Instruction::Param {
-                        result: ValueId(2),
-                        index: parameter_names
-                            .iter()
-                            .position(|parameter| parameter == bound_name)?
-                            as u32,
-                    });
+                    entry_instructions.push(parameter_instruction(
+                        bound_name,
+                        ValueId(2),
+                        parameter_names,
+                    )?);
                 }
             }
             _ => return None,
@@ -9292,6 +9270,40 @@ return n
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("ordinary-update counted loop should lower");
         assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n += -1
+return n
+"#,
+        )
+        .expect("signed-update loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("signed-update counted loop should lower");
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"value = -3
+while value < 0:
+    value += 1
+return value
+"#,
+        )
+        .expect("signed-initializer loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &[])
+            .expect("signed-initializer counted loop should lower");
+        assert_eq!(function.execute(), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"while n > -2:
+    n -= 1
+return n
+"#,
+        )
+        .expect("signed-bound loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("signed-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(-2)));
 
         let module = lucid_syntax::parse(
             r#"while n > limit:
