@@ -264,6 +264,19 @@ are clean. The implementation is backed up on the active development branch.
 The most recent changes tightened behavior where the two execution paths had
 diverged:
 
+* Classes that explicitly opt out of generated value capabilities now enforce
+  that opt-out in unchecked backends too. Runtime evaluation and native codegen
+  reject equality, ordering, and `hash()` when a class declares `without Eq`,
+  `order=false`/`without Ord`, or `without Hashable` without the checker-
+  accepted replacement method. This keeps direct backend entry points aligned
+  with the static checker instead of allowing opted-out value semantics to
+  reappear after checking is bypassed.
+* The main production crates no longer contain ordinary `unwrap`, `expect`,
+  `unreachable`, `todo`, or `panic` assumptions before their test modules.
+  Former internal assumptions in runtime `range`/`getattr`/`pow`, native
+  anonymous-closure and boolean-operator lowering, checker overload and
+  contextual literal validation, and database function-body lowering now
+  return existing typed diagnostics instead.
 * Truthiness now agrees across the interpreter and native backend for empty
   lists, dictionaries, sets, strings, and ranges, as well as zero BigInts and
   zero complex values. Native typed collection and string conditions use

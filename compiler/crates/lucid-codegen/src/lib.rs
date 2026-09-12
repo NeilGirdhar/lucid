@@ -8997,8 +8997,12 @@ static inline void lucid_print_val(LucidVal v) {
                                 .collect();
                             self.anonymous_bindings
                                 .insert(name.clone(), (parameter_specs, body_expr.clone()));
-                            let closure =
-                                self.emit_expr(value.as_ref().expect("anonymous value"))?;
+                            let Some(anonymous_value) = value.as_ref() else {
+                                return Err(CodegenError {
+                                    message: "anonymous binding is missing its value".into(),
+                                });
+                            };
+                            let closure = self.emit_expr(anonymous_value)?;
                             self.emit_line(&format!("lucid_var_{name} = {closure};"));
                             return Ok(());
                         }
@@ -9013,7 +9017,12 @@ static inline void lucid_print_val(LucidVal v) {
                             .collect();
                         self.anonymous_block_bindings
                             .insert(name.clone(), (parameter_specs, body.clone()));
-                        let closure = self.emit_expr(value.as_ref().expect("anonymous value"))?;
+                        let Some(anonymous_value) = value.as_ref() else {
+                            return Err(CodegenError {
+                                message: "anonymous binding is missing its value".into(),
+                            });
+                        };
+                        let closure = self.emit_expr(anonymous_value)?;
                         self.emit_line(&format!("lucid_var_{name} = {closure};"));
                         return Ok(());
                     }
@@ -10728,7 +10737,11 @@ static inline void lucid_print_val(LucidVal v) {
                         BinaryOp::BitAnd => "&",
                         BinaryOp::BitOr => "|",
                         BinaryOp::BitXor => "^",
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(CodegenError {
+                                message: "invalid boolean bitwise operator".into(),
+                            });
+                        }
                     };
                     return Err(CodegenError {
                         message: format!(

@@ -6119,15 +6119,15 @@ pub fn lower_function_body(
                 ) {
                     return lower_bindings_to_void(&bindings);
                 }
-                (
-                    match last {
-                        lucid_syntax::Stmt::Return {
-                            value: Some(value), ..
-                        } => value.span(),
-                        _ => unreachable!("last statement was validated above"),
-                    },
-                    bindings,
-                )
+                let lucid_syntax::Stmt::Return {
+                    value: Some(value), ..
+                } = last
+                else {
+                    return Err(Arc::from(
+                        "multi-statement function bodies are not yet supported by CIR lowering",
+                    ));
+                };
+                (value.span(), bindings)
             }
             _ => {
                 return Err(Arc::from(

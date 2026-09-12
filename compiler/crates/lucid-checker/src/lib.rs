@@ -3517,15 +3517,21 @@ impl TypeChecker {
                     params: param_types,
                     return_type: Box::new(fn_return),
                 };
+                let Type::Function {
+                    params: fn_params, ..
+                } = &fn_type
+                else {
+                    return Err(TypeError {
+                        message: "internal function signature was not callable".into(),
+                        span: func.span,
+                    });
+                };
                 if let Some(existing_overloads) = self.env.function_overloads.get(&func.name) {
                     if func.is_dispatch {
-                        let runtime_key = match &fn_type {
-                            Type::Function { params, .. } => params
-                                .iter()
-                                .map(Type::runtime_dispatch_key)
-                                .collect::<Vec<_>>(),
-                            _ => unreachable!(),
-                        };
+                        let runtime_key = fn_params
+                            .iter()
+                            .map(Type::runtime_dispatch_key)
+                            .collect::<Vec<_>>();
                         let duplicate_runtime_key =
                             existing_overloads.iter().any(|existing| match existing {
                                 Type::Function {
@@ -3555,13 +3561,7 @@ impl TypeChecker {
                             Type::Function {
                                 params: existing_params,
                                 ..
-                            } => {
-                                existing_params
-                                    == match &fn_type {
-                                        Type::Function { params, .. } => params,
-                                        _ => unreachable!(),
-                                    }
-                            }
+                            } => existing_params == fn_params,
                             _ => false,
                         });
                     if duplicate_signature {
@@ -5537,15 +5537,14 @@ impl TypeChecker {
                             || exact_float_literal
                             || exact_string_literal
                             || iv.is_subtype_of(&resolved, &self.env);
-                        let contextual_literal_ok = if !direct_match
-                            && value.as_ref().is_some_and(|expr| {
-                                matches!(expr, Expr::List { .. } | Expr::Dict { .. })
-                            }) {
-                            self.literal_expr_conforms_to_expected(
-                                value.as_ref().expect("checked above"),
-                                &resolved,
-                                0,
-                            )?
+                        let contextual_literal_ok = if !direct_match {
+                            if let Some(expr @ (Expr::List { .. } | Expr::Dict { .. })) =
+                                value.as_ref()
+                            {
+                                self.literal_expr_conforms_to_expected(expr, &resolved, 0)?
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         };

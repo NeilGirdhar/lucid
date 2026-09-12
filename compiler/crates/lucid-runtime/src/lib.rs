@@ -81,6 +81,14 @@ fn bigint_to_float(value: &BigInt) -> f64 {
     })
 }
 
+fn int_or_bigint_to_bigint(value: &Value) -> Option<BigInt> {
+    match value {
+        Value::Int(value) => Some(BigInt::from(*value)),
+        Value::BigInt(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
 thread_local! {
     static FROZEN_CONTAINERS: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
 }
@@ -2776,7 +2784,12 @@ impl Interpreter {
                         })
                     }
                 },
-                _ => unreachable!("range arity was validated before matching"),
+                _ => {
+                    return Err(RuntimeError {
+                        message: "range() accepts at most 3 arguments".into(),
+                        span: Span::default(),
+                    })
+                }
             };
 
             Ok(Value::Range { start, stop, step })
@@ -3208,11 +3221,13 @@ impl Interpreter {
                             }) = &value
                             {
                                 if getter_name == &format!("__getter__{name}") {
-                                    return _interp.invoke_value(
-                                        value.expect("getter value was just matched"),
-                                        vec![(None, args[0].clone())],
-                                        Span::default(),
-                                    );
+                                    if let Some(method) = value {
+                                        return _interp.invoke_value(
+                                            method,
+                                            vec![(None, args[0].clone())],
+                                            Span::default(),
+                                        );
+                                    }
                                 }
                             }
                             value
@@ -3618,9 +3633,15 @@ impl Interpreter {
                                 if matches!(base, Value::Int(_) | Value::BigInt(_))
                                     && matches!(exp, Value::Int(_) | Value::BigInt(_))
                                     && matches!(modulus, Value::Int(_) | Value::BigInt(_)) => {
-                                let base = match base { Value::Int(value) => BigInt::from(*value), Value::BigInt(value) => value.clone(), _ => unreachable!() };
-                                let exp = match exp { Value::Int(value) => BigInt::from(*value), Value::BigInt(value) => value.clone(), _ => unreachable!() };
-                                let modulus = match modulus { Value::Int(value) => BigInt::from(*value), Value::BigInt(value) => value.clone(), _ => unreachable!() };
+                                let Some(base) = int_or_bigint_to_bigint(base) else {
+                                    return Err(RuntimeError { message: "pow() arguments must be numeric".into(), span: Span::default() });
+                                };
+                                let Some(exp) = int_or_bigint_to_bigint(exp) else {
+                                    return Err(RuntimeError { message: "pow() arguments must be numeric".into(), span: Span::default() });
+                                };
+                                let Some(modulus) = int_or_bigint_to_bigint(modulus) else {
+                                    return Err(RuntimeError { message: "three-argument pow() requires int arguments and a nonzero modulus".into(), span: Span::default() });
+                                };
                                 if modulus.is_zero() { return Err(RuntimeError { message: "three-argument pow() requires int arguments and a nonzero modulus".into(), span: Span::default() }); }
                                 if exp.sign() == num_bigint::Sign::Minus { return Ok(Value::Int(INT_NAN)); }
                                 let modulus = modulus.abs();
