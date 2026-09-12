@@ -793,9 +793,8 @@ diverged:
   and execute through the CIR/native argument seams; async and dispatch
   calling conventions remain rejected until their ABIs exist.
 * Cranelift now emits parameterized integer signatures with argument-aware
-  invocation coverage for one- through eight-argument CIR functions; larger
-  native signatures fail explicitly until a general FFI invocation layer is
-  added.
+  invocation coverage for up to sixteen-argument CIR functions; larger native
+  signatures fail explicitly until a general FFI invocation layer is added.
   Recoverable result-ABI calls also accept those parameterized signatures and
   preserve division-by-zero status. The native handle now also exposes a
   parameterized void-call ABI, so CIR functions with bare `return` do not

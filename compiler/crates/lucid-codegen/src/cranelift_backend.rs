@@ -3772,6 +3772,43 @@ return total
     }
 
     #[test]
+    fn native_backend_executes_void_sixteen_parameter_abi_boundary() {
+        let mut instructions = Vec::new();
+        for index in 0..16u32 {
+            instructions.push(Instruction::Param {
+                result: ValueId(index),
+                index,
+            });
+        }
+        let function = Function {
+            entry: lucid_cir::BlockId(0),
+            blocks: vec![lucid_cir::Block {
+                id: lucid_cir::BlockId(0),
+                instructions,
+                terminator: Terminator::Return(None),
+            }],
+        };
+        let compiled = compile_integer_function(&function)
+            .expect("sixteen-parameter void CIR should compile");
+        assert_eq!(compiled.parameter_count(), 16);
+        let args = (1..=16).collect::<Vec<_>>();
+        unsafe { compiled.call_void_with_args(&args) };
+        assert_eq!(unsafe { compiled.try_call_void_with_args(&args) }, Ok(()));
+        assert_eq!(
+            unsafe { compiled.try_call_with_args(&args) },
+            Err(crate::native_abi::NativeErrorCode::InvalidOperation)
+        );
+        assert_eq!(
+            unsafe { compiled.try_call_void_with_args(&[1, 2]) },
+            Err(crate::native_abi::NativeErrorCode::UnexpectedArgumentCount)
+        );
+        assert_eq!(
+            unsafe { compiled.try_call_void_with_args(&(1..=17).collect::<Vec<_>>()) },
+            Err(crate::native_abi::NativeErrorCode::UnexpectedArgumentCount)
+        );
+    }
+
+    #[test]
     fn native_backend_rejects_seventeen_parameter_abi_boundary() {
         let mut instructions = Vec::new();
         for index in 0..17u32 {
