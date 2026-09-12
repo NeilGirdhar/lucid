@@ -7179,6 +7179,12 @@ impl Interpreter {
                         }),
                     },
                     Value::ClassRef(class_name) => {
+                        match attr.as_str() {
+                            "__name__" => return Ok(Value::Str(class_name)),
+                            "__doc__" => return Ok(Value::None),
+                            "__path__" => return Ok(Value::Str(class_name)),
+                            _ => {}
+                        }
                         self.check_private_access(&class_name, attr, *span)?;
                         if let Some(value) = self.class_var_get(&class_name, attr) {
                             return Ok(value);
@@ -12650,6 +12656,20 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             interp.env.borrow().get("name"),
             Some(Value::Str("answer".into()))
         );
+    }
+
+    #[test]
+    fn class_objects_expose_identity_metadata() {
+        let module = parse(
+            "class User:\n    name: str\nname = User.__name__\npath = User.__path__\ndoc = User.__doc__\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::default();
+        interp.eval_module(&module).unwrap();
+        let env = interp.env.borrow();
+        assert_eq!(env.get("name"), Some(Value::Str("User".into())));
+        assert_eq!(env.get("path"), Some(Value::Str("User".into())));
+        assert_eq!(env.get("doc"), Some(Value::None));
     }
 
     #[test]

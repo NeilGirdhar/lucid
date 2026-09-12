@@ -9924,6 +9924,23 @@ impl TypeChecker {
                                         return Ok(signature);
                                     }
                                 }
+                                match attr.as_str() {
+                                    "__name__" => return Ok(Type::Str),
+                                    "__doc__" => {
+                                        return Ok(
+                                            Type::Union(vec![Type::Str, Type::None]).canonical()
+                                        );
+                                    }
+                                    "__path__" => {
+                                        return Ok(self
+                                            .env
+                                            .classes
+                                            .get("DottedPath")
+                                            .cloned()
+                                            .unwrap_or(Type::TypeVar("DottedPath".into())));
+                                    }
+                                    _ => {}
+                                }
                                 if let Some(class_var_type) = self.class_var_type(class_name, attr)
                                 {
                                     return Ok(class_var_type);
@@ -10024,6 +10041,21 @@ impl TypeChecker {
                             if let Some((signature, _)) = self.class_replace_signature(name) {
                                 return Ok(signature);
                             }
+                        }
+                        match attr.as_str() {
+                            "__name__" => return Ok(Type::Str),
+                            "__doc__" => {
+                                return Ok(Type::Union(vec![Type::Str, Type::None]).canonical());
+                            }
+                            "__path__" => {
+                                return Ok(self
+                                    .env
+                                    .classes
+                                    .get("DottedPath")
+                                    .cloned()
+                                    .unwrap_or(Type::TypeVar("DottedPath".into())));
+                            }
+                            _ => {}
                         }
                         if attr.starts_with('_') && self.env.current_class.as_deref() != Some(name)
                         {
@@ -15960,6 +15992,15 @@ def reject(value: not int) -> none:
     fn function_values_expose_identity_metadata() {
         let module =
             parse("def f(value: int) -> int:\n    return value\nname: str = f.__name__\n").unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn class_objects_expose_identity_metadata() {
+        let module = parse(
+            "class User:\n    name: str\nclass_name: str = User.__name__\nprint(User.__path__)\nprint(User.__doc__)\n",
+        )
+        .unwrap();
         assert!(TypeChecker::new().check_module(&module).is_ok());
     }
 

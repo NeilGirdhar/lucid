@@ -5029,6 +5029,13 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                 }
                 if let Expr::Ident { name, .. } = &**value {
+                    if self.known_classes.contains_key(name) {
+                        match attr.as_str() {
+                            "__name__" | "__path__" => return "const char*".to_string(),
+                            "__doc__" => return "LucidVal".to_string(),
+                            _ => {}
+                        }
+                    }
                     if self.callable_metadata_name(name).is_some() {
                         match attr.as_str() {
                             "__name__" | "__path__" => return "const char*".to_string(),
@@ -14418,6 +14425,15 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                 }
                 if let Expr::Ident { name, .. } = &**value {
+                    if self.known_classes.contains_key(name) {
+                        match attr.as_str() {
+                            "__name__" | "__path__" => {
+                                return Ok(format!("\"{}\"", c_escape_string(name)));
+                            }
+                            "__doc__" => return Ok("lucid_none()".to_string()),
+                            _ => {}
+                        }
+                    }
                     if let Some(function_name) = self.callable_metadata_name(name) {
                         match attr.as_str() {
                             "__name__" | "__path__" => {
@@ -15313,6 +15329,25 @@ print(" ".join(capitalized))
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
             "answer\nanswer\nlen\nstr.hex\nstr.hex\n0x1f\nnone"
+        );
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_class_objects_expose_identity_metadata() {
+        let source = "class User:\n    name: str\nprint(User.__name__)\nprint(User.__path__)\nprint(User.__doc__)\n";
+        let module = parse(source).expect("class metadata source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_class_metadata_{}",
+            std::process::id()
+        ));
+        compile_to_native(&module, &output, 0).expect("class metadata should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout).trim(),
+            "User\nUser\nnone"
         );
         let _ = std::fs::remove_file(output);
     }
