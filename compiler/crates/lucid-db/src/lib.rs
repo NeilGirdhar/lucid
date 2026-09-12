@@ -2291,6 +2291,139 @@ pub fn lower_function_body(
         lucid_syntax::Stmt::If {
             condition,
             then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        fn pass_only(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements
+                .iter()
+                .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
+        }
+        fn mentions_name(expr: &lucid_syntax::Expr, target: &str) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => name == target,
+                lucid_syntax::Expr::Unary { expr, .. } => mentions_name(expr, target),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    mentions_name(left, target) || mentions_name(right, target)
+                }
+                lucid_syntax::Expr::IfExpr {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    mentions_name(condition, target)
+                        || mentions_name(then_branch, target)
+                        || mentions_name(else_branch, target)
+                }
+                _ => false,
+            }
+        }
+        let initial_value = match initial {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } if name == returned && !mentions_name(value, returned) => Some(value),
+            _ => None,
+        };
+        if let Some(initial_value) = initial_value {
+            let then_value = assigned_value(then_branch).and_then(|(name, value)| {
+                (name == returned && !mentions_name(value, returned)).then_some(value)
+            });
+            let else_value = match assigned_value(else_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if pass_only(else_branch) => Some(initial_value),
+                _ => None,
+            };
+            if let (Some(then_value), Some(else_value)) = (then_value, else_value)
+                && let Some(elif_values) = elif_branches
+                    .iter()
+                    .map(|(condition, branch)| {
+                        assigned_value(branch).and_then(|(name, value)| {
+                            (name == returned && !mentions_name(value, returned))
+                                .then_some((condition, value))
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()
+            {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                if function.is_dispatch {
+                    return Err(Arc::from(
+                        "dispatch function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    condition,
+                    then_value,
+                    &elif_values,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported initialized local else elif chain"));
+            }
+        }
+    }
+    if let [
+        initial,
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
             else_branch: None,
             elif_branches,
             ..
@@ -5118,6 +5251,30 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("initialized branch-local elif assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-else-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    else:\n        result = -100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local else elif assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-100)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-else-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    else:\n        pass\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass else elif should lower through CIR");
         assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
