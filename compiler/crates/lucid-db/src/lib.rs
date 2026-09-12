@@ -4241,6 +4241,31 @@ pub fn lower_function_body(
                         if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
                             continue;
                         }
+                        if let lucid_syntax::Stmt::Assert { condition, .. } = statement
+                            && static_truth(condition) == Some(true)
+                        {
+                            continue;
+                        }
+                        if let lucid_syntax::Stmt::While {
+                            condition,
+                            if_broken,
+                            ..
+                        } = statement
+                            && static_truth(condition) == Some(false)
+                            && if_broken.is_none()
+                        {
+                            continue;
+                        }
+                        if let lucid_syntax::Stmt::For {
+                            iterable,
+                            if_broken,
+                            ..
+                        } = statement
+                            && if_broken.is_none()
+                            && lucid_cir::is_const_empty_iterable(iterable)
+                        {
+                            continue;
+                        }
                         let (name, value) = match statement {
                             lucid_syntax::Stmt::Assignment {
                                 target: lucid_syntax::Expr::Ident { name, .. },
@@ -6474,6 +6499,19 @@ mod tests {
             .as_ref()
             .expect("pure branch expression should be ignored safely");
         assert_eq!(function.execute_with_args(&[21]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn database_accepts_proven_noops_in_selected_branch() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "selected-branch-noops.lucid",
+            "def answer(value: int):\n    if true:\n        assert(true)\n        while false:\n            value = 0\n        for item in []:\n            value = 0\n        result = value + 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("proven no-op statements in a selected branch should not block CIR lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
     }
 
     #[test]
