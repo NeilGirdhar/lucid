@@ -457,7 +457,9 @@ diverged:
   Constant integer/boolean subjects written with the required `as` alias now
   fold to the selected unguarded literal or wildcard arm and lower that arm's
   typed return expression directly, so parameter-dependent results in the
-  reachable arm do not require dynamic match CIR.
+  reachable arm do not require dynamic match CIR. A matching guarded arm still
+  blocks that fold and stays on the dynamic conditional path, because the guard
+  decides arm selection at runtime.
 * Canonical counted `while` and `for range` CIR loops now accept a trailing
   `pass` after the induction update, preserving the specified no-op statement
   without widening the loop lowering shape. They also accept an

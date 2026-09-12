@@ -1702,12 +1702,25 @@ pub fn lower_function_body(
             }
             _ => None,
         };
-        if let Some(subject_literal) = primitive_literal(subject)
-            && let Some(selected_arm) = arms.iter().find(|arm| {
-                arm.guard.is_none()
-                    && (matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_))
-                        || pattern_literal(&arm.pattern) == Some(subject_literal))
-            })
+        let constant_selected_arm = primitive_literal(subject).and_then(|subject_literal| {
+            let mut selected = None;
+            for arm in arms {
+                let arm_matches = matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+                    || pattern_literal(&arm.pattern) == Some(subject_literal);
+                if arm_matches {
+                    if arm.guard.is_some() {
+                        return None;
+                    }
+                    selected = Some(arm);
+                    break;
+                }
+                if pattern_literal(&arm.pattern).is_none() {
+                    return None;
+                }
+            }
+            selected
+        });
+        if let Some(selected_arm) = constant_selected_arm
             && let Some(value) = match_arm_value(selected_arm)
         {
             let nodes = function
@@ -5599,6 +5612,16 @@ mod tests {
             .expect("constant subject match should lower only the selected arm");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(17)));
+
+        let file = db.add_file(
+            "guarded-constant-subject-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true if value > 0:\n            return value + 10\n        case _:\n            return -value\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded constant subject match should keep the guard dynamic");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(Some(7)));
 
         let file = db.add_file(
             "multi-match.lucid",
