@@ -562,10 +562,10 @@ diverged:
   while `continue` remains accepted only as a single final tail statement,
   matching the public checker boundary. The repeated-`pass` counted-`while`
   form also has Cranelift result-ABI coverage.
-  Range accumulator loops now also accept one or two pre-loop local aliases for
-  literal or parameter-backed range bounds, whether an alias is used as the
-  start or stop operand in one-, two-, or three-argument ranges with a literal
-  step. This keeps `limit = n; for i in range(limit)`,
+  Range accumulator loops now also accept pre-loop local aliases for literal or
+  parameter-backed range bounds, whether an alias is used as the start or stop
+  operand in one-, two-, or three-argument ranges with a literal step. This
+  keeps `limit = n; for i in range(limit)`,
   `begin = seed; for i in range(begin, n)`,
   `begin = seed; stop = limit; for i in range(begin, stop)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
@@ -573,12 +573,12 @@ diverged:
   accumulator initializer, so those local range-bound aliases may appear before
   or after `total = ...`. The range-bound setup resolver can also follow a
   bounded local alias chain inside that accepted setup, such as
-  `start = seed; begin = start; for i in range(begin, n)`, while still
-  rejecting unused or cyclic setup aliases; both rejection paths now have
-  dedicated lowerer coverage. Range accumulator updates accept induction or
-  signed literal operands with `+=`, `-=`, `x = x + y`, `x = x - y`, and the
-  commuted additive spelling `x = y + x`. An unused pre-loop alias is still
-  rejected instead of being treated as loop setup.
+  `start = seed; middle = start; begin = middle; for i in range(begin, n)`,
+  while still rejecting unused or cyclic setup aliases; both rejection paths
+  now have dedicated lowerer coverage. Range accumulator updates accept
+  induction or signed literal operands with `+=`, `-=`, `x = x + y`,
+  `x = x - y`, and the commuted additive spelling `x = y + x`. An unused
+  pre-loop alias is still rejected instead of being treated as loop setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from a signed integer literal or parameter, then updated before
   the induction update. Plain counted loops and accumulator loops use the same

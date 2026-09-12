@@ -3767,148 +3767,67 @@ impl Function {
             body,
             if_broken,
             return_name,
-        ) = match module.statements.as_slice() {
-            [acc_statement, for_statement, return_statement] => {
-                let (acc_name, initial_expr) = initialized_ident(acc_statement)?;
-                let lucid_syntax::Stmt::For {
-                    target: lucid_syntax::Pattern::Ident(index_name, _),
-                    iterable: lucid_syntax::Expr::Call { func, args, .. },
-                    body,
-                    if_broken,
-                    ..
-                } = for_statement
-                else {
-                    return None;
-                };
-                let lucid_syntax::Stmt::Return {
-                    value:
-                        Some(lucid_syntax::Expr::Ident {
-                            name: return_name, ..
-                        }),
-                    ..
-                } = return_statement
-                else {
-                    return None;
-                };
-                (
-                    acc_name,
-                    initial_expr,
-                    Vec::new(),
-                    index_name,
-                    func,
-                    args,
-                    body,
-                    if_broken,
-                    return_name,
-                )
+        ) = {
+            let [setup @ .., for_statement, return_statement] = module.statements.as_slice() else {
+                return None;
+            };
+            if setup.is_empty() {
+                return None;
             }
-            [first_statement, second_statement, for_statement, return_statement] => {
-                let lucid_syntax::Stmt::For {
-                    target: lucid_syntax::Pattern::Ident(index_name, _),
-                    iterable: lucid_syntax::Expr::Call { func, args, .. },
-                    body,
-                    if_broken,
-                    ..
-                } = for_statement
-                else {
-                    return None;
-                };
-                let lucid_syntax::Stmt::Return {
-                    value:
-                        Some(lucid_syntax::Expr::Ident {
-                            name: return_name, ..
-                        }),
-                    ..
-                } = return_statement
-                else {
-                    return None;
-                };
-                let (first_name, first_expr) = initialized_ident(first_statement)?;
-                let (second_name, second_expr) = initialized_ident(second_statement)?;
-                let (acc_name, initial_expr, alias_statement) = if first_name == return_name {
-                    (first_name, first_expr, second_statement)
-                } else if second_name == return_name {
-                    (second_name, second_expr, first_statement)
-                } else {
-                    return None;
-                };
-                let (alias_name, _) = initialized_ident(alias_statement)?;
-                if alias_name == acc_name || alias_name == index_name {
-                    return None;
+            let lucid_syntax::Stmt::For {
+                target: lucid_syntax::Pattern::Ident(index_name, _),
+                iterable: lucid_syntax::Expr::Call { func, args, .. },
+                body,
+                if_broken,
+                ..
+            } = for_statement
+            else {
+                return None;
+            };
+            let lucid_syntax::Stmt::Return {
+                value:
+                    Some(lucid_syntax::Expr::Ident {
+                        name: return_name, ..
+                    }),
+                ..
+            } = return_statement
+            else {
+                return None;
+            };
+            let initializers = setup
+                .iter()
+                .map(initialized_ident)
+                .collect::<Option<Vec<_>>>()?;
+            let acc_index = initializers
+                .iter()
+                .position(|(name, _)| *name == return_name)?;
+            let (acc_name, initial_expr) = initializers[acc_index];
+            let mut seen_aliases = std::collections::HashSet::new();
+            let mut bound_aliases = Vec::new();
+            for (index, statement) in setup.iter().enumerate() {
+                if index == acc_index {
+                    continue;
                 }
-                (
-                    acc_name,
-                    initial_expr,
-                    vec![alias_statement],
-                    index_name,
-                    func,
-                    args,
-                    body,
-                    if_broken,
-                    return_name,
-                )
-            }
-            [first_statement, second_statement, third_statement, for_statement, return_statement] =>
-            {
-                let lucid_syntax::Stmt::For {
-                    target: lucid_syntax::Pattern::Ident(index_name, _),
-                    iterable: lucid_syntax::Expr::Call { func, args, .. },
-                    body,
-                    if_broken,
-                    ..
-                } = for_statement
-                else {
-                    return None;
-                };
-                let lucid_syntax::Stmt::Return {
-                    value:
-                        Some(lucid_syntax::Expr::Ident {
-                            name: return_name, ..
-                        }),
-                    ..
-                } = return_statement
-                else {
-                    return None;
-                };
-                let setup_statements = [first_statement, second_statement, third_statement];
-                let initializers = [
-                    initialized_ident(first_statement)?,
-                    initialized_ident(second_statement)?,
-                    initialized_ident(third_statement)?,
-                ];
-                let acc_index = initializers
-                    .iter()
-                    .position(|(name, _)| *name == return_name)?;
-                let alias_indices: Vec<_> = (0..setup_statements.len())
-                    .filter(|index| *index != acc_index)
-                    .collect();
-                let (acc_name, initial_expr) = initializers[acc_index];
-                let (first_alias_name, _) = initializers[alias_indices[0]];
-                let (second_alias_name, _) = initializers[alias_indices[1]];
-                if first_alias_name == acc_name
-                    || first_alias_name == index_name
-                    || second_alias_name == acc_name
-                    || second_alias_name == index_name
-                    || first_alias_name == second_alias_name
+                let (alias_name, _) = initializers[index];
+                if alias_name == acc_name
+                    || alias_name == index_name
+                    || !seen_aliases.insert(alias_name.as_str())
                 {
                     return None;
                 }
-                (
-                    acc_name,
-                    initial_expr,
-                    vec![
-                        setup_statements[alias_indices[0]],
-                        setup_statements[alias_indices[1]],
-                    ],
-                    index_name,
-                    func,
-                    args,
-                    body,
-                    if_broken,
-                    return_name,
-                )
+                bound_aliases.push(statement);
             }
-            _ => return None,
+            (
+                acc_name,
+                initial_expr,
+                bound_aliases,
+                index_name,
+                func,
+                args,
+                body,
+                if_broken,
+                return_name,
+            )
         };
         if return_name != acc_name
             || body.is_empty()
@@ -9788,6 +9707,22 @@ return total
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("range chained start alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+start = seed
+middle = start
+begin = middle
+for i in range(begin, n):
+    total += i
+return total
+"#,
+        )
+        .expect("range long chained start alias accumulation fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
+                .expect("range long chained start alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
 
         let module = lucid_syntax::parse(
