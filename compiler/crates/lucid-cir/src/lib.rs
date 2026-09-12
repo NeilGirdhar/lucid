@@ -4702,21 +4702,26 @@ impl Function {
                     Terminator::Return(Some(result)),
                 )
             } else {
-                let merged_name = then_bindings
-                    .iter()
-                    .find_map(|(name, value)| {
-                        (*value == then_value
-                            && else_bindings.get(name).copied() == Some(else_value))
+                let merged_name = then_bindings.iter().find_map(|(name, value)| {
+                    (*value == then_value && else_bindings.get(name).copied() == Some(else_value))
                         .then(|| name.clone())
-                    })
-                    .ok_or(LowerError::UnsupportedExpression)?;
+                });
                 let mut merge_bindings = state.bindings.clone();
-                merge_bindings.insert(merged_name, result);
-                let mut merge_instructions = vec![Instruction::Phi {
-                    result,
-                    incomings: vec![(BlockId(1), then_value), (BlockId(2), else_value)],
-                }];
-                let mut merge_last = Some(result);
+                let has_phi = merged_name.is_some();
+                let mut merge_instructions = if let Some(merged_name) = merged_name {
+                    merge_bindings.insert(merged_name, result);
+                    vec![Instruction::Phi {
+                        result,
+                        incomings: vec![(BlockId(1), then_value), (BlockId(2), else_value)],
+                    }]
+                } else {
+                    Vec::new()
+                };
+                let mut merge_last = if has_phi {
+                    Some(result)
+                } else {
+                    fallthrough_value
+                };
                 visit_all(
                     suffix,
                     &mut merge_bindings,
@@ -10012,6 +10017,23 @@ return total
             .expect("post-diamond continuation should preserve prefix bindings");
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(24)));
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(22)));
+        let module =
+            lucid_syntax::parse("if flag:\n    left = 1\nelse:\n    right = 2\nvalue = 3\n")
+                .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("post-diamond continuation should not require an unused phi");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(3)));
+        let module =
+            lucid_syntax::parse("if flag:\n    left = 1 / 0\nelse:\n    right = 2\nvalue = 3\n")
+                .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["flag".into()])
+            .expect("unused branch locals should still execute conditionally");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
+        assert_eq!(
+            function.execute_with_args(&[1]),
+            Err(ExecuteError::DivisionByZero)
+        );
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
         )

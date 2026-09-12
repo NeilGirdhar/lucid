@@ -1808,6 +1808,9 @@ diverged:
   Simple dynamic diamonds no longer have to be the final statement: when both
   arms assign the same local, the Phi result rebinds that local and later
   straight-line statements lower in the merge block.
+  If the continuation does not read a branch-local assignment, the merge block
+  can continue from prefix bindings without fabricating an unused Phi, while
+  keeping branch-local errors conditional.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
