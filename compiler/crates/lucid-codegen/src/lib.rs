@@ -266,6 +266,13 @@ impl Default for CCodeGenerator {
 }
 
 impl CCodeGenerator {
+    fn pattern_identifier_binds(name: &str) -> bool {
+        !matches!(
+            name,
+            "_" | "int" | "float" | "bool" | "str" | "none" | "None"
+        ) && !name.chars().next().is_some_and(char::is_uppercase)
+    }
+
     fn has_runtime_decorators(f: &FunctionDef) -> bool {
         f.decorators.iter().any(
             |decorator| !matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"),
@@ -5272,7 +5279,9 @@ static inline void lucid_print_val(LucidVal v) {
                 ..
             } => {
                 self.collect_pattern_vars(target, vars);
-                if let Pattern::Ident(name, _) = target {
+                if let Pattern::Ident(name, _) = target
+                    && Self::pattern_identifier_binds(name)
+                {
                     let ty = if matches!(iterable, Expr::Call { func, .. } if matches!(&**func, Expr::Ident { name, .. } if name == "range"))
                     {
                         "int64_t".to_string()
@@ -5378,9 +5387,7 @@ static inline void lucid_print_val(LucidVal v) {
 
     fn collect_pattern_vars(&self, pattern: &Pattern, vars: &mut HashMap<String, String>) {
         match pattern {
-            Pattern::Ident(name, _)
-                if !matches!(name.as_str(), "int" | "float" | "bool" | "str" | "none") =>
-            {
+            Pattern::Ident(name, _) if Self::pattern_identifier_binds(name) => {
                 vars.entry(name.clone())
                     .or_insert_with(|| "LucidVal".to_string());
             }
@@ -5522,12 +5529,7 @@ static inline void lucid_print_val(LucidVal v) {
         record_order: Option<&[String]>,
     ) {
         match pattern {
-            Pattern::Ident(name, _)
-                if !matches!(
-                    name.as_str(),
-                    "int" | "float" | "bool" | "str" | "none" | "None"
-                ) =>
-            {
+            Pattern::Ident(name, _) if Self::pattern_identifier_binds(name) => {
                 self.emit_line(&format!("lucid_var_{name} = {subject};"));
                 if self.current_fn_ret_type.as_deref() != Some("void") {
                     self.emit_line(&format!("lucid_alive_{name} = true;"));
@@ -5618,12 +5620,7 @@ static inline void lucid_print_val(LucidVal v) {
 
     fn pattern_binding_lines(&self, pattern: &Pattern, subject: &str, lines: &mut Vec<String>) {
         match pattern {
-            Pattern::Ident(name, _)
-                if !matches!(
-                    name.as_str(),
-                    "int" | "float" | "bool" | "str" | "none" | "None"
-                ) =>
-            {
+            Pattern::Ident(name, _) if Self::pattern_identifier_binds(name) => {
                 lines.push(format!("lucid_var_{name} = {subject};"));
             }
             Pattern::ClassDestructure {
@@ -15210,6 +15207,14 @@ mod tests {
     use lucid_syntax::parse;
     use std::fs;
     use std::process::Command;
+
+    #[test]
+    fn native_pattern_binding_skips_type_like_identifiers() {
+        assert!(!CCodeGenerator::pattern_identifier_binds("Pair"));
+        assert!(!CCodeGenerator::pattern_identifier_binds("int"));
+        assert!(!CCodeGenerator::pattern_identifier_binds("_"));
+        assert!(CCodeGenerator::pattern_identifier_binds("value"));
+    }
 
     #[test]
     fn bigint_literal_emission_normalizes_radix_spelling() {

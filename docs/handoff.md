@@ -1180,6 +1180,9 @@ diverged:
   The local-binding pre-scan now follows the same rule: uppercase
   identifier patterns are treated as type/class patterns, not new local
   bindings, so predeclared locals stay aligned with match checking.
+  Native codegen uses the same binding predicate for pattern-local variables,
+  so uppercase class/type patterns no longer synthesize bogus `lucid_var_*`
+  locals in generated C.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
