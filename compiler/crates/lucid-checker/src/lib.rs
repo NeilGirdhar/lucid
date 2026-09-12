@@ -2368,6 +2368,29 @@ impl TypeChecker {
         Ok(())
     }
 
+    fn ensure_external_class_placeholder(&mut self, name: &str) {
+        self.env
+            .classes
+            .entry(name.to_string())
+            .or_insert_with(|| Type::Class {
+                name: name.to_string(),
+                type_args: Vec::new(),
+                parent: None,
+                traits: vec!["Eq".into(), "Ord".into(), "Hashable".into()],
+                interfaces: Vec::new(),
+                fields: HashMap::new(),
+                is_sealed: false,
+            });
+        self.env
+            .class_constructor_arity
+            .entry(name.to_string())
+            .or_insert(0);
+        self.env
+            .class_constructor_required
+            .entry(name.to_string())
+            .or_insert(0);
+    }
+
     fn resolve_class_parents_and_check_cycles(&mut self, module: &Module) -> Result<(), TypeError> {
         let mut parents = HashMap::new();
         let mut spans = HashMap::new();
@@ -2376,9 +2399,11 @@ impl TypeChecker {
             parents: &mut HashMap<String, String>,
             spans: &mut HashMap<String, Span>,
             classes: &HashMap<String, Type>,
+            interfaces: &HashMap<String, Type>,
+            traits: &HashMap<String, Type>,
         ) {
             match stmt {
-                Stmt::Export(inner) => collect(inner, parents, spans, classes),
+                Stmt::Export(inner) => collect(inner, parents, spans, classes, interfaces, traits),
                 Stmt::ClassDef {
                     name, bases, span, ..
                 } => {
@@ -2387,6 +2412,13 @@ impl TypeChecker {
                         TypeExpr::Named {
                             name: base_name, ..
                         } if classes.contains_key(base_name) => Some(base_name.clone()),
+                        TypeExpr::Named {
+                            name: base_name, ..
+                        } if !interfaces.contains_key(base_name)
+                            && !traits.contains_key(base_name) =>
+                        {
+                            Some(base_name.clone())
+                        }
                         _ => None,
                     }) {
                         parents.insert(name.clone(), parent);
@@ -2396,7 +2428,14 @@ impl TypeChecker {
             }
         }
         for stmt in &module.statements {
-            collect(stmt, &mut parents, &mut spans, &self.env.classes);
+            collect(
+                stmt,
+                &mut parents,
+                &mut spans,
+                &self.env.classes,
+                &self.env.interfaces,
+                &self.env.traits,
+            );
         }
         self.env.class_parents = parents.clone();
         for (class, parent) in &parents {
@@ -2546,8 +2585,16 @@ impl TypeChecker {
                             interfaces.push(base_name.clone());
                         } else if self.env.traits.contains_key(base_name) {
                             traits.push(base_name.clone());
+                        } else if parent_class.is_none() {
+                            // External or omitted class parent. Forward
+                            // references to classes declared later have
+                            // already been registered in `env.classes`.
+                            self.ensure_external_class_placeholder(base_name);
+                            parent_class = Some(base_name.clone());
                         } else {
-                            // Forward-referenced or external
+                            // Additional unknown bases are external
+                            // structural obligations; Lucid still permits
+                            // only one nominal class parent.
                             interfaces.push(base_name.clone());
                         }
                     }
@@ -14527,6 +14574,18 @@ def reject(value: not int) -> none:
         TypeChecker::new()
             .check_module(&parse("cache: dict[!ExternalModel[str], float] = {:}\n").unwrap())
             .expect("forward or external class references should keep default Hashable semantics");
+    }
+
+    #[test]
+    fn unknown_first_base_is_external_class_parent() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "class B(A): ...\n\nclass C:\n    x: A = A()\n\ndef g(c: C):\n    c.x = B()\n",
+                )
+                .unwrap(),
+            )
+            .expect("an omitted external first base should behave as B's nominal parent");
     }
 
     #[test]
