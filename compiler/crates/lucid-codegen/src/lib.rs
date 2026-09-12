@@ -6735,6 +6735,10 @@ static inline void lucid_print_val(LucidVal v) {
                         .get(&class_name)
                         .cloned()
                         .unwrap_or_else(|| vec!["vpargs".into(), "kwargs".into()]);
+                    let is_bundle = class_name == "Arguments"
+                        || class_name == "Parameters"
+                        || class_name.ends_with("Arguments")
+                        || class_name.ends_with("Parameters");
                     self.emit_line(&format!(
                         "LucidList* _anonymous_gather_vpargs = lucid_list_new(args ? args->len - {index} : 0);"
                     ));
@@ -6744,18 +6748,55 @@ static inline void lucid_print_val(LucidVal v) {
                     self.emit_line(
                         "LucidDict* _anonymous_gather_kwargs = kwargs ? kwargs : lucid_dict_new(0);",
                     );
-                    let constructor_args = fields
-                        .iter()
-                        .map(|field| match field.as_str() {
-                            "pargs" => format!(
-                                "({{ LucidList* _p = lucid_list_new({index}); for (int64_t _i = 0; _i < {index} && args && _i < args->len; ++_i) lucid_list_append(_p, args->items[_i]); _p; }})"
-                            ),
-                            "vpargs" => "_anonymous_gather_vpargs".to_string(),
-                            "kwargs" => "_anonymous_gather_kwargs".to_string(),
-                            _ => "NULL".to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                    let constructor_args = if is_bundle {
+                        fields
+                            .iter()
+                            .map(|field| match field.as_str() {
+                                "pargs" => format!(
+                                    "({{ LucidList* _p = lucid_list_new({index}); for (int64_t _i = 0; _i < {index} && args && _i < args->len; ++_i) lucid_list_append(_p, args->items[_i]); _p; }})"
+                                ),
+                                "vpargs" => "_anonymous_gather_vpargs".to_string(),
+                                "kwargs" => "_anonymous_gather_kwargs".to_string(),
+                                _ => "NULL".to_string(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    } else {
+                        fields
+                            .iter()
+                            .enumerate()
+                            .map(|(field_index, field)| {
+                                let ty = self
+                                    .known_field_types
+                                    .get(&(class_name.clone(), field.clone()))
+                                    .cloned()
+                                    .unwrap_or_else(|| "LucidVal".into());
+                                let keyword = format!(
+                                    "kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\"))",
+                                    c_escape_string(field)
+                                );
+                                let source = format!(
+                                    "({keyword} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args && args->len > {field_index} ? args->items[{field_index}] : lucid_none()))",
+                                    c_escape_string(field)
+                                );
+                                self.emit_line(&format!(
+                                    "if (!({keyword}) && (!args || args->len <= {field_index})) {{ fprintf(stderr, \"anonymous gathered argument missing: {field}\\n\"); exit(1); }}"
+                                ));
+                                match ty.as_str() {
+                                    "int64_t" => format!("lucid_as_int({source})"),
+                                    "double" => format!("lucid_as_float({source})"),
+                                    "bool" => format!("lucid_as_bool({source})"),
+                                    "const char*" => format!("lucid_as_str({source})"),
+                                    "LucidList*" => format!("lucid_as_list({source})"),
+                                    "LucidDict*" => format!("lucid_as_dict({source})"),
+                                    "LucidSet*" => format!("lucid_as_set({source})"),
+                                    "LucidVal" => source,
+                                    other => format!("({other})lucid_as_ptr({source})"),
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
                     self.var_types.insert(param.name.clone(), "LucidVal".into());
                     self.emit_line(&format!(
                         "LucidVal lucid_var_{} = lucid_wrap({}_new({}));",
@@ -15512,6 +15553,24 @@ print(z is complex)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous gather failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+    }
+
+    #[test]
+    fn native_anonymous_function_gathers_named_class_fields() {
+        let source = "class Options:\n    retries: int\n    label: str\nf = def(***rest: Options): rest.retries + len(rest.label)\nprint(f(3, \"ok\"))\n";
+        let module = parse(source).expect("anonymous class gather source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_class_gather_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("anonymous class gather should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run anonymous class gather");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "anonymous class gather failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
     #[test]
