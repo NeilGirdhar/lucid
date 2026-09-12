@@ -3350,13 +3350,19 @@ impl Parser {
 
     fn parse_param_list(&mut self) -> Result<Vec<Param>, ParseError> {
         self.expect(&TokenKind::LParen)?;
-        let mut params = Vec::new();
+        let mut params: Vec<Param> = Vec::new();
         let mut is_positional_only = false;
         let mut is_keyword_only = false;
 
         while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
             if self.match_tok(&TokenKind::Slash) {
-                is_positional_only = true;
+                // `/` terminates the positional-only zone: parameters
+                // already parsed belong to that zone, while parameters that
+                // follow it remain keyword-capable.
+                for param in &mut params {
+                    param.is_positional_only = true;
+                }
+                is_positional_only = false;
                 self.match_tok(&TokenKind::Comma);
                 continue;
             }
