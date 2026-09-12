@@ -2964,13 +2964,18 @@ impl Function {
                 }
                 lucid_syntax::Expr::Binary {
                     op, left, right, ..
-                } if matches!(
-                    op,
-                    lucid_syntax::BinaryOp::Add
-                        | lucid_syntax::BinaryOp::Sub
-                        | lucid_syntax::BinaryOp::Mul
-                ) =>
-                {
+                } => {
+                    if !matches!(
+                        op,
+                        lucid_syntax::BinaryOp::Add
+                            | lucid_syntax::BinaryOp::Sub
+                            | lucid_syntax::BinaryOp::Mul
+                            | lucid_syntax::BinaryOp::Div
+                            | lucid_syntax::BinaryOp::FloorDiv
+                            | lucid_syntax::BinaryOp::Mod
+                    ) {
+                        return None;
+                    }
                     let (left_instruction, left_used_alias) =
                         atom_instruction(left.as_ref(), ValueId(6), parameter_names, step_initial)?;
                     let (right_instruction, right_used_alias) = atom_instruction(
@@ -2991,6 +2996,21 @@ impl Function {
                             right: ValueId(7),
                         },
                         lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                            result,
+                            left: ValueId(6),
+                            right: ValueId(7),
+                        },
+                        lucid_syntax::BinaryOp::Div => Instruction::Div {
+                            result,
+                            left: ValueId(6),
+                            right: ValueId(7),
+                        },
+                        lucid_syntax::BinaryOp::FloorDiv => Instruction::FloorDiv {
+                            result,
+                            left: ValueId(6),
+                            right: ValueId(7),
+                        },
+                        lucid_syntax::BinaryOp::Mod => Instruction::Mod {
                             result,
                             left: ValueId(6),
                             right: ValueId(7),
@@ -4062,7 +4082,7 @@ impl Function {
                 ValueId(15),
                 parameter_names,
                 alias_initial,
-                false,
+                true,
             )
         }
         let statements = module.statements.as_slice();
@@ -11310,6 +11330,24 @@ return n
         assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(-2)));
 
         let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= step // scale
+return n
+"#,
+        )
+        .expect("division-step counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "scale".into()],
+        )
+        .expect("division-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[10, 4, 2]), Ok(Some(0)));
+        assert_eq!(
+            function.execute_with_args(&[10, 4, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
+
+        let module = lucid_syntax::parse(
             r#"while n < limit:
     n -= -step
 return n
@@ -11812,6 +11850,26 @@ return total
         .expect("dynamic arithmetic accumulator counted loop should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 2, 2]), Ok(Some(9)));
         assert_eq!(function.execute_with_args(&[1, 2, 2]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += n
+    n -= step // scale
+return total
+"#,
+        )
+        .expect("division-step counted while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "scale".into()],
+        )
+        .expect("division-step counted while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 4, 2]), Ok(Some(30)));
+        assert_eq!(
+            function.execute_with_args(&[10, 4, 0]),
+            Err(ExecuteError::DivisionByZero)
+        );
 
         let module = lucid_syntax::parse(
             r#"total = 0

@@ -1037,6 +1037,57 @@ fn run_cir_executes_dynamic_arithmetic_step_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_division_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_division_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, step: int, scale: int):\n    while n > 0:\n        n -= step // scale\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "10,4,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir division-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "10,4,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir division-step counted loop zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn run_cir_executes_unary_dynamic_step_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_unary_dynamic_step_while_{}.lucid",

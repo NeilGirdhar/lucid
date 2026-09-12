@@ -2071,7 +2071,21 @@ fn compile_integer_function_impl(
                 if propagate_result_error {
                     args.push(block_error.unwrap_or(zero_error));
                 }
-                builder.ins().jump(target, &args);
+                if result_abi {
+                    let error = block_error.unwrap_or(zero_error);
+                    let failed = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+                        error,
+                        zero_error,
+                    );
+                    let error_block = builder.create_block();
+                    builder.ins().brif(failed, error_block, &[], target, &args);
+                    builder.switch_to_block(error_block);
+                    let value = builder.ins().iconst(types::I64, 0);
+                    builder.ins().return_(&[value, error]);
+                } else {
+                    builder.ins().jump(target, &args);
+                }
             }
             Terminator::Branch {
                 condition,
@@ -2096,9 +2110,30 @@ fn compile_integer_function_impl(
                     then_args.push(error);
                     else_args.push(error);
                 }
-                builder
-                    .ins()
-                    .brif(condition, then_block, &then_args, else_block, &else_args);
+                if result_abi {
+                    let error = block_error.unwrap_or(zero_error);
+                    let failed = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+                        error,
+                        zero_error,
+                    );
+                    let error_block = builder.create_block();
+                    let continue_block = builder.create_block();
+                    builder
+                        .ins()
+                        .brif(failed, error_block, &[], continue_block, &[]);
+                    builder.switch_to_block(error_block);
+                    let value = builder.ins().iconst(types::I64, 0);
+                    builder.ins().return_(&[value, error]);
+                    builder.switch_to_block(continue_block);
+                    builder
+                        .ins()
+                        .brif(condition, then_block, &then_args, else_block, &else_args);
+                } else {
+                    builder
+                        .ins()
+                        .brif(condition, then_block, &then_args, else_block, &else_args);
+                }
             }
         }
     }
@@ -3344,6 +3379,34 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_division_step_counted_while_accumulator_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += n
+    n -= step // scale
+return total
+"#,
+        )
+        .expect("division-step counted while accumulator fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "scale".into()],
+        )
+        .expect("division-step counted while accumulator should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile division-step counted accumulator CFG");
+        let result = unsafe { compiled.call_result_with_args(&[10, 4, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 30);
+        let zero = unsafe { compiled.call_result_with_args(&[10, 4, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::DivisionByZero
+        );
+    }
+
+    #[test]
     fn result_abi_executes_modulo_operand_counted_while_accumulator_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0
@@ -3439,6 +3502,32 @@ return n
         let result = unsafe { compiled.call_result_with_args(&[10, 3]) };
         assert!(result.is_ok());
         assert_eq!(result.value, -2);
+    }
+
+    #[test]
+    fn result_abi_executes_division_step_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= step // scale
+return n
+"#,
+        )
+        .expect("division-step counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into(), "scale".into()],
+        )
+        .expect("division-step counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile division-step counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[10, 4, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 0);
+        let zero = unsafe { compiled.call_result_with_args(&[10, 4, 0]) };
+        assert_eq!(
+            zero.error,
+            crate::native_abi::NativeErrorCode::DivisionByZero
+        );
     }
 
     #[test]

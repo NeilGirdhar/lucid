@@ -438,6 +438,9 @@ diverged:
   Unbounded execution now refuses to fall back from result-ABI compilation
   when the function contains recoverable division-family operations, so a
   backend limitation cannot silently turn recoverable errors into traps.
+  Native result-ABI CFG lowering now also returns immediately when a block
+  carries a recoverable error into a jump or branch, matching the interpreter
+  and preventing failed loop-body arithmetic from taking a dummy back-edge.
 * Native equality now compares lists, sets, and dictionaries structurally,
   keeping native behavior aligned with the interpreter instead of comparing
   container addresses.
@@ -629,8 +632,9 @@ diverged:
   parameter or a pre-loop local alias of a literal, checked constant
   expression, or parameter instead of only a signed literal, as in
   `tick = step; while n > 0: n -= tick`. Step expressions may also combine
-  parameter or local-alias atoms with unary `+`/`-` or binary `+`, `-`, or `*`,
-  so `n -= step + 1`, `tick = step + 1; n -= tick`, and
+  parameter or local-alias atoms with unary `+`/`-` or binary `+`, `-`, `*`,
+  `/`, `//`, or `%`,
+  so `n -= step + 1`, `n -= step // scale`, `tick = step + 1; n -= tick`, and
   `tick = -step; while n < limit: n -= tick` lower through the counted CFG.
   Comparison bounds use the same loop-invariant integer-expression subset,
   with division-family operators also accepted where the result ABI can carry
@@ -659,8 +663,8 @@ diverged:
   dynamic bound variables, as in `stop = limit + 1; tick = step + 1; total +=
   step + 1; value -= tick`, and `total += step % modulus` reports
   `division by zero` through the interpreter, `run-cir`, and native result
-  ABI. Induction-step expressions deliberately stay on the non-division subset
-  until recoverable arithmetic can short-circuit loop progress. The source and CLI
+  ABI. Division-family induction-step errors also short-circuit before the loop
+  back-edge in native result-ABI lowering. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
   and accumulator Phis. Accumulator loops can also keep the induction value as
   a parameter while seeding a local bound, including a checked
