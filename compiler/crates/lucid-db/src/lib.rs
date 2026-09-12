@@ -372,16 +372,7 @@ pub fn resolved_declarations<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<[Res
             } => (Some(name), DeclKind::Value, false),
             _ => (None, DeclKind::Value, false),
         };
-        let span = match statement {
-            lucid_syntax::Stmt::ClassDef { span, .. }
-            | lucid_syntax::Stmt::InterfaceDef { span, .. }
-            | lucid_syntax::Stmt::TraitDef { span, .. }
-            | lucid_syntax::Stmt::TypeAlias { span, .. }
-            | lucid_syntax::Stmt::VarDef { span, .. }
-            | lucid_syntax::Stmt::Assignment { span, .. } => *span,
-            lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef { span, .. }) => *span,
-            _ => lucid_syntax::Span::default(),
-        };
+        let span = statement_span(statement);
         if let Some(name) = name {
             declarations.push(ResolvedDecl {
                 symbol: Symbol::new(db, file, name.clone()),
@@ -9972,9 +9963,14 @@ mod tests {
         assert_eq!(declarations.len(), 2);
         assert_eq!(declarations[0].kind, DeclKind::Class);
         assert!(declarations[0].exported);
+        assert!(span_text(&db, file, declarations[0].span).starts_with("class Point:"));
         assert_eq!(declarations[1].kind, DeclKind::Function);
         assert!(!declarations[1].is_dispatch);
         assert!(declarations[1].exported);
+        assert_eq!(
+            span_text(&db, file, declarations[1].span).as_ref(),
+            "helper"
+        );
     }
 
     #[test]

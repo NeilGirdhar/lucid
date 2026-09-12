@@ -1785,7 +1785,8 @@ gaps are architectural rather than isolated syntax features:
    Statement-span extraction now covers every AST statement form that carries
    a parser span, including functions, structural control flow, returns, and
    augmented assignments, instead of falling back to a default span outside
-   imports and simple bindings.
+   imports and simple bindings. The resolved declaration index now reuses
+   that same helper, so declaration spans stay aligned with statement spans.
    Dedicated round-trip coverage now verifies Unicode line/column, byte
    offset, and span extraction agree.
    Malformed reversed spans now safely produce an empty slice rather than
