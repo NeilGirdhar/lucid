@@ -185,6 +185,7 @@ pub struct CCodeGenerator {
     current_fn_async: bool,
     known_classes: HashMap<String, Vec<String>>,
     known_without_traits: HashMap<String, HashSet<String>>,
+    known_capabilities: HashMap<String, HashSet<String>>,
     known_parents: HashMap<String, String>,
     known_class_members: HashMap<String, Vec<String>>,
     implementation_methods: HashMap<String, Vec<FunctionDef>>,
@@ -307,6 +308,7 @@ impl CCodeGenerator {
             current_fn_async: false,
             known_classes: HashMap::new(),
             known_without_traits: HashMap::new(),
+            known_capabilities: HashMap::new(),
             known_parents: HashMap::new(),
             known_class_members: HashMap::new(),
             implementation_methods: HashMap::new(),
@@ -520,7 +522,26 @@ impl CCodeGenerator {
         }
     }
 
+    fn is_builtin_capability(name: &str) -> bool {
+        matches!(
+            name,
+            "Eq"
+                | "Ord"
+                | "Hashable"
+                | "Sized"
+                | "Iterable"
+                | "Collection"
+                | "Sequence"
+                | "Reversible"
+                | "Set"
+                | "Container"
+                | "Shape"
+                | "Buffer"
+        )
+    }
+
     fn class_has_capability(&self, class: &str, capability: &str) -> bool {
+        let generated = matches!(capability, "Eq" | "Ord" | "Hashable");
         let mut current = Some(class.to_string());
         while let Some(name) = current {
             if self
@@ -530,9 +551,16 @@ impl CCodeGenerator {
             {
                 return false;
             }
+            if self
+                .known_capabilities
+                .get(&name)
+                .is_some_and(|capabilities| capabilities.contains(capability))
+            {
+                return true;
+            }
             current = self.known_parents.get(&name).cloned();
         }
-        true
+        generated
     }
 
     /// Materialize a user iterator in native code.  Iterator termination is a
@@ -698,7 +726,7 @@ impl CCodeGenerator {
             let stmt = Self::unwrap_export(stmt);
             if let Stmt::ClassDef {
                 name,
-                bases: _bases,
+                bases,
                 without_traits,
                 body,
                 ..
@@ -706,6 +734,16 @@ impl CCodeGenerator {
             {
                 self.known_without_traits
                     .insert(name.clone(), without_traits.iter().cloned().collect());
+                let capabilities = bases
+                    .iter()
+                    .filter_map(|base| match base {
+                        TypeExpr::Named { name, .. } if Self::is_builtin_capability(name) => {
+                            Some(name.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<HashSet<_>>();
+                self.known_capabilities.insert(name.clone(), capabilities);
                 let mut fields = Vec::new();
                 let mut members = Vec::new();
                 for member in body {
@@ -868,12 +906,26 @@ impl CCodeGenerator {
                         }
                     }
                 }
-            } else if let Stmt::ImplementDef { target, body, .. } = stmt {
+            } else if let Stmt::ImplementDef {
+                interface,
+                target,
+                body,
+                ..
+            } = stmt
+            {
                 let TypeExpr::Named { name: target_name, .. } = target else {
                     continue;
                 };
                 if !self.known_classes.contains_key(target_name) {
                     continue;
+                }
+                if let TypeExpr::Named { name: interface_name, .. } = interface
+                    && Self::is_builtin_capability(interface_name)
+                {
+                    self.known_capabilities
+                        .entry(target_name.clone())
+                        .or_default()
+                        .insert(interface_name.clone());
                 }
                 for function in body {
                     self.known_class_members
@@ -9683,6 +9735,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
                                         "((bool)1)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), "Sized"))
                                     } else {
                                         "((bool)0)".into()
                                     }
@@ -9695,6 +9749,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
                                         "((bool)1)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), "Container"))
                                     } else {
                                         "((bool)0)".into()
                                     }
@@ -9707,6 +9763,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         "LucidList*" | "LucidSet*" | "LucidDict*"
                                     ) {
                                         "((bool)1)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
                                     } else {
                                         "((bool)0)".into()
                                     }
@@ -9716,6 +9774,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\")", type_name)
                                     } else if left_ty == "LucidList*" {
                                         "((bool)1)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
                                     } else {
                                         "((bool)0)".into()
                                     }
@@ -9725,6 +9785,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\")")
                                     } else if left_ty == "LucidSet*" {
                                         "((bool)1)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), "Set"))
                                     } else {
                                         "((bool)0)".into()
                                     }
@@ -9745,6 +9807,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Shape\")")
                                     } else if left_ty == "LucidList*" {
                                         "((bool)1)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool){})", self.class_has_capability(left_ty.trim_end_matches('*'), "Shape"))
                                     } else {
                                         "((bool)0)".into()
                                     }
@@ -9935,6 +9999,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         "const char*" | "LucidList*" | "LucidDict*" | "LucidSet*"
                                     ) {
                                         "((bool)0)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
                                     } else {
                                         "((bool)1)".into()
                                     }
@@ -9968,6 +10034,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         "LucidList*" | "LucidSet*" | "LucidDict*"
                                     ) {
                                         "((bool)0)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
                                     } else {
                                         "((bool)1)".into()
                                     }
@@ -9977,6 +10045,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"{}\"))", type_name)
                                     } else if left_ty == "LucidList*" {
                                         "((bool)0)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), type_name))
                                     } else {
                                         "((bool)1)".into()
                                     }
@@ -9986,6 +10056,8 @@ static inline void lucid_print_val(LucidVal v) {
                                         format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\"))")
                                     } else if left_ty == "LucidSet*" {
                                         "((bool)0)".into()
+                                    } else if self.known_classes.contains_key(left_ty.trim_end_matches('*')) {
+                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), "Set"))
                                     } else {
                                         "((bool)1)".into()
                                     }
@@ -10000,6 +10072,10 @@ static inline void lucid_print_val(LucidVal v) {
                                         "((bool)0)".into()
                                     } else if type_name == "Shape" && left_ty == "LucidList*" {
                                         "((bool)0)".into()
+                                    } else if type_name == "Shape"
+                                        && self.known_classes.contains_key(left_ty.trim_end_matches('*'))
+                                    {
+                                        format!("((bool)!{})", self.class_has_capability(left_ty.trim_end_matches('*'), "Shape"))
                                     } else {
                                         "((bool)1)".into()
                                     }
@@ -16189,7 +16265,7 @@ print(z is complex)
 
     #[test]
     fn native_erased_capability_checks_inspect_runtime_class() {
-        let source = "class Bag without Iterable:\n    def __len__(self) -> int:\n        return 1\ndef identity(value: Any) -> Any:\n    return value\nvalue = identity(Bag())\nitems = identity(set([1]))\nshape = identity([1, 2])\nnumber = identity(1)\nprint(value is Sized)\nprint(value is not Iterable)\nprint(items is Set)\nprint(number is not Set)\nprint(shape is Shape)\n";
+        let source = "class Bag without Iterable:\n    def __len__(self) -> int:\n        return 1\nclass Declared(Sized):\n    def __len__(self) -> int:\n        return 1\nclass Retro:\n    pass\nimplement Sized for Retro:\n    def __len__(self) -> int:\n        return 1\ndef identity(value: Any) -> Any:\n    return value\nvalue = identity(Bag())\ndeclared = identity(Declared())\nretro = identity(Retro())\nitems = identity(set([1]))\nshape = identity([1, 2])\nnumber = identity(1)\nprint(value is Sized)\nprint(value is not Iterable)\nprint(declared is Sized)\nprint(retro is Sized)\nprint(items is Set)\nprint(number is not Set)\nprint(shape is Shape)\n";
         let module = parse(source).expect("erased capability source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_erased_capability_{}",
@@ -16202,7 +16278,7 @@ print(z is complex)
         assert!(run.status.success(), "erased capability failed: {run:?}");
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "true\ntrue\ntrue\ntrue\ntrue\n"
+            "false\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
         );
     }
 

@@ -5206,6 +5206,15 @@ impl Interpreter {
                         ),
                         span: *span,
                     })?;
+                if !class.bases.iter().any(|base| {
+                    matches!(base, TypeExpr::Named { name, .. } if name == trait_name)
+                }) {
+                    class.bases.push(TypeExpr::Named {
+                        name: trait_name.to_string(),
+                        args: Vec::new(),
+                        span: *span,
+                    });
+                }
                 for function in body {
                     let mut function = function.clone();
                     if !function
@@ -6532,8 +6541,7 @@ impl Interpreter {
                                     | Value::Set(_)
                                     | Value::Dict(_)
                                     | Value::Range { .. }
-                                    | Value::Object { .. }
-                            ),
+                            ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Sized")),
                             "Container" => matches!(
                                 lval,
                                 Value::Str(_)
@@ -6542,20 +6550,20 @@ impl Interpreter {
                                     | Value::Set(_)
                                     | Value::Dict(_)
                                     | Value::Range { .. }
-                                    | Value::Object { .. }
-                            ),
+                            ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Container")),
                             "Iterable" | "Collection" => matches!(
                                 lval,
                                 Value::List(_)
                                     | Value::Set(_)
                                     | Value::Dict(_)
                                     | Value::Range { .. }
-                                    | Value::Object { .. }
-                            ),
+                            ) || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, &name)),
                             "Sequence" | "Reversible" => {
                                 matches!(lval, Value::List(_) | Value::Range { .. })
+                                    || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, &name))
                             }
-                            "Set" => matches!(lval, Value::Set(_)),
+                            "Set" => matches!(lval, Value::Set(_))
+                                || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Set")),
                             "Buffer" => match &lval {
                                 Value::Bytes(_) | Value::MemoryView { .. } | Value::List(_) => true,
                                 Value::Object { fields, .. } => {
@@ -6563,7 +6571,8 @@ impl Interpreter {
                                 }
                                 _ => false,
                             },
-                            "Shape" => matches!(lval, Value::List(_)),
+                            "Shape" => matches!(lval, Value::List(_))
+                                || matches!(&lval, Value::Object { class_name, .. } if self.class_has_capability(class_name, "Shape")),
                             "Eq" | "Ord" | "Hashable" => match &lval {
                                 Value::None => false,
                                 Value::Object { class_name, .. } => {
@@ -8825,27 +8834,34 @@ impl Interpreter {
     }
 
     fn class_has_capability(&self, class_name: &str, capability: &str) -> bool {
+        let generated = matches!(capability, "Eq" | "Ord" | "Hashable");
         let mut current = Some(class_name.to_string());
         while let Some(name) = current {
-            if self.classes.get(&name).is_some_and(|class| {
-                class
-                    .without_traits
-                    .iter()
-                    .any(|trait_name| trait_name == capability)
-            }) {
+            let Some(class) = self.classes.get(&name) else {
+                break;
+            };
+            if class
+                .without_traits
+                .iter()
+                .any(|trait_name| trait_name == capability)
+            {
                 return false;
             }
-            current = self.classes.get(&name).and_then(|class| {
-                class.bases.iter().find_map(|base| {
-                    if let TypeExpr::Named { name, .. } = base {
-                        Some(name.clone())
-                    } else {
-                        None
+            if class.bases.iter().any(|base| {
+                matches!(base, TypeExpr::Named { name, .. } if name == capability)
+            }) {
+                return true;
+            }
+            current = class.bases.iter().find_map(|base| {
+                if let TypeExpr::Named { name, .. } = base {
+                    if self.classes.contains_key(name) {
+                        return Some(name.clone());
                     }
-                })
+                }
+                None
             });
         }
-        true
+        generated
     }
 
     fn collect_inherited_members(
@@ -12458,12 +12474,21 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
 
     #[test]
     fn test_without_capability_affects_instance_checks() {
-        let module =
-            parse("class Token without Eq:\n    value: int\nt = Token(1)\nresult = t is Eq\n")
-                .unwrap();
+        let module = parse(
+            "class Token without Eq:\n    value: int\n\
+             class Nominal:\n    def __len__(self) -> int:\n        return 1\n\
+             class Declared(Sized):\n    def __len__(self) -> int:\n        return 1\n\
+             class Retro:\n    pass\n\
+             implement Sized for Retro:\n    def __len__(self) -> int:\n        return 1\n\
+             t = Token(1)\nresult = t is Eq\nnominal = Nominal() is Sized\ndeclared = Declared() is Sized\nretro = Retro() is Sized\n",
+        )
+        .unwrap();
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("result"), Some(Value::Bool(false)));
+        assert_eq!(interp.env.borrow().get("nominal"), Some(Value::Bool(false)));
+        assert_eq!(interp.env.borrow().get("declared"), Some(Value::Bool(true)));
+        assert_eq!(interp.env.borrow().get("retro"), Some(Value::Bool(true)));
     }
 
     #[test]
