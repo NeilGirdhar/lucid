@@ -5529,6 +5529,9 @@ static inline void lucid_print_val(LucidVal v) {
                 ) =>
             {
                 self.emit_line(&format!("lucid_var_{name} = {subject};"));
+                if self.current_fn_ret_type.as_deref() != Some("void") {
+                    self.emit_line(&format!("lucid_alive_{name} = true;"));
+                }
             }
             Pattern::ClassDestructure {
                 class_name, fields, ..
@@ -8911,22 +8914,14 @@ static inline void lucid_print_val(LucidVal v) {
             } => {
                 let subject_code = self.emit_expr(subject)?;
                 let subject_tmp = self.new_temp();
+                let matched_tmp = self.new_temp();
                 self.emit_line(&format!(
                     "LucidVal {subject_tmp} = lucid_wrap({subject_code});"
                 ));
-                for (index, arm) in arms.iter().enumerate() {
+                self.emit_line(&format!("int {matched_tmp} = 0;"));
+                for arm in arms {
                     let condition = self.emit_pattern_condition(&arm.pattern, &subject_tmp)?;
-                    let guarded = if let Some(guard) = &arm.guard {
-                        let guard_truth = self.emit_condition(guard)?;
-                        format!("({condition}) && ({guard_truth})")
-                    } else {
-                        condition
-                    };
-                    if index == 0 {
-                        self.emit_line(&format!("if ({guarded}) {{"));
-                    } else {
-                        self.emit_line(&format!("}} else if ({guarded}) {{"));
-                    }
+                    self.emit_line(&format!("if (!{matched_tmp} && ({condition})) {{"));
                     self.indent += 1;
                     if let Some(alias) = subject_alias {
                         self.emit_line(&format!("lucid_var_{alias} = {subject_tmp};"));
@@ -8935,13 +8930,27 @@ static inline void lucid_print_val(LucidVal v) {
                         }
                     }
                     self.emit_pattern_bindings(&arm.pattern, &subject_tmp);
-                    for statement in &arm.body {
-                        self.emit_stmt(statement)?;
+                    if let Some(guard) = &arm.guard {
+                        let guard_truth = self.emit_condition(guard)?;
+                        self.emit_line(&format!("if ({guard_truth}) {{"));
+                        self.indent += 1;
+                        self.emit_line(&format!("{matched_tmp} = 1;"));
+                        for statement in &arm.body {
+                            self.emit_stmt(statement)?;
+                        }
+                        self.indent -= 1;
+                        self.emit_line("}");
+                    } else {
+                        self.emit_line(&format!("{matched_tmp} = 1;"));
+                        for statement in &arm.body {
+                            self.emit_stmt(statement)?;
+                        }
                     }
                     self.indent -= 1;
+                    self.emit_line("}");
                 }
                 if !arms.is_empty() {
-                    self.emit_line("} else {");
+                    self.emit_line(&format!("if (!{matched_tmp}) {{"));
                     self.indent += 1;
                     self.emit_line("fprintf(stderr, \"non-exhaustive match\\n\"); exit(1);");
                     self.indent -= 1;
@@ -15718,6 +15727,30 @@ match parse("ok") as outcome:
             .expect("run native binary");
         assert!(result.status.success(), "native program failed: {result:?}");
         assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "6");
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn native_match_guards_use_alias_and_pattern_bindings() {
+        let source = r#"
+value = 4
+match value as subject:
+    case n if n > 10:
+        print(1)
+    case n if subject == n:
+        print(8)
+    case _:
+        print(0)
+"#;
+        let module = parse(source).expect("match guard source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_native_match_guard_{}", std::process::id()));
+        compile_to_native(&module, &output, 0).expect("match guard should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert!(result.status.success(), "native program failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "8");
         let _ = std::fs::remove_file(output);
     }
 
