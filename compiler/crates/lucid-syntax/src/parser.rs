@@ -188,9 +188,10 @@ impl Parser {
             TokenKind::Async => {
                 self.advance();
                 self.expect(&TokenKind::Def)?;
-                let mut function = self.parse_raw_function(false, decorators)?;
-                function.is_async = true;
-                Ok(Stmt::Function(function))
+            let mut function = self.parse_raw_function(false, decorators)?;
+            function.is_async = true;
+            function.is_final = false;
+            Ok(Stmt::Function(function))
             }
             TokenKind::ContextManager => {
                 let modifier_span = self.advance().span;
@@ -642,6 +643,7 @@ impl Parser {
             let mut func = self.parse_raw_function(false, decorators)?;
             func.is_async = is_async;
             func.is_override = is_override;
+            func.is_final = is_final;
             return Ok(ClassMember::ClassMethod(func));
         }
 
@@ -656,11 +658,14 @@ impl Parser {
                 let mut func = self.parse_raw_function(false, context_decorators)?;
                 func.is_async = is_async;
                 func.is_override = is_override;
+                func.is_final = is_final;
                 return Ok(ClassMember::ClassMethod(func));
             }
             self.expect(&TokenKind::Def)?;
             let mut func = self.parse_raw_function(is_dispatch, context_decorators)?;
             func.is_async = is_async;
+            func.is_override = is_override;
+            func.is_final = is_final;
             return Ok(ClassMember::Method(func));
         }
 
@@ -669,6 +674,7 @@ impl Parser {
             let mut func = self.parse_raw_function(member_is_dispatch, decorators)?;
             func.is_async = is_async;
             func.is_override = is_override;
+            func.is_final = is_final;
             return Ok(ClassMember::Method(func));
         }
 
@@ -1283,6 +1289,7 @@ impl Parser {
             is_dispatch,
             is_async: false,
             is_override: false,
+            is_final: false,
             decorators,
             span: start,
         })

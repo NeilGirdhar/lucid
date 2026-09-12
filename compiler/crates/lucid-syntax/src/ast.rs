@@ -381,6 +381,7 @@ pub struct FunctionDef {
     pub is_dispatch: bool,
     pub is_async: bool,
     pub is_override: bool,
+    pub is_final: bool,
     pub decorators: Vec<Expr>,
     pub span: Span,
 }

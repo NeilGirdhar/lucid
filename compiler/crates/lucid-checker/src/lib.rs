@@ -955,6 +955,8 @@ pub struct TypeEnvironment {
     pub final_variables: HashSet<String>,
     /// Final instance fields, keyed by declaring class name.
     pub final_fields: HashMap<String, HashSet<String>>,
+    /// Final instance/class methods, keyed by declaring class name.
+    pub final_methods: HashMap<String, HashSet<String>>,
     pub final_classes: HashSet<String>,
     pub class_members: HashMap<String, HashSet<String>>,
     pub class_methods: HashMap<(String, String), Type>,
@@ -2061,6 +2063,7 @@ impl TypeChecker {
 
                 let mut fields = HashMap::new();
                 let mut final_fields = HashSet::new();
+                let mut final_methods = HashSet::new();
                 let mut member_names = HashSet::new();
                 let mut class_vars = HashMap::new();
                 let mut field_order = Vec::new();
@@ -2087,6 +2090,9 @@ impl TypeChecker {
                         }
                         ClassMember::Method(m) | ClassMember::ClassMethod(m) => {
                             member_names.insert(m.name.clone());
+                            if m.is_final {
+                                final_methods.insert(m.name.clone());
+                            }
                         }
                         ClassMember::Factory(f) => {
                             member_names.insert(f.name.clone());
@@ -2101,6 +2107,7 @@ impl TypeChecker {
                     }
                 }
                 self.env.final_fields.insert(name.clone(), final_fields);
+                self.env.final_methods.insert(name.clone(), final_methods);
                 self.env.class_members.insert(name.clone(), member_names);
                 self.env.class_vars.insert(name.clone(), class_vars);
                 self.env.class_field_order.insert(name.clone(), field_order);
@@ -2965,6 +2972,18 @@ impl TypeChecker {
                         _ => None,
                     })
                     .unwrap_or_default();
+                let final_inherited = bases
+                    .iter()
+                    .find_map(|base| match base {
+                        TypeExpr::Named { name: parent, .. }
+                            if self.env.classes.contains_key(parent)
+                                || self.env.class_members.contains_key(parent) =>
+                        {
+                            Some(self.inherited_final_method_names(parent))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
                 // The modifier lives on the member declaration, so inspect
                 // the original AST rather than reducing it to names.
                 for member in body {
@@ -2978,6 +2997,14 @@ impl TypeChecker {
                         return Err(TypeError {
                             message: format!(
                                 "member '{member_name}' overrides an inherited member; write 'override' explicitly"
+                            ),
+                            span: *span,
+                        });
+                    }
+                    if final_inherited.contains(member_name) {
+                        return Err(TypeError {
+                            message: format!(
+                                "member '{member_name}' is final and cannot be overridden"
                             ),
                             span: *span,
                         });
@@ -3061,6 +3088,28 @@ impl TypeChecker {
             .or_else(|| self.env.class_parents.get(class_name).cloned())
         {
             names.extend(self.inherited_member_names(&parent));
+        }
+        names
+    }
+
+    fn inherited_final_method_names(&self, class_name: &str) -> HashSet<String> {
+        let mut names = self
+            .env
+            .final_methods
+            .get(class_name)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(parent) = self
+            .env
+            .classes
+            .get(class_name)
+            .and_then(|ty| match ty {
+                Type::Class { parent, .. } => parent.clone(),
+                _ => None,
+            })
+            .or_else(|| self.env.class_parents.get(class_name).cloned())
+        {
+            names.extend(self.inherited_final_method_names(&parent));
         }
         names
     }
@@ -9118,6 +9167,33 @@ class Child(Reusable, Base1, Base2):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("final and cannot be inherited"));
+    }
+
+    #[test]
+    fn test_final_methods_cannot_be_overridden() {
+        let module = parse(
+            "class Base:\n    final def save(self) -> int:\n        return 1\nclass Child(Base):\n    override def save(self) -> int:\n        return 2\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err.message.contains("final and cannot be overridden"));
+
+        let module = parse(
+            "class Base:\n    final classmethod make(cls) -> int:\n        return 1\nclass Child(Base):\n    override classmethod make(cls) -> int:\n        return 2\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err.message.contains("final and cannot be overridden"));
+
+        let module = parse(
+            "class Grandparent:\n    final def save(self) -> int:\n        return 1\nclass Parent(Grandparent):\n    pass\nclass Child(Parent):\n    override def save(self) -> int:\n        return 2\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err.message.contains("final and cannot be overridden"));
     }
 
     #[test]
