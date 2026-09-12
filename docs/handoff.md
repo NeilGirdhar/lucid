@@ -569,13 +569,13 @@ diverged:
   `begin = seed; for i in range(begin, n)`,
   `begin = seed; stop = limit; for i in range(begin, stop)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
-  CIR/native path. Range accumulator updates accept induction or literal
+  CIR/native path. Range accumulator updates accept induction or signed literal
   operands with `+=`, `-=`, `x = x + y`, `x = x - y`, and the commuted
   additive spelling `x = y + x`. An unused pre-loop alias is still rejected
   instead of being treated as loop setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from an integer literal or parameter, then updated before the
-  induction update. The accumulator step can be a literal or the current
+  induction update. The accumulator step can be a signed literal or the current
   induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
   commuted additive spelling `x = y + x`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction

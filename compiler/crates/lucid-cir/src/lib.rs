@@ -2726,6 +2726,26 @@ impl Function {
         }
     }
 
+    fn int_literal_expr(expr: &lucid_syntax::Expr) -> Option<i64> {
+        match expr {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(*value),
+            lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Neg,
+                expr,
+                ..
+            } => Self::int_literal_expr(expr).and_then(i64::checked_neg),
+            lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Pos,
+                expr,
+                ..
+            } => Self::int_literal_expr(expr),
+            _ => None,
+        }
+    }
+
     /// Recognize and lower `while x > 0: x -= 1; return x`-style integer
     /// induction loops. The initial value must be a positional parameter;
     /// the body must contain exactly one augmented assignment to that same
@@ -3453,14 +3473,10 @@ impl Function {
             induction_name: &str,
         ) -> Option<AccumulatorOperand> {
             match expr {
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                } => Some(AccumulatorOperand::Literal(*value)),
                 lucid_syntax::Expr::Ident { name, .. } if name == induction_name => {
                     Some(AccumulatorOperand::Induction)
                 }
-                _ => None,
+                _ => Function::int_literal_expr(expr).map(AccumulatorOperand::Literal),
             }
         }
         fn accumulator_self_update(
@@ -3873,25 +3889,6 @@ impl Function {
         }) {
             return None;
         }
-        fn int_literal(expr: &lucid_syntax::Expr) -> Option<i64> {
-            match expr {
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Int(value),
-                    ..
-                } => Some(*value),
-                lucid_syntax::Expr::Unary {
-                    op: lucid_syntax::UnaryOp::Neg,
-                    expr,
-                    ..
-                } => int_literal(expr).and_then(i64::checked_neg),
-                lucid_syntax::Expr::Unary {
-                    op: lucid_syntax::UnaryOp::Pos,
-                    expr,
-                    ..
-                } => int_literal(expr),
-                _ => None,
-            }
-        }
         #[derive(Clone, Copy)]
         enum RangeAccumulatorOperand {
             Literal(i64),
@@ -3902,7 +3899,7 @@ impl Function {
                 lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
                     Some(RangeAccumulatorOperand::Induction)
                 }
-                _ => int_literal(expr).map(RangeAccumulatorOperand::Literal),
+                _ => Self::int_literal_expr(expr).map(RangeAccumulatorOperand::Literal),
             }
         };
         let accumulator_update = match &body[0] {
@@ -3957,7 +3954,7 @@ impl Function {
             [stop] => (&zero, &stop.value, 1),
             [start, stop] => (&start.value, &stop.value, 1),
             [start, stop, step] => {
-                let step = int_literal(&step.value)?;
+                let step = Self::int_literal_expr(&step.value)?;
                 if step == 0 {
                     return None;
                 }
@@ -3969,7 +3966,7 @@ impl Function {
             for statement in &bound_aliases {
                 let (alias_name, value) = initialized_ident(statement)?;
                 if matches!(expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name) {
-                    return match int_literal(value) {
+                    return match Self::int_literal_expr(value) {
                         Some(value) => Some(Instruction::ConstInt { result, value }),
                         None => match value {
                             lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
@@ -3984,7 +3981,7 @@ impl Function {
                     };
                 }
             }
-            match int_literal(expr) {
+            match Self::int_literal_expr(expr) {
                 Some(value) => Some(Instruction::ConstInt { result, value }),
                 None => match expr {
                     lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
@@ -9410,6 +9407,19 @@ return total
         let module = lucid_syntax::parse(
             r#"total = 0
 while n > 0:
+    total += -1
+    n -= 1
+return total
+"#,
+        )
+        .expect("signed-literal while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("signed-literal while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(-4)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
     total += n
     n -= 1
 return total
@@ -9558,6 +9568,18 @@ return total
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("literal-step range accumulation should lower");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(n):
+    total += -2
+return total
+"#,
+        )
+        .expect("signed-literal range accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("signed-literal range accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(-10)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
