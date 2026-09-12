@@ -2616,6 +2616,18 @@ impl Interpreter {
 
         // range(stop) / range(start, stop, [step])
         let range_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+            if args.is_empty() {
+                return Err(RuntimeError {
+                    message: "range() requires at least 1 argument".into(),
+                    span: Span::default(),
+                });
+            }
+            if args.len() > 3 {
+                return Err(RuntimeError {
+                    message: "range() accepts at most 3 arguments".into(),
+                    span: Span::default(),
+                });
+            }
             let (start, stop, step) = match args.len() {
                 1 => match &args[0] {
                     Value::Int(stop) => (0, *stop, 1),
@@ -2652,12 +2664,7 @@ impl Interpreter {
                         })
                     }
                 },
-                n => {
-                    return Err(RuntimeError {
-                        message: format!("range() takes 1 to 3 arguments, got {n}"),
-                        span: Span::default(),
-                    })
-                }
+                _ => unreachable!("range arity was validated before matching"),
             };
 
             Ok(Value::Range { start, stop, step })
@@ -2864,9 +2871,15 @@ impl Interpreter {
             Value::BuiltinFunction {
                 name: "slice".into(),
                 func: Rc::new(|args: &[Value], _interp: &mut Interpreter| {
-                    if !(1..=3).contains(&args.len()) {
+                    if args.is_empty() {
                         return Err(RuntimeError {
-                            message: "slice() takes one to three arguments".into(),
+                            message: "slice() requires at least 1 argument".into(),
+                            span: Span::default(),
+                        });
+                    }
+                    if args.len() > 3 {
+                        return Err(RuntimeError {
+                            message: "slice() accepts at most 3 arguments".into(),
                             span: Span::default(),
                         });
                     }
@@ -2875,7 +2888,7 @@ impl Interpreter {
                         let value = args.get(index).cloned().unwrap_or(Value::None);
                         if !matches!(value, Value::Int(_) | Value::None) {
                             return Err(RuntimeError {
-                                message: format!("slice {name} must be an integer or none"),
+                                message: format!("slice() {name} bounds must be int or none"),
                                 span: Span::default(),
                             });
                         }
@@ -2955,7 +2968,7 @@ impl Interpreter {
                         return Err(RuntimeError { message: "enumerate() takes one or two arguments".into(), span: Span::default() });
                     }
                     let mut index = if args.len() == 2 {
-                        match args[1] { Value::Int(value) => value, _ => return Err(RuntimeError { message: "enumerate() start must be an int".into(), span: Span::default() }) }
+                        match args[1] { Value::Int(value) => value, _ => return Err(RuntimeError { message: "enumerate() start must be int".into(), span: Span::default() }) }
                     } else { 0 };
                     let custom_iter = match &args[0] { Value::Object { fields, .. } => fields.borrow().get("__iter__").cloned(), _ => None };
                     let values = match &args[0] {
@@ -3209,9 +3222,15 @@ impl Interpreter {
             Value::BuiltinFunction {
                 name: "fields".into(),
                 func: Rc::new(|args: &[Value], interp: &mut Interpreter| {
-                    if args.len() != 1 {
+                    if args.is_empty() {
                         return Err(RuntimeError {
-                            message: "fields() takes exactly one argument".into(),
+                            message: "fields() requires at least 1 argument".into(),
+                            span: Span::default(),
+                        });
+                    }
+                    if args.len() > 1 {
+                        return Err(RuntimeError {
+                            message: "fields() accepts at most 1 argument".into(),
                             span: Span::default(),
                         });
                     }
@@ -3557,8 +3576,17 @@ impl Interpreter {
             Value::BuiltinFunction {
                 name: "map".into(),
                 func: Rc::new(|args: &[Value], interp: &mut Interpreter| {
-                    if args.len() != 2 {
-                        return Err(RuntimeError { message: "map() takes exactly two arguments".into(), span: Span::default() });
+                    if args.len() < 2 {
+                        return Err(RuntimeError { message: "map() requires at least 2 arguments".into(), span: Span::default() });
+                    }
+                    if args.len() > 2 {
+                        return Err(RuntimeError { message: "map() accepts at most 2 arguments".into(), span: Span::default() });
+                    }
+                    if !matches!(
+                        args[0],
+                        Value::Function { .. } | Value::BuiltinFunction { .. } | Value::Partial { .. }
+                    ) {
+                        return Err(RuntimeError { message: "map() first argument must be callable".into(), span: Span::default() });
                     }
                     let values = match &args[1] {
                         Value::List(values) => values.borrow().clone(),
@@ -3584,7 +3612,7 @@ impl Interpreter {
                                 other => return Err(RuntimeError { message: format!("__iter__ returned {}", other.type_name()), span: Span::default() }),
                             }
                         }
-                        other => return Err(RuntimeError { message: format!("map() argument is not iterable: {}", other.type_name()), span: Span::default() }),
+                        other => return Err(RuntimeError { message: format!("map() iterable argument must be iterable: {}", other.type_name()), span: Span::default() }),
                     };
                     let mapped = values.into_iter().map(|value| {
                         interp.invoke_value(args[0].clone(), vec![(None, value)], Span::default())
@@ -4697,7 +4725,7 @@ impl Interpreter {
                 Value::Float(f) => Ok(Value::Float(f.abs())),
                 Value::Complex(real, imag) => Ok(Value::Float(real.hypot(*imag))),
                 other => Err(RuntimeError {
-                    message: format!("bad operand type for abs(): {}", other.type_name()),
+                    message: format!("abs() argument must be numeric, got {}", other.type_name()),
                     span: Span::default(),
                 }),
             }
@@ -14080,6 +14108,39 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
             let error = interp
                 .eval_module(&module)
                 .expect_err("invalid module boundary must fail at runtime");
+            assert!(
+                error.message.contains(expected),
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_rejects_invalid_builtin_contracts() {
+        for (source, expected) in [
+            ("range()\n", "requires at least 1"),
+            ("range(1, \"bad\")\n", "arguments must be int"),
+            ("range(1, 2, 0)\n", "step cannot be zero"),
+            ("slice()\n", "requires at least 1"),
+            ("slice(1, \"bad\")\n", "bounds must be int or none"),
+            ("map(1)\n", "requires at least 2"),
+            ("map(1, [1])\n", "first argument must be callable"),
+            (
+                "def f(x):\n    return x\nmap(f, 1)\n",
+                "iterable argument must be iterable",
+            ),
+            ("enumerate([1], \"bad\")\n", "start must be int"),
+            ("complex(\"x\")\n", "arguments must be numeric"),
+            ("complex(1, 2, 3)\n", "at most two"),
+            ("fields()\n", "requires at least 1"),
+            ("abs(\"bad\")\n", "argument must be numeric"),
+        ] {
+            let module = parse(source).expect("invalid builtin-contract source should parse");
+            let mut interp = Interpreter::default();
+            let error = interp
+                .eval_module(&module)
+                .expect_err("invalid builtin contract must fail at runtime");
             assert!(
                 error.message.contains(expected),
                 "{source}: {}",

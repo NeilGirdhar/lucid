@@ -5625,6 +5625,62 @@ static inline void lucid_print_val(LucidVal v) {
         Ok(())
     }
 
+    fn expr_native_type(&self, expr: &Expr) -> String {
+        let mut vars = self.global_vars.clone();
+        vars.extend(self.var_types.clone());
+        self.infer_expr_type(expr, &vars)
+    }
+
+    fn expr_may_be_int_or_erased(&self, expr: &Expr) -> bool {
+        matches!(self.expr_native_type(expr).as_str(), "int64_t" | "LucidVal")
+    }
+
+    fn expr_may_be_int_or_none_or_erased(&self, expr: &Expr) -> bool {
+        is_none_expr(expr) || self.expr_may_be_int_or_erased(expr)
+    }
+
+    fn expr_may_be_numeric_or_erased(&self, expr: &Expr) -> bool {
+        self.expr_is_complex(expr)
+            || matches!(
+                self.expr_native_type(expr).as_str(),
+                "int64_t" | "double" | "LucidVal"
+            )
+    }
+
+    fn expr_may_be_iterable_or_erased(&self, expr: &Expr) -> bool {
+        let ty = self.expr_native_type(expr);
+        if matches!(
+            ty.as_str(),
+            "LucidVal"
+                | "LucidList*"
+                | "LucidDict*"
+                | "LucidSet*"
+                | "LucidRange*"
+                | "LucidBytes*"
+                | "LucidMemoryView*"
+        ) {
+            return true;
+        }
+        let class_name = ty.trim_end_matches('*');
+        self.method_owner(class_name, "__iter__").is_some()
+            || self.method_owner(class_name, "next").is_some()
+    }
+
+    fn expr_may_be_callable_or_erased(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::AnonymousDef { .. } => true,
+            Expr::Call { args, .. }
+                if args.iter().any(|arg| matches!(arg.value, Expr::Skip(_))) =>
+            {
+                true
+            }
+            Expr::Ident { name, .. } => {
+                self.is_known_callable_binding(name) || self.expr_native_type(expr) == "LucidVal"
+            }
+            _ => self.expr_native_type(expr) == "LucidVal",
+        }
+    }
+
     fn reject_late_positional_arguments(args: &[Arg]) -> Result<(), CodegenError> {
         let mut keyword_section_started = false;
         for argument in args {
@@ -12226,9 +12282,14 @@ static inline void lucid_print_val(LucidVal v) {
                             return Ok("lucid_none()".to_string());
                         }
                         "fields" => {
-                            if args.len() != 1 {
+                            if args.is_empty() {
                                 return Err(CodegenError {
-                                    message: "fields() takes exactly one argument".to_string(),
+                                    message: "fields() requires at least 1 argument".to_string(),
+                                });
+                            }
+                            if args.len() > 1 {
+                                return Err(CodegenError {
+                                    message: "fields() accepts at most 1 argument".to_string(),
                                 });
                             }
                             if let Expr::Ident {
@@ -12311,6 +12372,16 @@ static inline void lucid_print_val(LucidVal v) {
                                 });
                             }
                             self.reject_raw_string_iterable_arg("enumerate", &args[0].value)?;
+                            if !self.expr_may_be_iterable_or_erased(&args[0].value) {
+                                return Err(CodegenError {
+                                    message: "enumerate() argument must be iterable".into(),
+                                });
+                            }
+                            if args.len() == 2 && !self.expr_may_be_int_or_erased(&args[1].value) {
+                                return Err(CodegenError {
+                                    message: "enumerate() start must be int".into(),
+                                });
+                            }
                             let value = self.emit_expr(&args[0].value)?;
                             let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
                             let value_class = value_type.trim_end_matches('*');
@@ -12549,10 +12620,22 @@ static inline void lucid_print_val(LucidVal v) {
                             ));
                         }
                         "slice" => {
-                            if !(1..=3).contains(&args.len()) {
+                            if args.is_empty() {
                                 return Err(CodegenError {
-                                    message: "slice() takes one to three arguments".into(),
+                                    message: "slice() requires at least 1 argument".into(),
                                 });
+                            }
+                            if args.len() > 3 {
+                                return Err(CodegenError {
+                                    message: "slice() accepts at most 3 arguments".into(),
+                                });
+                            }
+                            for arg in args {
+                                if !self.expr_may_be_int_or_none_or_erased(&arg.value) {
+                                    return Err(CodegenError {
+                                        message: "slice() bounds must be int or none".into(),
+                                    });
+                                }
                             }
                             let start = self.emit_expr(&args[0].value)?;
                             let stop = args
@@ -12597,12 +12680,27 @@ static inline void lucid_print_val(LucidVal v) {
                             return Ok(format!("lucid_zip({bundle})"));
                         }
                         "map" => {
-                            if args.len() != 2 {
+                            if args.len() < 2 {
                                 return Err(CodegenError {
-                                    message: "map() takes exactly two arguments".to_string(),
+                                    message: "map() requires at least 2 arguments".to_string(),
+                                });
+                            }
+                            if args.len() > 2 {
+                                return Err(CodegenError {
+                                    message: "map() accepts at most 2 arguments".to_string(),
                                 });
                             }
                             self.reject_raw_string_iterable_arg("map", &args[1].value)?;
+                            if !self.expr_may_be_callable_or_erased(&args[0].value) {
+                                return Err(CodegenError {
+                                    message: "map() first argument must be callable".into(),
+                                });
+                            }
+                            if !self.expr_may_be_iterable_or_erased(&args[1].value) {
+                                return Err(CodegenError {
+                                    message: "map() iterable argument must be iterable".into(),
+                                });
+                            }
                             enum MapBody {
                                 Expression(String, Expr),
                                 Block(Vec<(String, String)>, Vec<Stmt>),
@@ -12654,9 +12752,8 @@ static inline void lucid_print_val(LucidVal v) {
                                             .get(resolved)
                                             .cloned()
                                             .ok_or_else(|| CodegenError {
-                                                message: format!(
-                                                    "unknown map function '{function_name}'"
-                                                ),
+                                                message: "map() first argument must be callable"
+                                                    .into(),
                                             })?;
                                         if parameter_types.len() != 1 {
                                             return Err(CodegenError {
@@ -12696,7 +12793,8 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 _ => {
                                     return Err(CodegenError {
-                                        message: "native map() requires a named or expression-bodied anonymous unary function".to_string(),
+                                        message: "map() first argument must be callable"
+                                            .to_string(),
                                     });
                                 }
                             };
@@ -12825,6 +12923,11 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "abs() takes exactly one argument".to_string(),
                                 });
                             }
+                            if !self.expr_may_be_numeric_or_erased(&args[0].value) {
+                                return Err(CodegenError {
+                                    message: "abs() argument must be numeric".into(),
+                                });
+                            }
                             let arg_str = self.emit_expr(&args[0].value)?;
                             return Ok(format!("lucid_abs_value(lucid_wrap({arg_str}))"));
                         }
@@ -12936,6 +13039,13 @@ static inline void lucid_print_val(LucidVal v) {
                                     message: "complex() takes at most two arguments".to_string(),
                                 });
                             }
+                            for arg in args {
+                                if !self.expr_may_be_numeric_or_erased(&arg.value) {
+                                    return Err(CodegenError {
+                                        message: "complex() arguments must be numeric".into(),
+                                    });
+                                }
+                            }
                             let real = if args.is_empty() {
                                 "lucid_int(0)".to_string()
                             } else {
@@ -12954,6 +13064,11 @@ static inline void lucid_print_val(LucidVal v) {
                         "sum" => {
                             if let Some(a) = args.first() {
                                 self.reject_raw_string_iterable_arg("sum", &a.value)?;
+                                if !self.expr_may_be_iterable_or_erased(&a.value) {
+                                    return Err(CodegenError {
+                                        message: "sum() argument must be iterable".into(),
+                                    });
+                                }
                                 let arg_str = self.emit_expr(&a.value)?;
                                 if args.len() > 2 {
                                     return Err(CodegenError {
@@ -12962,7 +13077,14 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 let start_code = args
                                     .get(1)
-                                    .map(|arg| self.emit_expr(&arg.value))
+                                    .map(|arg| {
+                                        if !self.expr_may_be_numeric_or_erased(&arg.value) {
+                                            return Err(CodegenError {
+                                                message: "sum() start must be numeric".into(),
+                                            });
+                                        }
+                                        self.emit_expr(&arg.value)
+                                    })
                                     .transpose()?;
                                 let is_bigint_list = matches!(&a.value, Expr::List { elements, .. } if elements.iter().any(|element| self.expr_is_bigint(element)));
                                 let is_float_list = matches!(&a.value, Expr::List { elements, .. } if elements.iter().any(|element| matches!(element, Expr::Literal { value: LiteralValue::Float(_), .. })));
@@ -13181,6 +13303,26 @@ static inline void lucid_print_val(LucidVal v) {
                             return Ok(format!("lucid_dict_from_value(lucid_wrap({value}))"));
                         }
                         "range" => {
+                            for arg in args {
+                                if !self.expr_may_be_int_or_erased(&arg.value) {
+                                    return Err(CodegenError {
+                                        message: "range() arguments must be int".into(),
+                                    });
+                                }
+                            }
+                            if let Some(Arg {
+                                value:
+                                    Expr::Literal {
+                                        value: LiteralValue::Int(0),
+                                        ..
+                                    },
+                                ..
+                            }) = args.get(2)
+                            {
+                                return Err(CodegenError {
+                                    message: "range() step cannot be zero".into(),
+                                });
+                            }
                             let (start, stop, step) = match args.len() {
                                 1 => (
                                     "0LL".to_string(),
@@ -13199,7 +13341,11 @@ static inline void lucid_print_val(LucidVal v) {
                                 ),
                                 _ => {
                                     return Err(CodegenError {
-                                        message: "range() takes one to three arguments".to_string(),
+                                        message: if args.is_empty() {
+                                            "range() requires at least 1 argument".to_string()
+                                        } else {
+                                            "range() accepts at most 3 arguments".to_string()
+                                        },
                                     });
                                 }
                             };
@@ -23077,6 +23223,39 @@ print(result[1])
             let _ = fs::remove_file(&output);
             let error = compile_to_native(&module, &output, 0)
                 .expect_err("invalid module boundary must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn native_rejects_invalid_builtin_contracts() {
+        for (source, expected) in [
+            ("range()\n", "requires at least 1"),
+            ("range(1, \"bad\")\n", "arguments must be int"),
+            ("range(1, 2, 0)\n", "step cannot be zero"),
+            ("slice()\n", "requires at least 1"),
+            ("slice(1, \"bad\")\n", "bounds must be int or none"),
+            ("map(1)\n", "requires at least 2"),
+            ("map(1, [1])\n", "first argument must be callable"),
+            (
+                "def f(x):\n    return x\nmap(f, 1)\n",
+                "iterable argument must be iterable",
+            ),
+            ("enumerate([1], \"bad\")\n", "start must be int"),
+            ("complex(\"x\")\n", "arguments must be numeric"),
+            ("complex(1, 2, 3)\n", "at most two"),
+            ("fields()\n", "requires at least 1"),
+            ("abs(\"bad\")\n", "argument must be numeric"),
+        ] {
+            let module = parse(source).expect("invalid builtin-contract source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_native_builtin_contract_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("invalid builtin contract must fail native codegen");
             let _ = fs::remove_file(&output);
             assert!(error.message.contains(expected), "{source}: {error}");
         }
