@@ -467,8 +467,8 @@ diverged:
   `if_broken: pass` completion clause; effectful completion clauses remain
   outside this narrow lowering form. Range accumulators support both additive
   and subtractive induction updates with checked CIR arithmetic.
-* Pure discarded expressions before a return now pass through typed-CIR
-  lowering; effectful expressions remain rejected instead of being dropped.
+* Pure discarded expressions before value and bare returns now pass through
+  CIR lowering; effectful expressions remain rejected instead of being dropped.
   Their rejection now carries a dedicated diagnostic explaining that an
   effectful discarded expression needs a non-typed-CIR lowering path.
 * Manifest `entry_point` lookups now enforce public internal targets even when
