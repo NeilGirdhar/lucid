@@ -8830,30 +8830,6 @@ impl TypeChecker {
                 Ok(Type::make_union(vec![then_t, else_t]))
             }
             Expr::List { elements, .. } => {
-                if !elements.is_empty()
-                    && elements.iter().all(|element| {
-                        matches!(
-                            element,
-                            Expr::Literal {
-                                value: LiteralValue::Int(_),
-                                ..
-                            }
-                        )
-                    })
-                {
-                    return Ok(Type::Shape(
-                        elements
-                            .iter()
-                            .map(|element| match element {
-                                Expr::Literal {
-                                    value: LiteralValue::Int(n),
-                                    ..
-                                } => Some(*n),
-                                _ => None,
-                            })
-                            .collect(),
-                    ));
-                }
                 let elem_types: Vec<Type> = elements
                     .iter()
                     .filter(|e| !matches!(e, Expr::Skip(_)))
@@ -11344,6 +11320,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("type alias bounds should be active while resolving alias bodies");
+    }
+
+    #[test]
+    fn integer_list_literals_remain_lists_not_shapes() {
+        let module = parse(
+            "first, *rest = [1, 2, 3, 4]\nrest: list[int] = [2, 3, 4]\npoint: !list[int] = ![3, 4]\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("ordinary integer list literals should not be inferred as shape types");
     }
 
     #[test]
