@@ -33,7 +33,10 @@ pub enum Type {
         type_args: Vec<Type>,
         methods: HashSet<String>,
     },
-    Record(Vec<(Option<String>, Type)>),
+    Record {
+        fields: Vec<(Option<String>, Type)>,
+        is_open: bool,
+    },
     Function {
         params: Vec<Type>,
         return_type: Box<Type>,
@@ -89,12 +92,13 @@ impl Type {
             },
             Type::Future(inner) => Type::Future(Box::new(inner.canonical())),
             Type::Negation(inner) => Type::Negation(Box::new(inner.canonical())),
-            Type::Record(fields) => Type::Record(
-                fields
+            Type::Record { fields, is_open } => Type::Record {
+                fields: fields
                     .iter()
                     .map(|(name, ty)| (name.clone(), ty.canonical()))
                     .collect(),
-            ),
+                is_open: *is_open,
+            },
             Type::Class {
                 name,
                 type_args,
@@ -228,8 +232,8 @@ impl Type {
                     methods.join(",")
                 )
             }
-            Type::Record(fields) => format!(
-                "record({})",
+            Type::Record { fields, is_open } => format!(
+                "record({}{})",
                 fields
                     .iter()
                     .map(|(name, ty)| format!(
@@ -238,7 +242,8 @@ impl Type {
                         ty.canonical_string()
                     ))
                     .collect::<Vec<_>>()
-                    .join(",")
+                    .join(","),
+                if *is_open { ",..." } else { "" }
             ),
             Type::Function {
                 params,
@@ -397,7 +402,14 @@ impl Type {
         // Anonymous records are structural: a value may carry additional
         // fields, but every field required by the target shape must exist at
         // the declared position/name and satisfy its type.
-        if let (Type::Record(source), Type::Record(target_fields)) = (self, target) {
+        if let (
+            Type::Record { fields: source, .. },
+            Type::Record {
+                fields: target_fields,
+                ..
+            },
+        ) = (self, target)
+        {
             return target_fields
                 .iter()
                 .enumerate()
@@ -417,7 +429,10 @@ impl Type {
                 fields,
                 ..
             },
-            Type::Record(target_fields),
+            Type::Record {
+                fields: target_fields,
+                ..
+            },
         ) = (self, target)
         {
             fn class_field_type(
@@ -775,12 +790,13 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
                 .collect(),
             methods: methods.clone(),
         },
-        Type::Record(fields) => Type::Record(
-            fields
+        Type::Record { fields, is_open } => Type::Record {
+            fields: fields
                 .iter()
                 .map(|(name, ty)| (name.clone(), substitute_type(ty, substitutions)))
                 .collect(),
-        ),
+            is_open: *is_open,
+        },
         Type::Function {
             params,
             return_type,
@@ -3386,7 +3402,7 @@ impl TypeChecker {
                 .unwrap_or(Type::TypeVar("Any".into())),
             Type::Class { name, .. } if name == "range" => Type::Int,
             Type::Shape(_) => Type::Int,
-            Type::Record(fields) => Type::make_union(
+            Type::Record { fields, .. } => Type::make_union(
                 fields
                     .iter()
                     .map(|(_, field_type)| field_type.clone())
@@ -3418,7 +3434,7 @@ impl TypeChecker {
             base,
             Type::Class { name, .. }
                 if matches!(name.as_str(), "list" | "set" | "dict" | "range")
-        ) || matches!(base, Type::Shape(_) | Type::Record(_))
+        ) || matches!(base, Type::Shape(_) | Type::Record { .. })
             || matches!(base, Type::Class { name, .. }
                 if self.env.class_members.get(name).is_some_and(|members| members.contains("__iter__")))
     }
@@ -4432,7 +4448,7 @@ impl TypeChecker {
                                 .first()
                                 .cloned()
                                 .unwrap_or(Type::TypeVar("Any".into())),
-                            Type::Record(values) => values
+                            Type::Record { fields: values, .. } => values
                                 .first()
                                 .map(|(_, ty)| ty.clone())
                                 .unwrap_or(Type::TypeVar("Any".into())),
@@ -4599,7 +4615,7 @@ impl TypeChecker {
                                     ),
                                     span: *span,
                                 });
-                            } else if let Type::Record(fields) = &obj_type {
+                            } else if let Type::Record { fields, .. } = &obj_type {
                                 if let Some((_, field_type)) = fields
                                     .iter()
                                     .find(|(name, _)| name.as_deref() == Some(attr))
@@ -4641,7 +4657,7 @@ impl TypeChecker {
                             other => other,
                         };
                         match sequence_type {
-                            Type::Record(fields) => {
+                            Type::Record { fields, .. } => {
                                 let field_type = match &**index {
                                     Expr::Literal {
                                         value: LiteralValue::Int(position),
@@ -5425,7 +5441,7 @@ impl TypeChecker {
             }
             Pattern::Tuple(items, _) => {
                 let element_types = match subject_type {
-                    Type::Record(fields) => {
+                    Type::Record { fields, .. } => {
                         fields.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>()
                     }
                     Type::Class {
@@ -5466,7 +5482,7 @@ impl TypeChecker {
                         .as_ref()
                         .and_then(|name| match subject_type {
                             Type::Class { fields, .. } => fields.get(name),
-                            Type::Record(fields) => fields
+                            Type::Record { fields, .. } => fields
                                 .iter()
                                 .find(|(field, _)| field.as_ref() == Some(name))
                                 .map(|(_, ty)| ty),
@@ -5547,7 +5563,7 @@ impl TypeChecker {
                 Ok(())
             }
             Pattern::Tuple(items, _) => match subject_type {
-                Type::Record(fields)
+                Type::Record { fields, .. }
                     if items.len().saturating_sub(usize::from(
                         items.iter().any(|p| matches!(p, Pattern::Star(_, _))),
                     )) <= fields.len() =>
@@ -5562,7 +5578,9 @@ impl TypeChecker {
             },
             Pattern::Star(_, _) => Ok(()),
             Pattern::RecordDestructure(fields, _) => match subject_type {
-                Type::Record(declared) => {
+                Type::Record {
+                    fields: declared, ..
+                } => {
                     for (name, _) in fields {
                         if let Some(name) = name {
                             if !declared
@@ -5727,7 +5745,11 @@ impl TypeChecker {
         expected: &Type,
         span: Span,
     ) -> Result<Type, TypeError> {
-        let Type::Record(fields) = expected else {
+        let Type::Record {
+            fields,
+            is_open,
+        } = expected
+        else {
             return self.type_of_expr(&Expr::Dict {
                 entries: entries.to_vec(),
                 span,
@@ -5761,10 +5783,15 @@ impl TypeChecker {
                 }
             };
             let Some(field_type) = expected_fields.get(&field_name) else {
-                return Err(TypeError {
-                    message: format!("record has no field '{field_name}'"),
-                    span: key.span(),
-                });
+                if *is_open {
+                    self.type_of_expr(value)?;
+                    continue;
+                } else {
+                    return Err(TypeError {
+                        message: format!("record has no field '{field_name}'"),
+                        span: key.span(),
+                    });
+                }
             };
             if !seen.insert(field_name.clone()) {
                 return Err(TypeError {
@@ -7909,7 +7936,10 @@ impl TypeChecker {
                     .iter()
                     .map(|(name, value)| Ok((name.clone(), self.type_of_expr(value)?)))
                     .collect::<Result<Vec<_>, TypeError>>()?;
-                Ok(Type::Record(typed_fields))
+                Ok(Type::Record {
+                    fields: typed_fields,
+                    is_open: false,
+                })
             }
             Expr::Dict { entries, .. } => {
                 let key_types = entries
@@ -8189,7 +8219,7 @@ impl TypeChecker {
                                     return Ok(method_type);
                                 }
                             }
-                            Type::Record(ref fields) => {
+                            Type::Record { ref fields, .. } => {
                                 if let Some((_, field_type)) = fields
                                     .iter()
                                     .find(|(name, _)| name.as_deref() == Some(attr))
@@ -8232,7 +8262,7 @@ impl TypeChecker {
                             })
                         }
                     }
-                    Type::Record(fields) => fields
+                    Type::Record { fields, .. } => fields
                         .iter()
                         .find(|(name, _)| name.as_deref() == Some(attr))
                         .map(|(_, field_type)| field_type.clone())
@@ -8453,7 +8483,7 @@ impl TypeChecker {
                             {
                                 Ok(val_t.clone())
                             }
-                            Type::Shape(_) | Type::Record(_) => Ok(val_t.clone()),
+                            Type::Shape(_) | Type::Record { .. } => Ok(val_t.clone()),
                             _ => Err(TypeError {
                                 message: "value is not sliceable".into(),
                                 span: index.span(),
@@ -8463,11 +8493,11 @@ impl TypeChecker {
                             if matches!(
                                 name.as_str(),
                                 "list" | "str" | "range" | "Bytes" | "ByteArray" | "MemoryView"
-                            ) || matches!(&val_t, Type::Shape(_) | Type::Record(_)) =>
+                            ) || matches!(&val_t, Type::Shape(_) | Type::Record { .. }) =>
                         {
                             Ok(val_t)
                         }
-                        Type::Shape(_) | Type::Record(_) => Ok(val_t),
+                        Type::Shape(_) | Type::Record { .. } => Ok(val_t),
                         _ => Err(TypeError {
                             message: "value is not sliceable".into(),
                             span: index.span(),
@@ -8576,7 +8606,7 @@ impl TypeChecker {
                                 Ok(Type::Int)
                             }
                         }
-                        Type::Record(fields) => match &**index {
+                        Type::Record { fields, .. } => match &**index {
                             Expr::Literal {
                                 value: LiteralValue::Int(position),
                                 ..
@@ -9356,7 +9386,9 @@ impl TypeChecker {
                     }
                 }
             }
-            TypeExpr::Record { fields, .. } => {
+            TypeExpr::Record {
+                fields, is_open, ..
+            } => {
                 let mut names = HashSet::new();
                 let mut resolved = Vec::with_capacity(fields.len());
                 for field in fields {
@@ -9373,7 +9405,10 @@ impl TypeChecker {
                         self.resolve_type_expr(&field.type_expr)?,
                     ));
                 }
-                Ok(Type::Record(resolved))
+                Ok(Type::Record {
+                    fields: resolved,
+                    is_open: *is_open,
+                })
             }
             TypeExpr::Function {
                 params,
@@ -10920,7 +10955,7 @@ def reject(value: not int) -> none:
         aggregate_checker.check_module(&aggregate).unwrap();
         assert!(matches!(
             aggregate_checker.env.variables.get("record"),
-            Some((Type::Record(fields), _)) if fields.len() == 2
+            Some((Type::Record { fields, .. }, _)) if fields.len() == 2
         ));
         assert!(matches!(
             aggregate_checker.env.variables.get("mapping"),
@@ -10949,7 +10984,7 @@ def reject(value: not int) -> none:
             .unwrap();
         assert!(matches!(
             typed_dict_record_checker.env.variables.get("movie"),
-            Some((Type::Record(fields), _)) if fields.len() == 2
+            Some((Type::Record { fields, .. }, _)) if fields.len() == 2
         ));
         let bad_record_value =
             parse("type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": 1957, \"year\": 1957}\n")
@@ -10975,6 +11010,15 @@ def reject(value: not int) -> none:
             .check_module(&extra_record_field)
             .unwrap_err();
         assert!(error.message.contains("record has no field 'director'"));
+        let open_record_field =
+            parse("type Movie = {\"name\": str, \"year\": int, ...}\nmovie: Movie = {\"name\": \"Paths\", \"year\": 1957, \"director\": \"Kubrick\"}\n")
+                .unwrap();
+        let mut open_record_field_checker = TypeChecker::new();
+        open_record_field_checker.check_module(&open_record_field).unwrap();
+        assert!(matches!(
+            open_record_field_checker.env.variables.get("movie"),
+            Some((Type::Record { is_open: true, .. }, _))
+        ));
         let bad_record_index_assignment =
             parse("type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths\", \"year\": 1957}\nmovie[\"name\"] = 1957\n")
                 .unwrap();

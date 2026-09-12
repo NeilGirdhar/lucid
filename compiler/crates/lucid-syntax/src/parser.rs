@@ -3023,6 +3023,7 @@ impl Parser {
                 // Empty tuple type ()
                 return Ok(TypeExpr::Record {
                     fields: Vec::new(),
+                    is_open: false,
                     span: tok.span,
                 });
             }
@@ -3090,6 +3091,7 @@ impl Parser {
             let end = self.expect(&TokenKind::RParen)?.span;
             return Ok(TypeExpr::Record {
                 fields,
+                is_open: false,
                 span: tok.span.merge(end),
             });
         }
@@ -3161,8 +3163,10 @@ impl Parser {
                 });
             }
             let mut entries = Vec::new();
+            let mut is_open = false;
             while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
                 if self.match_tok(&TokenKind::Ellipsis) {
+                    is_open = true;
                     self.match_tok(&TokenKind::Comma);
                     continue;
                 }
@@ -3197,6 +3201,7 @@ impl Parser {
                 .collect();
             return Ok(TypeExpr::Record {
                 fields,
+                is_open,
                 span: tok.span.merge(end),
             });
         }

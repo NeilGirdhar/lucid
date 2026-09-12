@@ -139,7 +139,9 @@ fn type_form_name(type_expr: &TypeExpr) -> String {
                 .join(", "),
             type_form_name(return_type)
         ),
-        TypeExpr::Record { fields, .. } => format!(
+        TypeExpr::Record {
+            fields, is_open, ..
+        } => format!(
             "({})",
             fields
                 .iter()
@@ -148,6 +150,7 @@ fn type_form_name(type_expr: &TypeExpr) -> String {
                     field.name.as_deref().unwrap_or("_"),
                     type_form_name(&field.type_expr)
                 ))
+                .chain(is_open.then(|| "...".to_string()))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -18696,7 +18699,7 @@ print(all({1, 2}))
 
     #[test]
     fn native_typed_dict_record_alias_mutates_by_key() {
-        let source = "type Movie = {\"name\": str, \"year\": int}\nmovie: Movie = {\"name\": \"Paths of Glory\", \"year\": 1957}\nmovie[\"year\"] += 1\nmovie[\"name\"] = \"Paths\"\nprint(movie[\"name\"])\nprint(movie[\"year\"])\n";
+        let source = "type Movie = {\"name\": str, \"year\": int, ...}\nmovie: Movie = {\"name\": \"Paths of Glory\", \"year\": 1957, \"director\": \"Kubrick\"}\nmovie[\"year\"] += 1\nmovie[\"name\"] = \"Paths\"\nprint(movie[\"name\"])\nprint(movie[\"year\"])\nprint(movie[\"director\"])\n";
         let module = parse(source).expect("typed dict record source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_typed_dict_record_{}",
@@ -18712,7 +18715,10 @@ print(all({1, 2}))
             run.status.success(),
             "typed dict record execution failed: {run:?}"
         );
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "Paths\n1958\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "Paths\n1958\nKubrick\n"
+        );
     }
 
     #[test]

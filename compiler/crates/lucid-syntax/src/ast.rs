@@ -47,6 +47,7 @@ pub enum TypeExpr {
     },
     Record {
         fields: Vec<RecordFieldType>,
+        is_open: bool,
         span: Span,
     },
     View {

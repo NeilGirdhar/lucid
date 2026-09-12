@@ -325,12 +325,16 @@ def register(handler: class[Handler]) -> none:
     fn test_parse_dict_shape_type_as_record() {
         let module = parse("type Movie = {\"name\": str, \"year\": int}\n").unwrap();
         let Stmt::TypeAlias {
-            value: TypeAliasValue::Direct(TypeExpr::Record { fields, .. }),
+            value:
+                TypeAliasValue::Direct(TypeExpr::Record {
+                    fields, is_open, ..
+                }),
             ..
         } = &module.statements[0]
         else {
             panic!("expected record type alias");
         };
+        assert!(!is_open);
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name.as_deref(), Some("name"));
         assert!(matches!(
@@ -342,6 +346,16 @@ def register(handler: class[Handler]) -> none:
             fields[1].type_expr,
             TypeExpr::Named { ref name, .. } if name == "int"
         ));
+
+        let module = parse("type Movie = {\"name\": str, ...}\n").unwrap();
+        let Stmt::TypeAlias {
+            value: TypeAliasValue::Direct(TypeExpr::Record { is_open, .. }),
+            ..
+        } = &module.statements[0]
+        else {
+            panic!("expected open record type alias");
+        };
+        assert!(is_open);
     }
 
     #[test]
