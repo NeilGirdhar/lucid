@@ -674,6 +674,9 @@ diverged:
   grammar-error recovery and giving diagnostic consumers one error shape.
   Prefix and radix lexing now binds validated lookahead characters directly,
   eliminating the last production lexer `unwrap()` assumptions.
+  Parser lookahead now also clamps over-advanced cursors to the inserted EOF
+  token instead of relying on an internal `expect`, keeping hand-built token
+  streams total for editor and fuzzing callers.
 * Boolean literals are now preserved as exact `LiteralBool` types, with the
   parser accepting `true` and `false` in type positions and widening them to
   `bool` when required.

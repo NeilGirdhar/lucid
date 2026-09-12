@@ -29,9 +29,8 @@ impl Parser {
     }
 
     fn peek(&self) -> &Token {
-        self.tokens
-            .get(self.cursor)
-            .unwrap_or_else(|| self.tokens.last().expect("token stream must end with EOF"))
+        let index = self.cursor.min(self.tokens.len().saturating_sub(1));
+        &self.tokens[index]
     }
 
     fn peek_kind(&self) -> &TokenKind {
@@ -3786,5 +3785,17 @@ impl Parser {
                 span: self.peek().span,
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peek_clamps_to_inserted_eof_after_cursor_passes_end() {
+        let mut parser = Parser::new(Vec::new());
+        parser.cursor = usize::MAX;
+        assert_eq!(parser.peek_kind(), &TokenKind::Eof);
     }
 }
