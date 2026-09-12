@@ -8398,6 +8398,30 @@ impl TypeChecker {
                                 return_type: Box::new(Type::Str),
                             });
                         }
+                        if name == "SourceLocation" && attr == "caller" {
+                            return Ok(Type::Function {
+                                params: Vec::new(),
+                                return_type: Box::new(
+                                    self.env
+                                        .classes
+                                        .get("SourceLocation")
+                                        .cloned()
+                                        .unwrap_or(Type::TypeVar("SourceLocation".into())),
+                                ),
+                            });
+                        }
+                        if name == "VarName" && attr == "from_assignment" {
+                            return Ok(Type::Function {
+                                params: Vec::new(),
+                                return_type: Box::new(
+                                    self.env
+                                        .classes
+                                        .get("VarName")
+                                        .cloned()
+                                        .unwrap_or(Type::TypeVar("VarName".into())),
+                                ),
+                            });
+                        }
                         if attr == "replace"
                             && matches!(&**value, Expr::Ident { name: value_name, .. } if value_name == name && self.env.classes.contains_key(value_name))
                         {
@@ -12469,6 +12493,34 @@ def reject(value: not int) -> none:
             )
             .expect_err("read-only dictionary views must reject indexed writes");
         assert!(error.message.contains("read-only"));
+    }
+
+    #[test]
+    fn test_call_site_capture_intrinsics_are_typed() {
+        TypeChecker::new()
+            .check_module(
+                &parse(
+                    "def log(message: str, where: SourceLocation = SourceLocation.caller()) -> none:\n    print(message)\nclass Traceback:\n    location: SourceLocation\n    factory __init__(cls):\n        return construct(SourceLocation.caller())\nclass Field:\n    name: VarName\n    factory __init__(cls):\n        return construct(VarName.from_assignment())\n",
+                )
+                .unwrap(),
+            )
+            .expect("call-site capture intrinsics should type-check");
+
+        for (source, message) in [
+            (
+                "bad: SourceLocation = VarName.from_assignment()\n",
+                "type mismatch",
+            ),
+            (
+                "bad: VarName = SourceLocation.caller()\n",
+                "type mismatch",
+            ),
+        ] {
+            let error = TypeChecker::new()
+                .check_module(&parse(source).unwrap())
+                .expect_err("mismatched capture intrinsic should fail");
+            assert!(error.message.contains(message), "{}", error.message);
+        }
     }
 
     #[test]
