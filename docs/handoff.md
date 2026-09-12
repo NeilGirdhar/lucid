@@ -1192,15 +1192,15 @@ diverged:
   uppercase `case None` matches the singleton consistently in both backends.
   Interpreter `case range` now matches first-class `Value::Range` values and
   no longer binds a local named `range`; the checker and typed-HIR local scans
-  follow the same non-binding rule. Native `case range` now fails explicitly
-  until native `range(...)` expressions stop lowering directly to lists.
+  follow the same non-binding rule. Native `range(...)` now produces a
+  first-class `LUCID_TYPE_RANGE` value, so `case range` tests the range tag
+  instead of treating a range expression as a list.
   Native class-like identifier patterns that are not known classes now fail
   codegen instead of compiling as unconditional matches; lowercase binding
   patterns remain the match-all binding form.
   Native `is`/`is not` checks now use concrete value tags for represented
-  builtin value classes (`list`, `dict`, `set`, `DottedPath`, and `None`)
-  instead of falling through to object/trait checks. Native `is range` now
-  fails explicitly until native ranges are first-class.
+  builtin value classes (`list`, `dict`, `set`, `range`, `DottedPath`, and
+  `None`) instead of falling through to object/trait checks.
   Interpreter and native capability checks now agree that `DottedPath` is
   `Sized` and `Container`, matching its supported `len()` and indexing
   behavior.
@@ -1209,9 +1209,10 @@ diverged:
   `Collection`, matching the checker and interpreter.
   Generic builtin type patterns such as `case list[int]`, `case set[int]`,
   and `case dict[str, int]` now use those value-kind tests instead of falling
-  through as native match-all arms for non-container subjects. `range` remains
-  outside that set until native `range(...)` expressions stop lowering
-  directly to lists in expression contexts.
+  through as native match-all arms for non-container subjects. Native range
+  values also participate in erased `Sized`, `Container`, `Iterable`,
+  `Collection`, `Sequence`, and `Reversible` capability checks; `Shape`
+  remains list-only.
   Native lowering now rejects unsupported explicit type patterns instead of
   compiling them as unconditional matches.
   Native `except` handler conditions now follow the same rule: supported value

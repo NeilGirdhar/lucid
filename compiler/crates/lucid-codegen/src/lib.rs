@@ -1777,11 +1777,14 @@ impl CCodeGenerator {
             self.indent -= 1;
             self.emit_line("}");
         }
-        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET;");
+        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_RANGE;");
         self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_LIST || (value.type == LUCID_TYPE_PTR && value.ptr && lucid_object_buffer(value.ptr));");
-        self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0 || strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;");
+        self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_RANGE;");
+        self.emit_line(
+            "if (strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;",
+        );
         self.emit_line(
             "if (strcmp(capability, \"Set\") == 0) return value.type == LUCID_TYPE_SET;",
         );
@@ -1898,6 +1901,7 @@ typedef struct LucidDict LucidDict;
 typedef struct LucidSet LucidSet;
 typedef struct LucidBytes LucidBytes;
 typedef struct LucidMemoryView LucidMemoryView;
+typedef struct LucidRange LucidRange;
 typedef struct LucidVal LucidVal;
 typedef struct LucidFuture LucidFuture;
 typedef struct LucidContext LucidContext;
@@ -2065,6 +2069,7 @@ static inline LucidObjectBuffer lucid_object_buffer(void* ptr) {
     return NULL;
 }
 static int64_t lucid_dynamic_len(LucidVal value);
+static inline int64_t lucid_range_count(int64_t start, int64_t stop, int64_t step);
 static inline bool lucid_object_frozen(void* ptr) {
     for (size_t i = 0; i < lucid_object_tag_count; ++i) if (lucid_object_tags[i].ptr == ptr) return lucid_object_tags[i].frozen;
     return false;
@@ -2095,6 +2100,7 @@ typedef enum {
     LUCID_TYPE_DOTTED_PATH,
     LUCID_TYPE_BYTES,
     LUCID_TYPE_MEMORYVIEW,
+    LUCID_TYPE_RANGE,
     LUCID_TYPE_LIST,
     LUCID_TYPE_DICT,
     LUCID_TYPE_SET,
@@ -2117,6 +2123,7 @@ typedef struct LucidVal {
     LucidDict* dict;
     LucidSet* set;
     LucidMemoryView* view;
+    LucidRange* range;
     LucidFuture* future;
     LucidContext* context;
     void* ptr;
@@ -2157,6 +2164,12 @@ struct LucidMemoryView {
     int64_t len;
     int64_t stride;
     bool read_only;
+};
+
+struct LucidRange {
+    int64_t start;
+    int64_t stop;
+    int64_t step;
 };
 
 struct LucidFuture {
@@ -2789,6 +2802,9 @@ static inline LucidVal lucid_char_str(char* s) {
 static inline LucidVal lucid_list_val(LucidList* l) {
     LucidVal v = {0}; v.type = LUCID_TYPE_LIST; v.list = l; v.ptr = (void*)l; return v;
 }
+static inline LucidVal lucid_range_val(LucidRange* r) {
+    LucidVal v = {0}; v.type = LUCID_TYPE_RANGE; v.range = r; v.ptr = (void*)r; return v;
+}
 static inline LucidVal lucid_list_get(LucidList* l, int64_t idx);
 static inline void lucid_list_set(LucidList* l, int64_t idx, LucidVal v);
 static inline LucidVal lucid_memoryview(LucidVal value) {
@@ -2886,6 +2902,7 @@ static inline LucidVal _w_val(LucidVal v) { return v; }
     bool: lucid_bool, \
     char*: lucid_char_str, \
     const char*: lucid_str, \
+    LucidRange*: lucid_range_val, \
     LucidList*: lucid_list_val, \
     LucidDict*: lucid_dict_val, \
     LucidSet*: lucid_set_val, \
@@ -2987,6 +3004,7 @@ static inline bool lucid_as_bool(LucidVal v) {
     if (v.type == LUCID_TYPE_STR || v.type == LUCID_TYPE_DOTTED_PATH) return v.s && v.s[0] != '\0';
     if (v.type == LUCID_TYPE_BYTES) return v.bytes && v.bytes->len > 0;
     if (v.type == LUCID_TYPE_MEMORYVIEW) return v.view && v.view->len > 0;
+    if (v.type == LUCID_TYPE_RANGE) return v.range && lucid_range_count(v.range->start, v.range->stop, v.range->step) > 0;
     if (v.type == LUCID_TYPE_LIST) return v.list && v.list->len > 0;
     if (v.type == LUCID_TYPE_DICT) return v.dict && v.dict->len > 0;
     if (v.type == LUCID_TYPE_SET) return v.set && v.set->len > 0;
@@ -3014,6 +3032,7 @@ static inline const char* lucid_to_str(LucidVal v) {
     if (v.type == LUCID_TYPE_BIGINT) { snprintf(buf, 64, "%s", v.bigint ? v.bigint : "0"); return buf; }
     if (v.type == LUCID_TYPE_FLOAT) { snprintf(buf, 64, "%.10g", v.f); return buf; }
     if (v.type == LUCID_TYPE_COMPLEX) { snprintf(buf, 64, "(%g%+gj)", v.real, v.imag); return buf; }
+    if (v.type == LUCID_TYPE_RANGE) { snprintf(buf, 64, "range(%lld, %lld, %lld)", (long long)(v.range ? v.range->start : 0), (long long)(v.range ? v.range->stop : 0), (long long)(v.range ? v.range->step : 1)); return buf; }
     if (v.type == LUCID_TYPE_BOOL) return v.b ? "true" : "false";
     if (v.type == LUCID_TYPE_PTR) {
         LucidObjectRepr repr = lucid_object_repr(v.ptr);
@@ -3258,6 +3277,7 @@ static inline LucidVal lucid_repr_value(LucidVal value) {
     else if (value.type == LUCID_TYPE_FLOAT) snprintf(out, 256, "%.10g", value.f);
     else if (value.type == LUCID_TYPE_COMPLEX) snprintf(out, 256, "(%g%+gj)", value.real, value.imag);
     else if (value.type == LUCID_TYPE_BIGINT) snprintf(out, 256, "%s", value.bigint ? value.bigint : "0");
+    else if (value.type == LUCID_TYPE_RANGE) snprintf(out, 256, "range(%lld, %lld, %lld)", (long long)(value.range ? value.range->start : 0), (long long)(value.range ? value.range->stop : 0), (long long)(value.range ? value.range->step : 1));
     else if (value.type == LUCID_TYPE_BOOL) snprintf(out, 256, "%s", value.b ? "true" : "false");
     else if (value.type == LUCID_TYPE_NONE) snprintf(out, 256, "none");
     else if (value.type == LUCID_TYPE_LIST) snprintf(out, 256, "[list len=%lld]", (long long)(value.list ? value.list->len : 0));
@@ -3382,6 +3402,9 @@ static inline bool lucid_str_truthy(const char* value) {
 static inline bool lucid_list_truthy(LucidList* value) {
     return value != NULL && value->len > 0;
 }
+static inline bool lucid_range_truthy(LucidRange* value) {
+    return value != NULL && lucid_range_count(value->start, value->stop, value->step) > 0;
+}
 static inline bool lucid_dict_truthy(LucidDict* value) {
     return value != NULL && value->len > 0;
 }
@@ -3396,6 +3419,7 @@ static inline bool lucid_set_truthy(LucidSet* value) {
     long long: _b_int, \
     float: _b_float, \
     double: _b_float, \
+    LucidRange*: lucid_range_truthy, \
     LucidVal: _b_val, \
     default: _b_ptr \
 )(x)
@@ -3420,6 +3444,10 @@ static inline bool lucid_eq(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_BIGINT || b.type == LUCID_TYPE_BIGINT) return lucid_bigint_cmp(a, b) == 0;
     if (a.type == LUCID_TYPE_INT || b.type == LUCID_TYPE_INT) return a.i == b.i;
     if (a.type == LUCID_TYPE_BOOL && b.type == LUCID_TYPE_BOOL) return a.b == b.b;
+    if (a.type == LUCID_TYPE_RANGE && b.type == LUCID_TYPE_RANGE) {
+        if (!a.range || !b.range) return a.range == b.range;
+        return a.range->start == b.range->start && a.range->stop == b.range->stop && a.range->step == b.range->step;
+    }
     if (a.type == LUCID_TYPE_LIST && b.type == LUCID_TYPE_LIST) {
         if (!a.list || !b.list || a.list->len != b.list->len) return a.list == b.list;
         for (int64_t i = 0; i < a.list->len; ++i)
@@ -3464,6 +3492,7 @@ static inline bool lucid_identity(LucidVal a, LucidVal b) {
     if (a.type == LUCID_TYPE_LIST) return a.list == b.list;
     if (a.type == LUCID_TYPE_SET) return a.set == b.set;
     if (a.type == LUCID_TYPE_DICT) return a.dict == b.dict;
+    if (a.type == LUCID_TYPE_RANGE) return a.range == b.range;
     if (a.type == LUCID_TYPE_STR) return strcmp(a.s ? a.s : "", b.s ? b.s : "") == 0;
     if (a.type == LUCID_TYPE_BYTES) {
         if (!a.bytes || !b.bytes || a.bytes->len != b.bytes->len) return a.bytes == b.bytes;
@@ -3930,6 +3959,9 @@ static inline LucidSet* lucid_set_from_value(LucidVal value) {
         for (int64_t i = 0; i < value.set->len; ++i) lucid_set_add(out, value.set->items[i]);
     } else if (value.type == LUCID_TYPE_LIST) {
         for (int64_t i = 0; i < value.list->len; ++i) lucid_set_add(out, value.list->items[i]);
+    } else if (value.type == LUCID_TYPE_RANGE) {
+        LucidList* items = lucid_iterable_to_list(value);
+        for (int64_t i = 0; i < items->len; ++i) lucid_set_add(out, items->items[i]);
     } else if (value.type == LUCID_TYPE_STR) {
         LucidList* chars = lucid_iterable_to_list(value);
         for (int64_t i = 0; i < chars->len; ++i) lucid_set_add(out, chars->items[i]);
@@ -4243,6 +4275,16 @@ static inline LucidList* lucid_range_to_list(int64_t start, int64_t stop, int64_
     return l;
 }
 
+static inline LucidRange* lucid_range_new(int64_t start, int64_t stop, int64_t step) {
+    if (step == 0) { fprintf(stderr, "range() step cannot be zero\n"); exit(1); }
+    LucidRange* range = (LucidRange*)malloc(sizeof(LucidRange));
+    if (!range) { fprintf(stderr, "out of memory allocating range\n"); exit(1); }
+    range->start = start;
+    range->stop = stop;
+    range->step = step;
+    return range;
+}
+
 static inline LucidList* lucid_iterable_to_list(LucidVal value) {
     if (value.type == LUCID_TYPE_PTR && value.ptr) {
         LucidObjectIter iter = lucid_object_iter(value.ptr);
@@ -4271,6 +4313,9 @@ static inline LucidList* lucid_iterable_to_list(LucidVal value) {
     }
     if (value.type == LUCID_TYPE_MEMORYVIEW && value.view) {
         return lucid_memoryview_to_list(value.view);
+    }
+    if (value.type == LUCID_TYPE_RANGE && value.range) {
+        return lucid_range_to_list(value.range->start, value.range->stop, value.range->step);
     }
     if (value.type == LUCID_TYPE_SET && value.set) {
         LucidList* out = lucid_list_new(value.set->len);
@@ -4564,6 +4609,7 @@ static inline LucidVal lucid_slice_value(LucidVal value, int64_t start, int64_t 
 }
 
 static inline int64_t _len_list(LucidList* l) { return l ? l->len : 0; }
+static inline int64_t _len_range(LucidRange* r) { return r ? lucid_range_count(r->start, r->stop, r->step) : 0; }
 static inline int64_t _len_str(const char* s) {
     int64_t n = 0; if (!s) return 0;
     for (const unsigned char* p = (const unsigned char*)s; *p; ++n) p += (*p < 0x80 ? 1 : ((*p & 0xe0) == 0xc0 ? 2 : ((*p & 0xf0) == 0xe0 ? 3 : 4)));
@@ -4575,6 +4621,7 @@ static inline int64_t _len_val(LucidVal v) {
     if (v.type == LUCID_TYPE_DOTTED_PATH) return lucid_dotted_path_len(v.s);
     if (v.type == LUCID_TYPE_BYTES) return v.bytes ? v.bytes->len : 0;
     if (v.type == LUCID_TYPE_MEMORYVIEW) return v.view ? v.view->len : 0;
+    if (v.type == LUCID_TYPE_RANGE) return v.range ? lucid_range_count(v.range->start, v.range->stop, v.range->step) : 0;
     if (v.type == LUCID_TYPE_DICT) return v.dict ? v.dict->len : 0;
     if (v.type == LUCID_TYPE_SET) return v.set ? v.set->len : 0;
     if (v.type == LUCID_TYPE_PTR && v.ptr) return lucid_dynamic_len(v);
@@ -4584,6 +4631,7 @@ static inline int64_t _len_def(void* p) { (void)p; return 0; }
 
 #define lucid_len(x) _Generic((x), \
     LucidList*: _len_list, \
+    LucidRange*: _len_range, \
     char*: _len_str, \
     const char*: _len_str, \
     LucidVal: _len_val, \
@@ -4950,7 +4998,7 @@ static inline void lucid_print_val(LucidVal v) {
                         "set" => "LucidSet*".to_string(),
                         "dict" => "LucidDict*".to_string(),
                         "slice" => "LucidDict*".to_string(),
-                        "range" => "LucidList*".to_string(),
+                        "range" => "LucidRange*".to_string(),
                         "freeze" => args
                             .first()
                             .map(|a| self.infer_expr_type(&a.value, vars))
@@ -5441,12 +5489,7 @@ static inline void lucid_print_val(LucidVal v) {
                 "list" => format!("{subject}.type == LUCID_TYPE_LIST"),
                 "set" => format!("{subject}.type == LUCID_TYPE_SET"),
                 "dict" => format!("{subject}.type == LUCID_TYPE_DICT"),
-                "range" => {
-                    return Err(CodegenError {
-                        message: "native range patterns require first-class native ranges"
-                            .to_string(),
-                    });
-                }
+                "range" => format!("{subject}.type == LUCID_TYPE_RANGE"),
                 "DottedPath" => format!("{subject}.type == LUCID_TYPE_DOTTED_PATH"),
                 "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
                 name if self.known_classes.contains_key(name) => {
@@ -5510,6 +5553,7 @@ static inline void lucid_print_val(LucidVal v) {
                     "list" => format!("{subject}.type == LUCID_TYPE_LIST"),
                     "set" => format!("{subject}.type == LUCID_TYPE_SET"),
                     "dict" => format!("{subject}.type == LUCID_TYPE_DICT"),
+                    "range" => format!("{subject}.type == LUCID_TYPE_RANGE"),
                     "DottedPath" => format!("{subject}.type == LUCID_TYPE_DOTTED_PATH"),
                     "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
                     name if self.known_classes.contains_key(name) => self
@@ -10646,10 +10690,11 @@ static inline void lucid_print_val(LucidVal v) {
                                     format!("(lucid_wrap({l_str}).type == LUCID_TYPE_DOTTED_PATH)")
                                 }
                                 "range" => {
-                                    return Err(CodegenError {
-                                        message: "native range type checks require first-class native ranges"
-                                            .to_string(),
-                                    });
+                                    if left_ty == "LucidRange*" {
+                                        "((bool)1)".into()
+                                    } else {
+                                        format!("(lucid_wrap({l_str}).type == LUCID_TYPE_RANGE)")
+                                    }
                                 }
                                 name if self.known_classes.contains_key(name) => {
                                     if left_ty.ends_with('*') {
@@ -10928,10 +10973,11 @@ static inline void lucid_print_val(LucidVal v) {
                                     format!("(lucid_wrap({l_str}).type != LUCID_TYPE_DOTTED_PATH)")
                                 }
                                 "range" => {
-                                    return Err(CodegenError {
-                                        message: "native range type checks require first-class native ranges"
-                                            .to_string(),
-                                    });
+                                    if left_ty == "LucidRange*" {
+                                        "((bool)0)".into()
+                                    } else {
+                                        format!("(lucid_wrap({l_str}).type != LUCID_TYPE_RANGE)")
+                                    }
                                 }
                                 name if self.known_classes.contains_key(name) => {
                                     if left_ty.ends_with('*') {
@@ -12596,7 +12642,7 @@ static inline void lucid_print_val(LucidVal v) {
                                     });
                                 }
                             };
-                            return Ok(format!("lucid_range_to_list({start}, {stop}, {step})"));
+                            return Ok(format!("lucid_range_new({start}, {stop}, {step})"));
                         }
                         "str" => {
                             if args.len() != 1 {
@@ -15765,20 +15811,19 @@ print(" ".join(capitalized))
     }
 
     #[test]
-    fn native_match_rejects_range_pattern_until_ranges_are_first_class() {
+    fn native_match_range_pattern_tests_range_values() {
         let source = "value = range(3)\nmatch value:\n    case range:\n        print(1)\n    case _:\n        print(0)\n";
         let module = parse(source).expect("range match pattern source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_range_match_pattern_{}",
             std::process::id()
         ));
-        let error = compile_to_native(&module, &output, 0)
-            .expect_err("native range pattern must fail until ranges are first class");
-        assert!(
-            error
-                .message
-                .contains("native range patterns require first-class native ranges")
-        );
+        compile_to_native(&module, &output, 0).expect("range match pattern should compile");
+        let result = std::process::Command::new(&output)
+            .output()
+            .expect("run native binary");
+        assert!(result.status.success(), "native program failed: {result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "1");
         let _ = std::fs::remove_file(output);
     }
 
@@ -17753,21 +17798,21 @@ print(missing is not list)
     }
 
     #[test]
-    fn native_range_type_check_fails_until_ranges_are_first_class() {
-        let source = "value = range(3)\nprint(value is range)\n";
+    fn native_range_type_check_uses_range_tag() {
+        let source = "value = range(3)\nprint(value is range)\nprint(value is not list)\nprint(len(value))\nprint(list(value)[2])\nprint(bool(range(5, 5)))\n";
         let module = parse(source).expect("range type-check source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_range_type_check_{}",
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        let error = compile_to_native(&module, &output, 0)
-            .expect_err("native range type checks must fail until ranges are first class");
+        compile_to_native(&module, &output, 0).expect("range type check source should compile");
+        let run = Command::new(&output).output().expect("run native binary");
         let _ = fs::remove_file(&output);
-        assert!(
-            error
-                .message
-                .contains("native range type checks require first-class native ranges")
+        assert!(run.status.success(), "native program failed: {run:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "true\ntrue\n3\n2\nfalse\n"
         );
     }
 
