@@ -17731,6 +17731,8 @@ print(unique is set)
 print(unique is not dict)
 print(path is DottedPath)
 print(path is not list)
+print(path is Sized)
+print(path is Container)
 print(missing is None)
 print(missing is not list)
 "#;
@@ -17746,7 +17748,7 @@ print(missing is not list)
         assert!(run.status.success(), "native program failed: {run:?}");
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+            "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
         );
     }
 

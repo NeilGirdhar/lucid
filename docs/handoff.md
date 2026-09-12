@@ -1201,6 +1201,9 @@ diverged:
   builtin value classes (`list`, `dict`, `set`, `DottedPath`, and `None`)
   instead of falling through to object/trait checks. Native `is range` now
   fails explicitly until native ranges are first-class.
+  Interpreter and native capability checks now agree that `DottedPath` is
+  `Sized` and `Container`, matching its supported `len()` and indexing
+  behavior.
   Generic builtin type patterns such as `case list[int]`, `case set[int]`,
   and `case dict[str, int]` now use those value-kind tests instead of falling
   through as native match-all arms for non-container subjects. `range` remains

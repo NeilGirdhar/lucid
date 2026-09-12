@@ -6694,6 +6694,7 @@ impl Interpreter {
                                     lval,
                                     Value::Str(_)
                                         | Value::Bytes(_)
+                                        | Value::DottedPath(_)
                                         | Value::List(_)
                                         | Value::Set(_)
                                         | Value::Dict(_)
@@ -6705,6 +6706,7 @@ impl Interpreter {
                                     lval,
                                     Value::Str(_)
                                         | Value::Bytes(_)
+                                        | Value::DottedPath(_)
                                         | Value::List(_)
                                         | Value::Set(_)
                                         | Value::Dict(_)
@@ -13033,15 +13035,14 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
 
     #[test]
     fn function_values_expose_identity_metadata() {
-        let module =
-            parse("def answer(value: int):\n    return value + 1\nname = answer.__name__\n")
-                .unwrap();
+        let module = parse("def answer(value: int):\n    return value + 1\nname = answer.__name__\npath = answer.__path__\npath_sized = path is Sized\npath_container = path is Container\n")
+            .unwrap();
         let mut interp = Interpreter::default();
         interp.eval_module(&module).unwrap();
-        assert_eq!(
-            interp.env.borrow().get("name"),
-            Some(Value::Str("answer".into()))
-        );
+        let env = interp.env.borrow();
+        assert_eq!(env.get("name"), Some(Value::Str("answer".into())));
+        assert_eq!(env.get("path_sized"), Some(Value::Bool(true)));
+        assert_eq!(env.get("path_container"), Some(Value::Bool(true)));
     }
 
     #[test]
