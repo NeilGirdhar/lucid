@@ -571,10 +571,13 @@ diverged:
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
   CIR/native path. The returned accumulator name now identifies the
   accumulator initializer, so those local range-bound aliases may appear before
-  or after `total = ...`. Range accumulator updates accept induction or signed
-  literal operands with `+=`, `-=`, `x = x + y`, `x = x - y`, and the
-  commuted additive spelling `x = y + x`. An unused pre-loop alias is still
-  rejected instead of being treated as loop setup.
+  or after `total = ...`. The range-bound setup resolver can also follow a
+  bounded local alias chain inside that accepted setup, such as
+  `start = seed; begin = start; for i in range(begin, n)`, while still
+  rejecting unused or cyclic setup aliases. Range accumulator updates accept
+  induction or signed literal operands with `+=`, `-=`, `x = x + y`,
+  `x = x - y`, and the commuted additive spelling `x = y + x`. An unused
+  pre-loop alias is still rejected instead of being treated as loop setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from a signed integer literal or parameter, then updated before
   the induction update. Plain counted loops and accumulator loops use the same

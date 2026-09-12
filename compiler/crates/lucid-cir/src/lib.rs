@@ -4000,50 +4000,81 @@ impl Function {
             }
             _ => return None,
         };
-        let operand = |expr: &lucid_syntax::Expr, result: ValueId| -> Option<Instruction> {
-            for statement in &bound_aliases {
+        fn bound_alias_value<'a>(
+            name: &str,
+            bound_aliases: &[&'a lucid_syntax::Stmt],
+        ) -> Option<&'a lucid_syntax::Expr> {
+            for statement in bound_aliases {
                 let (alias_name, value) = initialized_ident(statement)?;
-                if matches!(expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name) {
-                    return match Self::int_literal_expr(value) {
-                        Some(value) => Some(Instruction::ConstInt { result, value }),
-                        None => match value {
-                            lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
+                if alias_name == name {
+                    return Some(value);
+                }
+            }
+            None
+        }
+        fn expr_uses_bound_alias(
+            expr: &lucid_syntax::Expr,
+            alias: &str,
+            bound_aliases: &[&lucid_syntax::Stmt],
+            depth: usize,
+        ) -> Option<bool> {
+            if depth > bound_aliases.len() {
+                return Some(false);
+            }
+            let lucid_syntax::Expr::Ident { name, .. } = expr else {
+                return Some(false);
+            };
+            if name == alias {
+                return Some(true);
+            }
+            match bound_alias_value(name, bound_aliases) {
+                Some(value) => expr_uses_bound_alias(value, alias, bound_aliases, depth + 1),
+                None => Some(false),
+            }
+        }
+        fn operand(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            bound_aliases: &[&lucid_syntax::Stmt],
+            parameter_names: &[String],
+            depth: usize,
+        ) -> Option<Instruction> {
+            if depth > bound_aliases.len() {
+                return None;
+            }
+            match Function::int_literal_expr(expr) {
+                Some(value) => Some(Instruction::ConstInt { result, value }),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } => {
+                        if let Some(value) = bound_alias_value(name, bound_aliases) {
+                            operand(value, result, bound_aliases, parameter_names, depth + 1)
+                        } else {
+                            Some(Instruction::Param {
                                 result,
                                 index: parameter_names
                                     .iter()
                                     .position(|parameter| parameter == name)?
                                     as u32,
-                            }),
-                            _ => None,
-                        },
-                    };
-                }
-            }
-            match Self::int_literal_expr(expr) {
-                Some(value) => Some(Instruction::ConstInt { result, value }),
-                None => match expr {
-                    lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
-                        result,
-                        index: parameter_names
-                            .iter()
-                            .position(|parameter| parameter == name)?
-                            as u32,
-                    }),
+                            })
+                        }
+                    }
                     _ => None,
                 },
             }
-        };
+        }
         for statement in &bound_aliases {
             let (alias_name, _) = initialized_ident(statement)?;
-            if !matches!(start_expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name)
-                && !matches!(stop_expr, lucid_syntax::Expr::Ident { name, .. } if name == alias_name)
+            if !expr_uses_bound_alias(start_expr, alias_name, &bound_aliases, 0)?
+                && !expr_uses_bound_alias(stop_expr, alias_name, &bound_aliases, 0)?
             {
                 return None;
             }
         }
-        let start_instruction = operand(start_expr, ValueId(1))?;
-        let stop_instruction = operand(stop_expr, ValueId(0))?;
-        let accumulator_instruction = operand(initial_expr, ValueId(2))?;
+        let start_instruction =
+            operand(start_expr, ValueId(1), &bound_aliases, parameter_names, 0)?;
+        let stop_instruction = operand(stop_expr, ValueId(0), &bound_aliases, parameter_names, 0)?;
+        let accumulator_instruction =
+            operand(initial_expr, ValueId(2), &bound_aliases, parameter_names, 0)?;
         let accumulator_operand_value = match accumulator_operand {
             RangeAccumulatorOperand::Literal(_) => ValueId(9),
             RangeAccumulatorOperand::Induction => ValueId(3),
@@ -9742,6 +9773,21 @@ return total
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("range reordered start alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+start = seed
+begin = start
+for i in range(begin, n):
+    total += i
+return total
+"#,
+        )
+        .expect("range chained start alias accumulation fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
+                .expect("range chained start alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
 
         let module = lucid_syntax::parse(
