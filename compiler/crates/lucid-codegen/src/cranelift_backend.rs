@@ -3090,6 +3090,31 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_local_alias_arithmetic_bound_counted_while_accumulator_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = limit
+tick = step
+while n > stop + 1:
+    total += tick
+    n -= tick
+return total
+"#,
+        )
+        .expect("local alias arithmetic-bound accumulator fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local alias arithmetic-bound accumulator should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile local alias arithmetic-bound accumulator CFG");
+        let result = unsafe { compiled.call_result_with_args(&[10, 2, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 9);
+    }
+
+    #[test]
     fn result_abi_executes_local_bound_local_step_parameter_induction_counted_while_cfg() {
         let module = lucid_syntax::parse(
             r#"stop = limit

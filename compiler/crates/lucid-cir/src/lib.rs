@@ -2873,6 +2873,16 @@ impl Function {
                     .position(|parameter| parameter == name)? as u32,
             })
         }
+        fn expr_uses_ident(expr: &lucid_syntax::Expr, target: &str) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => name == target,
+                lucid_syntax::Expr::Unary { expr, .. } => expr_uses_ident(expr, target),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    expr_uses_ident(left, target) || expr_uses_ident(right, target)
+                }
+                _ => false,
+            }
+        }
         fn operand_instruction(
             expr: &lucid_syntax::Expr,
             result: ValueId,
@@ -2996,7 +3006,15 @@ impl Function {
                             Some(statement) => {
                                 let (alias_name, _) = initialized_ident(statement)?;
                                 if alias_name == name {
-                                    None
+                                    Some((
+                                        initializer_instruction(
+                                            statement,
+                                            alias_name,
+                                            result,
+                                            parameter_names,
+                                        )?,
+                                        true,
+                                    ))
                                 } else {
                                     Some((
                                         parameter_instruction(name, result, parameter_names)?,
@@ -3160,7 +3178,51 @@ impl Function {
                     )
                     .is_some() =>
                     {
-                        if first_name == induction_name && second_name != induction_name {
+                        if expr_uses_ident(expr, first_name)
+                            && first_name != induction_name
+                            && second_name == induction_name
+                        {
+                            (
+                                Some(second_statement),
+                                Some(first_statement),
+                                None,
+                                while_statement,
+                                None,
+                            )
+                        } else if expr_uses_ident(expr, second_name)
+                            && second_name != induction_name
+                            && first_name == induction_name
+                        {
+                            (
+                                Some(first_statement),
+                                Some(second_statement),
+                                None,
+                                while_statement,
+                                None,
+                            )
+                        } else if expr_uses_ident(expr, first_name)
+                            && first_name != induction_name
+                            && second_name != induction_name
+                        {
+                            (
+                                None,
+                                Some(first_statement),
+                                Some(second_statement),
+                                while_statement,
+                                None,
+                            )
+                        } else if expr_uses_ident(expr, second_name)
+                            && second_name != induction_name
+                            && first_name != induction_name
+                        {
+                            (
+                                None,
+                                Some(second_statement),
+                                Some(first_statement),
+                                while_statement,
+                                None,
+                            )
+                        } else if first_name == induction_name && second_name != induction_name {
                             (
                                 Some(first_statement),
                                 None,
@@ -3255,7 +3317,51 @@ impl Function {
                     )
                     .is_some() =>
                     {
-                        if first_name == induction_name && second_name != induction_name {
+                        if expr_uses_ident(expr, first_name)
+                            && first_name != induction_name
+                            && second_name == induction_name
+                        {
+                            (
+                                Some(second_statement),
+                                Some(first_statement),
+                                None,
+                                while_statement,
+                                Some(name),
+                            )
+                        } else if expr_uses_ident(expr, second_name)
+                            && second_name != induction_name
+                            && first_name == induction_name
+                        {
+                            (
+                                Some(first_statement),
+                                Some(second_statement),
+                                None,
+                                while_statement,
+                                Some(name),
+                            )
+                        } else if expr_uses_ident(expr, first_name)
+                            && first_name != induction_name
+                            && second_name != induction_name
+                        {
+                            (
+                                None,
+                                Some(first_statement),
+                                Some(second_statement),
+                                while_statement,
+                                Some(name),
+                            )
+                        } else if expr_uses_ident(expr, second_name)
+                            && second_name != induction_name
+                            && first_name != induction_name
+                        {
+                            (
+                                None,
+                                Some(second_statement),
+                                Some(first_statement),
+                                while_statement,
+                                Some(name),
+                            )
+                        } else if first_name == induction_name && second_name != induction_name {
                             (
                                 Some(first_statement),
                                 None,
@@ -3415,8 +3521,7 @@ impl Function {
                 let (target_name, _) = initialized_ident(statement)?;
                 if target_name == name {
                     (Some(statement), None, None)
-                } else if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target_name)
-                {
+                } else if expr_uses_ident(right.as_ref(), target_name) {
                     (None, Some(statement), None)
                 } else {
                     (None, None, Some(statement))
@@ -3690,6 +3795,16 @@ impl Function {
                     .position(|parameter| parameter == name)? as u32,
             })
         }
+        fn expr_uses_ident(expr: &lucid_syntax::Expr, target: &str) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => name == target,
+                lucid_syntax::Expr::Unary { expr, .. } => expr_uses_ident(expr, target),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    expr_uses_ident(left, target) || expr_uses_ident(right, target)
+                }
+                _ => false,
+            }
+        }
         fn operand_instruction(
             expr: &lucid_syntax::Expr,
             result: ValueId,
@@ -3711,7 +3826,11 @@ impl Function {
                             Some(statement) => {
                                 let (alias_name, _) = initialized_ident(statement)?;
                                 if alias_name == name {
-                                    None
+                                    let (_, value) = initialized_ident(statement)?;
+                                    Some((
+                                        initializer_instruction(value, result, parameter_names)?,
+                                        true,
+                                    ))
                                 } else {
                                     Some((
                                         parameter_instruction(name, result, parameter_names)?,
@@ -3922,16 +4041,16 @@ impl Function {
                     } else {
                         return None;
                     };
-                let (induction_statement, bound_initial, alias_statement) = if other_name
-                    == induction_name
-                {
-                    (Some(other_statement), None, None)
-                } else if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == other_name && name != induction_name)
-                {
-                    (None, Some(other_statement), None)
-                } else {
-                    (None, None, Some(other_statement))
-                };
+                let (induction_statement, bound_initial, alias_statement) =
+                    if other_name == induction_name {
+                        (Some(other_statement), None, None)
+                    } else if expr_uses_ident(right.as_ref(), other_name)
+                        && other_name != induction_name
+                    {
+                        (None, Some(other_statement), None)
+                    } else {
+                        (None, None, Some(other_statement))
+                    };
                 (
                     acc_name,
                     initial_expr,
@@ -4040,7 +4159,35 @@ impl Function {
                             return_name,
                         )
                     }
-                    _ => return None,
+                    expr => {
+                        let bound_index = initializers.iter().position(|(name, _)| {
+                            *name != acc_name
+                                && *name != induction_name
+                                && expr_uses_ident(expr, name)
+                        })?;
+                        let induction_index = initializers
+                            .iter()
+                            .position(|(name, _)| *name == induction_name);
+                        if acc_index == bound_index || induction_index == Some(bound_index) {
+                            return None;
+                        }
+                        let alias_index = [0usize, 1, 2].into_iter().find(|index| {
+                            *index != acc_index
+                                && *index != bound_index
+                                && induction_index != Some(*index)
+                        });
+                        (
+                            acc_name,
+                            initial_expr,
+                            induction_index.map(|index| initializer_statements[index]),
+                            Some(initializer_statements[bound_index]),
+                            alias_index.map(|index| initializer_statements[index]),
+                            condition,
+                            body,
+                            if_broken,
+                            return_name,
+                        )
+                    }
                 }
             }
             [first_statement, second_statement, third_statement, fourth_statement, while_statement, return_statement] =>
@@ -10592,6 +10739,20 @@ return n
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
 
         let module = lucid_syntax::parse(
+            r#"stop = limit
+while n > stop + 1:
+    n -= 1
+return n
+"#,
+        )
+        .expect("local alias arithmetic-bound counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("local alias arithmetic-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
             r#"while n > 1 + 1:
     n -= 1
 return n
@@ -11101,6 +11262,25 @@ return total
         .expect("dynamic arithmetic accumulator counted loop should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 2, 2]), Ok(Some(9)));
         assert_eq!(function.execute_with_args(&[1, 2, 2]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = limit
+tick = step
+while n > stop + 1:
+    total += tick
+    n -= tick
+return total
+"#,
+        )
+        .expect("local alias arithmetic-bound accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local alias arithmetic-bound accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(Some(9)));
+        assert_eq!(function.execute_with_args(&[1, 2, 3]), Ok(Some(0)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
