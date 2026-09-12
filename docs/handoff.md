@@ -138,6 +138,9 @@ and ordinary-class `***` gathers through the erased call ABI, including
 missing fields, surplus arguments, and unknown keywords. The parser and
 checker enforce positional-only/keyword-only boundaries, duplicate named
 arguments, and positional-after-named ordering for both functions and methods.
+Named calls also enforce each function's required and maximum arity, while
+retaining the unbounded arity of positional-variadic, keyword-variadic, and
+gathered signatures.
 Native hashing now detects `strtoll` overflow and uses the same decimal fold
 for wide BigInts as the interpreter.
 Native `format` now preserves decimal BigInt values when no format specifier
