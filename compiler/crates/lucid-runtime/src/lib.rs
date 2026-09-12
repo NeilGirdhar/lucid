@@ -4606,6 +4606,12 @@ impl Interpreter {
         // placeholders with the complete definitions.
         let mut sub_interp = Interpreter::new();
         let module_env = Rc::clone(&sub_interp.env);
+        let builtin_dispatch_counts = sub_interp
+            .dispatch
+            .methods
+            .iter()
+            .map(|(name, entries)| (name.clone(), entries.len()))
+            .collect::<HashMap<_, _>>();
         for statement in &parsed.statements {
             let statement = match statement {
                 Stmt::Export(inner) => inner.as_ref(),
@@ -4654,6 +4660,12 @@ impl Interpreter {
         self.classes.extend(sub_interp.classes);
         self.class_vars.extend(sub_interp.class_vars);
         self.traits.extend(sub_interp.traits);
+        for (name, entries) in sub_interp.dispatch.methods {
+            let builtin_count = builtin_dispatch_counts.get(&name).copied().unwrap_or(0);
+            for entry in entries.into_iter().skip(builtin_count) {
+                self.dispatch.register(name.clone(), entry.param_types, entry.func);
+            }
+        }
         self.module_cache = sub_interp.module_cache;
         self.module_loading = sub_interp.module_loading;
         self.module_loading.remove(&canon);
@@ -11239,6 +11251,31 @@ abs_val = math.abs(-42)
             interp.env.borrow().get("item"),
             Some(Value::Object { class_name, .. }) if class_name == "Box"
         ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn imported_dispatch_overloads_are_registered_in_parent_interpreter() {
+        let root = std::env::temp_dir().join(format!(
+            "lucid_runtime_imported_dispatch_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("child.lucid"),
+            "dispatch def choose(a: int, b: int):\n    return 1\ndispatch def choose(a: str, b: str):\n    return 2\n",
+        )
+        .unwrap();
+        let entry = root.join("entry.lucid");
+        let source = "import .child\n";
+        std::fs::write(&entry, source).unwrap();
+        let module = parse(source).unwrap();
+        let mut interp = Interpreter::default();
+        interp.set_current_file(Some(entry));
+        interp.eval_module(&module).expect("dispatch module should load");
+        assert_eq!(interp.call_dispatch("choose", &[Value::Int(2), Value::Int(3)]), Ok(Value::Int(1)));
+        assert_eq!(interp.call_dispatch("choose", &[Value::Str("a".into()), Value::Str("b".into())]), Ok(Value::Int(2)));
         let _ = std::fs::remove_dir_all(root);
     }
 
