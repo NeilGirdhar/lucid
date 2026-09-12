@@ -2074,9 +2074,11 @@ pub fn lower_function_body(
             lucid_syntax::Expr::Ident { .. }
                 | lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Int(_)
+                        | lucid_syntax::LiteralValue::BigInt(_)
                         | lucid_syntax::LiteralValue::Bool(_)
                         | lucid_syntax::LiteralValue::Float(_)
                         | lucid_syntax::LiteralValue::Str(_)
+                        | lucid_syntax::LiteralValue::Bytes(_)
                         | lucid_syntax::LiteralValue::None,
                     ..
                 }
@@ -2117,9 +2119,11 @@ pub fn lower_function_body(
         #[derive(Clone, Copy, PartialEq, Eq)]
         enum PrimitiveMatchLiteral<'a> {
             Int(i64),
+            BigInt(&'a str),
             Bool(bool),
             Float(u64),
             Str(&'a str),
+            Bytes(&'a [u8]),
             None,
         }
         fn primitive_literal(expr: &lucid_syntax::Expr) -> Option<PrimitiveMatchLiteral<'_>> {
@@ -2128,6 +2132,10 @@ pub fn lower_function_body(
                     value: lucid_syntax::LiteralValue::Int(value),
                     ..
                 } => Some(PrimitiveMatchLiteral::Int(*value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::BigInt(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::BigInt(value)),
                 lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Bool(value),
                     ..
@@ -2140,6 +2148,10 @@ pub fn lower_function_body(
                     value: lucid_syntax::LiteralValue::Str(value),
                     ..
                 } => Some(PrimitiveMatchLiteral::Str(value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bytes(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Bytes(value)),
                 lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::None,
                     ..
@@ -2405,6 +2417,9 @@ pub fn lower_function_body(
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(value), _) => {
                     Some(PrimitiveMatchLiteral::Int(*value))
                 }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::BigInt(value), _) => {
+                    Some(PrimitiveMatchLiteral::BigInt(value))
+                }
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bool(value), _) => {
                     Some(PrimitiveMatchLiteral::Bool(*value))
                 }
@@ -2413,6 +2428,9 @@ pub fn lower_function_body(
                 }
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Str(value), _) => {
                     Some(PrimitiveMatchLiteral::Str(value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bytes(value), _) => {
+                    Some(PrimitiveMatchLiteral::Bytes(value))
                 }
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::None, _) => {
                     Some(PrimitiveMatchLiteral::None)
@@ -7880,6 +7898,42 @@ mod tests {
                 .flat_map(|block| &block.instructions)
                 .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
         );
+
+        let file = db.add_file(
+            "constant-bigint-subject-match.lucid",
+            "def choose():\n    match 0x8000000000000000 as value:\n        case 0x8000000000000000:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant bigint subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-subject-fallback-match.lucid",
+            "def choose():\n    match 0x8000000000000000 as value:\n        case 0x9000000000000000:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant bigint subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bytes-subject-match.lucid",
+            "def choose():\n    match b\"ok\" as value:\n        case b\"ok\":\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant bytes subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bytes-subject-fallback-match.lucid",
+            "def choose():\n    match b\"ok\" as value:\n        case b\"no\":\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant bytes subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
 
         let file = db.add_file(
             "guarded-constant-subject-match.lucid",
