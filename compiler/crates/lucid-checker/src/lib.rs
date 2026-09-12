@@ -6254,6 +6254,26 @@ impl TypeChecker {
                         params,
                         return_type,
                     } => {
+                        if called_member_params.is_some()
+                            && !args.iter().any(|argument| {
+                                argument.is_spread
+                                    || argument.is_dict_spread
+                                    || argument.is_gather_spread
+                            })
+                            && args
+                                .iter()
+                                .filter(|argument| !matches!(argument.value, Expr::Skip(_)))
+                                .count()
+                                > params.len()
+                        {
+                            return Err(TypeError {
+                                message: "method accepts fewer arguments than supplied".into(),
+                                span: args
+                                    .last()
+                                    .map(|argument| argument.value.span())
+                                    .unwrap_or_default(),
+                            });
+                        }
                         if called_name.is_none()
                             && !args.iter().any(|argument| {
                                 argument.is_spread
@@ -10727,6 +10747,16 @@ def reject(value: not int) -> none:
         .unwrap();
         let error = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(error.message.contains("must be the method's final parameter"));
+    }
+
+    #[test]
+    fn method_calls_reject_surplus_arguments() {
+        let module = parse(
+            "class Worker:\n    def run(self, value: int) -> int:\n        return value\nw = Worker()\nresult = w.run(1, 2)\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(error.message.contains("method accepts fewer arguments"));
     }
 
     #[test]
