@@ -4241,6 +4241,50 @@ pub fn lower_function_body(
         bindings.push((name.clone(), value.span()));
         Ok(())
     }
+    enum StaticReturn {
+        Value(lucid_syntax::Span),
+        Void,
+    }
+    fn collect_static_branch_return(
+        branch: &[lucid_syntax::Stmt],
+        bindings: &mut Vec<(String, lucid_syntax::Span)>,
+    ) -> Result<StaticReturn, Arc<str>> {
+        let Some((last, prefix)) = branch.split_last() else {
+            return Ok(StaticReturn::Void);
+        };
+        for statement in prefix {
+            collect_pre_return_binding(statement, bindings)?;
+        }
+        match last {
+            lucid_syntax::Stmt::Return {
+                value: Some(value), ..
+            } => Ok(StaticReturn::Value(value.span())),
+            lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_) => {
+                Ok(StaticReturn::Void)
+            }
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => match static_branch_selection(
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch.as_ref(),
+            ) {
+                StaticBranch::Selected(branch) => collect_static_branch_return(branch, bindings),
+                StaticBranch::Empty => Ok(StaticReturn::Void),
+                StaticBranch::Unknown => Err(Arc::from(
+                    "constant function branch has no lowerable return",
+                )),
+            },
+            _ => Err(Arc::from(
+                "constant function branch has no lowerable return",
+            )),
+        }
+    }
     // A single expression return is the common case.  A constant statement
     // branch with one return per selected arm can also be folded here.  A
     // sequence of simple
@@ -4347,28 +4391,11 @@ pub fn lower_function_body(
                         StaticBranch::Selected([lucid_syntax::Stmt::Pass(_)])
                         | StaticBranch::Empty => return void_function(),
                         StaticBranch::Selected(branch) => {
-                            if let Some(lucid_syntax::Stmt::Return { value: None, .. }) =
-                                branch.last()
-                            {
-                                let mut bindings = Vec::new();
-                                for statement in &branch[..branch.len().saturating_sub(1)] {
-                                    collect_pre_return_binding(statement, &mut bindings)?;
-                                }
-                                return lower_bindings_to_void(&bindings);
-                            }
-                            let Some(lucid_syntax::Stmt::Return {
-                                value: Some(value), ..
-                            }) = branch.last()
-                            else {
-                                return Err(Arc::from(
-                                    "constant function branch has no lowerable return",
-                                ));
-                            };
                             let mut bindings = Vec::new();
-                            for statement in &branch[..branch.len().saturating_sub(1)] {
-                                collect_pre_return_binding(statement, &mut bindings)?;
+                            match collect_static_branch_return(branch, &mut bindings)? {
+                                StaticReturn::Value(span) => (span, bindings),
+                                StaticReturn::Void => return lower_bindings_to_void(&bindings),
                             }
-                            (value.span(), bindings)
                         }
                         StaticBranch::Unknown => {
                             return Err(Arc::from(
@@ -5931,6 +5958,33 @@ mod tests {
             .as_ref()
             .expect("constant else locals before return should lower through typed HIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-nested-branch-return.lucid",
+            "def answer(value: int):\n    if true:\n        if true:\n            return value + 1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested constant branch return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-nested-branch-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        selected = value + 1\n        if true:\n            return selected\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested constant branch locals before return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            return value + 1\n    else:\n        return 0\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("dynamic nested branch return must not be folded statically");
+        assert!(error.contains("constant function branch"));
 
         let file = db.add_file(
             "constant-string-branch.lucid",

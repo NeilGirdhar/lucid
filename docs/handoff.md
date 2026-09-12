@@ -488,6 +488,9 @@ diverged:
   through the same typed-local void path, preserving setup instructions before
   returning no value, including setup inside nested statically selected
   branches.
+  Nested statically selected branches ending in `return value` now use the same
+  typed-local path as direct selected arms; dynamic nested branch guards still
+  reject instead of being folded.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking
