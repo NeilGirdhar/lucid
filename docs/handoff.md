@@ -1207,6 +1207,9 @@ diverged:
   Match exhaustiveness now treats uppercase `case None` as covering the
   `none` variant, matching the checker, interpreter, and native pattern
   condition paths.
+  Exhaustiveness also resolves builtin pattern aliases before comparing union
+  variants, so `case bytes` covers the `Bytes` class variant instead of
+  leaving it spuriously uncovered.
   `match ... as alias` bindings now enter the checker’s match scope and narrow
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an

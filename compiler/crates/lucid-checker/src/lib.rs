@@ -6626,7 +6626,18 @@ impl TypeChecker {
                             class_name: name, ..
                         } => {
                             uncovered.retain(|v| match v {
-                                Type::Class { name: c_name, .. } => c_name != name,
+                                Type::Class { name: c_name, .. } => {
+                                    if c_name == name {
+                                        false
+                                    } else if let Some(Type::Class {
+                                        name: pattern_name, ..
+                                    }) = self.named_pattern_type(name)
+                                    {
+                                        pattern_name != *c_name
+                                    } else {
+                                        true
+                                    }
+                                }
                                 Type::Int if name == "int" => false,
                                 Type::Float if name == "float" => false,
                                 Type::Bool if name == "bool" => false,
@@ -12783,6 +12794,13 @@ def render(s: Shape) -> int:
         .unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&uppercase_none).is_ok());
+
+        let bytes_alias = parse(
+            "def render(s: Bytes | int) -> int:\n    match s:\n        case bytes:\n            return 1\n        case int:\n            return 2\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&bytes_alias).is_ok());
 
         let literal_ints = parse(
             "type Choice = 1 | 2\ndef render(s: Choice) -> int:\n    match s:\n        case 1:\n            exact: 1 = s\n            return exact\n        case 2:\n            exact: 2 = s\n            return exact\n",
