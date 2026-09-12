@@ -409,6 +409,16 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn wildcard_import_reports_explicit_rejection() {
+        let error = parse("from module import *\n").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("wildcard imports are not supported")
+        );
+    }
+
+    #[test]
     fn recovering_parser_keeps_later_statements() {
         let (module, errors) = parse_recovering("first = 1\nbad =\nlast = 3\n").unwrap();
         assert_eq!(errors.len(), 1);

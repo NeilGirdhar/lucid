@@ -3691,6 +3691,10 @@ impl Parser {
                 self.advance();
                 Ok("contextmanager".into())
             }
+            TokenKind::Star => Err(ParseError {
+                message: "wildcard imports are not supported; import explicit names".into(),
+                span: self.peek().span,
+            }),
             _ => Err(ParseError {
                 message: format!("expected identifier, found {}", self.peek_kind()),
                 span: self.peek().span,
