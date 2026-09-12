@@ -1018,6 +1018,8 @@ pub struct TypeEnvironment {
     pub final_methods: HashMap<String, HashSet<String>>,
     pub final_classes: HashSet<String>,
     pub class_members: HashMap<String, HashSet<String>>,
+    pub class_implemented_members: HashMap<String, HashSet<String>>,
+    pub class_abstract_members: HashMap<String, HashSet<String>>,
     pub class_methods: HashMap<(String, String), Type>,
     pub class_method_params: HashMap<(String, String), Vec<String>>,
     pub class_getters: HashMap<(String, String), Type>,
@@ -2308,6 +2310,13 @@ impl TypeChecker {
                     .get(name)
                     .cloned()
                     .unwrap_or_default();
+                let mut implemented_member_names = self
+                    .env
+                    .class_implemented_members
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut abstract_member_names = HashSet::new();
                 let mut class_vars = HashMap::new();
                 let mut field_order = Vec::new();
                 for member in body {
@@ -2318,6 +2327,7 @@ impl TypeChecker {
                         ClassMember::Field(f) => {
                             field_order.push(f.name.clone());
                             member_names.insert(f.name.clone());
+                            implemented_member_names.insert(f.name.clone());
                             if let Ok(ft) = self.resolve_type_expr(&f.type_annotation) {
                                 fields.insert(f.name.clone(), ft);
                             }
@@ -2327,24 +2337,45 @@ impl TypeChecker {
                         }
                         ClassMember::ClassVar(f) => {
                             member_names.insert(f.name.clone());
+                            implemented_member_names.insert(f.name.clone());
                             if let Ok(ft) = self.resolve_type_expr(&f.type_annotation) {
                                 class_vars.insert(f.name.clone(), ft);
                             }
                         }
                         ClassMember::Method(m) | ClassMember::ClassMethod(m) => {
                             member_names.insert(m.name.clone());
+                            if m.body.is_empty() {
+                                abstract_member_names.insert(m.name.clone());
+                            } else {
+                                implemented_member_names.insert(m.name.clone());
+                            }
                             if m.is_final {
                                 final_methods.insert(m.name.clone());
                             }
                         }
                         ClassMember::Factory(f) => {
                             member_names.insert(f.name.clone());
+                            if f.body.is_empty() {
+                                abstract_member_names.insert(f.name.clone());
+                            } else {
+                                implemented_member_names.insert(f.name.clone());
+                            }
                         }
                         ClassMember::Getter(g) => {
                             member_names.insert(g.name.clone());
+                            if g.body.is_empty() {
+                                abstract_member_names.insert(g.name.clone());
+                            } else {
+                                implemented_member_names.insert(g.name.clone());
+                            }
                         }
                         ClassMember::Setter(s) => {
                             member_names.insert(s.name.clone());
+                            if s.body.is_empty() {
+                                abstract_member_names.insert(s.name.clone());
+                            } else {
+                                implemented_member_names.insert(s.name.clone());
+                            }
                         }
                         _ => {}
                     }
@@ -2352,6 +2383,12 @@ impl TypeChecker {
                 self.env.final_fields.insert(name.clone(), final_fields);
                 self.env.final_methods.insert(name.clone(), final_methods);
                 self.env.class_members.insert(name.clone(), member_names);
+                self.env
+                    .class_implemented_members
+                    .insert(name.clone(), implemented_member_names);
+                self.env
+                    .class_abstract_members
+                    .insert(name.clone(), abstract_member_names);
                 self.env.class_vars.insert(name.clone(), class_vars);
                 self.env.class_field_order.insert(name.clone(), field_order);
                 let init_factory = body.iter().find_map(|member| match member {
@@ -3977,6 +4014,27 @@ impl TypeChecker {
             .unwrap_or_default();
         names.extend(own);
         names
+    }
+
+    fn class_abstract_member_names(&self, class_name: &str) -> HashSet<String> {
+        let mut abstract_members = self
+            .env
+            .class_abstract_members
+            .get(class_name)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(parent) = self.env.classes.get(class_name).and_then(|ty| match ty {
+            Type::Class { parent, .. } => parent.as_deref(),
+            _ => None,
+        }) {
+            abstract_members.extend(self.class_abstract_member_names(parent));
+        }
+        if let Some(implemented) = self.env.class_implemented_members.get(class_name) {
+            for member in implemented {
+                abstract_members.remove(member);
+            }
+        }
+        abstract_members
     }
 
     fn class_replace_signature(&self, class_name: &str) -> Option<(Type, Vec<String>)> {
@@ -7628,6 +7686,15 @@ impl TypeChecker {
                                 || argument.is_gather_spread
                         })
                     {
+                        let abstract_members = self.class_abstract_member_names(name);
+                        if let Some(member) = abstract_members.iter().min() {
+                            return Err(TypeError {
+                                message: format!(
+                                    "cannot construct class '{name}' with unimplemented abstract member '{member}'"
+                                ),
+                                span: func.span(),
+                            });
+                        }
                         let expected = self.class_constructor_field_count(name);
                         let required = self.class_constructor_required_count(name);
                         if args.len() < required || args.len() > expected {
@@ -10354,6 +10421,26 @@ class Child(Reusable, Base1, Base2):
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("final method 'Base.make' must have a body"));
+    }
+
+    #[test]
+    fn test_abstract_class_members_block_construction_until_implemented() {
+        let module = parse(
+            "class Base:\n    def required(self) -> int\n\nclass Child(Base):\n    pass\n\nvalue = Child()\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err.message.contains("unimplemented abstract member 'required'"));
+
+        let module = parse(
+            "class Base:\n    def required(self) -> int\n\nclass Child(Base):\n    override def required(self) -> int:\n        return 1\n\nvalue = Child()\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(&module)
+            .expect("implemented abstract member should permit construction");
     }
 
     #[test]
