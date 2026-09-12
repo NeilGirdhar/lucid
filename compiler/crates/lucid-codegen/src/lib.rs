@@ -6427,6 +6427,11 @@ static inline void lucid_print_val(LucidVal v) {
             .collect::<HashSet<_>>();
         let mut captures = HashSet::new();
         self.collect_anonymous_captures(body_expr, &parameter_names, &mut captures);
+        for param in params {
+            if let Some(default) = &param.default {
+                self.collect_anonymous_captures(default, &parameter_names, &mut captures);
+            }
+        }
         let has_variadic = params
             .iter()
             .any(|param| param.is_variadic_positional || param.is_variadic_keyword);
@@ -8367,6 +8372,11 @@ static inline void lucid_print_val(LucidVal v) {
                     .map(|param| param.name.clone())
                     .collect::<HashSet<_>>();
                 let mut captures = HashSet::new();
+                for param in params {
+                    if let Some(default) = &param.default {
+                        self.collect_anonymous_captures(default, &parameter_names, &mut captures);
+                    }
+                }
                 for statement in body {
                     match statement {
                         Stmt::Return { value: Some(value), .. }
@@ -18678,6 +18688,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous default failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
+    }
+
+    #[test]
+    fn native_anonymous_default_captures_enclosing_value() {
+        let source = "def make(offset: int) -> Any:\n    return def(x: int = offset) -> int: x\nprint(make(7)())\n";
+        let module = parse(source).expect("captured anonymous default source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_default_capture_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("captured anonymous default should compile");
+        let run = Command::new(&output).output().expect("run captured anonymous default");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "captured anonymous default failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
     }
 
     #[test]
