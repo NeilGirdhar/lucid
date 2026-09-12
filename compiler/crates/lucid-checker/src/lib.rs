@@ -10677,6 +10677,10 @@ impl TypeChecker {
                             require_int()?;
                             Ok(Type::Str)
                         }
+                        Type::Class { ref name, .. } if name == "DottedPath" => {
+                            require_int()?;
+                            Ok(Type::Str)
+                        }
                         Type::Str => {
                             require_int()?;
                             Ok(Type::Str)
@@ -16022,6 +16026,14 @@ def reject(value: not int) -> none:
     fn function_values_expose_identity_metadata() {
         let module =
             parse("def f(value: int) -> int:\n    return value\nname: str = f.__name__\n").unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn dotted_path_metadata_indexes_to_name_segment() {
+        let module =
+            parse("def slow_query() -> int:\n    return 1\nlast: str = slow_query.__path__[-1]\n")
+                .unwrap();
         assert!(TypeChecker::new().check_module(&module).is_ok());
     }
 
