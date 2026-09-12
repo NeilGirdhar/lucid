@@ -559,10 +559,11 @@ diverged:
   support both additive and subtractive induction updates with checked CIR
   arithmetic.
   Parameter-counted `while` loops also support one loop-carried accumulator
-  initialized from an integer literal or parameter, then updated by a literal
-  `+=`, `-=`, `x = x + literal`, or `x = x - literal` step before the induction
-  update. The source and CLI `run-cir --function` paths now execute this shape
-  through explicit induction and accumulator Phis.
+  initialized from an integer literal or parameter, then updated before the
+  induction update. The accumulator step can be a literal or the current
+  induction value, using `+=`, `-=`, `x = x + y`, or `x = x - y`. The source
+  and CLI `run-cir --function` paths now execute this shape through explicit
+  induction and accumulator Phis.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable
@@ -836,8 +837,10 @@ diverged:
   total += 1; n -= 1; return total` and the parameter-seeded variant to a
   four-block CFG with paired header Phis. The recognizer is still intentionally
   narrow: the induction value must be a parameter, the accumulator initializer
-  must be an integer literal or parameter, and both loop updates must use a
-  literal self-update.
+  must be an integer literal or parameter, and the induction update must use a
+  literal self-update. The accumulator update may use either a literal or the
+  current induction value, so countdown sums such as `total += n` execute on
+  the same verified CFG.
   The induction recognizer also accepts `!=` conditions and lowers them to
   the same checked back-edge shape.
   It rejects empty or multi-statement bodies without indexing assumptions and

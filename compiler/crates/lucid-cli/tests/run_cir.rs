@@ -625,6 +625,37 @@ fn run_cir_executes_parameter_counted_while_accumulator() {
 }
 
 #[test]
+fn run_cir_executes_parameter_counted_while_induction_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_while_induction_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int):\n    total = 0\n    while n > 0:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir induction accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
 fn run_cir_executes_conditional_return_expression() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_conditional_expr_{}.lucid",

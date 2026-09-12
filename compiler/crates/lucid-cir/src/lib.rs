@@ -3104,6 +3104,69 @@ impl Function {
                 .iter()
                 .position(|parameter| parameter == induction_name)? as u32,
         };
+        #[derive(Clone, Copy)]
+        enum AccumulatorOperand {
+            Literal(i64),
+            Induction,
+        }
+        fn accumulator_operand(
+            expr: &lucid_syntax::Expr,
+            induction_name: &str,
+        ) -> Option<AccumulatorOperand> {
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(step),
+                    ..
+                } => Some(AccumulatorOperand::Literal(*step)),
+                lucid_syntax::Expr::Ident { name, .. } if name == induction_name => {
+                    Some(AccumulatorOperand::Induction)
+                }
+                _ => None,
+            }
+        }
+        fn accumulator_self_update(
+            statement: &lucid_syntax::Stmt,
+            target: &str,
+            induction_name: &str,
+        ) -> Option<(lucid_syntax::BinaryOp, AccumulatorOperand)> {
+            match statement {
+                lucid_syntax::Stmt::AugAssign {
+                    target:
+                        lucid_syntax::Expr::Ident {
+                            name: update_name, ..
+                        },
+                    op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
+                    value,
+                    ..
+                } if update_name == target => Some((
+                    update_op.clone(),
+                    accumulator_operand(value, induction_name)?,
+                )),
+                lucid_syntax::Stmt::Assignment {
+                    target:
+                        lucid_syntax::Expr::Ident {
+                            name: update_name, ..
+                        },
+                    value:
+                        lucid_syntax::Expr::Binary {
+                            op:
+                                update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
+                            left,
+                            right,
+                            ..
+                        },
+                    ..
+                } if update_name == target
+                    && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
+                {
+                    Some((
+                        update_op.clone(),
+                        accumulator_operand(right.as_ref(), induction_name)?,
+                    ))
+                }
+                _ => None,
+            }
+        }
         fn literal_self_update(
             statement: &lucid_syntax::Stmt,
             target: &str,
@@ -3151,7 +3214,7 @@ impl Function {
                 _ => None,
             }
         }
-        let (acc_op, acc_step) = literal_self_update(&body[0], acc_name)?;
+        let (acc_op, acc_operand) = accumulator_self_update(&body[0], acc_name, induction_name)?;
         let (induction_op, induction_step) = literal_self_update(&body[1], induction_name)?;
         let comparison = match op {
             lucid_syntax::BinaryOp::NotEq
@@ -3183,16 +3246,20 @@ impl Function {
             },
             _ => return None,
         };
+        let acc_operand_value = match acc_operand {
+            AccumulatorOperand::Literal(_) => ValueId(6),
+            AccumulatorOperand::Induction => ValueId(2),
+        };
         let accumulator_update = match acc_op {
             lucid_syntax::BinaryOp::Add => Instruction::Add {
                 result: ValueId(7),
                 left: ValueId(3),
-                right: ValueId(6),
+                right: acc_operand_value,
             },
             lucid_syntax::BinaryOp::Sub => Instruction::Sub {
                 result: ValueId(7),
                 left: ValueId(3),
-                right: ValueId(6),
+                right: acc_operand_value,
             },
             _ => return None,
         };
@@ -3209,6 +3276,19 @@ impl Function {
             },
             _ => return None,
         };
+        let mut body_instructions = Vec::new();
+        if let AccumulatorOperand::Literal(acc_step) = acc_operand {
+            body_instructions.push(Instruction::ConstInt {
+                result: ValueId(6),
+                value: acc_step,
+            });
+        }
+        body_instructions.push(accumulator_update);
+        body_instructions.push(Instruction::ConstInt {
+            result: ValueId(8),
+            value: induction_step,
+        });
+        body_instructions.push(induction_update);
         let function = Self {
             entry: BlockId(0),
             blocks: vec![
@@ -3242,18 +3322,7 @@ impl Function {
                 },
                 Block {
                     id: BlockId(2),
-                    instructions: vec![
-                        Instruction::ConstInt {
-                            result: ValueId(6),
-                            value: acc_step,
-                        },
-                        accumulator_update,
-                        Instruction::ConstInt {
-                            result: ValueId(8),
-                            value: induction_step,
-                        },
-                        induction_update,
-                    ],
+                    instructions: body_instructions,
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
@@ -8716,6 +8785,33 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("parameter-seeded while accumulator should lower");
         assert_eq!(function.execute_with_args(&[3, 7]), Ok(Some(13)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("while induction accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("induction accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = seed
+while n > 0:
+    total = total + n
+    n = n - 1
+return total
+"#,
+        )
+        .expect("ordinary induction accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
+                .expect("ordinary induction accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4, 10]), Ok(Some(20)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
