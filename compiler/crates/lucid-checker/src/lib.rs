@@ -1708,6 +1708,7 @@ impl TypeChecker {
             ("AssertionError", Some("Exception")),
             ("IndexError", Some("Exception")),
             ("NameError", Some("Exception")),
+            ("ParseError", Some("Exception")),
             ("RuntimeError", Some("Exception")),
             ("TypeError", Some("Exception")),
             ("ValueError", Some("Exception")),
@@ -1928,7 +1929,18 @@ impl TypeChecker {
             (
                 Type::Function {
                     params: vec![Type::Str],
-                    return_type: Box::new(Type::Str),
+                    return_type: Box::new(Type::make_union(vec![
+                        Type::Str,
+                        Type::Class {
+                            name: "ParseError".into(),
+                            type_args: Vec::new(),
+                            parent: Some("Exception".into()),
+                            traits: vec!["Eq".into()],
+                            interfaces: Vec::new(),
+                            fields: HashMap::new(),
+                            is_sealed: false,
+                        },
+                    ])),
                 },
                 MutabilityView::ReadOnly,
             ),
@@ -11596,6 +11608,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("Decimal should be available as a SupportsFloat numeric class");
+    }
+
+    #[test]
+    fn read_file_propagates_parse_error_with_question_mark() {
+        let module = parse(
+            "def load(path: str) -> str | ParseError:\n    text = read_file(path)?\n    return text\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("read_file(path)? should unwrap str and propagate ParseError");
     }
 
     #[test]
