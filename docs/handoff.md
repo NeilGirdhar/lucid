@@ -579,6 +579,10 @@ diverged:
   Void no-op range loops now lower to the same counted CFG shape and return
   `None`; they accept the same local bound aliases and statically known literal
   step aliases as the accumulator form.
+  Typed-HIR expression collection now preserves loop context while replaying
+  `for` and `while` bodies, so `break` and `continue` remain valid during the
+  database collection pass instead of failing after the main checker accepts
+  them.
   The returned accumulator name now identifies the
   accumulator initializer, so setup aliases may feed either range bounds or
   `total = ...`, and those local aliases may appear before or after the

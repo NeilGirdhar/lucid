@@ -14795,6 +14795,18 @@ def reject(value: not int) -> none:
         TypeChecker::new()
             .check_module(&valid_control_flow)
             .expect("loop control should be accepted inside a loop");
+        let valid_for_continue =
+            parse("def drain(n: int):\n    for item in range(n):\n        continue\n").unwrap();
+        TypeChecker::new()
+            .check_module(&valid_for_continue)
+            .expect("continue should be accepted inside a for loop");
+        let valid_for_continue_with_aliases = parse(
+            "def drain(n: int, limit: int):\n    stop = limit\n    stride = -1\n    for item in range(n, stop, stride):\n        continue\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&valid_for_continue_with_aliases)
+            .expect("continue should be accepted inside a for loop with local range aliases");
         let invalid_user_iterator = parse(
             "class Counter:\n    def __iter__(self):\n        return self\n    def next(self) -> int:\n        return 1\nfor item in Counter():\n    item + \"wrong\"\n",
         )

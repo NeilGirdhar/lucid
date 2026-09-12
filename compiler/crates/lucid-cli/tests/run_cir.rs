@@ -1779,7 +1779,7 @@ fn run_cir_executes_void_range_with_local_aliases() {
     ));
     fs::write(
         &path,
-        "def drain(n: int, limit: int):\n    stop = limit\n    stride = -1\n    for i in range(n, stop, stride):\n        pass\n",
+        "def drain(n: int, limit: int):\n    stop = limit\n    stride = -1\n    for i in range(n, stop, stride):\n        continue\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))

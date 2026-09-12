@@ -872,24 +872,35 @@ fn collect_typed_body<'db>(
                     }
                 }
                 bind_pattern(&mut body_checker, target);
-                let mut collect_scoped_body =
-                    |body: &[lucid_syntax::Stmt], nodes: &mut Vec<TypedExpr<'db>>| {
-                        for statement in body {
-                            body_checker
-                                .check_statement(statement)
-                                .map_err(|error| Arc::<str>::from(error.message))?;
-                            collect_typed_body(
-                                db,
-                                &body_checker,
-                                std::slice::from_ref(statement),
-                                nodes,
-                            )?;
-                        }
-                        Ok::<(), Arc<str>>(())
-                    };
-                collect_scoped_body(body, nodes)?;
+                body_checker.env.loop_depth += 1;
+                let body_result = (|| {
+                    for statement in body {
+                        body_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &body_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
+                    Ok::<(), Arc<str>>(())
+                })();
+                body_checker.env.loop_depth -= 1;
+                body_result?;
                 if let Some(body) = if_broken {
-                    collect_scoped_body(body, nodes)?;
+                    for statement in body {
+                        body_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &body_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
                 }
             }
             Stmt::While {
@@ -900,24 +911,35 @@ fn collect_typed_body<'db>(
             } => {
                 collect_typed_exprs(db, checker, condition, nodes)?;
                 let mut body_checker = checker.clone();
-                let mut collect_scoped_body =
-                    |body: &[lucid_syntax::Stmt], nodes: &mut Vec<TypedExpr<'db>>| {
-                        for statement in body {
-                            body_checker
-                                .check_statement(statement)
-                                .map_err(|error| Arc::<str>::from(error.message))?;
-                            collect_typed_body(
-                                db,
-                                &body_checker,
-                                std::slice::from_ref(statement),
-                                nodes,
-                            )?;
-                        }
-                        Ok::<(), Arc<str>>(())
-                    };
-                collect_scoped_body(body, nodes)?;
+                body_checker.env.loop_depth += 1;
+                let body_result = (|| {
+                    for statement in body {
+                        body_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &body_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
+                    Ok::<(), Arc<str>>(())
+                })();
+                body_checker.env.loop_depth -= 1;
+                body_result?;
                 if let Some(body) = if_broken {
-                    collect_scoped_body(body, nodes)?;
+                    for statement in body {
+                        body_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &body_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
                 }
             }
             Stmt::Match { subject, arms, .. } => {
@@ -7616,6 +7638,18 @@ mod tests {
             .as_ref()
             .expect("inferred-return function should lower");
         assert_eq!(lowered.execute(), Ok(Some(42)));
+    }
+
+    #[test]
+    fn typed_module_accepts_continue_in_for_function_body() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "for-continue.lucid",
+            "def drain(n: int, limit: int):\n    stop = limit\n    stride = -1\n    for item in range(n, stop, stride):\n        continue\n",
+        );
+        typed_module(&db, file)
+            .as_ref()
+            .expect("continue should type-check inside a for loop");
     }
 
     #[test]
