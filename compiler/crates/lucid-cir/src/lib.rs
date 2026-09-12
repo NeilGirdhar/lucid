@@ -3019,6 +3019,258 @@ impl Function {
         )
     }
 
+    /// Lower `total = 0; while n > 0: total += 1; n -= 1; return total`.
+    /// This is the accumulator-bearing counterpart to [`Self::from_counted_while`]:
+    /// the induction variable and accumulator are both loop-carried header Phis.
+    fn from_counted_while_accumulator(
+        module: &lucid_syntax::Module,
+        parameter_names: &[String],
+    ) -> Option<Result<Self, LowerError>> {
+        let [lucid_syntax::Stmt::Assignment {
+            target: lucid_syntax::Expr::Ident { name: acc_name, .. },
+            value: initial_expr,
+            ..
+        }
+        | lucid_syntax::Stmt::VarDef {
+            pattern: lucid_syntax::Pattern::Ident(acc_name, _),
+            value: Some(initial_expr),
+            ..
+        }, lucid_syntax::Stmt::While {
+            condition,
+            body,
+            if_broken,
+            ..
+        }, lucid_syntax::Stmt::Return {
+            value:
+                Some(lucid_syntax::Expr::Ident {
+                    name: return_name, ..
+                }),
+            ..
+        }] = module.statements.as_slice()
+        else {
+            return None;
+        };
+        if return_name != acc_name
+            || body.len() < 2
+            || body.len() > 3
+            || (body.len() == 3
+                && !matches!(
+                    &body[2],
+                    lucid_syntax::Stmt::Continue(_) | lucid_syntax::Stmt::Pass(_)
+                ))
+        {
+            return None;
+        }
+        let _ = if_broken;
+        let lucid_syntax::Expr::Binary {
+            op, left, right, ..
+        } = condition
+        else {
+            return None;
+        };
+        let lucid_syntax::Expr::Ident {
+            name: induction_name,
+            ..
+        } = left.as_ref()
+        else {
+            return None;
+        };
+        let lucid_syntax::Expr::Literal {
+            value: lucid_syntax::LiteralValue::Int(bound),
+            ..
+        } = right.as_ref()
+        else {
+            return None;
+        };
+        let accumulator_instruction = match initial_expr {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Instruction::ConstInt {
+                result: ValueId(1),
+                value: *value,
+            },
+            lucid_syntax::Expr::Ident { name, .. } => Instruction::Param {
+                result: ValueId(1),
+                index: parameter_names
+                    .iter()
+                    .position(|parameter| parameter == name)? as u32,
+            },
+            _ => return None,
+        };
+        let induction_instruction = Instruction::Param {
+            result: ValueId(0),
+            index: parameter_names
+                .iter()
+                .position(|parameter| parameter == induction_name)? as u32,
+        };
+        fn literal_self_update(
+            statement: &lucid_syntax::Stmt,
+            target: &str,
+        ) -> Option<(lucid_syntax::BinaryOp, i64)> {
+            match statement {
+                lucid_syntax::Stmt::AugAssign {
+                    target:
+                        lucid_syntax::Expr::Ident {
+                            name: update_name, ..
+                        },
+                    op: update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
+                    value:
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Int(step),
+                            ..
+                        },
+                    ..
+                } if update_name == target => Some((update_op.clone(), *step)),
+                lucid_syntax::Stmt::Assignment {
+                    target:
+                        lucid_syntax::Expr::Ident {
+                            name: update_name, ..
+                        },
+                    value:
+                        lucid_syntax::Expr::Binary {
+                            op:
+                                update_op @ (lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub),
+                            left,
+                            right,
+                            ..
+                        },
+                    ..
+                } if update_name == target
+                    && matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target) =>
+                {
+                    let lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Int(step),
+                        ..
+                    } = right.as_ref()
+                    else {
+                        return None;
+                    };
+                    Some((update_op.clone(), *step))
+                }
+                _ => None,
+            }
+        }
+        let (acc_op, acc_step) = literal_self_update(&body[0], acc_name)?;
+        let (induction_op, induction_step) = literal_self_update(&body[1], induction_name)?;
+        let comparison = match op {
+            lucid_syntax::BinaryOp::NotEq
+            | lucid_syntax::BinaryOp::NotIdentity
+            | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
+                result: ValueId(5),
+                left: ValueId(2),
+                right: ValueId(4),
+            },
+            lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
+                result: ValueId(5),
+                left: ValueId(2),
+                right: ValueId(4),
+            },
+            lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
+                result: ValueId(5),
+                left: ValueId(2),
+                right: ValueId(4),
+            },
+            lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
+                result: ValueId(5),
+                left: ValueId(2),
+                right: ValueId(4),
+            },
+            lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
+                result: ValueId(5),
+                left: ValueId(2),
+                right: ValueId(4),
+            },
+            _ => return None,
+        };
+        let accumulator_update = match acc_op {
+            lucid_syntax::BinaryOp::Add => Instruction::Add {
+                result: ValueId(7),
+                left: ValueId(3),
+                right: ValueId(6),
+            },
+            lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                result: ValueId(7),
+                left: ValueId(3),
+                right: ValueId(6),
+            },
+            _ => return None,
+        };
+        let induction_update = match induction_op {
+            lucid_syntax::BinaryOp::Add => Instruction::Add {
+                result: ValueId(9),
+                left: ValueId(2),
+                right: ValueId(8),
+            },
+            lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                result: ValueId(9),
+                left: ValueId(2),
+                right: ValueId(8),
+            },
+            _ => return None,
+        };
+        let function = Self {
+            entry: BlockId(0),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    instructions: vec![induction_instruction, accumulator_instruction],
+                    terminator: Terminator::Jump(BlockId(1)),
+                },
+                Block {
+                    id: BlockId(1),
+                    instructions: vec![
+                        Instruction::Phi {
+                            result: ValueId(2),
+                            incomings: vec![(BlockId(0), ValueId(0)), (BlockId(2), ValueId(9))],
+                        },
+                        Instruction::Phi {
+                            result: ValueId(3),
+                            incomings: vec![(BlockId(0), ValueId(1)), (BlockId(2), ValueId(7))],
+                        },
+                        Instruction::ConstInt {
+                            result: ValueId(4),
+                            value: *bound,
+                        },
+                        comparison,
+                    ],
+                    terminator: Terminator::Branch {
+                        condition: ValueId(5),
+                        then_block: BlockId(2),
+                        else_block: BlockId(3),
+                    },
+                },
+                Block {
+                    id: BlockId(2),
+                    instructions: vec![
+                        Instruction::ConstInt {
+                            result: ValueId(6),
+                            value: acc_step,
+                        },
+                        accumulator_update,
+                        Instruction::ConstInt {
+                            result: ValueId(8),
+                            value: induction_step,
+                        },
+                        induction_update,
+                    ],
+                    terminator: Terminator::Jump(BlockId(1)),
+                },
+                Block {
+                    id: BlockId(3),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Some(ValueId(3))),
+                },
+            ],
+        };
+        Some(
+            function
+                .verify()
+                .map(|_| function)
+                .map_err(|_| LowerError::UnsupportedExpression),
+        )
+    }
+
     /// Lower `total = 0; for i in range(limit): total += i; return total`.
     /// The index and accumulator are independent loop-carried values, each
     /// represented by a header Phi and updated in the body block.
@@ -3252,6 +3504,9 @@ impl Function {
         // This is deliberately structural: the loop value is a header Phi,
         // so both the interpreter and native backend observe the same SSA
         // semantics instead of receiving an eagerly-unrolled approximation.
+        if let Some(function) = Self::from_counted_while_accumulator(module, parameter_names) {
+            return function;
+        }
         if let Some(function) = Self::from_counted_while(module, parameter_names) {
             return function;
         }
@@ -8433,6 +8688,34 @@ return value
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("local-init counted loop should lower");
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    total += 1
+    n -= 1
+return total
+"#,
+        )
+        .expect("while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(4)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = seed
+while n > 0:
+    total = total + 2
+    n = n - 1
+return total
+"#,
+        )
+        .expect("while parameter-seeded accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
+                .expect("parameter-seeded while accumulator should lower");
+        assert_eq!(function.execute_with_args(&[3, 7]), Ok(Some(13)));
 
         let module = lucid_syntax::parse(
             r#"total = 0

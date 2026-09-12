@@ -558,6 +558,11 @@ diverged:
   because the accepted loop shape has no `break` path. Range accumulators
   support both additive and subtractive induction updates with checked CIR
   arithmetic.
+  Parameter-counted `while` loops also support one loop-carried accumulator
+  initialized from an integer literal or parameter, then updated by a literal
+  `+=`, `-=`, `x = x + literal`, or `x = x - literal` step before the induction
+  update. The source and CLI `run-cir --function` paths now execute this shape
+  through explicit induction and accumulator Phis.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable
@@ -827,6 +832,12 @@ diverged:
   Ordinary assignment updates such as `n = n - 1` use the same loop lowering.
   Void induction functions with no explicit return now lower to the same CFG
   and terminate with a verified `Return(None)`.
+  A related accumulator recognizer lowers `total = 0; while n > 0:
+  total += 1; n -= 1; return total` and the parameter-seeded variant to a
+  four-block CFG with paired header Phis. The recognizer is still intentionally
+  narrow: the induction value must be a parameter, the accumulator initializer
+  must be an integer literal or parameter, and both loop updates must use a
+  literal self-update.
   The induction recognizer also accepts `!=` conditions and lowers them to
   the same checked back-edge shape.
   It rejects empty or multi-statement bodies without indexing assumptions and
