@@ -9683,7 +9683,7 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "Set" => {
                                     if left_ty == "LucidVal" {
-                                        "lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\")".into()
+                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\")")
                                     } else if left_ty == "LucidSet*" {
                                         "((bool)1)".into()
                                     } else {
@@ -9703,7 +9703,7 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "Shape" => {
                                     if left_ty == "LucidVal" {
-                                        "lucid_dynamic_capability(lucid_wrap({l_str}), \"Shape\")".into()
+                                        format!("lucid_dynamic_capability(lucid_wrap({l_str}), \"Shape\")")
                                     } else if left_ty == "LucidList*" {
                                         "((bool)1)".into()
                                     } else {
@@ -9944,7 +9944,7 @@ static inline void lucid_print_val(LucidVal v) {
                                 }
                                 "Set" => {
                                     if left_ty == "LucidVal" {
-                                        "(!lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\"))".into()
+                                        format!("(!lucid_dynamic_capability(lucid_wrap({l_str}), \"Set\"))")
                                     } else if left_ty == "LucidSet*" {
                                         "((bool)0)".into()
                                     } else {
@@ -16113,7 +16113,7 @@ print(z is complex)
 
     #[test]
     fn native_erased_capability_checks_inspect_runtime_class() {
-        let source = "class Bag without Iterable:\n    def __len__(self) -> int:\n        return 1\ndef identity(value: Any) -> Any:\n    return value\nvalue = identity(Bag())\nprint(value is Sized)\nprint(value is not Iterable)\n";
+        let source = "class Bag without Iterable:\n    def __len__(self) -> int:\n        return 1\ndef identity(value: Any) -> Any:\n    return value\nvalue = identity(Bag())\nitems = identity(set([1]))\nshape = identity([1, 2])\nnumber = identity(1)\nprint(value is Sized)\nprint(value is not Iterable)\nprint(items is Set)\nprint(number is not Set)\nprint(shape is Shape)\n";
         let module = parse(source).expect("erased capability source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_erased_capability_{}",
@@ -16124,7 +16124,10 @@ print(z is complex)
         let run = Command::new(&output).output().expect("run erased capability");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "erased capability failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\ntrue\n");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "true\ntrue\ntrue\ntrue\ntrue\n"
+        );
     }
 
     #[test]
