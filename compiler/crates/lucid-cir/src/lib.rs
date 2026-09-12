@@ -2878,33 +2878,101 @@ impl Function {
             result: ValueId,
             parameter_names: &[String],
             step_initial: Option<&lucid_syntax::Stmt>,
-        ) -> Option<(Instruction, bool)> {
-            match Function::const_int_expr(expr) {
-                Some(value) => Some((Instruction::ConstInt { result, value }, false)),
-                None => match expr {
-                    lucid_syntax::Expr::Ident { name, .. } => match step_initial {
-                        Some(statement) => {
-                            let (alias_name, _) = initialized_ident(statement)?;
-                            if alias_name == name {
-                                Some((
-                                    initializer_instruction(
-                                        statement,
-                                        alias_name,
-                                        result,
-                                        parameter_names,
-                                    )?,
-                                    true,
-                                ))
-                            } else {
+        ) -> Option<(Vec<Instruction>, bool)> {
+            fn atom_instruction(
+                expr: &lucid_syntax::Expr,
+                result: ValueId,
+                parameter_names: &[String],
+                step_initial: Option<&lucid_syntax::Stmt>,
+            ) -> Option<(Instruction, bool)> {
+                match Function::const_int_expr(expr) {
+                    Some(value) => Some((Instruction::ConstInt { result, value }, false)),
+                    None => match expr {
+                        lucid_syntax::Expr::Ident { name, .. } => match step_initial {
+                            Some(statement) => {
+                                let (alias_name, _) = initialized_ident(statement)?;
+                                if alias_name == name {
+                                    Some((
+                                        initializer_instruction(
+                                            statement,
+                                            alias_name,
+                                            result,
+                                            parameter_names,
+                                        )?,
+                                        true,
+                                    ))
+                                } else {
+                                    Some((
+                                        parameter_instruction(name, result, parameter_names)?,
+                                        false,
+                                    ))
+                                }
+                            }
+                            None => {
                                 Some((parameter_instruction(name, result, parameter_names)?, false))
                             }
-                        }
-                        None => {
-                            Some((parameter_instruction(name, result, parameter_names)?, false))
-                        }
+                        },
+                        _ => None,
                     },
-                    _ => None,
-                },
+                }
+            }
+            if let Some((instruction, used_alias)) =
+                atom_instruction(expr, result, parameter_names, step_initial)
+            {
+                return Some((vec![instruction], used_alias));
+            }
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => {
+                    let statement = step_initial?;
+                    let (alias_name, value) = initialized_ident(statement)?;
+                    if alias_name != name {
+                        return None;
+                    }
+                    let (instructions, _) =
+                        operand_instruction(value, result, parameter_names, None)?;
+                    Some((instructions, true))
+                }
+                lucid_syntax::Expr::Binary {
+                    op, left, right, ..
+                } if matches!(
+                    op,
+                    lucid_syntax::BinaryOp::Add
+                        | lucid_syntax::BinaryOp::Sub
+                        | lucid_syntax::BinaryOp::Mul
+                ) =>
+                {
+                    let (left_instruction, left_used_alias) =
+                        atom_instruction(left.as_ref(), ValueId(6), parameter_names, step_initial)?;
+                    let (right_instruction, right_used_alias) = atom_instruction(
+                        right.as_ref(),
+                        ValueId(7),
+                        parameter_names,
+                        step_initial,
+                    )?;
+                    let combine = match op {
+                        lucid_syntax::BinaryOp::Add => Instruction::Add {
+                            result,
+                            left: ValueId(6),
+                            right: ValueId(7),
+                        },
+                        lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                            result,
+                            left: ValueId(6),
+                            right: ValueId(7),
+                        },
+                        lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                            result,
+                            left: ValueId(6),
+                            right: ValueId(7),
+                        },
+                        _ => return None,
+                    };
+                    Some((
+                        vec![left_instruction, right_instruction, combine],
+                        left_used_alias || right_used_alias,
+                    ))
+                }
+                _ => None,
             }
         }
         let (initial, bound_initial, step_initial, while_statement, return_name) = match module
@@ -3250,7 +3318,7 @@ impl Function {
         // normally.  Lucid's `if_broken` suite therefore cannot run here, so
         // it is safe to leave even effectful suites unlowered.
         let _ = if_broken;
-        let (update_op, step_instruction, used_step_initial) = match &body[0] {
+        let (update_op, step_instructions, used_step_initial) = match &body[0] {
             lucid_syntax::Stmt::AugAssign {
                 target:
                     lucid_syntax::Expr::Ident {
@@ -3265,9 +3333,9 @@ impl Function {
                     lucid_syntax::BinaryOp::Add | lucid_syntax::BinaryOp::Sub
                 ) =>
             {
-                let (instruction, used_step_initial) =
+                let (instructions, used_step_initial) =
                     operand_instruction(value, ValueId(4), parameter_names, step_initial)?;
-                (update_op.clone(), instruction, used_step_initial)
+                (update_op.clone(), instructions, used_step_initial)
             }
             lucid_syntax::Stmt::Assignment {
                 target:
@@ -3295,9 +3363,9 @@ impl Function {
                 ) {
                     return None;
                 }
-                let (instruction, used_step_initial) =
+                let (instructions, used_step_initial) =
                     operand_instruction(right.as_ref(), ValueId(4), parameter_names, step_initial)?;
-                (op.clone(), instruction, used_step_initial)
+                (op.clone(), instructions, used_step_initial)
             }
             lucid_syntax::Stmt::Assignment {
                 target:
@@ -3322,9 +3390,9 @@ impl Function {
                 .is_some()
                 && matches!(right.as_ref(), lucid_syntax::Expr::Ident { name: right_name, .. } if right_name == name) =>
             {
-                let (instruction, used_step_initial) =
+                let (instructions, used_step_initial) =
                     operand_instruction(left.as_ref(), ValueId(4), parameter_names, step_initial)?;
-                (lucid_syntax::BinaryOp::Add, instruction, used_step_initial)
+                (lucid_syntax::BinaryOp::Add, instructions, used_step_initial)
             }
             _ => return None,
         };
@@ -3448,7 +3516,11 @@ impl Function {
                 },
                 Block {
                     id: BlockId(2),
-                    instructions: vec![step_instruction, update],
+                    instructions: {
+                        let mut instructions = step_instructions;
+                        instructions.push(update);
+                        instructions
+                    },
                     terminator: Terminator::Jump(BlockId(1)),
                 },
                 Block {
@@ -10393,6 +10465,31 @@ return n
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
                 .expect("local-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(-2)));
+
+        let module = lucid_syntax::parse(
+            r#"while n > 0:
+    n -= step + 1
+return n
+"#,
+        )
+        .expect("dynamic arithmetic-step counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("dynamic arithmetic-step counted loop should lower");
+        assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(-2)));
+
+        let module = lucid_syntax::parse(
+            r#"tick = step + 1
+while n > 0:
+    n -= tick
+return n
+"#,
+        )
+        .expect("local dynamic arithmetic-step counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "step".into()])
+                .expect("local dynamic arithmetic-step counted loop should lower");
         assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(-2)));
 
         let module = lucid_syntax::parse(

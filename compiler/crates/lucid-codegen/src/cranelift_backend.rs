@@ -3091,6 +3091,28 @@ return value
     }
 
     #[test]
+    fn result_abi_executes_dynamic_arithmetic_step_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"tick = step + 1
+while n > 0:
+    n -= tick
+return n
+"#,
+        )
+        .expect("dynamic arithmetic-step counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "step".into()],
+        )
+        .expect("dynamic arithmetic-step counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile dynamic arithmetic-step counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[10, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, -2);
+    }
+
+    #[test]
     fn result_abi_executes_counted_while_with_repeated_pass_tail() {
         let module = lucid_syntax::parse(
             r#"while n > 0:
