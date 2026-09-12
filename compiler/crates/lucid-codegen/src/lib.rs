@@ -6685,6 +6685,20 @@ static inline void lucid_print_val(LucidVal v) {
                         "if ({missing}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
                     ));
                 }
+            } else {
+                for (index, param) in params.iter().enumerate() {
+                    if param.is_gather || param.default.is_some() {
+                        continue;
+                    }
+                    let positional_index = params[..index]
+                        .iter()
+                        .filter(|previous| !previous.is_keyword_only && !previous.is_variadic_keyword)
+                        .count();
+                    self.emit_line(&format!(
+                        "if ((!args || args->len <= {positional_index}) && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}",
+                        c_escape_string(&param.name)
+                    ));
+                }
             }
             if has_keyword_variadic {
                 self.emit_line("LucidDict* _anonymous_kwargs = kwargs ? kwargs : lucid_dict_new(0);");
@@ -6775,12 +6789,13 @@ static inline void lucid_print_val(LucidVal v) {
                                     "kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\"))",
                                     c_escape_string(field)
                                 );
+                                let source_index = gather_index.unwrap_or(0) + field_index;
                                 let source = format!(
-                                    "({keyword} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args && args->len > {field_index} ? args->items[{field_index}] : lucid_none()))",
+                                    "({keyword} ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args && args->len > {source_index} ? args->items[{source_index}] : lucid_none()))",
                                     c_escape_string(field)
                                 );
                                 self.emit_line(&format!(
-                                    "if (!({keyword}) && (!args || args->len <= {field_index})) {{ fprintf(stderr, \"anonymous gathered argument missing: {field}\\n\"); exit(1); }}"
+                                    "if (!({keyword}) && (!args || args->len <= {source_index})) {{ fprintf(stderr, \"anonymous gathered argument missing: {field}\\n\"); exit(1); }}"
                                 ));
                                 match ty.as_str() {
                                     "int64_t" => format!("lucid_as_int({source})"),
@@ -15571,6 +15586,25 @@ print(z is complex)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous class gather failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
+    }
+
+    #[test]
+    fn native_anonymous_function_gathers_after_fixed_prefix() {
+        let source = "class Options:\n    retries: int\nf = def(prefix: int, ***rest: Options): prefix + rest.retries\nprint(f(10, 3))\n";
+        let module = parse(source).expect("prefixed anonymous gather source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_prefixed_gather_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("prefixed anonymous gather should compile");
+        let run = Command::new(&output)
+            .output()
+            .expect("run prefixed anonymous gather");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "prefixed anonymous gather failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "13\n");
     }
 
     #[test]
