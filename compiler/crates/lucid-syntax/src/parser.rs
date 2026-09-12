@@ -2831,7 +2831,7 @@ impl Parser {
 
         // Union types: A | B
         while self.match_tok(&TokenKind::Pipe) {
-            let right = self.parse_type_primary()?;
+            let right = self.parse_type_expr()?;
             let span = left.span().merge(right.span());
             left = match left {
                 TypeExpr::Union { mut types, span: _ } => {

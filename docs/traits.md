@@ -276,6 +276,8 @@ parent's, or a trait's — must be marked `override`:
 
 ```python
 class Timestamped:
+    updated_at: float
+
     def save(self):
         self.updated_at = now()
 
@@ -454,4 +456,3 @@ each container's traversal only needs to be locally correct on its own; a
 bounded, higher-kinded parameter earns its cost when every implementer,
 including ones that do not exist yet, needs to be provably checked against
 the same signature.
-

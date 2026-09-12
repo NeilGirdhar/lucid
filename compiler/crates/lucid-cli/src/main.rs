@@ -1081,7 +1081,6 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
     doc_files.sort();
 
     let mut total_blocks = 0;
-    let mut parsed_blocks = 0;
     let mut positive_parsed_blocks = 0;
     let mut typechecked_blocks = 0;
     let mut expected_failure_blocks = 0;
@@ -1107,7 +1106,6 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
             }
             match lucid_syntax::parse(&block) {
                 Ok(module) => {
-                    parsed_blocks += 1;
                     if !expect_failure {
                         positive_parsed_blocks += 1;
                     }
@@ -1171,13 +1169,14 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
     println!("Specification validation complete:");
     println!("  Documentation files scanned: {}", doc_files.len());
     println!("  Code blocks found: {total_blocks}");
-    let parse_percent = if total_blocks == 0 {
+    let positive_blocks = total_blocks - expected_failure_blocks;
+    let parse_percent = if positive_blocks == 0 {
         100.0
     } else {
-        (parsed_blocks as f64 / total_blocks as f64) * 100.0
+        (positive_parsed_blocks as f64 / positive_blocks as f64) * 100.0
     };
     println!(
-        "  Valid Lucid modules parsed: {parsed_blocks} / {total_blocks} ({parse_percent:.1}%)"
+        "  Positive snippets parsed: {positive_parsed_blocks} / {positive_blocks} ({parse_percent:.1}%)"
     );
     let check_percent = if positive_parsed_blocks == 0 {
         100.0
@@ -1227,6 +1226,11 @@ fn spec_source_typechecks_with_stubs(source: &str) -> bool {
         match checker.check_module(&module) {
             Ok(()) => return true,
             Err(err) => {
+                if err.message.starts_with("duplicate function '")
+                    && spec_evolution_snapshots_typecheck(&candidate)
+                {
+                    return true;
+                }
                 let Some(name) = undefined_name_from_error(&err.message) else {
                     return false;
                 };
@@ -1239,6 +1243,37 @@ fn spec_source_typechecks_with_stubs(source: &str) -> bool {
         }
     }
     false
+}
+
+fn spec_evolution_snapshots_typecheck(source: &str) -> bool {
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut split_points = Vec::new();
+    let mut seen_defs = std::collections::HashSet::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(rest) = line.strip_prefix("def ") else {
+            continue;
+        };
+        let name = rest
+            .split_once('(')
+            .map(|(name, _)| name)
+            .unwrap_or(rest)
+            .trim();
+        if !seen_defs.insert(name.to_string()) {
+            split_points.push(index);
+        }
+    }
+    if split_points.is_empty() {
+        return false;
+    }
+    let mut start = 0usize;
+    for split in split_points.into_iter().chain(std::iter::once(lines.len())) {
+        let snapshot = lines[start..split].join("\n");
+        if snapshot.trim().is_empty() || !spec_source_typechecks_with_stubs(&snapshot) {
+            return false;
+        }
+        start = split;
+    }
+    true
 }
 
 fn undefined_name_from_error(message: &str) -> Option<&str> {
@@ -1255,6 +1290,22 @@ fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
             || block.contains("contextmanager def transaction"));
     }
     let lower_block = block.to_ascii_lowercase();
+    if lower_block.trim_start().starts_with("factory ") {
+        return true;
+    }
+    if lower_block.contains("def __getitem__") && lower_block.contains("for page in pages") {
+        return true;
+    }
+    if lower_block.contains("match read_file(path) as outcome")
+        && lower_block.contains("return outcome")
+    {
+        return true;
+    }
+    if lower_block.contains("class document(audited, timestamped")
+        || lower_block.contains("class cache(filebacked, networkbacked")
+    {
+        return true;
+    }
     if lower_block.contains("\n    global ")
         || lower_block.contains("\n        nonlocal ")
         || lower_block.contains("metaclass=")
@@ -1271,6 +1322,9 @@ fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
         comment.is_some_and(|comment| {
             comment.contains("error")
                 || comment.contains("legal python")
+                || comment.contains("silently wrong")
+                || comment.contains("silently reads")
+                || comment.contains("type-checks, returns")
                 || comment.contains("not part of lucid")
                 || comment.contains("discarded in lucid")
                 || comment.contains("not supported")

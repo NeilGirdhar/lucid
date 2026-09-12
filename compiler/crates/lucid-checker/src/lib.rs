@@ -2339,8 +2339,8 @@ impl TypeChecker {
             (
                 "sorted",
                 1,
-                Some(1),
-                vec![any.clone()],
+                Some(2),
+                vec![any.clone(), any.clone()],
                 Type::Class {
                     name: "list".into(),
                     type_args: vec![any.clone()],
@@ -5226,7 +5226,27 @@ impl TypeChecker {
                 }
                 if let Some(message) = message {
                     Self::reject_bare_skip_value(message, "assert message")?;
-                    let message_type = self.type_of_expr(message)?;
+                    let expected_lazy_message = Type::Function {
+                        params: Vec::new(),
+                        return_type: Box::new(Type::Str),
+                    };
+                    let message_type = if let Expr::AnonymousDef {
+                        params,
+                        return_type,
+                        body,
+                        span,
+                    } = message
+                    {
+                        self.anonymous_function_type_against_expected(
+                            params,
+                            return_type.as_ref(),
+                            body,
+                            &expected_lazy_message,
+                            *span,
+                        )?
+                    } else {
+                        self.type_of_expr(message)?
+                    };
                     let lazy_message = matches!(
                         &message_type,
                         Type::Function { params, return_type }
@@ -6077,14 +6097,14 @@ impl TypeChecker {
                     self.check_statement(s)?;
                 }
                 self.env.loop_depth -= 1;
-                self.env.variables = old_vars;
-                self.env.exact_variables = old_exact_vars;
 
                 if let Some(ref ib) = if_broken {
                     for s in ib {
                         self.check_statement(s)?;
                     }
                 }
+                self.env.variables = old_vars;
+                self.env.exact_variables = old_exact_vars;
                 Ok(())
             }
             Stmt::While {
@@ -6102,6 +6122,8 @@ impl TypeChecker {
                     });
                 }
                 self.env.loop_depth += 1;
+                let old_vars = self.env.variables.clone();
+                let old_exact_vars = self.env.exact_variables.clone();
                 for s in body {
                     self.check_statement(s)?;
                 }
@@ -6111,6 +6133,8 @@ impl TypeChecker {
                         self.check_statement(s)?;
                     }
                 }
+                self.env.variables = old_vars;
+                self.env.exact_variables = old_exact_vars;
                 Ok(())
             }
             Stmt::With { items, body, .. } => {
@@ -6741,10 +6765,19 @@ impl TypeChecker {
             Pattern::ClassDestructure {
                 class_name, fields, ..
             } => {
-                let expected = self.env.classes.get(class_name).ok_or_else(|| TypeError {
-                    message: format!("unknown class in destructuring pattern '{class_name}'"),
-                    span,
-                })?;
+                let subject_is_any = matches!(subject_type, Type::TypeVar(name) if name == "Any");
+                let Some(expected) = self.env.classes.get(class_name) else {
+                    if subject_is_any {
+                        return Ok(());
+                    }
+                    return Err(TypeError {
+                        message: format!("unknown class in destructuring pattern '{class_name}'"),
+                        span,
+                    });
+                };
+                if subject_is_any {
+                    return Ok(());
+                }
                 if !subject_type.is_subtype_of(expected, &self.env) {
                     return Err(TypeError {
                         message: format!("cannot destructure {:?} as {class_name}", subject_type),
@@ -6767,6 +6800,7 @@ impl TypeChecker {
                 Ok(())
             }
             Pattern::Tuple(items, _) => match subject_type {
+                Type::TypeVar(name) if name == "Any" => Ok(()),
                 Type::Record { fields, .. }
                     if items.len().saturating_sub(usize::from(
                         items.iter().any(|p| matches!(p, Pattern::Star(_, _))),
@@ -6782,6 +6816,7 @@ impl TypeChecker {
             },
             Pattern::Star(_, _) => Ok(()),
             Pattern::RecordDestructure(fields, _) => match subject_type {
+                Type::TypeVar(name) if name == "Any" => Ok(()),
                 Type::Record {
                     fields: declared, ..
                 } => {
@@ -7299,6 +7334,20 @@ impl TypeChecker {
             span,
         } = &argument.value
         {
+            if let Type::Union(parts) = parameter {
+                if let Some(function_part) = parts
+                    .iter()
+                    .find(|part| matches!(part, Type::Function { .. }))
+                {
+                    return self.anonymous_function_type_against_expected(
+                        params,
+                        return_type.as_ref(),
+                        body,
+                        function_part,
+                        *span,
+                    );
+                }
+            }
             if matches!(parameter, Type::Function { .. })
                 || Self::anonymous_params_need_expected(params)
             {
@@ -7746,6 +7795,7 @@ impl TypeChecker {
                             other => other,
                         };
                         let supported = match membership_target {
+                            Type::TypeVar(name) if name == "Any" => true,
                             Type::Class {
                                 name, type_args, ..
                             } if matches!(name.as_str(), "list" | "set" | "frozenset") => {
@@ -8170,6 +8220,7 @@ impl TypeChecker {
                         if let Some(argument) = args.first() {
                             let argument_type = self.type_of_expr(&argument.value)?;
                             let sized = matches!(&argument_type, Type::Str | Type::Shape(_))
+                                || matches!(&argument_type, Type::TypeVar(name) if name == "Any")
                                 || matches!(&argument_type, Type::Class { name, .. }
                                     if matches!(name.as_str(), "list" | "set" | "dict" | "range" | "str")
                                         || self.env.class_members.get(name).is_some_and(|members| members.contains("__len__")));
@@ -10062,6 +10113,20 @@ impl TypeChecker {
                             message: format!("record has no field '{attr}'"),
                             span: expr.span(),
                         }),
+                    Type::Function { .. } => match attr.as_str() {
+                        "__name__" => Ok(Type::Str),
+                        "__doc__" => Ok(Type::Union(vec![Type::Str, Type::None]).canonical()),
+                        "__path__" => Ok(self
+                            .env
+                            .classes
+                            .get("DottedPath")
+                            .cloned()
+                            .unwrap_or(Type::TypeVar("DottedPath".into()))),
+                        _ => Err(TypeError {
+                            message: format!("function has no member '{attr}'"),
+                            span: expr.span(),
+                        }),
+                    },
                     Type::TypeVar(name) if matches!(name.as_str(), "Any" | "module" | "super") => {
                         Ok(Type::TypeVar("Any".to_string()))
                     }
@@ -10302,6 +10367,7 @@ impl TypeChecker {
                                 span: index.span(),
                             }),
                         },
+                        Type::TypeVar(name) if name == "Any" => Ok(Type::TypeVar("Any".into())),
                         Type::Class { name, .. }
                             if matches!(
                                 name.as_str(),
@@ -10318,6 +10384,9 @@ impl TypeChecker {
                     }
                 } else {
                     let index_t = self.type_of_expr(index)?;
+                    if matches!(&val_t, Type::TypeVar(name) if name == "Any") {
+                        return Ok(Type::TypeVar("Any".into()));
+                    }
                     let require_int = || {
                         if !index_t.is_subtype_of(&Type::Int, &self.env) {
                             return Err(TypeError {
@@ -15718,6 +15787,14 @@ def reject(value: not int) -> none:
             valid_result.err()
         );
 
+        let inferred = parse("x: int = 1\nassert(x > 0, def: f\"x is {x}\")\n").unwrap();
+        let inferred_result = TypeChecker::new().check_module(&inferred);
+        assert!(
+            inferred_result.is_ok(),
+            "inferred lazy assert failed: {:?}",
+            inferred_result.err()
+        );
+
         let invalid = parse("assert(false, 42)\n").unwrap();
         let error = TypeChecker::new().check_module(&invalid).unwrap_err();
         assert!(error.message.contains("assert message must be str"));
@@ -15864,6 +15941,55 @@ def reject(value: not int) -> none:
         let module =
             parse("shape = Parameters[(c: int, /, a: int), int, {\"b\": int, _: int, ...}]\n")
                 .unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn sorted_accepts_keyword_key_partial_application() {
+        let module = parse("def score(weights: list[int], item: int) -> int:\n    return item\nitems = [1, 2]\nweights = [1]\nranked = sorted(items, key=score(weights, _))\n").unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn anonymous_argument_uses_function_arm_of_union_parameter() {
+        let module = parse("def precondition(ok: bool, message: str | () -> str) -> none:\n    pass\nx: int = 1\nprecondition(x > 0, def: f\"x is {x}\")\n").unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn function_values_expose_identity_metadata() {
+        let module =
+            parse("def f(value: int) -> int:\n    return value\nname: str = f.__name__\n").unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn destructuring_any_subject_binds_nested_names() {
+        let class_pattern = parse("origin = ...\nlet Point(x, y) = origin\n").unwrap();
+        assert!(TypeChecker::new().check_module(&class_pattern).is_ok());
+
+        let tuple_pattern = parse("midpoint = ...\nlet (x, y) = midpoint\n").unwrap();
+        assert!(TypeChecker::new().check_module(&tuple_pattern).is_ok());
+    }
+
+    #[test]
+    fn if_broken_can_see_loop_body_bindings() {
+        let module = parse("def first(items: list[int]) -> int | none:\n    for item in items:\n        found = item\n        break\n    if_broken:\n        return found\n    return none\n").unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn indexing_any_receiver_returns_any() {
+        let module =
+            parse("x = ...\nrow = ...\ncol = ...\na = x[0]\nb = x[1, 2, 3]\nc = x[row:col]\n")
+                .unwrap();
+        assert!(TypeChecker::new().check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn membership_on_any_container_returns_bool() {
+        let module =
+            parse("text = ...\ncontains: bool = \"e\" in text\nsize: int = len(text)\n").unwrap();
         assert!(TypeChecker::new().check_module(&module).is_ok());
     }
 
