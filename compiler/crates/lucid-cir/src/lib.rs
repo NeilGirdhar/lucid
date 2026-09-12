@@ -10171,6 +10171,25 @@ return total
         assert_eq!(function.execute_with_args(&[5, 2, 3]), Ok(Some(9)));
 
         let module = lucid_syntax::parse(
+            r#"value = n
+stop = limit
+tick = step
+total = 0
+while value > stop:
+    total += value
+    value -= tick
+return total
+"#,
+        )
+        .expect("local-bound local-induction-step accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local-bound local-induction-step accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(Some(21)));
+
+        let module = lucid_syntax::parse(
             r#"total = 0
 value = n
 stop = limit

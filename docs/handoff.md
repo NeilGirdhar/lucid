@@ -601,7 +601,8 @@ diverged:
   current induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
   commuted additive spelling `x = y + x`; the same local alias slot can also
   feed the accumulator loop's induction update, including when the loop also
-  seeds a local induction variable, as in `total += value; value -= tick`. The source and CLI
+  seeds local induction and bound variables, as in `stop = limit; total +=
+  value; value -= tick`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
   and accumulator Phis. Cranelift result-ABI coverage now executes the same
   countdown-sum CFG natively. Plain counted loops and accumulator loops now

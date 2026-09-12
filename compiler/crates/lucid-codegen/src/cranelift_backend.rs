@@ -2985,6 +2985,33 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_local_bound_local_induction_step_while_accumulation_cfg() {
+        let module = lucid_syntax::parse(
+            r#"value = n
+stop = limit
+tick = step
+total = 0
+while value > stop:
+    total += value
+    value -= tick
+return total
+"#,
+        )
+        .expect("local-bound local-induction-step while accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into(), "step".into()],
+        )
+        .expect("local-bound local-induction-step while accumulation should lower");
+        let compiled = compile_integer_result_function(&function).expect(
+            "result ABI should compile local-bound local-induction-step while accumulation CFG",
+        );
+        let result = unsafe { compiled.call_result_with_args(&[10, 2, 3]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 21);
+    }
+
+    #[test]
     fn lowers_verified_integer_cir_to_machine_code() {
         let function = Function {
             entry: lucid_cir::BlockId(0),
