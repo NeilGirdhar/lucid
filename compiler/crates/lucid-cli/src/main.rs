@@ -1101,16 +1101,19 @@ fn test_spec_docs(docs_dir: &Path, verbose: bool) {
                 Ok(module) => {
                     parsed_blocks += 1;
                     let mut checker = lucid_checker::TypeChecker::new();
-                    if checker.check_module(&module).is_ok() {
-                        typechecked_blocks += 1;
-                    } else if verbose {
-                        let err = checker.check_module(&module).unwrap_err();
-                        println!(
-                            "! Typecheck failed in {} block #{}: {}",
-                            doc_file.display(),
-                            idx + 1,
-                            err.message
-                        );
+                    match checker.check_module(&module) {
+                        Ok(()) => {
+                            typechecked_blocks += 1;
+                        }
+                        Err(err) if verbose => {
+                            println!(
+                                "! Typecheck failed in {} block #{}: {}",
+                                doc_file.display(),
+                                idx + 1,
+                                err.message
+                            );
+                        }
+                        Err(_) => {}
                     }
                 }
                 Err(err) => {

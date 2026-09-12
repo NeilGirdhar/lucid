@@ -3765,6 +3765,15 @@ impl TypeChecker {
                     .map(|(_, field_type)| field_type.clone())
                     .collect(),
             ),
+            Type::Trait {
+                name, type_args, ..
+            }
+            | Type::Interface {
+                name, type_args, ..
+            } if Self::is_iterable_obligation_name(name, &self.env) => type_args
+                .first()
+                .cloned()
+                .unwrap_or(Type::TypeVar("Any".into())),
             Type::Class { name, .. } => self
                 .class_method_type(name, "next")
                 .and_then(|method| match method {
@@ -3797,6 +3806,16 @@ impl TypeChecker {
         ) || matches!(base, Type::Shape(_) | Type::Record { .. })
             || matches!(base, Type::Class { name, .. }
                 if self.env.class_members.get(name).is_some_and(|members| members.contains("__iter__")))
+            || matches!(base, Type::Trait { name, .. } | Type::Interface { name, .. }
+                if Self::is_iterable_obligation_name(name, &self.env))
+    }
+
+    fn is_iterable_obligation_name(name: &str, env: &TypeEnvironment) -> bool {
+        matches!(
+            name,
+            "Iterable" | "Iterator" | "Collection" | "Sequence" | "Set"
+        ) || trait_extends(name, "Iterable", env)
+            || interface_extends(name, "Iterable", env)
     }
 
     fn is_reversible_type(&self, value: &Type) -> bool {
@@ -10854,6 +10873,17 @@ class Child(Base):
         let module = parse("trait NeedsMethod:\n    def needed(self) -> int\n\nclass Empty(NeedsMethod):\n    ...\n").unwrap();
         let err = TypeChecker::new().check_module(&module).unwrap_err();
         assert!(err.message.contains("required member 'needed'"));
+    }
+
+    #[test]
+    fn iterable_traits_can_be_used_in_for_loops() {
+        let module = parse(
+            "def mean(xs: Iterable[SupportsFloat]) -> float:\n    total = 0.0\n    count = 0\n    for x in xs:\n        total += float(x)\n        count += 1\n    return total / count\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("Iterable[T] should provide T in for loops");
     }
 
     #[test]
