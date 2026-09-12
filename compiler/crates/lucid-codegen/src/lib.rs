@@ -6667,8 +6667,17 @@ static inline void lucid_print_val(LucidVal v) {
                 ));
             } else {
                 self.emit_line(&format!(
-                    "if (!args || args->len < {required_count} || args->len > {fixed_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
+                    "if (!args || args->len > {fixed_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
                 ));
+                for (index, param) in params.iter().enumerate() {
+                    if param.is_variadic_positional || param.is_variadic_keyword || param.default.is_some() {
+                        continue;
+                    }
+                    self.emit_line(&format!(
+                        "if (args->len <= {index} && (!kwargs || !lucid_dict_contains(kwargs, lucid_str(\"{}\")))) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}",
+                        c_escape_string(&param.name)
+                    ));
+                }
             }
             if has_keyword_variadic {
                 self.emit_line("LucidDict* _anonymous_kwargs = kwargs ? kwargs : lucid_dict_new(0);");
@@ -6732,9 +6741,9 @@ static inline void lucid_print_val(LucidVal v) {
                 let ty = self.map_type_expr(param.type_annotation.as_ref());
                 let source = if let Some(default) = &param.default {
                     let default_code = self.emit_expr(default)?;
-                    format!("(args->len > {index} ? args->items[{index}] : lucid_wrap({default_code}))")
+                    format!("(kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\")) ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : (args->len > {index} ? args->items[{index}] : lucid_wrap({default_code})))", c_escape_string(&param.name), c_escape_string(&param.name))
                 } else {
-                    format!("args->items[{index}]")
+                    format!("(kwargs && lucid_dict_contains(kwargs, lucid_str(\"{}\")) ? lucid_dict_get(kwargs, lucid_str(\"{}\"), lucid_none()) : args->items[{index}])", c_escape_string(&param.name), c_escape_string(&param.name))
                 };
                 let value = match ty.as_str() {
                     "int64_t" => format!("lucid_as_int({source})"),
@@ -18611,6 +18620,22 @@ print(result[1])
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "anonymous default failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "8\n");
+    }
+
+    #[test]
+    fn native_anonymous_function_supports_keyword_arguments() {
+        let source = "f = def(x: int, y: int = 5) -> int: x + y\nprint(f(y=3, x=2))\n";
+        let module = parse(source).expect("anonymous keyword source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_keyword_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("anonymous keyword should compile");
+        let run = Command::new(&output).output().expect("run anonymous keyword");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "anonymous keyword failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
     }
 
     #[test]
