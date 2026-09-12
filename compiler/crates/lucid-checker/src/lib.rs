@@ -4911,6 +4911,15 @@ impl TypeChecker {
                                         });
                                     }
                                 }
+                            } else if attr.starts_with('_')
+                                && self.env.current_class.as_deref() == Some(class_name)
+                            {
+                                // Private backing slots used by computed
+                                // getters/setters are intentionally not part
+                                // of the public constructor field list. Inside
+                                // the declaring class they behave like local
+                                // implementation storage; outside the class,
+                                // the privacy check above still rejects them.
                             } else {
                                 return Err(TypeError {
                                     message: format!(
@@ -8703,6 +8712,10 @@ impl TypeChecker {
                             Ok(class_var_type)
                         } else if let Some(method_type) = self.class_method_type(name, attr) {
                             Ok(method_type)
+                        } else if attr.starts_with('_')
+                            && self.env.current_class.as_deref() == Some(name)
+                        {
+                            Ok(Type::TypeVar("Any".into()))
                         } else {
                             Err(TypeError {
                                 message: format!("class '{name}' has no member '{attr}'"),
@@ -10467,6 +10480,11 @@ dispatch def area(c: Circle) -> int:
         checker
             .check_module(&module)
             .expect("private field writes inside the declaring class should type check");
+        let module = parse("class ComputedPoint:\n    getter x(self) -> float:\n        return self._x\n    setter x(self, value: float):\n        self._x = value\n").unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(&module)
+            .expect("computed properties should allow private backing slots");
         let module = parse("value = 1\nresult = value.missing\n").unwrap();
         let mut checker = TypeChecker::new();
         let error = checker.check_module(&module).unwrap_err();
