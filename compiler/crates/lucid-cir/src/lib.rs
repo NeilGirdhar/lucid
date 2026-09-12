@@ -6093,6 +6093,111 @@ impl Function {
         Ok(function)
     }
 
+    /// Lower an `if`/`elif` guard ladder where each selected branch returns
+    /// either a value or no value. The resulting CIR uses direct branch
+    /// returns for every arm, so mixed value/void control flow never passes
+    /// through a Phi.
+    pub fn from_parameterized_if_elif_mixed_return_chain(
+        condition: &lucid_syntax::Expr,
+        then_expr: Option<&lucid_syntax::Expr>,
+        elif_branches: &[(&lucid_syntax::Expr, Option<&lucid_syntax::Expr>)],
+        fallback_expr: Option<&lucid_syntax::Expr>,
+        parameter_names: &[String],
+    ) -> Result<Self, LowerError> {
+        if elif_branches.is_empty() {
+            return Err(LowerError::UnsupportedExpression);
+        }
+        let mut entry_instructions = parameter_names
+            .iter()
+            .enumerate()
+            .map(|(index, _)| Instruction::Param {
+                result: ValueId(index as u32),
+                index: index as u32,
+            })
+            .collect::<Vec<_>>();
+        let mut next = parameter_names.len() as u32;
+        let condition_value = Self::lower_parameter_expr(
+            condition,
+            parameter_names,
+            &mut entry_instructions,
+            &mut next,
+        )?;
+        fn return_block(
+            id: BlockId,
+            expr: Option<&lucid_syntax::Expr>,
+            parameter_names: &[String],
+            next: &mut u32,
+        ) -> Result<Block, LowerError> {
+            let mut instructions = Vec::new();
+            let value = expr
+                .map(|expr| {
+                    Function::lower_parameter_expr(expr, parameter_names, &mut instructions, next)
+                })
+                .transpose()?;
+            Ok(Block {
+                id,
+                instructions,
+                terminator: Terminator::Return(value),
+            })
+        }
+        let mut blocks = vec![
+            Block {
+                id: BlockId(0),
+                instructions: entry_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: BlockId(1),
+                    else_block: BlockId(2),
+                },
+            },
+            return_block(BlockId(1), then_expr, parameter_names, &mut next)?,
+        ];
+        let mut condition_block = 2_u32;
+        for (index, (elif_condition, elif_expr)) in elif_branches.iter().enumerate() {
+            let then_block = condition_block + 1;
+            let false_block = condition_block + 2;
+            let mut condition_instructions = Vec::new();
+            let condition_value = Self::lower_parameter_expr(
+                elif_condition,
+                parameter_names,
+                &mut condition_instructions,
+                &mut next,
+            )?;
+            blocks.push(Block {
+                id: BlockId(condition_block),
+                instructions: condition_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: BlockId(then_block),
+                    else_block: BlockId(false_block),
+                },
+            });
+            blocks.push(return_block(
+                BlockId(then_block),
+                *elif_expr,
+                parameter_names,
+                &mut next,
+            )?);
+            if index == elif_branches.len() - 1 {
+                blocks.push(return_block(
+                    BlockId(false_block),
+                    fallback_expr,
+                    parameter_names,
+                    &mut next,
+                )?);
+            }
+            condition_block = false_block;
+        }
+        let function = Self {
+            entry: BlockId(0),
+            blocks,
+        };
+        function
+            .verify()
+            .map_err(|_| LowerError::UnsupportedExpression)?;
+        Ok(function)
+    }
+
     /// Lower a guard ladder whose first branch returns no value while later
     /// `elif` branches and the final fall-through return values.
     pub fn from_parameterized_if_void_elif_chain_direct(
