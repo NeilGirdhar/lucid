@@ -14,6 +14,34 @@ use std::rc::Rc;
 type BuiltinFn = Rc<dyn Fn(&[Value], &mut Interpreter) -> Result<Value, RuntimeError>>;
 type Teardown = (Vec<Stmt>, Option<Vec<Stmt>>, Rc<RefCell<Environment>>);
 
+fn declaration_only_module(path: &std::path::Path) -> bool {
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(module) = lucid_syntax::parse(&source) else {
+        return false;
+    };
+    fn is_declaration(statement: &Stmt) -> bool {
+        match statement {
+            Stmt::Export(inner) => is_declaration(inner),
+            Stmt::ClassDef { .. }
+            | Stmt::InterfaceDef { .. }
+            | Stmt::TraitDef { .. }
+            | Stmt::ImplementDef { .. }
+            | Stmt::TypeAlias { .. }
+            | Stmt::Function(_)
+            | Stmt::Import { .. }
+            | Stmt::FromImport { .. }
+            | Stmt::Pass(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::VarDef { value: None, .. } => true,
+            _ => false,
+        }
+    }
+    module.statements.iter().all(is_declaration)
+}
+
 fn parse_bigint_literal(text: &str) -> Option<BigInt> {
     let text = text.trim().replace('_', "");
     let negative = text.starts_with('-');
@@ -772,6 +800,10 @@ pub struct Interpreter {
     pub output: Vec<String>,
     pub current_file: Option<std::path::PathBuf>,
     pub module_cache: HashMap<std::path::PathBuf, Rc<RefCell<Environment>>>,
+    /// Canonical module paths whose environments have been published but are
+    /// still being initialized. This distinguishes a recursive declaration
+    /// edge from a value-initialization cycle.
+    module_loading: HashSet<std::path::PathBuf>,
     builtin_names: HashSet<String>,
     capture_assignment: Option<String>,
     setter_depth: usize,
@@ -796,6 +828,7 @@ impl Interpreter {
             output: Vec::new(),
             current_file: None,
             module_cache: HashMap::new(),
+            module_loading: HashSet::new(),
             builtin_names: HashSet::new(),
             capture_assignment: None,
             setter_depth: 0,
@@ -4547,6 +4580,12 @@ impl Interpreter {
 
         let canon = std::fs::canonicalize(&candidate).unwrap_or(candidate);
         if let Some(cached) = self.module_cache.get(&canon) {
+            if self.module_loading.contains(&canon) && !declaration_only_module(&canon) {
+                return Err(RuntimeError {
+                    message: format!("cyclic module initialization involving '{}'", canon.display()),
+                    span,
+                });
+            }
             return Ok(Rc::clone(cached));
         }
 
@@ -4596,15 +4635,20 @@ impl Interpreter {
         }
         self.module_cache
             .insert(canon.clone(), Rc::clone(&module_env));
+        self.module_loading.insert(canon.clone());
         sub_interp.current_file = Some(canon.clone());
         sub_interp.module_cache = self.module_cache.clone();
+        sub_interp.module_loading = self.module_loading.clone();
         if let Err(error) = sub_interp.eval_module(&parsed) {
             self.module_cache.remove(&canon);
+            self.module_loading.remove(&canon);
             return Err(error);
         }
 
         let env = sub_interp.env;
         self.module_cache = sub_interp.module_cache;
+        self.module_loading = sub_interp.module_loading;
+        self.module_loading.remove(&canon);
         self.module_cache.insert(canon, Rc::clone(&env));
 
         Ok(env)
@@ -11184,6 +11228,26 @@ abs_val = math.abs(-42)
             .expect("declaration-only cycle should terminate");
         assert!(interp.env.borrow().get("A").is_some());
         assert!(interp.env.borrow().get("B").is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn value_module_cycles_report_initialization_error() {
+        let root = std::env::temp_dir().join(format!(
+            "lucid_runtime_value_cycle_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.lucid"), "import .b\nvalue = 1\n").unwrap();
+        std::fs::write(root.join("b.lucid"), "import .a\nvalue = 2\n").unwrap();
+        let mut interp = Interpreter::default();
+        interp.set_current_file(Some(root.join("entry.lucid")));
+        let error = match interp.load_module(".a", Span::default()) {
+            Ok(_) => panic!("value cycle should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("cyclic module initialization"));
         let _ = std::fs::remove_dir_all(root);
     }
 
