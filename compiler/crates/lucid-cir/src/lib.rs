@@ -10588,6 +10588,22 @@ return total
 
         let module = lucid_syntax::parse(
             r#"total = 0
+stop = 1 + 1
+while n > stop:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("parameter-induction local constant-bound accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()]).expect(
+            "parameter-induction local constant-bound accumulator should lower through CIR",
+        );
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
 value = n
 while value > 0:
     total += value
@@ -10599,6 +10615,20 @@ return total
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("local-induction while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+value = 1 + 2
+while value > 0:
+    total += value
+    value -= 1
+return total
+"#,
+        )
+        .expect("local constant-induction accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &[])
+            .expect("local constant-induction accumulator should lower through CIR");
+        assert_eq!(function.execute(), Ok(Some(6)));
 
         let module = lucid_syntax::parse(
             r#"value = n
@@ -10686,6 +10716,20 @@ return total
         )
         .expect("parameter-induction local-bound local-step accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 2, 3]), Ok(Some(21)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+tick = 1 + 1
+while n > 0:
+    total += n
+    n -= tick
+return total
+"#,
+        )
+        .expect("parameter-induction local constant-step accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("parameter-induction local constant-step accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(9)));
 
         let module = lucid_syntax::parse(
             r#"total = 0

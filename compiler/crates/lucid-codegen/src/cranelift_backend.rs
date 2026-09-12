@@ -3177,6 +3177,27 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_local_constant_induction_while_accumulation_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+value = 1 + 2
+while value > 0:
+    total += value
+    value -= 1
+return total
+"#,
+        )
+        .expect("local constant-induction while accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &[])
+            .expect("local constant-induction while accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile local constant-induction while accumulation CFG");
+        let result = unsafe { compiled.call_result_with_args(&[]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 6);
+    }
+
+    #[test]
     fn result_abi_executes_local_bound_while_accumulation_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0
@@ -3222,6 +3243,28 @@ return total
             "result ABI should compile parameter-induction local-bound while accumulation CFG",
         );
         let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 12);
+    }
+
+    #[test]
+    fn result_abi_executes_parameter_induction_local_constant_bound_while_accumulation_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = 1 + 1
+while n > stop:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("parameter-induction local constant-bound while accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("parameter-induction local constant-bound while accumulation should lower");
+        let compiled = compile_integer_result_function(&function).expect(
+            "result ABI should compile parameter-induction local constant-bound while accumulation CFG",
+        );
+        let result = unsafe { compiled.call_result_with_args(&[5]) };
         assert!(result.is_ok());
         assert_eq!(result.value, 12);
     }
@@ -3297,6 +3340,28 @@ return total
         let result = unsafe { compiled.call_result_with_args(&[10, 2, 3]) };
         assert!(result.is_ok());
         assert_eq!(result.value, 21);
+    }
+
+    #[test]
+    fn result_abi_executes_parameter_induction_local_constant_step_while_accumulation_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+tick = 1 + 1
+while n > 0:
+    total += n
+    n -= tick
+return total
+"#,
+        )
+        .expect("parameter-induction local constant-step while accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("parameter-induction local constant-step while accumulation should lower");
+        let compiled = compile_integer_result_function(&function).expect(
+            "result ABI should compile parameter-induction local constant-step while accumulation CFG",
+        );
+        let result = unsafe { compiled.call_result_with_args(&[5]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 9);
     }
 
     #[test]

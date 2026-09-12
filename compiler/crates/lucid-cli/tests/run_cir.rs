@@ -1429,6 +1429,35 @@ fn run_cir_executes_local_induction_while_accumulator() {
 }
 
 #[test]
+fn run_cir_executes_local_constant_induction_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_constant_induction_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to():\n    total = 0\n    value = 1 + 2\n    while value > 0:\n        total += value\n        value -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local constant-induction accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+#[test]
 fn run_cir_executes_local_bound_while_accumulator() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_bound_while_accumulator_{}.lucid",
@@ -1454,6 +1483,37 @@ fn run_cir_executes_local_bound_while_accumulator() {
     assert!(
         output.status.success(),
         "run-cir local-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
+fn run_cir_executes_parameter_induction_local_constant_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_induction_local_constant_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int):\n    total = 0\n    stop = 1 + 1\n    while n > stop:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-induction local constant-bound accumulator loop failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
@@ -1550,6 +1610,37 @@ fn run_cir_executes_local_bound_local_induction_step_while_accumulator() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "21");
+}
+
+#[test]
+fn run_cir_executes_parameter_induction_local_constant_step_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_induction_local_constant_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_by_step(n: int):\n    total = 0\n    tick = 1 + 1\n    while n > 0:\n        total += n\n        n -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_by_step",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-induction local constant-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
 }
 
 #[test]

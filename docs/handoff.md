@@ -603,10 +603,11 @@ diverged:
   `x = y + x`, including `inc = step; total += inc`. An unused pre-loop alias
   is still rejected instead of being treated as loop setup.
   Parameter-counted `while` loops also support one loop-carried accumulator
-  initialized from a signed integer literal or parameter, then updated before
-  the induction update. Plain counted loops and accumulator loops use the same
-  signed integer recognition for local initializers, literal comparison bounds,
-  and induction update steps, so `value = -3`, `while n > -3`, and `n += -1`
+  initialized from a checked constant integer expression or parameter, then
+  updated before the induction update. Plain counted loops and accumulator
+  loops use the same checked constant integer recognition for local
+  initializers, comparison bounds, and induction update steps, so
+  `value = 1 + 2`, `while n > 1 + 1`, and `n -= 1 + 1`
   lower through the counted path. Additive induction updates also accept the
   commuted spelling `n = -1 + n`, and the induction step may be a positional
   parameter or a pre-loop local alias of a literal, checked constant
@@ -631,13 +632,14 @@ diverged:
   value; value -= tick`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
   and accumulator Phis. Accumulator loops can also keep the induction value as
-  a parameter while seeding a local bound, with or without a local step alias,
-  before the loop. Cranelift result-ABI coverage now executes the same
+  a parameter while seeding a local bound, including a checked
+  constant-expression local such as `stop = 1 + 1`, with or without a local
+  step alias before the loop. Cranelift result-ABI coverage now executes the same
   countdown-sum CFG natively. Plain counted loops and accumulator loops now
   also accept a distinct positional parameter as the comparison bound, such as
   `while n > limit`, with both CIR interpretation and native result-ABI
-  coverage for the accumulator form. Accumulator loops may also copy a literal
-  or parameter into a local induction variable before the loop, so
+  coverage for the accumulator form. Accumulator loops may also copy a checked
+  constant expression or parameter into a local induction variable before the loop, so
   `total = 0; value = n; while value > 0: ...; return total` uses the same
   Phi-backed CFG instead of falling back at the multi-statement boundary. The
   accumulator and local induction initializers may appear in either order; the
