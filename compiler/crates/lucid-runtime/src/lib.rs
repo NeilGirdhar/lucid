@@ -3019,38 +3019,6 @@ impl Interpreter {
                 }),
             },
         );
-        for (name, radix) in [("bin", 2u32), ("oct", 8u32), ("hex", 16u32)] {
-            let builtin_name = name.to_string();
-            self.env.borrow_mut().set(
-                builtin_name.clone(),
-                Value::BuiltinFunction {
-                    name: builtin_name.clone(),
-                    func: Rc::new(move |args: &[Value], _interp: &mut Interpreter| {
-                        if args.len() != 1 {
-                            return Err(RuntimeError {
-                                message: format!("{builtin_name}() takes exactly one argument"),
-                                span: Span::default(),
-                            });
-                        }
-                        let value = match &args[0] {
-                            Value::Int(value) => *value,
-                            _ => {
-                                return Err(RuntimeError {
-                                    message: format!("{builtin_name}() argument must be int"),
-                                    span: Span::default(),
-                                })
-                            }
-                        };
-                        let digits = match radix {
-                            2 => format!("{value:b}"),
-                            8 => format!("{value:o}"),
-                            _ => format!("{value:x}"),
-                        };
-                        Ok(Value::Str(digits))
-                    }),
-                },
-            );
-        }
         self.env.borrow_mut().set(
             "hash".into(),
             Value::BuiltinFunction {
@@ -4515,79 +4483,6 @@ impl Interpreter {
             Value::BuiltinFunction {
                 name: "round".to_string(),
                 func: round_fn,
-            },
-        );
-
-        // ord(c)
-        let ord_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
-            if args.len() != 1 {
-                return Err(RuntimeError {
-                    message: "ord() takes exactly 1 argument".into(),
-                    span: Span::default(),
-                });
-            }
-            match &args[0] {
-                Value::Str(s) => {
-                    let mut chars = s.chars();
-                    if let (Some(c), None) = (chars.next(), chars.next()) {
-                        Ok(Value::Int(c as i64))
-                    } else {
-                        Err(RuntimeError {
-                            message: format!(
-                                "ord() expected a character, but string of length {} found",
-                                s.len()
-                            ),
-                            span: Span::default(),
-                        })
-                    }
-                }
-                other => Err(RuntimeError {
-                    message: format!(
-                        "ord() expected string of length 1, but {} found",
-                        other.type_name()
-                    ),
-                    span: Span::default(),
-                }),
-            }
-        });
-        self.env.borrow_mut().set(
-            "ord".to_string(),
-            Value::BuiltinFunction {
-                name: "ord".to_string(),
-                func: ord_fn,
-            },
-        );
-
-        // chr(i)
-        let chr_fn = Rc::new(|args: &[Value], _interp: &mut Interpreter| {
-            if args.len() != 1 {
-                return Err(RuntimeError {
-                    message: "chr() takes exactly 1 argument".into(),
-                    span: Span::default(),
-                });
-            }
-            match &args[0] {
-                Value::Int(n) => {
-                    if let Some(c) = char::from_u32(*n as u32) {
-                        Ok(Value::Str(c.to_string()))
-                    } else {
-                        Err(RuntimeError {
-                            message: format!("chr() arg not in range: {n}"),
-                            span: Span::default(),
-                        })
-                    }
-                }
-                other => Err(RuntimeError {
-                    message: format!("an integer is required (got type {})", other.type_name()),
-                    span: Span::default(),
-                }),
-            }
-        });
-        self.env.borrow_mut().set(
-            "chr".to_string(),
-            Value::BuiltinFunction {
-                name: "chr".to_string(),
-                func: chr_fn,
             },
         );
 

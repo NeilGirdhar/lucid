@@ -623,7 +623,6 @@ impl CCodeGenerator {
                 | "bool"
                 | "bytes"
                 | "bytearray"
-                | "chr"
                 | "dict"
                 | "enumerate"
                 | "env_var"
@@ -644,7 +643,6 @@ impl CCodeGenerator {
                 | "max"
                 | "memoryview"
                 | "min"
-                | "ord"
                 | "pow"
                 | "print"
                 | "range"
@@ -5066,9 +5064,6 @@ static inline void lucid_print_val(LucidVal v) {
                         "format" => "const char*".to_string(),
                         "repr" => "const char*".to_string(),
                         "locals" => "LucidDict*".to_string(),
-                        "ord" => "int64_t".to_string(),
-                        "chr" => "LucidVal".to_string(),
-                        "bin" | "oct" | "hex" => "const char*".to_string(),
                         "abs" => args
                             .first()
                             .map(|a| self.infer_expr_type(&a.value, vars))
@@ -7385,9 +7380,9 @@ static inline void lucid_print_val(LucidVal v) {
         captures: &mut HashSet<String>,
     ) {
         const BUILTINS: &[&str] = &[
-            "abs", "all", "any", "bool", "bytes", "chr", "dict", "float", "int", "len", "list",
-            "max", "min", "ord", "pow", "print", "range", "repr", "round", "set", "str", "sum",
-            "type", "none", "None", "true", "false",
+            "abs", "all", "any", "bool", "bytes", "dict", "float", "int", "len", "list", "max",
+            "min", "pow", "print", "range", "repr", "round", "set", "str", "sum", "type", "none",
+            "None", "true", "false",
         ];
         match expr {
             Expr::Ident { name, .. } => {
@@ -12069,36 +12064,6 @@ static inline void lucid_print_val(LucidVal v) {
                                 "lucid_as_str(lucid_repr_value(lucid_wrap({value})))"
                             ));
                         }
-                        "ord" | "chr" => {
-                            if args.len() != 1 {
-                                return Err(CodegenError {
-                                    message: format!("{name}() takes exactly one argument"),
-                                });
-                            }
-                            let value = self.emit_expr(&args[0].value)?;
-                            let helper = if name == "ord" {
-                                "lucid_ord_value"
-                            } else {
-                                "lucid_chr_value"
-                            };
-                            return Ok(format!("{helper}(lucid_wrap({value}))"));
-                        }
-                        "bin" | "oct" | "hex" => {
-                            if args.len() != 1 {
-                                return Err(CodegenError {
-                                    message: format!("{name}() takes exactly one argument"),
-                                });
-                            }
-                            let value = self.emit_expr(&args[0].value)?;
-                            let spec = match name.as_str() {
-                                "bin" => "b",
-                                "oct" => "o",
-                                _ => "x",
-                            };
-                            return Ok(format!(
-                                "lucid_as_str(lucid_format_value(lucid_wrap({value}), \"{spec}\"))"
-                            ));
-                        }
                         "locals" => {
                             if !args.is_empty() {
                                 return Err(CodegenError {
@@ -12986,6 +12951,19 @@ static inline void lucid_print_val(LucidVal v) {
                     }
 
                     // User function call
+                    let has_named_callable = self.known_fns.contains_key(name)
+                        || self.known_fn_params.contains_key(name)
+                        || self.known_fn_gather.contains_key(name)
+                        || self.known_fn_variadic.contains_key(name)
+                        || self.dispatch_fns.contains_key(name)
+                        || self.dispatch_signatures.contains_key(name)
+                        || self.function_aliases.contains_key(name);
+                    if !has_named_callable {
+                        return Err(CodegenError {
+                            message: format!("unknown callable '{name}'"),
+                        });
+                    }
+
                     // A runtime list spread can still target a statically
                     // known fixed-arity function.  Materialize each element
                     // at the call boundary and coerce it according to the
@@ -19831,20 +19809,28 @@ print(all({1, 2}))
     }
 
     #[test]
-    fn native_chr_rejects_non_integer_erased_values() {
-        let source =
-            "def identity(value: Any) -> Any:\n    return value\nprint(chr(identity(65.0)))\n";
-        let module = parse(source).expect("dynamic chr source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_chr_dynamic_invalid_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("dynamic chr should compile");
-        let run = Command::new(&output).output().expect("run dynamic chr");
-        let _ = fs::remove_file(&output);
-        assert!(!run.status.success(), "chr(float) should fail");
-        assert!(String::from_utf8_lossy(&run.stderr).contains("an integer is required"));
+    fn native_removed_bare_string_builtins_are_rejected() {
+        for name in ["chr", "ord", "bin", "oct", "hex"] {
+            let source = match name {
+                "chr" => "print(chr(65))\n".to_string(),
+                "ord" => "print(ord(\"A\"))\n".to_string(),
+                _ => format!("print({name}(10))\n"),
+            };
+            let module = parse(&source).expect("removed builtin source should parse");
+            let output = std::env::temp_dir().join(format!(
+                "lucid_codegen_removed_builtin_{name}_{}",
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("removed bare builtin should not compile to native code");
+            let _ = fs::remove_file(&output);
+            assert!(
+                error.message.contains("unknown callable"),
+                "{name}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]
@@ -21152,37 +21138,21 @@ print(all({1, 2}))
     }
 
     #[test]
-    fn native_ord_and_chr_round_trip_ascii() {
-        let source = "print(ord(\"A\"))\nprint(chr(66))\n";
-        let module = parse(source).expect("ord/chr source should parse");
-        let output =
-            std::env::temp_dir().join(format!("lucid_codegen_ord_chr_test_{}", std::process::id()));
-        let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("ord/chr source should compile");
-        let run = Command::new(&output)
-            .output()
-            .expect("compiled ord/chr program should run");
-        let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "65\nB\n");
-    }
-
-    #[test]
-    fn native_ord_and_chr_handle_unicode_codepoints() {
-        let source = "print(ord(\"é\"))\nprint(chr(128512))\nprint(len(\"aé😀\"))\nprint(list(\"aé😀\")[1])\n";
-        let module = parse(source).expect("unicode ord/chr source should parse");
+    fn native_strings_handle_unicode_codepoints() {
+        let source = "print(len(\"aé😀\"))\nprint(list(\"aé😀\")[1])\n";
+        let module = parse(source).expect("unicode string source should parse");
         let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_unicode_ord_chr_test_{}",
+            "lucid_codegen_unicode_string_test_{}",
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("unicode ord/chr source should compile");
+        compile_to_native(&module, &output, 0).expect("unicode string source should compile");
         let run = Command::new(&output)
             .output()
-            .expect("compiled unicode ord/chr should run");
+            .expect("compiled unicode string should run");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "233\n😀\n3\né\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\né\n");
     }
 
     #[test]
@@ -21301,22 +21271,6 @@ print(all({1, 2}))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n42\ntrue\ntrue\n");
-    }
-
-    #[test]
-    fn native_integer_radix_builtins_match_formatting() {
-        let source = "print(bin(10))\nprint(oct(10))\nprint(hex(255))\n";
-        let module = parse(source).expect("radix source should parse");
-        let output =
-            std::env::temp_dir().join(format!("lucid_codegen_radix_test_{}", std::process::id()));
-        let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("radix source should compile");
-        let run = Command::new(&output)
-            .output()
-            .expect("compiled radix program should run");
-        let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "1010\n12\nff\n");
     }
 
     #[test]

@@ -88,6 +88,12 @@ Native `sorted` uses the same exact BigInt comparator, preserving order beyond
 the precision of `double`.
 Native `sorted` now materializes erased custom iterables and compares object
 values through their registered `__lt__` callbacks.
+Bare `bin`, `oct`, `hex`, `chr`, and `ord` are now removed from the runtime
+and native builtin surfaces, matching `removed-builtins.md`. The checker still
+reports targeted migration diagnostics, while the native backend now rejects
+unknown direct call targets before C compilation instead of emitting an
+unresolved symbol. The implemented radix factories remain `str.bin`, `str.oct`,
+and `str.hex`.
 Native `len(Any)` now dispatches to a declared custom `__len__` method instead
 of treating erased class instances as zero-length values.
 Native erased binary arithmetic and bitwise operations now reach user-defined
@@ -1355,10 +1361,9 @@ diverged:
   runtime constructor and rejecting non-numeric components.
   The `slice` builtin now enforces one-to-three integer-or-`none` bounds,
   matching its runtime object constructor.
-  `ord` now rejects statically known strings other than exactly one Unicode
-  character, matching its runtime validation.
-  `chr` now rejects statically known integer literals outside Rust's valid
-  Unicode scalar range before execution.
+  Bare `ord` and `chr` are removed builtins; static diagnostics point callers
+  to `string.ord(...)` and `string.chr(...)` instead of treating them as
+  top-level calls.
   `map` now enforces its two-argument contract, requires a callable mapper,
   and checks its source as an iterable; `enumerate` checks its optional start
   as an integer.
