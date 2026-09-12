@@ -2077,6 +2077,10 @@ impl TypeChecker {
                         .count(),
                 );
                 for member in body {
+                    if let ClassMember::Method(method) | ClassMember::ClassMethod(method) = member
+                    {
+                        Self::reject_removed_decorators(method)?;
+                    }
                     let (method_name, params, return_type, is_async) = match member {
                         ClassMember::Method(method) | ClassMember::ClassMethod(method) => (
                             &method.name,
@@ -2391,6 +2395,10 @@ impl TypeChecker {
                 }
                 self.env.obligations.insert(name.clone(), required);
                 for member in body {
+                    if let TraitMember::Method(method) | TraitMember::ClassMethod(method) = member
+                    {
+                        Self::reject_removed_decorators(method)?;
+                    }
                     match member {
                         TraitMember::Method(method) | TraitMember::ClassMethod(method) => {
                             let parameter_types = method
@@ -2538,6 +2546,7 @@ impl TypeChecker {
                 Ok(())
             }
             Stmt::Function(func) => {
+                Self::reject_removed_decorators(func)?;
                 if let Some((gather_index, gather)) = func
                     .params
                     .iter()
@@ -2768,6 +2777,26 @@ impl TypeChecker {
             message: message.into(),
             span,
         })
+    }
+
+    fn reject_removed_decorators(function: &FunctionDef) -> Result<(), TypeError> {
+        for decorator in &function.decorators {
+            let Expr::Ident { name, span } = decorator else {
+                continue;
+            };
+            let message = match name.as_str() {
+                "staticmethod" => {
+                    "staticmethod is not supported; use a module-level function instead"
+                }
+                "property" => "property is not supported; use getter or setter syntax instead",
+                _ => continue,
+            };
+            return Err(TypeError {
+                message: message.into(),
+                span: *span,
+            });
+        }
+        Ok(())
     }
 
     fn member_name_and_span(member: &ClassMember) -> Option<(&str, Span)> {
@@ -11164,6 +11193,31 @@ def reject(value: not int) -> none:
             let error = checker
                 .check_module(&parse(source).unwrap())
                 .expect_err("removed dynamic attribute hook must fail static checking");
+            assert!(error.message.contains(message));
+            assert!(error.span.end > error.span.start);
+        }
+    }
+
+    #[test]
+    fn test_removed_python_member_decorators_are_rejected_statically() {
+        for (source, message) in [
+            (
+                "class Tools:\n    @staticmethod\n    def answer() -> int:\n        return 42\n",
+                "staticmethod is not supported",
+            ),
+            (
+                "class Circle:\n    @property\n    def area(self) -> int:\n        return 1\n",
+                "property is not supported",
+            ),
+            (
+                "@staticmethod\ndef answer() -> int:\n    return 42\n",
+                "staticmethod is not supported",
+            ),
+        ] {
+            let mut checker = TypeChecker::new();
+            let error = checker
+                .check_module(&parse(source).unwrap())
+                .expect_err("removed Python decorator must fail static checking");
             assert!(error.message.contains(message));
             assert!(error.span.end > error.span.start);
         }
