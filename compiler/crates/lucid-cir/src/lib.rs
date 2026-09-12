@@ -2781,6 +2781,49 @@ impl Function {
                     ..
                 }] => (Some(initial), None, while_statement, Some(name)),
                 [initial, while_statement] => (Some(initial), None, while_statement, None),
+                [first_statement, second_statement, while_statement] => {
+                    let lucid_syntax::Stmt::While { condition, .. } = while_statement else {
+                        return None;
+                    };
+                    let lucid_syntax::Expr::Binary { left, right, .. } = condition else {
+                        return None;
+                    };
+                    let lucid_syntax::Expr::Ident {
+                        name: induction_name,
+                        ..
+                    } = left.as_ref()
+                    else {
+                        return None;
+                    };
+                    let lucid_syntax::Expr::Ident {
+                        name: bound_name, ..
+                    } = right.as_ref()
+                    else {
+                        return None;
+                    };
+                    if induction_name == bound_name {
+                        return None;
+                    }
+                    let (first_name, _) = initialized_ident(first_statement)?;
+                    let (second_name, _) = initialized_ident(second_statement)?;
+                    if first_name == induction_name && second_name == bound_name {
+                        (
+                            Some(first_statement),
+                            Some(second_statement),
+                            while_statement,
+                            None,
+                        )
+                    } else if first_name == bound_name && second_name == induction_name {
+                        (
+                            Some(second_statement),
+                            Some(first_statement),
+                            while_statement,
+                            None,
+                        )
+                    } else {
+                        return None;
+                    }
+                }
                 [first_statement, second_statement, while_statement, lucid_syntax::Stmt::Return {
                     value: Some(lucid_syntax::Expr::Ident { name, .. }),
                     ..
@@ -9092,6 +9135,19 @@ return value
         let function = Function::from_module_linear_with_params(&module, &["n".into()])
             .expect("void counted loop should lower");
         assert_eq!(function.execute_with_args(&[3]), Ok(None));
+
+        let module = lucid_syntax::parse(
+            r#"value = n
+stop = limit
+while value > stop:
+    value -= 1
+"#,
+        )
+        .expect("void local-bound counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("void local-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(None));
 
         let module = lucid_syntax::parse(
             r#"value = n

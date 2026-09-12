@@ -578,7 +578,9 @@ diverged:
   or parameter before the loop, so the entry block can seed induction,
   accumulator, and bound values before entering the shared header. The same
   local-bound entry seeding is supported for plain counted `while` loops that
-  return the induction variable.
+  return the induction variable or fall through with no explicit return. Void
+  loop CFGs now compile through the Cranelift result ABI while preserving the
+  CLI convention that void `run-cir` functions produce no stdout.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable
@@ -863,7 +865,8 @@ diverged:
   initializer. A local bound initializer is accepted as the third pre-loop
   initializer when the loop condition compares against that local. Plain
   counted loops also accept paired local induction and local bound
-  initializers, including `value = n; stop = limit; while value > stop`.
+  initializers, including `value = n; stop = limit; while value > stop`, for
+  both value-returning and void fall-through forms.
   The induction recognizer also accepts `!=` conditions and lowers them to
   the same checked back-edge shape.
   It rejects empty or multi-statement bodies without indexing assumptions and

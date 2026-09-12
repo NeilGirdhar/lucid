@@ -1007,11 +1007,7 @@ pub fn compile_integer_result_function(
         .find(|block| block.id == function.entry)
         .ok_or(CraneliftError::UnsupportedControlFlow)?;
     let has_division_operations = function.has_division_operations();
-    let returns_value = function
-        .blocks
-        .iter()
-        .any(|block| matches!(block.terminator, Terminator::Return(Some(_))));
-    if !has_division_operations && returns_value {
+    if !has_division_operations {
         // With no recoverable operation, the status is always success.  Let
         // the ordinary CIR backend handle diamonds, jumps, and Phi merges so
         // the result ABI is not artificially limited to one block.
@@ -1214,7 +1210,7 @@ fn compile_integer_function_impl(
     let mut module = JITModule::new(JITBuilder::with_isa(isa, default_libcall_names()));
     let mut context = module.make_context();
     context.func.name = UserFuncName::user(0, 0);
-    if returns_value {
+    if returns_value || result_abi {
         context
             .func
             .signature
@@ -2349,6 +2345,28 @@ return value
         let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
         assert!(result.is_ok());
         assert_eq!(result.value, 2);
+    }
+
+    #[test]
+    fn result_abi_executes_void_local_bound_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"value = n
+stop = limit
+while value > stop:
+    value -= 1
+"#,
+        )
+        .expect("void local-bound counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "limit".into()],
+        )
+        .expect("void local-bound counted while should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile void local-bound counted while CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 0);
     }
 
     #[test]

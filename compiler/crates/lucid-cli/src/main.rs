@@ -664,7 +664,9 @@ fn run_cir_file(
             unsafe { compiled.call_result() }
         };
         if result.is_ok() {
-            println!("{}", result.value);
+            if compiled.returns_value() {
+                println!("{}", result.value);
+            }
         } else {
             eprintln!("CIR execution error: {}", result.error);
             exit(1);
