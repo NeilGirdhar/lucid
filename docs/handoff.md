@@ -1789,6 +1789,9 @@ diverged:
   The final-statement diamond now merges each branch's lowered result value,
   so branches no longer need to assign the same source name when no later
   statement observes that name.
+  A branch-local bare `return` after such a value is now treated as branch
+  completion for that final diamond, while a branch with no produced value
+  still reports `NoLowerableAssignment`.
 * The same diamond accepts one statically selected `elif` arm, preserving
   branch selection without lowering an incomplete conditional chain.
 * The compiler database now exposes an incremental resolved-module HIR

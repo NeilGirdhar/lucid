@@ -4639,6 +4639,11 @@ impl Function {
                 if statement_static_noop(statement, bindings, instructions) {
                     continue;
                 }
+                if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
+                    && then_last.is_some()
+                {
+                    continue;
+                }
                 visit(
                     statement,
                     &mut then_bindings,
@@ -4652,6 +4657,11 @@ impl Function {
             let mut else_last = None;
             for statement in else_branch {
                 if statement_static_noop(statement, bindings, instructions) {
+                    continue;
+                }
+                if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
+                    && else_last.is_some()
+                {
                     continue;
                 }
                 visit(
@@ -9731,6 +9741,28 @@ return total
         assert_eq!(
             Function::from_module_linear(&module).unwrap().execute(),
             Ok(Some(3))
+        );
+        let module = lucid_syntax::parse(
+            "flag = true\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(2))
+        );
+        let module = lucid_syntax::parse(
+            "flag = false\nif flag:\n    x = 2\n    return\nelse:\n    y = 3\n    return\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module).unwrap().execute(),
+            Ok(Some(3))
+        );
+        let module =
+            lucid_syntax::parse("flag = true\nif flag:\n    return\nelse:\n    y = 3\n").unwrap();
+        assert_eq!(
+            Function::from_module_linear(&module),
+            Err(LowerError::NoLowerableAssignment)
         );
         let module = lucid_syntax::parse(
             "flag = false\nchecked = true\nkeep_going = false\nif flag:\n    x = 2\n    assert(checked)\nelse:\n    x = 3\n    while keep_going:\n        x = 9\n",
