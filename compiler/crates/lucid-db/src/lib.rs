@@ -5939,6 +5939,38 @@ mod tests {
         );
 
         let file = db.add_file(
+            "constant-elif-setup-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    elif true:\n        temporary = value + 1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("setup-only selected elif branch should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-else-setup-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    else:\n        temporary = value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("setup-only selected else branch should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
             "constant-effectful-fallthrough-branch.lucid",
             "def answer(value: int):\n    if true:\n        str(value)\n    else:\n        return value\n",
         );

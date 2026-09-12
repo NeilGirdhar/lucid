@@ -492,8 +492,8 @@ diverged:
   typed-local path as direct selected arms; dynamic nested branch guards still
   reject instead of being folded.
   Static selected branches that fall through after supported setup work now
-  lower through the void path as well, while effectful discarded setup remains
-  rejected.
+  lower through the void path as well for selected `then`, `elif`, and `else`
+  arms, while effectful discarded setup remains rejected.
 * Manifest `entry_point` lookups now enforce public internal targets even when
   callers use the API before explicitly invoking whole-manifest validation.
 * The interpreter now exposes a checked `call_named` boundary for invoking
