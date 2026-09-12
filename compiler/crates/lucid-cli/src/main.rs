@@ -215,6 +215,34 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
         package.is_file().then_some(package)
     }
 
+    fn declaration_only(path: &Path) -> bool {
+        let Ok(source) = fs::read_to_string(path) else {
+            return false;
+        };
+        let Ok(module) = lucid_syntax::parse(&source) else {
+            return false;
+        };
+        fn is_declaration(statement: &Stmt) -> bool {
+            match statement {
+                Stmt::Export(inner) => is_declaration(inner),
+                Stmt::ClassDef { .. }
+                | Stmt::InterfaceDef { .. }
+                | Stmt::TraitDef { .. }
+                | Stmt::ImplementDef { .. }
+                | Stmt::TypeAlias { .. }
+                | Stmt::Function(_)
+                | Stmt::Import { .. }
+                | Stmt::FromImport { .. }
+                | Stmt::Pass(_)
+                | Stmt::Break(_)
+                | Stmt::Continue(_)
+                | Stmt::VarDef { value: None, .. } => true,
+                _ => false,
+            }
+        }
+        module.statements.iter().all(is_declaration)
+    }
+
     fn visit(
         path: &Path,
         visited: &mut HashSet<PathBuf>,
@@ -228,6 +256,11 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
                 .map(|item| item.display().to_string())
                 .collect::<Vec<_>>();
             cycle.push(canonical.display().to_string());
+            if active[index..].iter().all(|item| declaration_only(item)) {
+                // Declaration names are collected before module execution;
+                // the recursive edge contributes no executable statements.
+                return Ok(Vec::new());
+            }
             return Err(format!(
                 "Import Error: cyclic local imports: {}",
                 cycle.join(" -> ")
