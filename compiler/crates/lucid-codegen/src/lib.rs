@@ -5056,7 +5056,6 @@ static inline void lucid_print_val(LucidVal v) {
                             .first()
                             .map(|a| self.infer_expr_type(&a.value, vars))
                             .unwrap_or_else(|| "LucidVal".to_string()),
-                        "next" => "LucidVal".to_string(),
                         // The runtime hash builtin returns a Lucid integer
                         // value (which may be widened in the future), not a
                         // raw C scalar.
@@ -12001,28 +12000,6 @@ static inline void lucid_print_val(LucidVal v) {
                             }
                             return Ok(format!("lucid_iter_value(lucid_wrap({value}))"));
                         }
-                        "next" => {
-                            if !(1..=2).contains(&args.len()) {
-                                return Err(CodegenError {
-                                    message: "next() takes one or two arguments".to_string(),
-                                });
-                            }
-                            let value = self.emit_expr(&args[0].value)?;
-                            let value_type = self.infer_expr_type(&args[0].value, &HashMap::new());
-                            let class_name = value_type.trim_end_matches('*');
-                            if let Some(owner) = self.method_owner(class_name, "next") {
-                                return Ok(format!("{owner}_next(({owner}*)({value}))"));
-                            }
-                            let fallback = if args.len() == 2 {
-                                self.emit_expr(&args[1].value)?
-                            } else {
-                                "lucid_none()".to_string()
-                            };
-                            return Ok(format!(
-                                "lucid_next_value(lucid_wrap({value}), {}, lucid_wrap({fallback}))",
-                                args.len() == 2
-                            ));
-                        }
                         "hash" => {
                             if args.len() != 1 {
                                 return Err(CodegenError {
@@ -16454,11 +16431,11 @@ match value as subject:
     }
 
     #[test]
-    fn native_next_dispatches_erased_custom_iterator() {
-        let source = "class Counter:\n    current: int\n    def next(self) -> Any:\n        self.current = self.current + 1\n        return self.current\ndef identity(value: Any) -> Any:\n    return value\nc = identity(Counter(4))\nprint(next(c))\nprint(next(c))";
+    fn native_next_method_dispatches_erased_custom_iterator() {
+        let source = "class Counter:\n    current: int\n    def next(self) -> Any:\n        self.current = self.current + 1\n        return self.current\ndef identity(value: Any) -> Any:\n    return value\nc = identity(Counter(4))\nprint(c.next())\nprint(c.next())";
         let module = parse(source).expect("dynamic next source should parse");
         let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_dynamic_next_builtin_test_{}",
+            "lucid_codegen_dynamic_next_method_test_{}",
             std::process::id()
         ));
         let _ = fs::remove_file(&output);
@@ -16471,7 +16448,7 @@ match value as subject:
 
     #[test]
     fn native_iter_returns_erased_custom_iterator() {
-        let source = "class Counter:\n    current: int\n    def __iter__(self) -> Any:\n        return self\n    def next(self) -> Any:\n        self.current = self.current + 1\n        return self.current\ndef identity(value: Any) -> Any:\n    return value\nc = identity(Counter(4))\ni = iter(c)\nprint(next(i))";
+        let source = "class Counter:\n    current: int\n    def __iter__(self) -> Any:\n        return self\n    def next(self) -> Any:\n        self.current = self.current + 1\n        return self.current\ndef identity(value: Any) -> Any:\n    return value\nc = identity(Counter(4))\ni = iter(c)\nprint(i.next())";
         let module = parse(source).expect("dynamic iter builtin source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_dynamic_iter_builtin_test_{}",
@@ -21104,20 +21081,20 @@ print(all({1, 2}))
     }
 
     #[test]
-    fn native_next_consumes_lists_and_uses_default() {
-        let source =
-            "items = [4, 5]\nprint(next(items))\nprint(next(items, 9))\nprint(next(items, 9))\n";
-        let module = parse(source).expect("next source should parse");
+    fn native_removed_next_builtin_is_rejected() {
+        let source = "items = [4, 5]\nprint(next(items))\n";
+        let module = parse(source).expect("removed next source should parse");
         let output =
             std::env::temp_dir().join(format!("lucid_codegen_next_test_{}", std::process::id()));
         let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("next source should compile");
-        let run = Command::new(&output)
-            .output()
-            .expect("compiled next program should run");
+        let error =
+            compile_to_native(&module, &output, 0).expect_err("bare next should not compile");
         let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n5\n9\n");
+        assert!(
+            error.message.contains("unknown callable"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

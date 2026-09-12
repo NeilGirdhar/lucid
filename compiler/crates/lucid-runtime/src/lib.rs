@@ -3248,39 +3248,6 @@ impl Interpreter {
             },
         );
         self.env.borrow_mut().set(
-            "next".into(),
-            Value::BuiltinFunction {
-                name: "next".into(),
-                func: Rc::new(|args: &[Value], interp: &mut Interpreter| {
-                    if !(1..=2).contains(&args.len()) {
-                        return Err(RuntimeError {
-                            message: "next() takes one or two arguments".into(),
-                            span: Span::default(),
-                        });
-                    }
-                    if let Value::Object { fields, .. } = &args[0] {
-                        if let Some(method) = fields.borrow().get("next").cloned() {
-                            return interp.invoke_value(
-                                method,
-                                vec![(None, args[0].clone())],
-                                Span::default(),
-                            );
-                        }
-                    }
-                    if let Value::List(items) = &args[0] {
-                        let mut items = items.borrow_mut();
-                        if !items.is_empty() {
-                            return Ok(items.remove(0));
-                        }
-                    }
-                    args.get(1).cloned().ok_or_else(|| RuntimeError {
-                        message: "stop iteration".into(),
-                        span: Span::default(),
-                    })
-                }),
-            },
-        );
-        self.env.borrow_mut().set(
             "map".into(),
             Value::BuiltinFunction {
                 name: "map".into(),

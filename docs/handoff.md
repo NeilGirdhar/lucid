@@ -88,12 +88,12 @@ Native `sorted` uses the same exact BigInt comparator, preserving order beyond
 the precision of `double`.
 Native `sorted` now materializes erased custom iterables and compares object
 values through their registered `__lt__` callbacks.
-Bare `bin`, `oct`, `hex`, `chr`, and `ord` are now removed from the runtime
-and native builtin surfaces, matching `removed-builtins.md`. The checker still
-reports targeted migration diagnostics, while the native backend now rejects
-unknown direct call targets before C compilation instead of emitting an
+Bare `bin`, `oct`, `hex`, `chr`, `ord`, and `next` are now removed from the
+runtime and native builtin surfaces, matching `removed-builtins.md`. The checker
+still reports targeted migration diagnostics, while the native backend now
+rejects unknown direct call targets before C compilation instead of emitting an
 unresolved symbol. The implemented radix factories remain `str.bin`, `str.oct`,
-and `str.hex`.
+and `str.hex`; iterator advancement is an ordinary `cursor.next()` method call.
 Native `len(Any)` now dispatches to a declared custom `__len__` method instead
 of treating erased class instances as zero-length values.
 Native erased binary arithmetic and bitwise operations now reach user-defined
@@ -186,14 +186,11 @@ Erased iteration also drains custom iterator objects through their `next()`
 callbacks until `iteration.done`.
 The same object protocol registry now preserves custom `__reversed__` methods
 for erased receivers.
-The `next()` builtin also dispatches custom iterator methods after an `Any`
-erasure.
-The `iter()` builtin preserves an erased object's iterator value, so a
-subsequent `next()` call observes the same protocol state.
+Bare `next()` is no longer a builtin. Erased iterator values still expose their
+ordinary `next()` method, so `iter(value).next()` observes the same protocol
+state without reopening Python's top-level wrapper.
 Native `complex` now rejects non-numeric values after erasure instead of
 silently treating them as zero.
-Native `chr` now requires an integer runtime value after erasure, matching the
-interpreter instead of coercing floats and strings.
 Dynamic `int` and `float` conversions now reject unsupported `none` and object
 values instead of silently producing zero.
 Native three-argument `pow` now performs modular exponentiation for BigInt
