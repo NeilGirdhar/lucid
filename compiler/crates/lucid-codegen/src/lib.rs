@@ -8279,6 +8279,13 @@ static inline void lucid_print_val(LucidVal v) {
                                         "write_file",
                                         "zip",
                                     ];
+                                    if self.infer_expr_type(left, &HashMap::new()) == "LucidVal"
+                                        && self.expr_is_val(left)
+                                    {
+                                        return Ok(format!(
+                                            "lucid_is_callable(lucid_wrap({l_str}))"
+                                        ));
+                                    }
                                     let callable = match &**left {
                                         Expr::AnonymousDef { .. } => true,
                                         Expr::Call { args, .. }
@@ -8516,6 +8523,13 @@ static inline void lucid_print_val(LucidVal v) {
                                         "write_file",
                                         "zip",
                                     ];
+                                    if self.infer_expr_type(left, &HashMap::new()) == "LucidVal"
+                                        && self.expr_is_val(left)
+                                    {
+                                        return Ok(format!(
+                                            "(!lucid_is_callable(lucid_wrap({l_str})))"
+                                        ));
+                                    }
                                     let callable = match &**left {
                                         Expr::AnonymousDef { .. } => true,
                                         Expr::Call { args, .. }
@@ -17623,7 +17637,7 @@ print(result[1])
 
     #[test]
     fn native_calls_function_value_retrieved_from_list() {
-        let source = "def double(x: int) -> int:\n    return x * 2\nfs = [double]\nprint(fs[0](21))\n";
+        let source = "def double(x: int) -> int:\n    return x * 2\nfs = [double]\nprint(fs[0] is Callable)\nprint(fs[0](21))\n";
         let module = parse(source).expect("function value list source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_function_value_list_{}",
@@ -17634,7 +17648,7 @@ print(result[1])
         let run = Command::new(&output).output().expect("run function value list");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "function value list failed: {run:?}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n42\n");
     }
 
     #[test]
