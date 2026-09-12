@@ -4666,6 +4666,9 @@ impl TypeChecker {
                 Ok(())
             }
             Stmt::Raise { exception, .. } => {
+                if matches!(exception, Expr::Ident { name, .. } if name == "__rethrow__") {
+                    return Ok(());
+                }
                 // Exceptions represent broken invariants and remain
                 // unchecked in function signatures, but their expression
                 // still belongs to the checked expression language.
@@ -5840,6 +5843,15 @@ impl TypeChecker {
         if yields > 0 && !is_contextmanager {
             return Err(TypeError {
                 message: "yield is only valid in a contextmanager definition".into(),
+                span: func.span,
+            });
+        }
+        if is_contextmanager && (yields != 1 || !yield_guaranteed(&func.body)) {
+            return Err(TypeError {
+                message: format!(
+                    "contextmanager '{}' must yield exactly once on every path (found {yields})",
+                    func.name
+                ),
                 span: func.span,
             });
         }
@@ -10588,6 +10600,9 @@ fn yield_guaranteed(statements: &[Stmt]) -> bool {
             } if yield_guaranteed(finally_body) => {
                 return true;
             }
+            Stmt::Try { body, .. } if yield_guaranteed(body) => {
+                return true;
+            }
             Stmt::Return { .. } => return false,
             Stmt::For { .. } | Stmt::While { .. } => {}
             _ => {}
@@ -11354,6 +11369,32 @@ u.id = 2
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("must be a contextmanager"));
+    }
+
+    #[test]
+    fn contextmanager_yield_inside_try_is_guaranteed() {
+        let module = parse(
+            "class Connection:\n    def begin(self):\n        pass\n    def commit(self):\n        pass\n    def rollback(self):\n        pass\n\ncontextmanager def transaction(conn: Connection):\n    conn.begin()\n    try:\n        yield conn\n        conn.commit()\n    except:\n        conn.rollback()\n        raise\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("yield in a guaranteed try body should satisfy contextmanager");
+    }
+
+    #[test]
+    fn contextmanager_methods_require_one_guaranteed_yield() {
+        let bad =
+            parse("class Session:\n    contextmanager def __cm__(self):\n        pass\n").unwrap();
+        let err = TypeChecker::new().check_module(&bad).unwrap_err();
+        assert!(err.message.contains("must yield exactly once"));
+
+        let good =
+            parse("class Session:\n    contextmanager def __cm__(self):\n        yield self\n")
+                .unwrap();
+        TypeChecker::new()
+            .check_module(&good)
+            .expect("contextmanager method with one guaranteed yield should pass");
     }
 
     #[test]
