@@ -3523,7 +3523,7 @@ impl Function {
                 };
                 let (first_name, first_expr) = initialized_ident(first_statement)?;
                 let (second_name, second_expr) = initialized_ident(second_statement)?;
-                let lucid_syntax::Expr::Binary { left, .. } = condition else {
+                let lucid_syntax::Expr::Binary { left, right, .. } = condition else {
                     return None;
                 };
                 let lucid_syntax::Expr::Ident {
@@ -3541,16 +3541,21 @@ impl Function {
                     } else {
                         return None;
                     };
-                let (induction_statement, alias_statement) = if other_name == induction_name {
-                    (Some(other_statement), None)
+                let (induction_statement, bound_initial, alias_statement) = if other_name
+                    == induction_name
+                {
+                    (Some(other_statement), None, None)
+                } else if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == other_name && name != induction_name)
+                {
+                    (None, Some(other_statement), None)
                 } else {
-                    (None, Some(other_statement))
+                    (None, None, Some(other_statement))
                 };
                 (
                     acc_name,
                     initial_expr,
                     induction_statement,
-                    None,
+                    bound_initial,
                     alias_statement,
                     condition,
                     body,
@@ -10111,6 +10116,22 @@ return total
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("parameter-bound while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(0)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+stop = limit
+while n > stop:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("parameter-induction local-bound accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("parameter-induction local-bound accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(0)));
 

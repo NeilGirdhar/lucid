@@ -1183,6 +1183,37 @@ fn run_cir_executes_local_bound_while_accumulator() {
 }
 
 #[test]
+fn run_cir_executes_parameter_induction_local_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_induction_local_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int, limit: int):\n    total = 0\n    stop = limit\n    while n > stop:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-induction local-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
 fn run_cir_executes_local_bound_local_step_while_accumulator() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_bound_local_step_while_accumulator_{}.lucid",
