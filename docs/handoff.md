@@ -554,9 +554,10 @@ diverged:
 * Canonical counted `while` and `for range` CIR loops now accept a trailing
   `pass` after the induction update, preserving the specified no-op statement
   without widening the loop lowering shape. They also accept an
-  `if_broken: pass` completion clause; effectful completion clauses remain
-  outside this narrow lowering form. Range accumulators support both additive
-  and subtractive induction updates with checked CIR arithmetic.
+  unreachable `if_broken` completion clause, including effectful suites,
+  because the accepted loop shape has no `break` path. Range accumulators
+  support both additive and subtractive induction updates with checked CIR
+  arithmetic.
 * Pure discarded expressions before value and bare returns now pass through
   CIR lowering; effectful expressions remain rejected instead of being dropped.
   Their rejection now carries a dedicated diagnostic explaining that an

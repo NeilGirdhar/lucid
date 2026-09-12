@@ -1160,7 +1160,6 @@ fn collect_typed_body<'db>(
                             statement,
                             lucid_syntax::Stmt::While {
                                 condition,
-                                if_broken: None,
                                 ..
                             } if typed_match_static_truth(condition) == Some(false)
                         )
@@ -1168,7 +1167,6 @@ fn collect_typed_body<'db>(
                             statement,
                             lucid_syntax::Stmt::For {
                                 iterable,
-                                if_broken: None,
                                 ..
                             } if lucid_cir::is_const_empty_iterable(iterable)
                         )
@@ -1896,7 +1894,6 @@ pub fn lower_function_body(
                 statement,
                 lucid_syntax::Stmt::While {
                     condition,
-                    if_broken: None,
                     ..
                 } if static_truth(condition) == Some(false)
             )
@@ -1904,7 +1901,6 @@ pub fn lower_function_body(
                 statement,
                 lucid_syntax::Stmt::For {
                     iterable,
-                    if_broken: None,
                     ..
                 } if lucid_cir::is_const_empty_iterable(iterable)
             )
@@ -6404,22 +6400,12 @@ pub fn lower_function_body(
         {
             return Ok(());
         }
-        if let lucid_syntax::Stmt::While {
-            condition,
-            if_broken,
-            ..
-        } = statement
+        if let lucid_syntax::Stmt::While { condition, .. } = statement
             && static_truth(condition) == Some(false)
-            && if_broken.is_none()
         {
             return Ok(());
         }
-        if let lucid_syntax::Stmt::For {
-            iterable,
-            if_broken,
-            ..
-        } = statement
-            && if_broken.is_none()
+        if let lucid_syntax::Stmt::For { iterable, .. } = statement
             && lucid_cir::is_const_empty_iterable(iterable)
         {
             return Ok(());
@@ -8793,6 +8779,26 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
 
         let file = db.add_file(
+            "multi-match-dead-loop-if-broken-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            while false:\n                pass\n            if_broken:\n                fallback = 100\n            return 11\n        case 2:\n            for item in []:\n                pass\n            if_broken:\n                fallback = 100\n            return 22\n        case _:\n            while false:\n                pass\n            if_broken:\n                fallback = 100\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with dead if_broken setup should lower");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm dead if_broken match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
             "multi-match-empty-for-hir.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            for item in []:\n                pass\n            return 11\n        case 2:\n            for item in []:\n                pass\n            return 22\n        case _:\n            for item in []:\n                pass\n            fallback = 33\n            return fallback\n",
         );
@@ -9457,6 +9463,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
 
         let file = db.add_file(
+            "dynamic-nested-branch-dead-loop-if-broken-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            while false:\n                return 0\n            if_broken:\n                selected = 100\n            selected = value + 1\n            return selected\n        else:\n            for item in []:\n                return 0\n            if_broken:\n                selected = 100\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-loop if_broken local returns should lower");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
             "dynamic-nested-branch-dead-if-local-return.lucid",
             "def answer(value: int):\n    if true:\n        if value > 0:\n            if false:\n                return 0\n            selected = value + 1\n            return selected\n        else:\n            if true:\n                pass\n            return -value\n    else:\n        return 0\n",
         );
@@ -9547,6 +9563,16 @@ mod tests {
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("selected dynamic nested dead-loop void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-dead-loop-if-broken-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            while false:\n                return value\n            if_broken:\n                value = 100\n            return\n        else:\n            for item in []:\n                return value\n            if_broken:\n                value = 100\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-loop if_broken void branch should lower");
         assert_eq!(function.execute_with_args(&[41]), Ok(None));
         assert_eq!(function.execute_with_args(&[-41]), Ok(None));
 
