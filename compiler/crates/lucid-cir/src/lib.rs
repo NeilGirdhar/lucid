@@ -3125,16 +3125,19 @@ impl Function {
             return None;
         }
         let name = condition_name;
-        let (initial, step_initial) = match (initial, step_initial) {
-            (Some(statement), None) => {
+        let (initial, bound_initial, step_initial) = match (initial, bound_initial, step_initial) {
+            (Some(statement), None, None) => {
                 let (target_name, _) = initialized_ident(statement)?;
                 if target_name == name {
-                    (Some(statement), None)
+                    (Some(statement), None, None)
+                } else if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == target_name)
+                {
+                    (None, Some(statement), None)
                 } else {
-                    (None, Some(statement))
+                    (None, None, Some(statement))
                 }
             }
-            (initial, step_initial) => (initial, step_initial),
+            (initial, bound_initial, step_initial) => (initial, bound_initial, step_initial),
         };
         // A malformed/empty loop body must be rejected as an unsupported
         // shape, not indexed optimistically and panicked on. A trailing
@@ -9753,6 +9756,20 @@ return n
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("parameter-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
+            r#"stop = limit
+while n > stop:
+    n -= 1
+return n
+"#,
+        )
+        .expect("local-bound parameter-induction counted loop fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
+                .expect("local-bound parameter-induction counted loop should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(2)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(1)));
 
