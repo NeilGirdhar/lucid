@@ -58,6 +58,21 @@ fp = freeze(p)
 }
 
 #[test]
+fn test_identity_checks_accept_declaration_kind_rhs() {
+    let src = r#"
+class Box:
+    pass
+
+value = Box()
+is_class = value is class
+is_trait = value is trait
+"#;
+    let (chk, evl) = run_lucid(src);
+    assert!(chk.is_ok(), "typecheck failed: {:?}", chk.err());
+    assert!(evl.is_ok(), "evaluation failed: {:?}", evl.err());
+}
+
+#[test]
 fn test_principles_recoverable_errors_with_question_mark() {
     let src = r#"
 def step_one(x: int):

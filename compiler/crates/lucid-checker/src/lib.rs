@@ -5640,6 +5640,9 @@ impl TypeChecker {
                         Ok(Type::Bool)
                     }
                     BinaryOp::Is | BinaryOp::IsNot | BinaryOp::Identity | BinaryOp::NotIdentity => {
+                        let declaration_kind_check =
+                            matches!(&**right, Expr::Ident { name, .. } if matches!(name.as_str(), "class" | "trait" | "interface"))
+                                || matches!(&**right, Expr::Type(TypeExpr::Named { name, .. }) if matches!(name.as_str(), "class" | "trait" | "interface"));
                         let tested_type = if let Expr::Ident { name, .. } = &**right {
                             match name.as_str() {
                                 "int" => Type::Int,
@@ -5653,6 +5656,7 @@ impl TypeChecker {
                             rt.clone()
                         };
                         if matches!(op, BinaryOp::Is)
+                            && !declaration_kind_check
                             && !types_may_overlap(&lt, &tested_type, &self.env)
                         {
                             return Err(TypeError {
@@ -10172,6 +10176,9 @@ def reject(value: not int) -> none:
             .check_module(&invalid_loop)
             .unwrap_err();
         assert!(error.message.contains("is not iterable"));
+        TypeChecker::new()
+            .check_module(&parse("class Box:\n    pass\nvalue = Box()\nis_class = value is class\nis_trait = value is trait\n").unwrap())
+            .expect("declaration-kind instance checks should type-check");
         for (source, message) in [
             ("break\n", "break is only valid inside a loop"),
             ("continue\n", "continue is only valid inside a loop"),
