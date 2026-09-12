@@ -4560,10 +4560,49 @@ impl Interpreter {
             span,
         })?;
 
+        // Publish an activation record before evaluating imports. This makes
+        // declaration-only cycles finite: a module reached recursively can
+        // observe the names collected below instead of re-entering the
+        // loader indefinitely. The subsequent evaluation replaces these
+        // placeholders with the complete definitions.
+        let module_env = Rc::new(RefCell::new(Environment::new()));
+        for statement in &parsed.statements {
+            let statement = match statement {
+                Stmt::Export(inner) => inner.as_ref(),
+                other => other,
+            };
+            match statement {
+                Stmt::ClassDef { name, .. } => {
+                    module_env
+                        .borrow_mut()
+                        .set(name.clone(), Value::ClassRef(name.clone()));
+                }
+                Stmt::Function(function) => {
+                    module_env.borrow_mut().set(
+                        function.name.clone(),
+                        Value::Function {
+                            name: function.name.clone(),
+                            params: function.params.clone(),
+                            body: function.body.clone(),
+                            closure: Rc::clone(&module_env),
+                            is_contextmanager: false,
+                            is_async: function.is_async,
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+        self.module_cache
+            .insert(canon.clone(), Rc::clone(&module_env));
         let mut sub_interp = Interpreter::new();
         sub_interp.current_file = Some(canon.clone());
         sub_interp.module_cache = self.module_cache.clone();
-        sub_interp.eval_module(&parsed)?;
+        sub_interp.env = module_env;
+        if let Err(error) = sub_interp.eval_module(&parsed) {
+            self.module_cache.remove(&canon);
+            return Err(error);
+        }
 
         let env = sub_interp.env;
         self.module_cache = sub_interp.module_cache;
@@ -11123,6 +11162,30 @@ abs_val = math.abs(-42)
         assert_eq!(interp.env.borrow().get("sq").unwrap(), Value::Float(4.0));
         assert_eq!(interp.env.borrow().get("p").unwrap(), Value::Bool(true));
         assert_eq!(interp.env.borrow().get("abs_val").unwrap(), Value::Int(42));
+    }
+
+    #[test]
+    fn declaration_only_module_cycles_are_cached_before_execution() {
+        let root = std::env::temp_dir().join(format!(
+            "lucid_runtime_decl_cycle_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let a = root.join("a.lucid");
+        let b = root.join("b.lucid");
+        std::fs::write(&a, "from .b import B\nclass A:\n    pass\n").unwrap();
+        std::fs::write(&b, "from .a import A\nclass B:\n    pass\n").unwrap();
+        let source = std::fs::read_to_string(&a).unwrap();
+        let module = parse(&source).unwrap();
+        let mut interp = Interpreter::default();
+        interp.set_current_file(Some(a.clone()));
+        interp
+            .eval_module(&module)
+            .expect("declaration-only cycle should terminate");
+        assert!(interp.env.borrow().get("A").is_some());
+        assert!(interp.env.borrow().get("B").is_some());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
