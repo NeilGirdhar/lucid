@@ -5379,6 +5379,49 @@ static inline void lucid_print_val(LucidVal v) {
         Ok(())
     }
 
+    fn reject_exact_primitive_mismatch(
+        &self,
+        expected_c_type: &str,
+        value: &Expr,
+    ) -> Result<(), CodegenError> {
+        let expected = match expected_c_type {
+            "int64_t" => "int",
+            "double" => "float",
+            "bool" => "bool",
+            _ => return Ok(()),
+        };
+        let actual = match value {
+            Expr::Literal { value, .. } => match value {
+                LiteralValue::Int(_) | LiteralValue::BigInt(_) => "int",
+                LiteralValue::Float(_) | LiteralValue::Complex(_) => "float",
+                LiteralValue::Bool(_) => "bool",
+                LiteralValue::Str(_) => "str",
+                _ => return Ok(()),
+            },
+            Expr::Ident { name, .. } => {
+                let actual_c_type = self
+                    .var_types
+                    .get(name)
+                    .or_else(|| self.global_vars.get(name))
+                    .cloned();
+                match actual_c_type.as_deref() {
+                    Some("int64_t") => "int",
+                    Some("double") => "float",
+                    Some("bool") => "bool",
+                    Some("const char*") | Some("char*") => "str",
+                    _ => return Ok(()),
+                }
+            }
+            _ => return Ok(()),
+        };
+        if actual != expected {
+            return Err(CodegenError {
+                message: format!("{actual} is not {expected}"),
+            });
+        }
+        Ok(())
+    }
+
     fn collect_vars_from_stmt(&mut self, stmt: &Stmt, vars: &mut HashMap<String, String>) {
         match stmt {
             Stmt::VarDef {
@@ -8673,6 +8716,10 @@ static inline void lucid_print_val(LucidVal v) {
                     }
                     if let Some(val_expr) = value {
                         Self::reject_bare_skip_value(val_expr, "variable initializer")?;
+                        if let Some(annotation) = type_annotation {
+                            let expected = self.map_type_expr(Some(annotation));
+                            self.reject_exact_primitive_mismatch(&expected, val_expr)?;
+                        }
                         if Self::type_expr_is_bytes(type_annotation.as_ref())
                             || self.expr_is_bytes_value(val_expr)
                         {
@@ -8855,6 +8902,7 @@ static inline void lucid_print_val(LucidVal v) {
                             .or_else(|| self.global_vars.get(name))
                             .cloned()
                             .unwrap_or_else(|| "LucidVal".to_string());
+                        self.reject_exact_primitive_mismatch(&var_ty, value)?;
                         if var_ty == "LucidVal" {
                             self.emit_line(&format!("lucid_var_{name} = lucid_wrap({val_code});"));
                         } else if var_ty == "int64_t" && self.expr_is_val(value) {
@@ -23078,6 +23126,26 @@ print(result[1])
                     .contains("sequence index must be int, got bool"),
                 "{source}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn native_exact_numeric_annotations_reject_implicit_coercions() {
+        for (source, expected) in [
+            ("value: int = true\n", "bool is not int"),
+            ("value: float = true\n", "bool is not float"),
+            ("value: float = 2\n", "int is not float"),
+            ("value: int = 1\nvalue = true\n", "bool is not int"),
+            ("value: float = 2.0\nvalue = 2\n", "int is not float"),
+        ] {
+            let module = parse(source).expect("numeric exactness source should parse");
+            let output = std::env::temp_dir()
+                .join(format!("lucid_native_numeric_exact_{}", std::process::id()));
+            let _ = fs::remove_file(&output);
+            let error = compile_to_native(&module, &output, 0)
+                .expect_err("implicit numeric coercion must fail native codegen");
+            let _ = fs::remove_file(&output);
+            assert!(error.message.contains(expected), "{source}: {error}");
         }
     }
 
