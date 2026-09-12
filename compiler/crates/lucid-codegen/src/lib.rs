@@ -620,11 +620,28 @@ impl CCodeGenerator {
             return Some(name.to_string());
         }
         self.function_aliases.get(name).map(|target| {
-            target
-                .strip_prefix("__str_base_")
-                .unwrap_or(target)
-                .to_string()
+            if let Some(method) = target.strip_prefix("__str_base_") {
+                format!("str.{method}")
+            } else {
+                target.to_string()
+            }
         })
+    }
+
+    fn str_base_metadata_name(value: &Expr) -> Option<String> {
+        if let Expr::Attribute {
+            value: receiver,
+            attr,
+            ..
+        } = value
+        {
+            if matches!(&**receiver, Expr::Ident { name, .. } if name == "str")
+                && matches!(attr.as_str(), "bin" | "oct" | "hex")
+            {
+                return Some(format!("str.{attr}"));
+            }
+        }
+        None
     }
 
     fn class_has_capability(&self, class: &str, capability: &str) -> bool {
@@ -5004,6 +5021,13 @@ static inline void lucid_print_val(LucidVal v) {
                 }
             }
             Expr::Attribute { value, attr, .. } => {
+                if Self::str_base_metadata_name(value).is_some() {
+                    match attr.as_str() {
+                        "__name__" | "__path__" => return "const char*".to_string(),
+                        "__doc__" => return "LucidVal".to_string(),
+                        _ => {}
+                    }
+                }
                 if let Expr::Ident { name, .. } = &**value {
                     if self.callable_metadata_name(name).is_some() {
                         match attr.as_str() {
@@ -14384,6 +14408,15 @@ static inline void lucid_print_val(LucidVal v) {
                 ))
             }
             Expr::Attribute { value, attr, .. } => {
+                if let Some(function_name) = Self::str_base_metadata_name(value) {
+                    match attr.as_str() {
+                        "__name__" | "__path__" => {
+                            return Ok(format!("\"{}\"", c_escape_string(&function_name)));
+                        }
+                        "__doc__" => return Ok("lucid_none()".to_string()),
+                        _ => {}
+                    }
+                }
                 if let Expr::Ident { name, .. } = &**value {
                     if let Some(function_name) = self.callable_metadata_name(name) {
                         match attr.as_str() {
@@ -15267,7 +15300,7 @@ print(" ".join(capitalized))
 
     #[test]
     fn native_function_values_expose_identity_metadata() {
-        let source = "def answer(value: int) -> int:\n    return value + 1\nalias = answer\nprint(answer.__name__)\nprint(alias.__name__)\nprint(len.__name__)\nprint(str.hex(31))\nprint(answer.__doc__)\n";
+        let source = "def answer(value: int) -> int:\n    return value + 1\nalias = answer\nformatter = str.hex\nprint(answer.__name__)\nprint(alias.__name__)\nprint(len.__name__)\nprint(str.hex.__name__)\nprint(formatter.__name__)\nprint(str.hex(31))\nprint(answer.__doc__)\n";
         let module = parse(source).expect("function metadata source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_function_metadata_{}",
@@ -15279,7 +15312,7 @@ print(" ".join(capitalized))
             .expect("run native binary");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout).trim(),
-            "answer\nanswer\nlen\n0x1f\nnone"
+            "answer\nanswer\nlen\nstr.hex\nstr.hex\n0x1f\nnone"
         );
         let _ = std::fs::remove_file(output);
     }
