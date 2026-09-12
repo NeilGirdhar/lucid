@@ -3631,6 +3631,63 @@ pub fn lower_function_body(
             condition,
             then_branch,
             elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(fallback_value),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        if let Some(then_value) = single_value_return(then_branch) {
+            let lower = if has_division(then_value) || has_division(fallback_value) {
+                lucid_cir::Function::from_parameterized_if_direct(
+                    condition,
+                    then_value,
+                    fallback_value,
+                    &function.parameter_names,
+                )
+            } else {
+                lucid_cir::Function::from_parameterized_if(
+                    condition,
+                    then_value,
+                    fallback_value,
+                    &function.parameter_names,
+                )
+            };
+            return lower
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported dynamic guard return"));
+        }
+        if branch_is_single_void(then_branch) {
+            let inverted = lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Not,
+                expr: Box::new(condition.clone()),
+                span: condition.span(),
+            };
+            return lucid_cir::Function::from_parameterized_if_optional(
+                &inverted,
+                fallback_value,
+                &function.parameter_names,
+            )
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported mixed guard return"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
             else_branch,
             ..
         },
@@ -10138,6 +10195,30 @@ mod tests {
             .as_ref()
             .expect("statement conditional returns should lower through typed HIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+    }
+
+    #[test]
+    fn database_lowers_guard_returns_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "guard-return.lucid",
+            "def choose(flag: bool):\n    if flag:\n        return 11\n    return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guard return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "void-guard-return.lucid",
+            "def choose(flag: bool):\n    if flag:\n        return\n    return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("void guard return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
     }
 
