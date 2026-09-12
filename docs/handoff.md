@@ -1069,6 +1069,9 @@ diverged:
   to each arm’s pattern, matching runtime alias behavior. Non-name match
   subjects now require that alias, so narrowing cannot depend on an
   unnameable expression.
+  Dispatch definitions now reject overloads that erase to the same runtime
+  parameter types, so shape-only or generic-only distinctions cannot compile
+  into an ambiguous runtime dispatch table.
   Interface and trait subtyping now follows their declared inheritance
   chains, so derived obligations can be used wherever a base contract is
   required.
@@ -1711,9 +1714,10 @@ gaps are architectural rather than isolated syntax features:
    empty environment. Native anonymous closures now satisfy the escaping
    environment requirement, but recursive cells, reclamation, and CIR/Cranelift
    integration still need to replace the AST-directed implementation.
-6. Shape semantics are open in [Shapes](shape.md): literal-count inference for
-   dispatch by rank or shape still needs precise rules and tests; type-level
-   `stack` shape inference now has a concrete implementation.
+6. Shape semantics are open in [Shapes](shape.md): type-level `stack` shape
+   inference now has a concrete implementation, and dispatch by rank or shape
+   is explicitly rejected because runtime dispatch erases phantom shape
+   parameters. Broader source-to-native shape propagation remains incomplete.
 7. The typed project/configuration loaders cover core `project.yaml`,
    `development.yaml`, and `lucid.lock` semantics, but installation,
    environment management, library initialization, and full conformance

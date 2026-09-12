@@ -292,6 +292,29 @@ impl Type {
         }
     }
 
+    fn runtime_dispatch_key(&self) -> String {
+        match self {
+            Type::Int | Type::LiteralInt(_) => "int".into(),
+            Type::Float | Type::LiteralFloat(_) => "float".into(),
+            Type::Bool | Type::LiteralBool(_) => "bool".into(),
+            Type::Str | Type::LiteralStr(_) => "str".into(),
+            Type::None => "none".into(),
+            Type::Class { name, .. } | Type::Interface { name, .. } | Type::Trait { name, .. } => {
+                name.clone()
+            }
+            Type::Exact(inner) | Type::View { inner, .. } => inner.runtime_dispatch_key(),
+            Type::Record { .. } => "record".into(),
+            Type::Function { .. } => "function".into(),
+            Type::Future(_) => "future".into(),
+            Type::Shape(_)
+            | Type::Never
+            | Type::Union(_)
+            | Type::Intersection(_)
+            | Type::Negation(_)
+            | Type::TypeVar(_) => "object".into(),
+        }
+    }
+
     pub fn make_union(types: Vec<Type>) -> Self {
         let mut flattened = Vec::new();
         for t in types {
@@ -3450,6 +3473,38 @@ impl TypeChecker {
                     return_type: Box::new(fn_return),
                 };
                 if let Some(existing_overloads) = self.env.function_overloads.get(&func.name) {
+                    if func.is_dispatch {
+                        let runtime_key = match &fn_type {
+                            Type::Function { params, .. } => params
+                                .iter()
+                                .map(Type::runtime_dispatch_key)
+                                .collect::<Vec<_>>(),
+                            _ => unreachable!(),
+                        };
+                        let duplicate_runtime_key =
+                            existing_overloads.iter().any(|existing| match existing {
+                                Type::Function {
+                                    params: existing_params,
+                                    ..
+                                } => {
+                                    existing_params
+                                        .iter()
+                                        .map(Type::runtime_dispatch_key)
+                                        .collect::<Vec<_>>()
+                                        == runtime_key
+                                }
+                                _ => false,
+                            });
+                        if duplicate_runtime_key {
+                            return Err(TypeError {
+                                message: format!(
+                                    "dispatch function '{}' has the same runtime parameter types as an existing overload",
+                                    func.name
+                                ),
+                                span: func.span,
+                            });
+                        }
+                    }
                     let duplicate_signature =
                         existing_overloads.iter().any(|existing| match existing {
                             Type::Function {
@@ -14345,6 +14400,15 @@ def reject(value: not int) -> none:
             specific_operator_checker.env.variables.get("result"),
             Some((Type::Str, _))
         ));
+        let shape_only_dispatch = parse(
+            "class Array[D, S]:\n    pass\n\ndispatch def rank(value: Array[int, typing.shape[2]]) -> int:\n    return 2\n\ndispatch def rank(value: Array[int, typing.shape[3]]) -> int:\n    return 3\n",
+        )
+        .unwrap();
+        let mut shape_only_dispatch_checker = TypeChecker::new();
+        let error = shape_only_dispatch_checker
+            .check_module(&shape_only_dispatch)
+            .unwrap_err();
+        assert!(error.message.contains("same runtime parameter types"));
         let invalid_overload = parse(
             "dispatch def choose(value: int) -> int:\n    return value\ndispatch def choose(value: str) -> str:\n    return value\nresult = choose(true)\n",
         )
