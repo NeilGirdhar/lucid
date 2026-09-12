@@ -10066,6 +10066,13 @@ impl TypeChecker {
                             }
                             _ => {}
                         }
+                        if attr == "__class__" {
+                            return Err(TypeError {
+                                message: "__class__ is not part of Lucid; class shape is fixed"
+                                    .into(),
+                                span: expr.span(),
+                            });
+                        }
                         if attr.starts_with('_') && self.env.current_class.as_deref() != Some(name)
                         {
                             return Err(TypeError {
@@ -13101,6 +13108,15 @@ u.id = 2
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("member '_value' is private"));
+    }
+
+    #[test]
+    fn object_class_attribute_reports_fixed_shape_rule() {
+        let module =
+            parse("class Point:\n    x: int\n\np = Point(1)\nresult = p.__class__\n").unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&module).unwrap_err();
+        assert!(err.message.contains("__class__ is not part of Lucid"));
     }
 
     #[test]
