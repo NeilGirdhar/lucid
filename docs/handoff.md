@@ -593,10 +593,11 @@ diverged:
   and induction update steps, so `value = -3`, `while n > -3`, and `n += -1`
   lower through the counted path. Additive induction updates also accept the
   commuted spelling `n = -1 + n`, and the induction step may be a positional
-  parameter instead of only a signed literal. The accumulator step can be a
-  signed literal, positional parameter, or the current induction value, using
-  `+=`, `-=`, `x = x + y`, `x = x - y`, or the commuted additive spelling
-  `x = y + x`. The source and CLI
+  parameter or a pre-loop local alias of a literal or parameter instead of only
+  a signed literal, as in `tick = step; while n > 0: n -= tick`. The
+  accumulator step can be a signed literal, positional parameter, or the
+  current induction value, using `+=`, `-=`, `x = x + y`, `x = x - y`, or the
+  commuted additive spelling `x = y + x`. The source and CLI
   `run-cir --function` paths now execute this shape through explicit induction
   and accumulator Phis. Cranelift result-ABI coverage now executes the same
   countdown-sum CFG natively. Plain counted loops and accumulator loops now
