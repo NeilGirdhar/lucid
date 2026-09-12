@@ -4646,6 +4646,14 @@ impl Interpreter {
         }
 
         let env = sub_interp.env;
+        // Module values can escape through imports and then be used by the
+        // importing interpreter (for example, constructing an imported
+        // class). Keep the semantic registries in sync with the environment
+        // cache instead of leaving definitions stranded in the temporary
+        // module interpreter.
+        self.classes.extend(sub_interp.classes);
+        self.class_vars.extend(sub_interp.class_vars);
+        self.traits.extend(sub_interp.traits);
         self.module_cache = sub_interp.module_cache;
         self.module_loading = sub_interp.module_loading;
         self.module_loading.remove(&canon);
@@ -11205,6 +11213,33 @@ abs_val = math.abs(-42)
         assert_eq!(interp.env.borrow().get("sq").unwrap(), Value::Float(4.0));
         assert_eq!(interp.env.borrow().get("p").unwrap(), Value::Bool(true));
         assert_eq!(interp.env.borrow().get("abs_val").unwrap(), Value::Int(42));
+    }
+
+    #[test]
+    fn imported_class_definitions_are_available_to_parent_interpreter() {
+        let root = std::env::temp_dir().join(format!(
+            "lucid_runtime_imported_class_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("child.lucid"),
+            "class Box:\n    value: int\n",
+        )
+        .unwrap();
+        let entry = root.join("entry.lucid");
+        let source = "import .child\nitem = child.Box(7)\n";
+        std::fs::write(&entry, source).unwrap();
+        let module = parse(source).unwrap();
+        let mut interp = Interpreter::default();
+        interp.set_current_file(Some(entry));
+        interp.eval_module(&module).expect("imported class should construct");
+        assert!(matches!(
+            interp.env.borrow().get("item"),
+            Some(Value::Object { class_name, .. }) if class_name == "Box"
+        ));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
