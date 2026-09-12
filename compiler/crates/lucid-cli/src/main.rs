@@ -1211,6 +1211,10 @@ fn spec_block_typechecks_with_context_or_stubs(previous_blocks: &[String], block
 }
 
 fn spec_source_typechecks_with_stubs(source: &str) -> bool {
+    spec_source_typechecks_with_stubs_inner(source, true)
+}
+
+fn spec_source_typechecks_with_stubs_inner(source: &str, allow_return_fragment: bool) -> bool {
     const MAX_STUBS: usize = 8;
     let mut stubs = Vec::new();
     for _ in 0..=MAX_STUBS {
@@ -1231,6 +1235,12 @@ fn spec_source_typechecks_with_stubs(source: &str) -> bool {
                 {
                     return true;
                 }
+                if allow_return_fragment
+                    && err.message == "return is only valid inside a function"
+                    && spec_return_fragment_typechecks_with_stubs(source)
+                {
+                    return true;
+                }
                 let Some(name) = undefined_name_from_error(&err.message) else {
                     return false;
                 };
@@ -1243,6 +1253,22 @@ fn spec_source_typechecks_with_stubs(source: &str) -> bool {
         }
     }
     false
+}
+
+fn spec_return_fragment_typechecks_with_stubs(source: &str) -> bool {
+    let indented = source
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                "    ".to_string()
+            } else {
+                format!("    {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let wrapped = format!("def __spec_fragment__():\n{indented}\n");
+    spec_source_typechecks_with_stubs_inner(&wrapped, false)
 }
 
 fn spec_evolution_snapshots_typecheck(source: &str) -> bool {
@@ -1294,11 +1320,6 @@ fn spec_block_expects_failure(path: &Path, block: &str) -> bool {
         return true;
     }
     if lower_block.contains("def __getitem__") && lower_block.contains("for page in pages") {
-        return true;
-    }
-    if lower_block.contains("match read_file(path) as outcome")
-        && lower_block.contains("return outcome")
-    {
         return true;
     }
     if lower_block.contains("class document(audited, timestamped")
@@ -1414,11 +1435,43 @@ fn extract_rst_code_blocks(rst: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_markdown_code_blocks;
+    use super::{
+        extract_markdown_code_blocks, spec_block_expects_failure, spec_source_typechecks_with_stubs,
+    };
+    use std::path::Path;
 
     #[test]
     fn markdown_extraction_handles_empty_and_unclosed_blocks() {
         assert!(extract_markdown_code_blocks("```lucid\n```").is_empty());
         assert!(extract_markdown_code_blocks("```lucid\nanswer = 42\n").is_empty());
+    }
+
+    #[test]
+    fn spec_docs_accept_return_fragments_as_function_bodies() {
+        let fragment = r#"
+match read_file(path) as outcome:
+    case ParseError:
+        return outcome
+    case _:
+        text = outcome
+"#;
+
+        assert!(spec_source_typechecks_with_stubs(fragment));
+    }
+
+    #[test]
+    fn match_subject_alias_docs_are_positive_examples() {
+        let fragment = r#"
+match read_file(path) as outcome:
+    case ParseError:
+        return outcome
+    case _:
+        text = outcome
+"#;
+
+        assert!(!spec_block_expects_failure(
+            Path::new("docs/question-mark-operator.md"),
+            fragment,
+        ));
     }
 }
