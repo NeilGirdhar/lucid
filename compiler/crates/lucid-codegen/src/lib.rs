@@ -6640,7 +6640,7 @@ static inline void lucid_print_val(LucidVal v) {
                 "LucidVal {adapter}(void* _env, LucidList* args, LucidDict* kwargs) {{"
             ));
             self.indent += 1;
-            self.emit_line(&format!("{env_type}* env = ({env_type}*)_env; (void)kwargs;"));
+            self.emit_line(&format!("{env_type}* env = ({env_type}*)_env;"));
             let required_count = params
                 .iter()
                 .filter(|param| {
@@ -6649,9 +6649,12 @@ static inline void lucid_print_val(LucidVal v) {
                         && param.default.is_none()
                 })
                 .count();
+            let gather_index = params.iter().position(|param| param.is_gather);
             let positional_count = params
                 .iter()
-                .filter(|param| !param.is_keyword_only && !param.is_variadic_keyword)
+                .filter(|param| {
+                    !param.is_keyword_only && !param.is_variadic_keyword && !param.is_gather
+                })
                 .count();
             let has_positional_variadic = params.iter().any(|param| param.is_variadic_positional);
             let has_keyword_variadic = params.iter().any(|param| param.is_variadic_keyword);
@@ -6659,7 +6662,7 @@ static inline void lucid_print_val(LucidVal v) {
                 self.emit_line(&format!(
                     "if (!args || args->len < {required_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
                 ));
-            } else {
+            } else if gather_index.is_none() {
                 self.emit_line(&format!(
                     "if (!args || args->len > {positional_count}) {{ fprintf(stderr, \"anonymous callable argument count mismatch\\n\"); exit(1); }}"
                 ));
@@ -6722,6 +6725,44 @@ static inline void lucid_print_val(LucidVal v) {
                 ));
             }
             for (index, param) in params.iter().enumerate() {
+                if Some(index) == gather_index {
+                    let class_name = match param.type_annotation.as_ref() {
+                        Some(TypeExpr::Named { name, .. }) => name.clone(),
+                        _ => "Arguments".to_string(),
+                    };
+                    let fields = self
+                        .known_classes
+                        .get(&class_name)
+                        .cloned()
+                        .unwrap_or_else(|| vec!["vpargs".into(), "kwargs".into()]);
+                    self.emit_line(&format!(
+                        "LucidList* _anonymous_gather_vpargs = lucid_list_new(args ? args->len - {index} : 0);"
+                    ));
+                    self.emit_line(&format!(
+                        "for (int64_t _anonymous_i = {index}; args && _anonymous_i < args->len; ++_anonymous_i) lucid_list_append(_anonymous_gather_vpargs, args->items[_anonymous_i]);"
+                    ));
+                    self.emit_line(
+                        "LucidDict* _anonymous_gather_kwargs = kwargs ? kwargs : lucid_dict_new(0);",
+                    );
+                    let constructor_args = fields
+                        .iter()
+                        .map(|field| match field.as_str() {
+                            "pargs" => format!(
+                                "({{ LucidList* _p = lucid_list_new({index}); for (int64_t _i = 0; _i < {index} && args && _i < args->len; ++_i) lucid_list_append(_p, args->items[_i]); _p; }})"
+                            ),
+                            "vpargs" => "_anonymous_gather_vpargs".to_string(),
+                            "kwargs" => "_anonymous_gather_kwargs".to_string(),
+                            _ => "NULL".to_string(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.var_types.insert(param.name.clone(), "LucidVal".into());
+                    self.emit_line(&format!(
+                        "LucidVal lucid_var_{} = lucid_wrap({}_new({}));",
+                        param.name, class_name, constructor_args
+                    ));
+                    continue;
+                }
                 if param.is_variadic_positional {
                     self.var_types.insert(param.name.clone(), "LucidList*".into());
                     self.emit_line(&format!(
@@ -7155,6 +7196,7 @@ static inline void lucid_print_val(LucidVal v) {
                             if self.emit_recursive_anonymous_binding(name, params, body)? {
                                 return Ok(());
                             }
+                            if !params.iter().any(|param| param.is_gather) {
                             if let [
                                 Stmt::Return {
                                     value: Some(body_expr),
@@ -7173,6 +7215,12 @@ static inline void lucid_print_val(LucidVal v) {
                                     .collect();
                                 self.anonymous_bindings
                                     .insert(name.clone(), (parameter_specs, body_expr.clone()));
+                                let closure = self.emit_expr(value)?;
+                                self.emit_line(&format!("lucid_var_{name} = {closure};"));
+                                return Ok(());
+                            }
+                            }
+                            if params.iter().any(|param| param.is_gather) {
                                 let closure = self.emit_expr(value)?;
                                 self.emit_line(&format!("lucid_var_{name} = {closure};"));
                                 return Ok(());
@@ -15447,6 +15495,22 @@ print(z is complex)
             .expect("run keyword variadic closure");
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "keyword variadic closure failed: {run:?}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+    }
+
+    #[test]
+    fn native_anonymous_function_gathers_arguments_bundle() {
+        let source = "class Arguments:\n    vpargs: list[int]\n    kwargs: dict[str, int]\nf = def(***rest: Arguments): len(rest.vpargs) + len(rest.kwargs)\nprint(f(1, a=2))\n";
+        let module = parse(source).expect("anonymous gather source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_native_anonymous_gather_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect("anonymous gather should compile");
+        let run = Command::new(&output).output().expect("run anonymous gather");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "anonymous gather failed: {run:?}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
     }
 
