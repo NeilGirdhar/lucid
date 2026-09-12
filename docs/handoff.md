@@ -680,9 +680,12 @@ diverged:
   accumulator, bound, and update-alias values before entering the shared header.
   The same
   local-bound entry seeding is supported for plain counted `while` loops that
-  return the induction variable or fall through with no explicit return. Void
-  loop CFGs now compile through the Cranelift result ABI while preserving the
-  CLI convention that void `run-cir` functions produce no stdout.
+  return the induction variable or fall through with no explicit return. The
+  database function-body query now delegates those setup-plus-void loop bodies
+  to the source-CIR lowerer instead of rejecting them at the generic
+  multi-statement boundary. Void loop CFGs now compile through the Cranelift
+  result ABI while preserving the CLI convention that void `run-cir` functions
+  produce no stdout.
   Linear constant-loop unrolling now also checks reachability before rejecting
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable

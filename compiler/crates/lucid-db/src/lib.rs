@@ -6651,6 +6651,21 @@ pub fn lower_function_body(
                     last,
                     lucid_syntax::Stmt::Return { .. } | lucid_syntax::Stmt::Pass(_)
                 ) {
+                    if function.is_async {
+                        return Err(Arc::from(
+                            "async function bodies are not yet supported by CIR lowering",
+                        ));
+                    }
+                    let module = lucid_syntax::Module {
+                        statements: source_function.body.clone(),
+                        span: source_function.span,
+                    };
+                    if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                        &module,
+                        &function.parameter_names,
+                    ) {
+                        return Ok(Arc::new(function));
+                    }
                     return Err(Arc::from(
                         "multi-statement function bodies are not yet supported by CIR lowering",
                     ));
@@ -11075,6 +11090,15 @@ mod tests {
             .as_ref()
             .expect("void counted while should lower through CIR");
         assert_eq!(function.execute_with_args(&[2]), Ok(None));
+
+        let file = db.add_file(
+            "void-local-bound-counted-while.lucid",
+            "def drain(n: int, limit: int):\n    stop = limit\n    while n > stop:\n        n -= 1\n",
+        );
+        let function = lower_function_body(&db, file, "drain".into())
+            .as_ref()
+            .expect("void local-bound counted while should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4, 2]), Ok(None));
     }
 
     #[test]
