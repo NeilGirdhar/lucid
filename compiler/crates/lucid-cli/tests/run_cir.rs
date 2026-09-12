@@ -749,6 +749,37 @@ fn run_cir_executes_constant_bound_counted_while_loop() {
 }
 
 #[test]
+fn run_cir_executes_local_constant_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_constant_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    stop = 1 + 1\n    while n > stop:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local constant-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+}
+
+#[test]
 fn run_cir_executes_local_step_counted_while_loop() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_local_step_while_{}.lucid",
@@ -1704,6 +1735,37 @@ fn run_cir_executes_range_accumulator_with_local_start_alias() {
     assert!(
         output.status.success(),
         "run-cir range start alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_constant_start_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_constant_start_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_from(n: int):\n    total = 0\n    begin = 1 + 1\n    for i in range(begin, n):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_from",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range constant start alias accumulator failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");

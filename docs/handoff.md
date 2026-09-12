@@ -567,11 +567,13 @@ diverged:
   while `continue` remains accepted only as a single final tail statement,
   matching the public checker boundary. The repeated-`pass` counted-`while`
   form also has Cranelift result-ABI coverage.
-  Range accumulator loops now also accept pre-loop local aliases for literal or
-  parameter-backed range bounds, whether an alias is used as the start or stop
+  Range accumulator loops now also accept pre-loop local aliases for literal,
+  checked constant-expression, or parameter-backed range bounds, whether an
+  alias is used as the start or stop
   operand in one-, two-, or three-argument ranges with a literal step. This
   keeps `limit = n; for i in range(limit)`,
   `begin = seed; for i in range(begin, n)`,
+  `begin = 1 + 1; for i in range(begin, n)`,
   `begin = seed; stop = limit; for i in range(begin, stop)`, and
   `stop = limit; for i in range(n, stop, -1)` on the same Phi-backed
   CIR/native path. Three-argument ranges may also spell a statically known
@@ -613,7 +615,8 @@ diverged:
   such as `while n > 1 + 1` lower through the same path while overflow or
   dynamic expressions remain outside it. Plain counted
   loops can also keep the induction value as a parameter while seeding the
-  comparison bound from a local, with or without a local step alias, as in
+  comparison bound from a local, including a checked constant-expression local
+  such as `stop = 1 + 1`, with or without a local step alias, as in
   `stop = limit; tick = step; while n > stop`.
   Plain counted
   loops can seed local induction, bound, and step-alias values together, in any

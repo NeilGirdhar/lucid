@@ -2439,6 +2439,26 @@ return total
     }
 
     #[test]
+    fn result_abi_executes_range_accumulation_with_local_constant_start_alias_cfg() {
+        let module = lucid_syntax::parse(
+            r#"total = 0
+begin = 1 + 1
+for i in range(begin, n):
+    total += i
+return total
+"#,
+        )
+        .expect("range constant start alias accumulation fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range constant start alias accumulation should lower");
+        let compiled = compile_integer_result_function(&function)
+            .expect("result ABI should compile range constant start alias loop CFG");
+        let result = unsafe { compiled.call_result_with_args(&[5]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 9);
+    }
+
+    #[test]
     fn result_abi_executes_range_accumulation_with_chained_local_bound_alias_cfg() {
         let module = lucid_syntax::parse(
             r#"total = 0
@@ -2863,6 +2883,26 @@ return n
         let compiled = compile_integer_result_function(&function)
             .expect("result ABI should compile local-bound parameter-induction counted loop CFG");
         let result = unsafe { compiled.call_result_with_args(&[5, 2]) };
+        assert!(result.is_ok());
+        assert_eq!(result.value, 2);
+    }
+
+    #[test]
+    fn result_abi_executes_local_constant_bound_parameter_induction_counted_while_cfg() {
+        let module = lucid_syntax::parse(
+            r#"stop = 1 + 1
+while n > stop:
+    n -= 1
+return n
+"#,
+        )
+        .expect("local constant-bound parameter-induction counted while fixture should parse");
+        let function = lucid_cir::Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("local constant-bound parameter-induction counted while should lower");
+        let compiled = compile_integer_result_function(&function).expect(
+            "result ABI should compile local constant-bound parameter-induction counted loop CFG",
+        );
+        let result = unsafe { compiled.call_result_with_args(&[5]) };
         assert!(result.is_ok());
         assert_eq!(result.value, 2);
     }

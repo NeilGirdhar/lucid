@@ -2726,26 +2726,6 @@ impl Function {
         }
     }
 
-    fn int_literal_expr(expr: &lucid_syntax::Expr) -> Option<i64> {
-        match expr {
-            lucid_syntax::Expr::Literal {
-                value: lucid_syntax::LiteralValue::Int(value),
-                ..
-            } => Some(*value),
-            lucid_syntax::Expr::Unary {
-                op: lucid_syntax::UnaryOp::Neg,
-                expr,
-                ..
-            } => Self::int_literal_expr(expr).and_then(i64::checked_neg),
-            lucid_syntax::Expr::Unary {
-                op: lucid_syntax::UnaryOp::Pos,
-                expr,
-                ..
-            } => Self::int_literal_expr(expr),
-            _ => None,
-        }
-    }
-
     fn const_int_expr(expr: &lucid_syntax::Expr) -> Option<i64> {
         match expr {
             lucid_syntax::Expr::Literal {
@@ -2845,7 +2825,7 @@ impl Function {
             if target_name != target {
                 return None;
             }
-            match Function::int_literal_expr(value) {
+            match Function::const_int_expr(value) {
                 Some(value) => Some(Instruction::ConstInt { result, value }),
                 None => match value {
                     lucid_syntax::Expr::Ident { name, .. } => Some(Instruction::Param {
@@ -10135,6 +10115,19 @@ return n
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
 
         let module = lucid_syntax::parse(
+            r#"stop = 1 + 1
+while n > stop:
+    n -= 1
+return n
+"#,
+        )
+        .expect("local constant-bound counted loop fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("local constant-bound counted loop should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+
+        let module = lucid_syntax::parse(
             r#"stop = limit
 while n > stop:
     n -= 1
@@ -10801,6 +10794,19 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("range start alias accumulation should lower");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+begin = 1 + 1
+for i in range(begin, n):
+    total += i
+return total
+"#,
+        )
+        .expect("range constant start alias accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("range constant start alias accumulation should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(9)));
 
         let module = lucid_syntax::parse(
             r#"begin = seed
