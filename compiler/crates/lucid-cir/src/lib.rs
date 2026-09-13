@@ -1863,6 +1863,22 @@ impl Function {
                                     literal_values: None,
                                 })
                             }
+                            "list" | "record" | "set"
+                                if kind == "dict"
+                                    && operand.children.iter().all(|child| {
+                                        nodes.get(*child as usize).is_some_and(|pair| {
+                                            matches!(pair.kind.as_str(), "list" | "record")
+                                                && pair.children.len() == 2
+                                        })
+                                    }) =>
+                            {
+                                Some(TypedAggregateShape {
+                                    kind: "dict",
+                                    source_id: operand_id,
+                                    member_positions: (0..operand.children.len()).collect(),
+                                    literal_values: None,
+                                })
+                            }
                             "dict" if kind == "dict" && operand.children.len() % 2 == 0 => {
                                 Some(TypedAggregateShape {
                                     kind,
@@ -1892,6 +1908,27 @@ impl Function {
                     .ok_or(LowerError::UnsupportedExpression)?;
                 if aggregate.kind == "call" && aggregate.children.len() == 1 {
                     Ok(Vec::new())
+                } else if shape.kind == "dict"
+                    && matches!(aggregate.kind.as_str(), "list" | "record" | "set")
+                {
+                    let mut child_ids = Vec::with_capacity(shape.member_positions.len() * 2);
+                    for position in &shape.member_positions {
+                        let pair_id = aggregate
+                            .children
+                            .get(*position)
+                            .copied()
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                        let pair = nodes
+                            .get(pair_id as usize)
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                        if !matches!(pair.kind.as_str(), "list" | "record")
+                            || pair.children.len() != 2
+                        {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        child_ids.extend(pair.children.iter().copied());
+                    }
+                    Ok(child_ids)
                 } else {
                     Ok(aggregate.children.clone())
                 }
@@ -28957,6 +28994,127 @@ return total
     }
 
     #[test]
+    fn lowers_typed_dict_constructor_from_pair_iterables() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("dict".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("len".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "list".into(),
+                detail: None,
+                children: vec![2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "record".into(),
+                detail: None,
+                children: vec![4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "list".into(),
+                detail: None,
+                children: vec![6, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "index".into(),
+                detail: None,
+                children: vec![9, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![4, 5, 2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![9, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![10, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![14, 13],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 15, &[])
+            .expect("typed dict constructor should flatten iterable pairs");
+        assert_eq!(function.execute(), Ok(Some(23)));
+    }
+
+    #[test]
     fn typed_dict_constructor_indexing_evaluates_values() {
         let nodes = vec![
             TypedExprNode {
@@ -29025,6 +29183,89 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 8, &[])
             .expect("typed dict constructor indexing should preserve value evaluation");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("dict".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "record".into(),
+                detail: None,
+                children: vec![1, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "record".into(),
+                detail: None,
+                children: vec![4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "list".into(),
+                detail: None,
+                children: vec![6, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "index".into(),
+                detail: None,
+                children: vec![9, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 10, &[])
+            .expect("typed dict constructor pair indexing should preserve value evaluation");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
