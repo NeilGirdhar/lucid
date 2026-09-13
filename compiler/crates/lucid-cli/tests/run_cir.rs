@@ -491,6 +491,30 @@ fn check_renders_related_diagnostic_spans() {
 }
 
 #[test]
+fn check_renders_private_export_fix() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_check_private_export_fix_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "export _private = 1\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("cannot export private name '_private'"));
+    assert!(
+        stderr.contains("help: rename '_private' to 'private' or remove the export marker"),
+        "diagnostic should render the private export fix: {stderr}"
+    );
+}
+
+#[test]
 fn run_cir_uses_statement_and_cfg_lowering() {
     let path = std::env::temp_dir().join(format!("lucid_run_cir_cfg_{}.lucid", std::process::id()));
     fs::write(

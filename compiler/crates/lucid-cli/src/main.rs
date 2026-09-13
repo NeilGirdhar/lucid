@@ -399,6 +399,9 @@ fn emit_database_diagnostics(
                 "-".repeat(related_underline_len)
             );
         }
+        if let Some(fix) = &diagnostic.fix {
+            eprintln!("  help: {fix}");
+        }
     }
 }
 

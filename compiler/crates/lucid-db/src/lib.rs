@@ -188,6 +188,27 @@ pub struct Diagnostic {
     pub fix: Option<String>,
 }
 
+fn private_export_fix(name: &str) -> Option<String> {
+    if !name.starts_with('_') {
+        return None;
+    }
+    let public = name.trim_start_matches('_');
+    if public.is_empty() {
+        Some("remove the export marker".to_string())
+    } else {
+        Some(format!(
+            "rename '{name}' to '{public}' or remove the export marker"
+        ))
+    }
+}
+
+fn private_export_fix_from_message(message: &str) -> Option<String> {
+    let name = message
+        .strip_prefix("cannot export private name '")?
+        .strip_suffix('\'')?;
+    private_export_fix(name)
+}
+
 #[salsa::tracked]
 pub fn parse_file(db: &dyn Db, file: SourceFile) -> Arc<GreenNode> {
     Arc::new(parse_lossless(file.text(db)).green().clone().into_owned())
@@ -7488,6 +7509,7 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
     };
     let mut checker = lucid_checker::TypeChecker::new();
     if let Err(error) = checker.check_module(module) {
+        let fix = private_export_fix_from_message(&error.message);
         diagnostics.push(Diagnostic {
             file,
             severity: Severity::Error,
@@ -7495,7 +7517,7 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
             message: error.message,
             span: error.span,
             related: Arc::from([]),
-            fix: None,
+            fix,
         });
     }
     Arc::from(diagnostics)
@@ -7601,7 +7623,7 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                         message: format!("cannot export private name '{name}'"),
                         span: statement_span(statement),
                         related: Arc::from([]),
-                        fix: None,
+                        fix: private_export_fix(name),
                     });
                 }
             }
@@ -12040,6 +12062,19 @@ mod tests {
             .expect("private export diagnostic");
         assert!(diagnostic.message.contains("_private"));
         assert!(diagnostic.span.end > diagnostic.span.start);
+        assert_eq!(
+            diagnostic.fix.as_deref(),
+            Some("rename '_private' to 'private' or remove the export marker")
+        );
+        let file_diagnostics = file_diagnostics(&db, file);
+        let file_diagnostic = file_diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0200")
+            .expect("checker private export diagnostic");
+        assert_eq!(
+            file_diagnostic.fix.as_deref(),
+            Some("rename '_private' to 'private' or remove the export marker")
+        );
     }
 
     #[test]
