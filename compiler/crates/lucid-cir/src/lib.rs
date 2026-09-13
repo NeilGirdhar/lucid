@@ -3710,9 +3710,27 @@ impl Function {
         }
         let mut last = None;
         let mut next = 0;
-        for root in roots {
+        let prefix_root_is_aggregate_binding = |root: u32| {
+            if !local_bindings.iter().any(|(_, binding)| *binding == root) {
+                return false;
+            }
+            let Some(node) = nodes.get(root as usize) else {
+                return false;
+            };
+            matches!(node.kind.as_str(), "list" | "set" | "record" | "dict")
+                || (node.kind == "call"
+                    && node.children.first().is_some_and(|callee| {
+                        nodes.get(*callee as usize).is_some_and(|callee| {
+                            callee.kind == "name" && callee.detail.as_deref() == Some("range")
+                        })
+                    }))
+        };
+        for (index, root) in roots.iter().copied().enumerate() {
+            if index + 1 != roots.len() && prefix_root_is_aggregate_binding(root) {
+                continue;
+            }
             last = Some(lower(
-                *root,
+                root,
                 nodes,
                 &mut lowered,
                 &mut instructions,

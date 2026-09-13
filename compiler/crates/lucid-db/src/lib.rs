@@ -10184,7 +10184,7 @@ mod tests {
 
         let file = db.add_file(
             "dynamic-aggregate-min-max.lucid",
-            "def aggregate_bounds(left: int, middle: int, right: int):\n    return min([left, middle, right]) + max([left, middle, right])\n",
+            "def aggregate_bounds(left: int, middle: int, right: int):\n    values = [left, middle, right]\n    return min(values) + max(values)\n",
         );
         let function = lower_function_body(&db, file, "aggregate_bounds".into())
             .as_ref()
