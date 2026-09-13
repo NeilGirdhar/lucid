@@ -10183,6 +10183,18 @@ mod tests {
         assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(56)));
 
         let file = db.add_file(
+            "dynamic-aggregate-min-max.lucid",
+            "def aggregate_bounds(left: int, middle: int, right: int):\n    return min([left, middle, right]) + max([left, middle, right])\n",
+        );
+        let function = lower_function_body(&db, file, "aggregate_bounds".into())
+            .as_ref()
+            .expect("dynamic aggregate min/max should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[11, 22, 33]), Ok(Some(44)));
+        assert_eq!(function.execute_with_args(&[33, 11, 22]), Ok(Some(44)));
+        assert_eq!(function.execute_with_args(&[22, 33, 11]), Ok(Some(44)));
+
+        let file = db.add_file(
             "dynamic-pow.lucid",
             "def power(base: int, exponent: int):\n    return pow(base, exponent)\n",
         );

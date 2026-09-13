@@ -3431,6 +3431,7 @@ impl Function {
                                             return Err(LowerError::UnsupportedExpression);
                                         }
                                         let mut selected = None::<(usize, i64)>;
+                                        let mut all_ordered = true;
                                         for (member_index, position) in
                                             shape.member_positions.iter().copied().enumerate()
                                         {
@@ -3440,22 +3441,60 @@ impl Function {
                                                 nodes,
                                                 parameter_names,
                                                 local_bindings,
-                                            )
-                                            .ok_or(LowerError::UnsupportedExpression)?;
-                                            let replace = match (
-                                                callee.detail.as_deref(),
-                                                selected.map(|(_, value)| value),
-                                            ) {
-                                                (_, None) => true,
-                                                (Some("min"), Some(value)) => order_value < value,
-                                                (Some("max"), Some(value)) => order_value > value,
-                                                _ => unreachable!(),
-                                            };
-                                            if replace {
-                                                selected = Some((member_index, order_value));
+                                            );
+                                            if let Some(order_value) = order_value {
+                                                let replace = match (
+                                                    callee.detail.as_deref(),
+                                                    selected.map(|(_, value)| value),
+                                                ) {
+                                                    (_, None) => true,
+                                                    (Some("min"), Some(value)) => {
+                                                        order_value < value
+                                                    }
+                                                    (Some("max"), Some(value)) => {
+                                                        order_value > value
+                                                    }
+                                                    _ => unreachable!(),
+                                                };
+                                                if replace {
+                                                    selected = Some((member_index, order_value));
+                                                }
+                                            } else {
+                                                all_ordered = false;
                                             }
                                         }
-                                        selected.map(|(index, _)| lowered_members[index])
+                                        if all_ordered {
+                                            selected.map(|(index, _)| lowered_members[index])
+                                        } else {
+                                            result = lowered_members[0];
+                                            for member in lowered_members.iter().copied().skip(1) {
+                                                let comparison = ValueId(*next);
+                                                *next += 1;
+                                                instructions.push(match callee.detail.as_deref() {
+                                                    Some("min") => Instruction::CmpLt {
+                                                        result: comparison,
+                                                        left: member,
+                                                        right: result,
+                                                    },
+                                                    Some("max") => Instruction::CmpGt {
+                                                        result: comparison,
+                                                        left: member,
+                                                        right: result,
+                                                    },
+                                                    _ => unreachable!(),
+                                                });
+                                                let selected = ValueId(*next);
+                                                *next += 1;
+                                                instructions.push(Instruction::Select {
+                                                    result: selected,
+                                                    condition: comparison,
+                                                    then_value: member,
+                                                    else_value: result,
+                                                });
+                                                result = selected;
+                                            }
+                                            Some(result)
+                                        }
                                     } else {
                                         None
                                     };
@@ -32300,6 +32339,85 @@ return total
         assert_eq!(function.blocks.len(), 1);
         assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(34)));
         assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(56)));
+    }
+
+    #[test]
+    fn lowers_dynamic_aggregate_min_max_calls() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("left".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("middle".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("right".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "list".into(),
+                detail: None,
+                children: vec![2, 3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![6, 7],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(
+            &nodes,
+            8,
+            &["left".into(), "middle".into(), "right".into()],
+        )
+        .expect("dynamic aggregate min/max should lower as ordinary CIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[11, 22, 33]), Ok(Some(44)));
+        assert_eq!(function.execute_with_args(&[33, 11, 22]), Ok(Some(44)));
+        assert_eq!(function.execute_with_args(&[22, 33, 11]), Ok(Some(44)));
     }
 
     #[test]
