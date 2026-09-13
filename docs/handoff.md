@@ -6,7 +6,7 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13 (second continuation session)
+## Resume snapshot: 2026-09-13 (second continuation session - IN PROGRESS)
 
 Work is on branch `codex/lucid-implementation`. Latest checkpoint
 is at `49599d6 Remove empty placeholder loop for builtin functions`.
