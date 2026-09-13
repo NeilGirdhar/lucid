@@ -1338,7 +1338,7 @@ fn run_cir_lowers_constant_float_predicates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    value = 1.5\n    empty = 0.0\n    selected = 1 if value else 0\n    if value < 2.5:\n        return selected and bool(value) and not bool(empty) and value != 2.5\n    else:\n        return false\n",
+        "def answer():\n    value = 1.5\n    empty = 0.0\n    values = [1.5, 2.5]\n    lookup = {1.5: 2.5}\n    selected = 1 if value else 0\n    if value < 2.5:\n        return selected and bool(value) and not bool(empty) and value != 2.5 and len(values) == 2 and values[1] == 2.5 and value in values and lookup[value] == 2.5\n    else:\n        return false\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))

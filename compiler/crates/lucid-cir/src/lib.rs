@@ -8315,12 +8315,16 @@ impl Function {
         enum AggregateBinding {
             List(Vec<ValueId>),
             StringList(Vec<String>),
+            FloatList(Vec<f64>),
             Set(Vec<ValueId>),
             StringSet(Vec<String>),
+            FloatSet(Vec<f64>),
             Dict(Vec<(ValueId, ValueId)>),
             StringDict(Vec<(String, String)>),
+            FloatDict(Vec<(f64, f64)>),
             Record(Vec<ValueId>),
             StringRecord(Vec<String>),
+            FloatRecord(Vec<f64>),
             String(String),
             Bytes(Vec<u8>),
             Range(Vec<i64>),
@@ -8582,6 +8586,21 @@ impl Function {
                     AggregateBinding::Float(value) => Some(*value),
                     _ => None,
                 },
+                lucid_syntax::Expr::Index { value, index, .. } => {
+                    if let Some(values) = constant_float_list(value, aggregate_bindings) {
+                        let selected = select_constant_index(values.len(), constant_index(index)?)?;
+                        values.get(selected).copied()
+                    } else if let Some(values) = constant_float_record(value, aggregate_bindings) {
+                        let selected = select_constant_index(values.len(), constant_index(index)?)?;
+                        values.get(selected).copied()
+                    } else {
+                        let entries = constant_float_dict(value, aggregate_bindings)?;
+                        let index = constant_float(index, aggregate_bindings)?;
+                        entries
+                            .iter()
+                            .find_map(|(key, value)| (key == &index).then_some(*value))
+                    }
+                }
                 lucid_syntax::Expr::Unary {
                     op: lucid_syntax::UnaryOp::Pos,
                     expr,
@@ -8592,6 +8611,81 @@ impl Function {
                     expr,
                     ..
                 } => Some(-constant_float(expr, aggregate_bindings)?),
+                _ => None,
+            }
+        }
+        fn constant_float_list(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<f64>> {
+            match expr {
+                lucid_syntax::Expr::List { elements, .. } => elements
+                    .iter()
+                    .map(|element| constant_float(element, aggregate_bindings))
+                    .collect(),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::FloatList(values) => Some(values.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        fn constant_float_set(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<f64>> {
+            match expr {
+                lucid_syntax::Expr::Set { elements, .. } => elements
+                    .iter()
+                    .map(|element| constant_float(element, aggregate_bindings))
+                    .collect(),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::FloatSet(values) => Some(values.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        fn constant_float_record(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<f64>> {
+            match expr {
+                lucid_syntax::Expr::Record { fields, .. } => fields
+                    .iter()
+                    .map(|(name, field)| {
+                        if name.is_some() {
+                            None
+                        } else {
+                            constant_float(field, aggregate_bindings)
+                        }
+                    })
+                    .collect(),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::FloatRecord(values) => Some(values.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        fn constant_float_dict(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<(f64, f64)>> {
+            match expr {
+                lucid_syntax::Expr::Dict { entries, .. } => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Some((
+                            constant_float(key, aggregate_bindings)?,
+                            constant_float(value, aggregate_bindings)?,
+                        ))
+                    })
+                    .collect(),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::FloatDict(entries) => Some(entries.clone()),
+                    _ => None,
+                },
                 _ => None,
             }
         }
@@ -8703,13 +8797,28 @@ impl Function {
                                 .ok_or(LowerError::UnsupportedExpression)?
                                 .len()
                         }
+                        expr if constant_float_list(expr, aggregate_bindings).is_some() => {
+                            constant_float_list(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .len()
+                        }
                         expr if constant_string_set(expr, aggregate_bindings).is_some() => {
                             constant_string_set(expr, aggregate_bindings)
                                 .ok_or(LowerError::UnsupportedExpression)?
                                 .len()
                         }
+                        expr if constant_float_set(expr, aggregate_bindings).is_some() => {
+                            constant_float_set(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .len()
+                        }
                         expr if constant_string_dict(expr, aggregate_bindings).is_some() => {
                             constant_string_dict(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .len()
+                        }
+                        expr if constant_float_dict(expr, aggregate_bindings).is_some() => {
+                            constant_float_dict(expr, aggregate_bindings)
                                 .ok_or(LowerError::UnsupportedExpression)?
                                 .len()
                         }
@@ -8763,11 +8872,16 @@ impl Function {
                         {
                             AggregateBinding::List(elements) => elements.len(),
                             AggregateBinding::StringList(elements) => elements.len(),
+                            AggregateBinding::FloatList(elements) => elements.len(),
                             AggregateBinding::Set(elements) => elements.len(),
                             AggregateBinding::StringSet(elements) => elements.len(),
+                            AggregateBinding::FloatSet(elements) => elements.len(),
                             AggregateBinding::Dict(entries) => entries.len(),
                             AggregateBinding::StringDict(entries) => entries.len(),
-                            AggregateBinding::Record(_) | AggregateBinding::StringRecord(_) => {
+                            AggregateBinding::FloatDict(entries) => entries.len(),
+                            AggregateBinding::Record(_)
+                            | AggregateBinding::StringRecord(_)
+                            | AggregateBinding::FloatRecord(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::String(value) => value.chars().count(),
@@ -8881,16 +8995,28 @@ impl Function {
                         {
                             AggregateBinding::List(elements) => !elements.is_empty(),
                             AggregateBinding::StringList(elements) => !elements.is_empty(),
+                            AggregateBinding::FloatList(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
                             AggregateBinding::Set(elements) => !elements.is_empty(),
                             AggregateBinding::StringSet(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
+                            AggregateBinding::FloatSet(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::Dict(entries) => !entries.is_empty(),
                             AggregateBinding::StringDict(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
+                            AggregateBinding::FloatDict(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
                             AggregateBinding::Record(elements) => !elements.is_empty(),
                             AggregateBinding::StringRecord(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
+                            AggregateBinding::FloatRecord(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::String(value) => !value.is_empty(),
@@ -9079,13 +9205,25 @@ impl Function {
                                 AggregateBinding::StringDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::FloatDict(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::StringSet(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::FloatSet(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::StringList(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::FloatList(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::StringRecord(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::FloatRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::Record(_) => {
@@ -9176,13 +9314,25 @@ impl Function {
                                 AggregateBinding::StringDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::FloatDict(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::StringSet(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::FloatSet(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::StringList(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::FloatList(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::StringRecord(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::FloatRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::Record(_) => {
@@ -9328,10 +9478,19 @@ impl Function {
                                 AggregateBinding::StringSet(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
+                                AggregateBinding::FloatSet(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
                                 AggregateBinding::StringList(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
+                                AggregateBinding::FloatList(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
                                 AggregateBinding::StringRecord(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::FloatRecord(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::Dict(entries) => {
@@ -9339,6 +9498,9 @@ impl Function {
                                         .ok_or(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::StringDict(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::FloatDict(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::Record(elements) => {
@@ -9668,6 +9830,39 @@ impl Function {
                     op: op @ (lucid_syntax::BinaryOp::In | lucid_syntax::BinaryOp::NotIn),
                     right,
                     ..
+                } if constant_float(left, aggregate_bindings).is_some()
+                    && (constant_float_list(right, aggregate_bindings).is_some()
+                        || constant_float_set(right, aggregate_bindings).is_some()
+                        || constant_float_dict(right, aggregate_bindings).is_some()) =>
+                {
+                    let needle = constant_float(left, aggregate_bindings)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let contains = if let Some(haystack) =
+                        constant_float_list(right, aggregate_bindings)
+                    {
+                        haystack.contains(&needle)
+                    } else if let Some(haystack) = constant_float_set(right, aggregate_bindings) {
+                        haystack.contains(&needle)
+                    } else {
+                        constant_float_dict(right, aggregate_bindings)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                            .iter()
+                            .any(|(key, _)| key == &needle)
+                    };
+                    let value = match op {
+                        lucid_syntax::BinaryOp::In => contains,
+                        lucid_syntax::BinaryOp::NotIn => !contains,
+                        _ => unreachable!(),
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Binary {
+                    left,
+                    op: op @ (lucid_syntax::BinaryOp::In | lucid_syntax::BinaryOp::NotIn),
+                    right,
+                    ..
                 } => {
                     let needle = lower(left, bindings, aggregate_bindings, instructions, next)?;
                     let needle = constant_int(needle, instructions)
@@ -9734,6 +9929,9 @@ impl Function {
                                 AggregateBinding::StringSet(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::FloatSet(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::Dict(entries) => {
                                     for (key, _) in entries {
                                         contains |= contains_value(*key, instructions)?;
@@ -9742,10 +9940,19 @@ impl Function {
                                 AggregateBinding::StringDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::FloatDict(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::StringList(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::FloatList(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::StringRecord(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::FloatRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::Record(_) => {
@@ -10389,7 +10596,13 @@ impl Function {
                 (AggregateBinding::StringList(left), AggregateBinding::StringList(right)) => {
                     Some(left == right)
                 }
+                (AggregateBinding::FloatList(left), AggregateBinding::FloatList(right)) => {
+                    Some(left == right)
+                }
                 (AggregateBinding::StringRecord(left), AggregateBinding::StringRecord(right)) => {
+                    Some(left == right)
+                }
+                (AggregateBinding::FloatRecord(left), AggregateBinding::FloatRecord(right)) => {
                     Some(left == right)
                 }
                 (AggregateBinding::Set(left), AggregateBinding::Set(right)) => {
@@ -10406,6 +10619,13 @@ impl Function {
                     right.sort_unstable();
                     Some(left == right)
                 }
+                (AggregateBinding::FloatSet(left), AggregateBinding::FloatSet(right)) => {
+                    let mut left = left.clone();
+                    let mut right = right.clone();
+                    left.sort_by(f64::total_cmp);
+                    right.sort_by(f64::total_cmp);
+                    Some(left == right)
+                }
                 (AggregateBinding::Dict(left), AggregateBinding::Dict(right)) => {
                     let mut left = int_pairs(left)?;
                     let mut right = int_pairs(right)?;
@@ -10418,6 +10638,19 @@ impl Function {
                     let mut right = right.clone();
                     left.sort_unstable();
                     right.sort_unstable();
+                    Some(left == right)
+                }
+                (AggregateBinding::FloatDict(left), AggregateBinding::FloatDict(right)) => {
+                    let mut left = left.clone();
+                    let mut right = right.clone();
+                    left.sort_by(|left, right| match left.0.total_cmp(&right.0) {
+                        std::cmp::Ordering::Equal => left.1.total_cmp(&right.1),
+                        ordering => ordering,
+                    });
+                    right.sort_by(|left, right| match left.0.total_cmp(&right.0) {
+                        std::cmp::Ordering::Equal => left.1.total_cmp(&right.1),
+                        ordering => ordering,
+                    });
                     Some(left == right)
                 }
                 (AggregateBinding::String(left), AggregateBinding::String(right)) => {
@@ -10437,12 +10670,16 @@ impl Function {
                 (
                     AggregateBinding::List(_)
                     | AggregateBinding::StringList(_)
+                    | AggregateBinding::FloatList(_)
                     | AggregateBinding::Set(_)
                     | AggregateBinding::StringSet(_)
+                    | AggregateBinding::FloatSet(_)
                     | AggregateBinding::Dict(_)
                     | AggregateBinding::StringDict(_)
+                    | AggregateBinding::FloatDict(_)
                     | AggregateBinding::Record(_)
                     | AggregateBinding::StringRecord(_)
+                    | AggregateBinding::FloatRecord(_)
                     | AggregateBinding::String(_)
                     | AggregateBinding::Bytes(_)
                     | AggregateBinding::Range(_)
@@ -10451,12 +10688,16 @@ impl Function {
                     | AggregateBinding::Ellipsis,
                     AggregateBinding::List(_)
                     | AggregateBinding::StringList(_)
+                    | AggregateBinding::FloatList(_)
                     | AggregateBinding::Set(_)
                     | AggregateBinding::StringSet(_)
+                    | AggregateBinding::FloatSet(_)
                     | AggregateBinding::Dict(_)
                     | AggregateBinding::StringDict(_)
+                    | AggregateBinding::FloatDict(_)
                     | AggregateBinding::Record(_)
                     | AggregateBinding::StringRecord(_)
+                    | AggregateBinding::FloatRecord(_)
                     | AggregateBinding::String(_)
                     | AggregateBinding::Bytes(_)
                     | AggregateBinding::Range(_)
@@ -10478,12 +10719,16 @@ impl Function {
                     None => match aggregate_bindings.get(name)? {
                         AggregateBinding::List(elements) => Some(!elements.is_empty()),
                         AggregateBinding::StringList(elements) => Some(!elements.is_empty()),
+                        AggregateBinding::FloatList(_) => None,
                         AggregateBinding::Set(elements) => Some(!elements.is_empty()),
                         AggregateBinding::StringSet(_) => None,
+                        AggregateBinding::FloatSet(_) => None,
                         AggregateBinding::Dict(entries) => Some(!entries.is_empty()),
                         AggregateBinding::StringDict(_) => None,
+                        AggregateBinding::FloatDict(_) => None,
                         AggregateBinding::Record(elements) => Some(!elements.is_empty()),
                         AggregateBinding::StringRecord(_) => None,
+                        AggregateBinding::FloatRecord(_) => None,
                         AggregateBinding::String(value) => Some(!value.is_empty()),
                         AggregateBinding::Bytes(value) => Some(!value.is_empty()),
                         AggregateBinding::Range(values) => Some(!values.is_empty()),
@@ -10604,6 +10849,9 @@ impl Function {
                     if let Some(values) = constant_string_list(expr, aggregate_bindings) {
                         return Ok(Some(AggregateBinding::StringList(values)));
                     }
+                    if let Some(values) = constant_float_list(expr, aggregate_bindings) {
+                        return Ok(Some(AggregateBinding::FloatList(values)));
+                    }
                     let mut values = Vec::with_capacity(elements.len());
                     for element in elements {
                         values.push(lower(
@@ -10619,6 +10867,9 @@ impl Function {
                 lucid_syntax::Expr::Set { elements, .. } => {
                     if let Some(values) = constant_string_set(expr, aggregate_bindings) {
                         return Ok(Some(AggregateBinding::StringSet(values)));
+                    }
+                    if let Some(values) = constant_float_set(expr, aggregate_bindings) {
+                        return Ok(Some(AggregateBinding::FloatSet(values)));
                     }
                     let mut values = Vec::with_capacity(elements.len());
                     for element in elements {
@@ -10636,6 +10887,9 @@ impl Function {
                     if let Some(entries) = constant_string_dict(expr, aggregate_bindings) {
                         return Ok(Some(AggregateBinding::StringDict(entries)));
                     }
+                    if let Some(entries) = constant_float_dict(expr, aggregate_bindings) {
+                        return Ok(Some(AggregateBinding::FloatDict(entries)));
+                    }
                     let mut values = Vec::with_capacity(entries.len());
                     for (key, value) in entries {
                         let key = lower(key, bindings, aggregate_bindings, instructions, next)?;
@@ -10647,6 +10901,9 @@ impl Function {
                 lucid_syntax::Expr::Record { fields, .. } => {
                     if let Some(values) = constant_string_record(expr, aggregate_bindings) {
                         return Ok(Some(AggregateBinding::StringRecord(values)));
+                    }
+                    if let Some(values) = constant_float_record(expr, aggregate_bindings) {
+                        return Ok(Some(AggregateBinding::FloatRecord(values)));
                     }
                     let mut values = Vec::with_capacity(fields.len());
                     for (name, field) in fields {
@@ -21301,6 +21558,18 @@ return total
             ("value = 1.5\nreturn 42 if value < 2.5 else 0\n", 42),
             ("value = 1.5\nreturn 42 if value else 0\n", 42),
             ("value = 0.0\nreturn 0 if value else 42\n", 42),
+            ("values = [1.5, 2.5]\nreturn len(values)\n", 2),
+            ("return [1.5, 2.5] == [1.5, 2.5]\n", 1),
+            ("return [1.5, 2.5] != [1.5, 3.5]\n", 1),
+            ("values = [1.5, 2.5]\nreturn values[1] == 2.5\n", 1),
+            ("values = [1.5, 2.5]\nreturn 1.5 in values\n", 1),
+            ("return {1.5, 2.5} == {2.5, 1.5}\n", 1),
+            ("values = {1.5, 2.5}\nreturn 2.5 in values\n", 1),
+            ("return (1.5, 2.5) == (1.5, 2.5)\n", 1),
+            ("values = (1.5, 2.5)\nreturn values[0] == 1.5\n", 1),
+            ("values = {1.5: 2.5}\nreturn len(values)\n", 1),
+            ("values = {1.5: 2.5}\nreturn 1.5 in values\n", 1),
+            ("values = {1.5: 2.5}\nreturn values[1.5] == 2.5\n", 1),
             (
                 "value = 1.5\nif value < 2.5:\n    return 42\nelse:\n    return 0\n",
                 42,
