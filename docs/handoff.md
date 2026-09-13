@@ -545,6 +545,9 @@ diverged:
   that fold: `if false` arms are skipped and `if true` arms select normally. A
   matching dynamic guarded arm still blocks the fold and stays on the dynamic
   conditional path, because the guard decides arm selection at runtime.
+  A selected constant-match value arm now also carries straight-line local
+  bindings, including bindings inside a statically selected nested branch,
+  through the typed-local CIR path before returning the final expression.
   Statically false guarded arms before an unguarded wildcard are now skipped
   before primitive match lowering, so the wildcard arm can lower directly
   instead of carrying dead guard control flow.

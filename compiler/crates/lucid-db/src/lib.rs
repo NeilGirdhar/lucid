@@ -2342,6 +2342,75 @@ pub fn lower_function_body(
         fn match_arm_value(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
             match_statement_value(&arm.body)
         }
+        type MatchLocalBinding = (String, lucid_syntax::Span);
+        type MatchValueWithBindings<'a> = (&'a lucid_syntax::Expr, Vec<MatchLocalBinding>);
+        fn match_statement_value_with_bindings(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Result<Option<MatchValueWithBindings<'_>>, Arc<str>> {
+            fn collect<'a>(
+                statements: &'a [lucid_syntax::Stmt],
+                bindings: &mut Vec<MatchLocalBinding>,
+            ) -> Result<Option<&'a lucid_syntax::Expr>, Arc<str>> {
+                for (index, statement) in statements.iter().enumerate() {
+                    if branch_noop_statement(statement) {
+                        continue;
+                    }
+                    match statement {
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        } => {
+                            return if statements[index + 1..].iter().all(branch_noop_statement) {
+                                Ok(Some(value))
+                            } else {
+                                Ok(None)
+                            };
+                        }
+                        lucid_syntax::Stmt::Return { value: None, .. } => return Ok(None),
+                        lucid_syntax::Stmt::Assignment {
+                            target: lucid_syntax::Expr::Ident { name, .. },
+                            value,
+                            ..
+                        }
+                        | lucid_syntax::Stmt::VarDef {
+                            pattern: lucid_syntax::Pattern::Ident(name, _),
+                            value: Some(value),
+                            ..
+                        } => bindings.push((name.clone(), value.span())),
+                        lucid_syntax::Stmt::If {
+                            condition,
+                            then_branch,
+                            elif_branches,
+                            else_branch,
+                            ..
+                        } => match static_branch_selection(
+                            condition,
+                            then_branch,
+                            elif_branches,
+                            else_branch.as_ref(),
+                        ) {
+                            StaticBranch::Selected(branch) => return collect(branch, bindings),
+                            StaticBranch::Empty => continue,
+                            StaticBranch::Unknown => return Ok(None),
+                        },
+                        lucid_syntax::Stmt::Expr(_) => {
+                            return Err(Arc::from(
+                                "effectful discarded expression is not supported by typed CIR lowering",
+                            ));
+                        }
+                        _ => return Ok(None),
+                    }
+                }
+                Ok(None)
+            }
+            let mut bindings = Vec::new();
+            let value = collect(statements, &mut bindings)?;
+            Ok(value.map(|value| (value, bindings)))
+        }
+        fn match_arm_value_with_bindings(
+            arm: &lucid_syntax::MatchArm,
+        ) -> Result<Option<MatchValueWithBindings<'_>>, Arc<str>> {
+            match_statement_value_with_bindings(&arm.body)
+        }
         fn match_statements_are_void(statements: &[lucid_syntax::Stmt]) -> bool {
             let Some((last, prefix)) = statements.split_last() else {
                 return true;
@@ -2579,7 +2648,7 @@ pub fn lower_function_body(
             selected
         });
         if let Some(selected_arm) = constant_selected_arm {
-            if let Some(value) = match_arm_value(selected_arm) {
+            if let Some((value, bindings)) = match_arm_value_with_bindings(selected_arm)? {
                 let nodes = function
                     .body_expressions
                     .iter()
@@ -2591,15 +2660,30 @@ pub fn lower_function_body(
                         literal: node.literal,
                     })
                     .collect::<Vec<_>>();
+                let local_bindings = bindings
+                    .iter()
+                    .map(|(name, span)| {
+                        function
+                            .body_expressions
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == *span)
+                            .map(|node| (name.clone(), node.id))
+                            .ok_or_else(|| {
+                                Arc::<str>::from("local binding has no typed expression")
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 if let Some(root) = function
                     .body_expressions
                     .iter()
                     .rev()
                     .find(|node| node.span == value.span())
-                    && let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                    && let Ok(lowered) = lucid_cir::Function::from_typed_function_body_with_locals(
                         &nodes,
                         root.id,
                         &function.parameter_names,
+                        &local_bindings,
                     )
                 {
                     return Ok(Arc::new(lowered));
@@ -8671,6 +8755,24 @@ mod tests {
             .expect("constant subject match should lower only the selected arm");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(17)));
+
+        let file = db.add_file(
+            "constant-subject-sequential-local-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true:\n            first = value + 1\n            second = first * 2\n            return second\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant subject selected arm should preserve sequential locals");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-subject-static-branch-local-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true:\n            first = value + 1\n            if true:\n                second = first * 2\n                return second\n            else:\n                return 1 // 0\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant subject selected static branch should preserve locals");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(42)));
 
         let file = db.add_file(
             "constant-subject-void-match.lucid",
