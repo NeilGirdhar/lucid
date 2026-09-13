@@ -14102,6 +14102,135 @@ impl Function {
                 _ => Err(LowerError::UnsupportedExpression),
             }
         }
+        fn bind_aggregate_element_pattern(
+            pattern: &lucid_syntax::Pattern,
+            element: AggregateElement,
+            bindings: &mut HashMap<String, ValueId>,
+            aggregate_bindings: &mut HashMap<String, AggregateBinding>,
+        ) -> Result<(), LowerError> {
+            match element {
+                AggregateElement::Value(value) => {
+                    bind_scalar_pattern(pattern, value, bindings, aggregate_bindings)
+                }
+                AggregateElement::Aggregate(aggregate) => {
+                    bind_aggregate_record_target(pattern, aggregate, bindings, aggregate_bindings)
+                }
+            }
+        }
+        fn bind_homogeneous_aggregate_fields<T>(
+            target: &lucid_syntax::Pattern,
+            items: &[T],
+            mut field: impl FnMut(&T) -> AggregateBinding,
+            bindings: &mut HashMap<String, ValueId>,
+            aggregate_bindings: &mut HashMap<String, AggregateBinding>,
+        ) -> Result<(), LowerError> {
+            match target {
+                lucid_syntax::Pattern::Tuple(elements, _) if elements.len() == items.len() => {
+                    for (element, item) in elements.iter().zip(items) {
+                        bind_aggregate_record_target(
+                            element,
+                            field(item),
+                            bindings,
+                            aggregate_bindings,
+                        )?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Pattern::RecordDestructure(elements, _)
+                    if elements.len() == items.len() =>
+                {
+                    if elements.iter().any(|(name, _)| name.is_some()) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for ((_, element), item) in elements.iter().zip(items) {
+                        bind_aggregate_record_target(
+                            element,
+                            field(item),
+                            bindings,
+                            aggregate_bindings,
+                        )?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Pattern::Wildcard(_) => Ok(()),
+                _ => Err(LowerError::UnsupportedExpression),
+            }
+        }
+        fn bind_aggregate_record_target(
+            target: &lucid_syntax::Pattern,
+            aggregate: AggregateBinding,
+            bindings: &mut HashMap<String, ValueId>,
+            aggregate_bindings: &mut HashMap<String, AggregateBinding>,
+        ) -> Result<(), LowerError> {
+            match target {
+                lucid_syntax::Pattern::Ident(name, _) => {
+                    bindings.remove(name);
+                    aggregate_bindings.insert(name.clone(), aggregate);
+                    Ok(())
+                }
+                lucid_syntax::Pattern::Wildcard(_) => Ok(()),
+                _ => match aggregate {
+                    AggregateBinding::Record(items) => {
+                        bind_record_target(target, items, bindings, aggregate_bindings)
+                    }
+                    AggregateBinding::StringRecord(items) => bind_homogeneous_aggregate_fields(
+                        target,
+                        &items,
+                        |item| AggregateBinding::String(item.clone()),
+                        bindings,
+                        aggregate_bindings,
+                    ),
+                    AggregateBinding::FloatRecord(items) => bind_homogeneous_aggregate_fields(
+                        target,
+                        &items,
+                        |item| AggregateBinding::Float(*item),
+                        bindings,
+                        aggregate_bindings,
+                    ),
+                    AggregateBinding::SingletonRecord(items) => bind_homogeneous_aggregate_fields(
+                        target,
+                        &items,
+                        |item| singleton_aggregate(*item),
+                        bindings,
+                        aggregate_bindings,
+                    ),
+                    AggregateBinding::MixedRecord(items) => match target {
+                        lucid_syntax::Pattern::Tuple(elements, _)
+                            if elements.len() == items.len() =>
+                        {
+                            for (element, item) in elements.iter().zip(items) {
+                                bind_aggregate_element_pattern(
+                                    element,
+                                    item,
+                                    bindings,
+                                    aggregate_bindings,
+                                )?;
+                            }
+                            Ok(())
+                        }
+                        lucid_syntax::Pattern::RecordDestructure(elements, _)
+                            if elements.len() == items.len() =>
+                        {
+                            if elements.iter().any(|(name, _)| name.is_some()) {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
+                            for ((_, element), item) in elements.iter().zip(items) {
+                                bind_aggregate_element_pattern(
+                                    element,
+                                    item,
+                                    bindings,
+                                    aggregate_bindings,
+                                )?;
+                            }
+                            Ok(())
+                        }
+                        lucid_syntax::Pattern::Wildcard(_) => Ok(()),
+                        _ => Err(LowerError::UnsupportedExpression),
+                    },
+                    _ => Err(LowerError::UnsupportedExpression),
+                },
+            }
+        }
         struct EnumerateLoopState<'a> {
             bindings: &'a mut HashMap<String, ValueId>,
             aggregate_bindings: &'a mut HashMap<String, AggregateBinding>,
@@ -15159,6 +15288,39 @@ impl Function {
                                 last,
                             )?;
                         }
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target,
+                    iterable: iterable @ lucid_syntax::Expr::Call { func, args, .. },
+                    body,
+                    ..
+                } if args.is_empty()
+                    && matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Attribute { attr, .. } if attr == "items"
+                    ) =>
+                {
+                    let Some(records) = dict_item_records(
+                        iterable,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    )?
+                    else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    if records.is_empty() {
+                        return Ok(());
+                    }
+                    if contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for record in records {
+                        bind_aggregate_record_target(target, record, bindings, aggregate_bindings)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
                 }
@@ -24640,6 +24802,26 @@ return total
                 .expect("bound int-string dictionary item views should iterate mixed records")
                 .execute(),
             Ok(Some(6))
+        );
+        let module = lucid_syntax::parse(
+            "total = 0\nfor key, item in {1: 10, 2: 20}.items():\n    total = total + key + item\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("constant dictionary item views should destructure key-value records")
+                .execute(),
+            Ok(Some(33))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\npairs = {\"a\": 10, \"bc\": 20}\nfor key, item in pairs.items():\n    value = value + len(key) + item\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound mixed dictionary item views should destructure key-value records")
+                .execute(),
+            Ok(Some(33))
         );
         let module = lucid_syntax::parse(
             "value = 0\nfor item in {1: \"a\", 2: \"bc\"}.values():\n    value = value + len(item)\n",

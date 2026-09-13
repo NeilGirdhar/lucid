@@ -1425,7 +1425,7 @@ fn run_cir_executes_constant_dict_view_for_loops_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    total = 0\n    for key in {1: 10, 2: 20}.keys():\n        total += key\n    for value in {1: 10, 2: 20}.values():\n        total += value\n    for item in {1: 10, 2: 20}.items():\n        total += item[0] + item[1]\n    pairs = {1: 10, 2: 20}\n    for item in pairs.items():\n        total += item[0] + item[1]\n    names = {\"a\": \"bc\", \"de\": \"f\"}\n    for item in names.items():\n        total += len(item[0]) + len(item[1])\n    floats = {1.5: 2.5, 3.5: 4.5}\n    for item in floats.items():\n        total += int(item[0] < item[1])\n    scores = {\"a\": 10, \"bc\": 20}\n    for item in scores.items():\n        total += len(item[0]) + item[1]\n    labels = {1: \"a\", 2: \"bc\"}\n    for item in labels.items():\n        total += item[0] + len(item[1])\n    for text in {1: \"a\", 2: \"bc\"}.values():\n        total += len(text)\n    return total\n",
+        "def answer():\n    total = 0\n    for key in {1: 10, 2: 20}.keys():\n        total += key\n    for value in {1: 10, 2: 20}.values():\n        total += value\n    for item in {1: 10, 2: 20}.items():\n        total += item[0] + item[1]\n    pairs = {1: 10, 2: 20}\n    for item in pairs.items():\n        total += item[0] + item[1]\n    for key, value in pairs.items():\n        total += key + value\n    names = {\"a\": \"bc\", \"de\": \"f\"}\n    for item in names.items():\n        total += len(item[0]) + len(item[1])\n    floats = {1.5: 2.5, 3.5: 4.5}\n    for item in floats.items():\n        total += int(item[0] < item[1])\n    scores = {\"a\": 10, \"bc\": 20}\n    for item in scores.items():\n        total += len(item[0]) + item[1]\n    for key, value in scores.items():\n        total += len(key) + value\n    labels = {1: \"a\", 2: \"bc\"}\n    for item in labels.items():\n        total += item[0] + len(item[1])\n    for text in {1: \"a\", 2: \"bc\"}.values():\n        total += len(text)\n    return total\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
@@ -1443,7 +1443,7 @@ fn run_cir_executes_constant_dict_view_for_loops_in_typed_function_body() {
         "run-cir function dict view for loops failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "149");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "215");
 }
 
 #[test]
