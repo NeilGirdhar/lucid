@@ -308,6 +308,22 @@ pub fn span_text(db: &dyn Db, file: SourceFile, span: lucid_syntax::Span) -> Arc
     Arc::from(&source[start..end])
 }
 
+fn source_fallback_span(db: &dyn Db, file: SourceFile) -> Option<lucid_syntax::Span> {
+    let source = file.text(db);
+    let (start, character) = source
+        .char_indices()
+        .find(|(_, character)| !character.is_whitespace())
+        .or_else(|| source.char_indices().next())?;
+    let end = start + character.len_utf8();
+    let (line, column) = *source_position(db, file, start as u32);
+    Some(lucid_syntax::Span::new(
+        start,
+        end,
+        line as usize,
+        column as usize,
+    ))
+}
+
 fn first_lexical_error_span(db: &dyn Db, file: SourceFile) -> lucid_syntax::Span {
     let cst = parse_file(db, file);
     let Some(range) = lucid_syntax::error_ranges(
@@ -9011,6 +9027,7 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                     .as_ref()
                     .ok()
                     .and_then(|module| module.statements.first().map(statement_span))
+                    .or_else(|| source_fallback_span(db, file))
                     .unwrap_or_default();
                 diagnostics.push(Diagnostic {
                     file,
@@ -14284,6 +14301,21 @@ mod tests {
                 .expect_err("duplicate paths must invalidate module order")
                 .contains("duplicate module path")
         );
+    }
+
+    #[test]
+    fn duplicate_module_diagnostic_uses_source_fallback_without_statements() {
+        let mut db = CompilerDatabase::default();
+        let first = db.add_file("dup.lucid", "   \n");
+        let second = db.add_file("dup.lucid", "   \n");
+        let project = Project::new(&db, vec![first, second]);
+        let diagnostics = project_diagnostics(&db, project);
+        let duplicate = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0303")
+            .expect("duplicate module diagnostic");
+        assert_ne!(duplicate.span, lucid_syntax::Span::default());
+        assert!(duplicate.span.end > duplicate.span.start);
     }
 
     #[test]
