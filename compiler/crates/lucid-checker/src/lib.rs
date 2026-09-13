@@ -6829,7 +6829,13 @@ impl TypeChecker {
         })
     }
 
-    fn match_pattern_narrowed_type(&self, pattern: &Pattern, subject_type: &Type) -> Type {
+    /// Return the subject type visible inside a match arm after `pattern`
+    /// has selected that arm.
+    ///
+    /// Typed-HIR collection uses this to record the same narrowed subject and
+    /// `match ... as alias` bindings that the checker exposes while checking
+    /// the arm body.
+    pub fn match_pattern_narrowed_type(&self, pattern: &Pattern, subject_type: &Type) -> Type {
         fn literal_narrowed_type(value: &LiteralValue, env: &TypeEnvironment) -> Type {
             match value {
                 LiteralValue::Int(value) => Type::LiteralInt(*value),

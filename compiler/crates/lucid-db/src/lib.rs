@@ -999,16 +999,48 @@ fn collect_typed_body<'db>(
                     }
                 }
             }
-            Stmt::Match { subject, arms, .. } => {
+            Stmt::Match {
+                subject,
+                subject_alias,
+                arms,
+                ..
+            } => {
                 let subject_id = collect_typed_exprs(db, checker, subject, nodes)?;
                 let subject_type = checker
                     .type_of_expr(subject)
                     .map_err(|error| Arc::<str>::from(error.message))?;
+                let subject_name = match subject {
+                    lucid_syntax::Expr::Ident { name, .. } => Some(name.as_str()),
+                    _ => None,
+                };
                 for arm in arms {
                     let mut arm_checker = checker.clone();
+                    if let Some(alias) = subject_alias {
+                        arm_checker.env.variables.insert(
+                            alias.clone(),
+                            (subject_type.clone(), lucid_syntax::MutabilityView::ReadOnly),
+                        );
+                        arm_checker.env.exact_variables.remove(alias);
+                    }
                     arm_checker.bind_match_pattern_types(&arm.pattern, &subject_type);
                     if let Some(guard) = &arm.guard {
                         collect_typed_exprs(db, &arm_checker, guard, nodes)?;
+                    }
+                    let narrowed =
+                        arm_checker.match_pattern_narrowed_type(&arm.pattern, &subject_type);
+                    if let Some(name) = subject_name {
+                        arm_checker.env.variables.insert(
+                            name.to_string(),
+                            (narrowed.clone(), lucid_syntax::MutabilityView::ReadOnly),
+                        );
+                        arm_checker.env.exact_variables.remove(name);
+                    }
+                    if let Some(alias) = subject_alias {
+                        arm_checker.env.variables.insert(
+                            alias.clone(),
+                            (narrowed, lucid_syntax::MutabilityView::ReadOnly),
+                        );
+                        arm_checker.env.exact_variables.remove(alias);
                     }
                     for statement in &arm.body {
                         arm_checker
@@ -9483,6 +9515,25 @@ mod tests {
                 .iter()
                 .any(|node| node.detail.as_deref() == Some("value") && node.type_name == "int")
         );
+    }
+
+    #[test]
+    fn typed_module_scopes_match_alias_and_subject_narrowing() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "match-alias-narrowing.lucid",
+            "def choose(flag: bool):\n    match flag as selected:\n        case true:\n            narrowed_flag = flag\n            narrowed_alias = selected\n            return 1\n        case _:\n            return 0\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("match arm body should collect with narrowed subject and alias types");
+        let function = &typed.functions[0];
+        assert!(function.body_expressions.iter().any(|node| {
+            node.detail.as_deref() == Some("flag") && node.type_name == "LiteralBool(true)"
+        }));
+        assert!(function.body_expressions.iter().any(|node| {
+            node.detail.as_deref() == Some("selected") && node.type_name == "LiteralBool(true)"
+        }));
     }
 
     #[test]
