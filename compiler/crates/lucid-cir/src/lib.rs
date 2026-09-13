@@ -1530,7 +1530,7 @@ impl Function {
                     lowered.insert(id, result);
                     return Ok(result);
                 }
-                if node.kind == "call" && node.children.len() == 2 {
+                if node.kind == "call" && (node.children.len() == 2 || node.children.len() == 3) {
                     let callee = nodes
                         .get(node.children[0] as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
@@ -1540,6 +1540,9 @@ impl Function {
                             Some("len" | "bool" | "all" | "any" | "sum")
                         )
                     {
+                        if node.children.len() == 3 && callee.detail.as_deref() != Some("sum") {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
                         let aggregate_id = node.children[1];
                         let aggregate = nodes
                             .get(aggregate_id as usize)
@@ -1580,6 +1583,19 @@ impl Function {
                                 lowered_members.push(lowered_child);
                             }
                         }
+                        let start = if node.children.len() == 3 {
+                            Some(lower(
+                                node.children[2],
+                                nodes,
+                                lowered,
+                                instructions,
+                                next,
+                                parameter_names,
+                                local_bindings,
+                            )?)
+                        } else {
+                            None
+                        };
                         result = provisional_result;
                         match callee.detail.as_deref() {
                             Some("len") => {
@@ -1597,7 +1613,19 @@ impl Function {
                             }
                             Some("all" | "any" | "sum") => {
                                 if callee.detail.as_deref() == Some("sum") {
-                                    if lowered_members.is_empty() {
+                                    if let Some(start) = start {
+                                        result = start;
+                                        for member in lowered_members {
+                                            let combined = ValueId(*next);
+                                            *next += 1;
+                                            instructions.push(Instruction::Add {
+                                                result: combined,
+                                                left: result,
+                                                right: member,
+                                            });
+                                            result = combined;
+                                        }
+                                    } else if lowered_members.is_empty() {
                                         instructions
                                             .push(Instruction::ConstInt { result, value: 0 });
                                     } else {
@@ -25875,6 +25903,132 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 4, &["value".into()])
             .expect("typed sum should preserve arithmetic overflow");
+        assert_eq!(
+            function.execute_with_args(&[i64::MAX]),
+            Err(ExecuteError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn lowers_typed_sum_start_of_constant_aggregates() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "list".into(),
+                detail: None,
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(5)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "record".into(),
+                detail: None,
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(7)),
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 6, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![5, 8],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 9, &[])
+            .expect("typed sum with start should lower constant aggregate literals");
+        assert_eq!(function.execute(), Ok(Some(42)));
+    }
+
+    #[test]
+    fn typed_sum_start_preserves_arithmetic_overflow() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "list".into(),
+                detail: None,
+                children: vec![1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("start".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 2, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &["start".into()])
+            .expect("typed sum with start should preserve overflow");
         assert_eq!(
             function.execute_with_args(&[i64::MAX]),
             Err(ExecuteError::ArithmeticOverflow)
