@@ -1747,6 +1747,44 @@ impl Function {
                         return Ok(result);
                     }
                     if callee.kind == "name"
+                        && callee.detail.as_deref() == Some("abs")
+                        && node.children.len() == 2
+                    {
+                        let operand_id = node.children[1];
+                        let operand = nodes
+                            .get(operand_id as usize)
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                        let operand_id =
+                            local_binding_id(operand, operand_id, parameter_names, local_bindings)
+                                .unwrap_or(operand_id);
+                        let operand_value = match nodes
+                            .get(operand_id as usize)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                            .literal
+                        {
+                            Some(TypedLiteral::Int(value)) => value,
+                            Some(TypedLiteral::Bool(value)) => i64::from(value),
+                            None => return Err(LowerError::UnsupportedExpression),
+                        };
+                        let operand = lower(
+                            node.children[1],
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        if operand_value < 0 {
+                            result = provisional_result;
+                            instructions.push(Instruction::Neg { result, operand });
+                        } else {
+                            result = operand;
+                        }
+                        lowered.insert(id, result);
+                        return Ok(result);
+                    }
+                    if callee.kind == "name"
                         && matches!(
                             callee.detail.as_deref(),
                             Some("len" | "bool" | "all" | "any" | "sum" | "min" | "max")
@@ -26376,6 +26414,116 @@ return total
             .expect("typed primitive int/bool conversions should lower");
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(4)));
+    }
+
+    #[test]
+    fn lowers_typed_abs_of_constant_primitives() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("abs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(-42)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(true)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![2, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![8, 7],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body_with_locals(&nodes, 9, &[], &[("value".into(), 3)])
+                .expect("typed abs should lower constant primitive operands");
+        assert_eq!(function.execute(), Ok(Some(53)));
+    }
+
+    #[test]
+    fn typed_abs_preserves_integer_overflow() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("abs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(i64::MIN)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 2, &[])
+            .expect("typed abs should preserve integer overflow");
+        assert_eq!(function.execute(), Err(ExecuteError::ArithmeticOverflow));
     }
 
     #[test]
