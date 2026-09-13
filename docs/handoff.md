@@ -2079,6 +2079,8 @@ diverged:
   rewriting the shape into an explicit conditional ladder.
   The same adapter handles a nested dynamic `elif` ladder without an inner
   `else`, using the initialized local as the selected-arm fall-through result.
+  It also accepts an inner `else` that assigns the returned local, using that
+  assignment as the selected-arm fallback.
   The adapter is limited to primitive, non-division guard conditions so it does
   not introduce eager recoverable errors while nested CFG splicing is still
   incomplete.

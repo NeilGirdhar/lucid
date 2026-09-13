@@ -3881,7 +3881,7 @@ pub fn lower_function_body(
                 condition: inner_condition,
                 then_branch: inner_then,
                 elif_branches: inner_elifs,
-                else_branch: None,
+                else_branch: inner_else,
                 ..
             },
             lucid_syntax::Stmt::Return {
@@ -3921,6 +3921,18 @@ pub fn lower_function_body(
                 .map(|(condition, value)| (condition, *value))
                 .collect::<Vec<_>>();
             elif_values.push((condition, initial_value));
+            let inner_fallback = match inner_else.as_deref() {
+                Some(branch) => {
+                    let Some(value) = assignment_value_for_name(branch, name) else {
+                        return Err(Arc::from("unsupported nested dynamic local elif branch"));
+                    };
+                    value
+                }
+                None => initial_value,
+            };
+            if let Some(fallback) = elif_values.last_mut() {
+                *fallback = (condition, inner_fallback);
+            }
             if function.is_async {
                 return Err(Arc::from(
                     "async function bodies are not yet supported by CIR lowering",
@@ -11944,6 +11956,18 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[0, 11]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-elif-else-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = 0\n        if value > 10:\n            result = 100\n        elif value > 0:\n            result = value + 10\n        else:\n            result = -value\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested dynamic local elif else branch should lower through a ladder");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(2)));
         assert_eq!(function.execute_with_args(&[0, 11]), Ok(Some(-1)));
     }
 
