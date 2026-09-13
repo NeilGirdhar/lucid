@@ -1919,6 +1919,9 @@ diverged:
 * The linear CIR lowering boundary now accepts value-return statements and
   rejects source statements after a return until multi-block terminators are
   available.
+* Function-body CIR lowering now treats a single `pass` or bare `return` as a
+  verified void function instead of reporting it through the multi-statement
+  fallback.
 * CIR functions now have deterministic text serialization for snapshots,
   diagnostics, and future backend differential tests.
 * The runtime interpreter now implements `Default` as an embedding-friendly

@@ -6668,6 +6668,9 @@ pub fn lower_function_body(
                     value: Some(value), ..
                 },
             ] => (value.span(), Vec::new()),
+            [lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)] => {
+                return void_function();
+            }
             [
                 lucid_syntax::Stmt::If {
                     condition,
@@ -11246,6 +11249,22 @@ mod tests {
                 .flat_map(|block| &block.instructions)
                 .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
         );
+    }
+
+    #[test]
+    fn database_lowers_single_void_function_bodies() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("single-pass.lucid", "def discard():\n    pass\n");
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("a single pass statement should lower to a void CIR function");
+        assert_eq!(function.execute(), Ok(None));
+
+        let file = db.add_file("single-bare-return.lucid", "def discard():\n    return\n");
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("a single bare return should lower to a void CIR function");
+        assert_eq!(function.execute(), Ok(None));
     }
 
     #[test]
