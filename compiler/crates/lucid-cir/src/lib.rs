@@ -31020,6 +31020,50 @@ return total
             .expect("typed right-hand dynamic abs should lower through a conditional CFG");
         assert_eq!(function.execute_with_args(&[-42]), Ok(Some(43)));
         assert_eq!(function.execute_with_args(&[42]), Ok(Some(43)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("abs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("Lt".into()),
+                children: vec![2, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &["value".into()])
+            .expect("typed dynamic abs comparison should lower through a conditional CFG");
+        assert_eq!(function.execute_with_args(&[-9]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-10]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[9]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[10]), Ok(Some(0)));
     }
 
     #[test]
