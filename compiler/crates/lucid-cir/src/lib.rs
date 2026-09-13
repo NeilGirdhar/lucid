@@ -8469,17 +8469,26 @@ impl Function {
                     if matches!(
                         func.as_ref(),
                         lucid_syntax::Expr::Attribute { attr, .. } if attr == "split"
-                    ) && args.len() == 1 =>
+                    ) && args.len() <= 1 =>
                 {
                     let lucid_syntax::Expr::Attribute { value, .. } = func.as_ref() else {
                         unreachable!();
                     };
                     let value = constant_string(value, aggregate_bindings)?;
-                    let separator = constant_string(&args[0].value, aggregate_bindings)?;
-                    if separator.is_empty() {
-                        return None;
+                    if let Some(arg) = args.first() {
+                        let separator = constant_string(&arg.value, aggregate_bindings)?;
+                        if separator.is_empty() {
+                            let mut values = Vec::with_capacity(value.chars().count() + 2);
+                            values.push(String::new());
+                            values.extend(value.chars().map(|ch| ch.to_string()));
+                            values.push(String::new());
+                            Some(values)
+                        } else {
+                            Some(value.split(&separator).map(str::to_string).collect())
+                        }
+                    } else {
+                        Some(value.split_whitespace().map(str::to_string).collect())
                     }
-                    Some(value.split(&separator).map(str::to_string).collect())
                 }
                 _ => None,
             }
@@ -20971,7 +20980,11 @@ return total
             ("return len(\"  lucid  \".strip())\n", 5),
             ("return len(\"banana\".replace(\"na\", \"NA\"))\n", 6),
             ("return len(\"a,b\".split(\",\"))\n", 2),
+            ("return len(\"a b\".split())\n", 2),
+            ("return len(\"  a  b  \".split())\n", 2),
+            ("return len(\"abc\".split(\"\"))\n", 5),
             ("return \"a,b\".split(\",\")[1] == \"b\"\n", 1),
+            ("return \"abc\".split(\"\")[1] == \"a\"\n", 1),
             ("return \",\".join([\"a\", \"b\"]) == \"a,b\"\n", 1),
             ("return [\"a\", \"b\"] == [\"a\", \"b\"]\n", 1),
             ("return \"a\" in [\"a\", \"b\"]\n", 1),
@@ -21011,6 +21024,14 @@ return total
             (
                 "text = \"a,b\"\nseparator = \",\"\nreturn len(text.split(separator))\n",
                 2,
+            ),
+            (
+                "text = \"  a  b  \"\nreturn len(text.split())\n",
+                2,
+            ),
+            (
+                "text = \"abc\"\nseparator = \"\"\nreturn text.split(separator)[4] == \"\"\n",
+                1,
             ),
             (
                 "parts = [\"a\", \"b\"]\nseparator = \",\"\nreturn separator.join(parts) == \"a,b\"\n",
