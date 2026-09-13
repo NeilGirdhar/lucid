@@ -4514,6 +4514,45 @@ impl TypeChecker {
         }
     }
 
+    fn iterator_result_type(&self, iterable: &Type) -> Option<Type> {
+        if !self.is_iterable_type(iterable) {
+            return None;
+        }
+        let base = match iterable {
+            Type::View { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        if let Type::Class { name, .. } = base {
+            if !matches!(
+                name.as_str(),
+                "list"
+                    | "set"
+                    | "frozenset"
+                    | "dict"
+                    | "frozendict"
+                    | "range"
+                    | "Bytes"
+                    | "ByteArray"
+                    | "MemoryView"
+            ) {
+                if let Some(Type::Function { return_type, .. }) =
+                    self.class_method_type(name, "__iter__")
+                {
+                    return Some(*return_type);
+                }
+            }
+        }
+        Some(Type::Class {
+            name: "list".into(),
+            type_args: vec![self.iterable_element_type(iterable)],
+            parent: None,
+            traits: Vec::new(),
+            interfaces: Vec::new(),
+            fields: HashMap::new(),
+            is_sealed: false,
+        })
+    }
+
     fn is_iterable_type(&self, iterable: &Type) -> bool {
         let base = match iterable {
             Type::View { inner, .. } => inner.as_ref(),
@@ -9918,6 +9957,7 @@ impl TypeChecker {
                                             is_sealed: false,
                                         })
                                     }
+                                    "iter" => self.iterator_result_type(&argument_type),
                                     "enumerate" if self.is_iterable_type(&argument_type) => {
                                         Some(Type::Class {
                                             name: "list".into(),
@@ -15947,7 +15987,7 @@ def reject(value: not int) -> none:
         checker
             .check_module(
                 &parse(
-                    "def double(x: int) -> int:\n    return x * 2\nvalues = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\nenumerated = enumerate(range(3), 5)\nzipped = zip(range(3), sorted(range(3)))\nmapped = map(double, range(3))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\nmapped_sum = sum(mapped)\nenum_index: int = enumerated[0][0]\nenum_value: int = enumerated[0][1]\nzip_left: int = zipped[0][0]\nzip_right: int = zipped[0][1]\nmapped_value: int = mapped[0]\n",
+                    "def double(x: int) -> int:\n    return x * 2\nvalues = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\niter_values = iter(range(5))\nenumerated = enumerate(range(3), 5)\nzipped = zip(range(3), sorted(range(3)))\nmapped = map(double, range(3))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\niter_sum = sum(iter_values)\nmapped_sum = sum(mapped)\niter_value: int = iter_values[0]\nenum_index: int = enumerated[0][0]\nenum_value: int = enumerated[0][1]\nzip_left: int = zipped[0][0]\nzip_right: int = zipped[0][1]\nmapped_value: int = mapped[0]\n",
                 )
                 .unwrap(),
             )
@@ -15987,6 +16027,11 @@ def reject(value: not int) -> none:
                 if name == "list" && type_args == &vec![Type::Int]
         ));
         assert!(matches!(
+            checker.env.variables.get("iter_values").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "list" && type_args == &vec![Type::Int]
+        ));
+        assert!(matches!(
             checker.env.variables.get("enumerated").map(|(ty, _)| ty),
             Some(Type::Class { name, type_args, .. })
                 if name == "list"
@@ -16017,6 +16062,10 @@ def reject(value: not int) -> none:
         ));
         assert!(matches!(
             checker.env.variables.get("reversed_sum").map(|(ty, _)| ty),
+            Some(Type::Int)
+        ));
+        assert!(matches!(
+            checker.env.variables.get("iter_sum").map(|(ty, _)| ty),
             Some(Type::Int)
         ));
         assert!(matches!(
