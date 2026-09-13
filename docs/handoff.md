@@ -2041,6 +2041,16 @@ diverged:
   If the continuation does not read branch-local bindings, dynamic `elif`
   ladders can now continue without fabricating a Phi while preserving
   conditional branch errors.
+* Primitive function-level `match` lowering now has a syntax-to-`if` fallback
+  for integer, boolean, and wildcard arms, including guarded arms.
+  That routes supported match bodies through the same verified linear CFG
+  lowerer used by dynamic `if`/`elif`, rather than requiring every arm to fit
+  the old `match_arm_value` extractor.
+  The new regression covers a guarded literal arm and wildcard fallback whose
+  bodies define locals before returning.
+  Nested dynamic control flow inside an arm still requires nested CFG inlining:
+  the equivalent nested `if` inside an `if` branch currently reports
+  `constant function branch has no lowerable return`.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,

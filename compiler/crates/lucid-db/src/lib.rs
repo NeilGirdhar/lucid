@@ -2800,6 +2800,46 @@ pub fn lower_function_body(
             },
             _ => None,
         };
+        if arms.len() >= 2
+            && arms.iter().all(|arm| {
+                matches!(
+                    arm.pattern,
+                    lucid_syntax::Pattern::Literal(
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                        _
+                    ) | lucid_syntax::Pattern::Wildcard(_)
+                )
+            })
+        {
+            let mut conditional_arms = Vec::new();
+            let mut fallback_arm = None;
+            for arm in arms {
+                if let Some(condition) = arm_condition(arm) {
+                    conditional_arms.push((condition, arm.body.clone()));
+                } else {
+                    fallback_arm = Some(arm.body.clone());
+                    break;
+                }
+            }
+            if let Some(((condition, then_branch), elif_source)) = conditional_arms.split_first() {
+                let lowered_match = lucid_syntax::Module {
+                    statements: vec![lucid_syntax::Stmt::If {
+                        condition: condition.clone(),
+                        then_branch: then_branch.clone(),
+                        elif_branches: elif_source.to_vec(),
+                        else_branch: fallback_arm,
+                        span: source_function.span,
+                    }],
+                    span: source_function.span,
+                };
+                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                    &lowered_match,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(lowered));
+                }
+            }
+        }
         if arms.iter().any(|arm| arm.guard.is_some())
             && arms.iter().all(|arm| {
                 matches!(
@@ -9448,6 +9488,17 @@ mod tests {
         );
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
+
+        let file = db.add_file(
+            "guarded-match-local-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if value > 0:\n            selected = value + 10\n            return selected\n        case _:\n            fallback = -value\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded match with local arm bodies should lower through shared CFG");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
 
         let file = db.add_file(
