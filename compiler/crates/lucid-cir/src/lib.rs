@@ -8541,6 +8541,74 @@ impl Function {
                     Ok(id)
                 }
                 lucid_syntax::Expr::Binary {
+                    left,
+                    op: op @ (lucid_syntax::BinaryOp::In | lucid_syntax::BinaryOp::NotIn),
+                    right,
+                    ..
+                } => {
+                    let needle = lower(left, bindings, aggregate_bindings, instructions, next)?;
+                    let needle = constant_int(needle, instructions)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let contains_value = |value: ValueId,
+                                          instructions: &[Instruction]|
+                     -> Result<bool, LowerError> {
+                        Ok(constant_int(value, instructions)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                            == needle)
+                    };
+                    let mut contains = false;
+                    match right.as_ref() {
+                        lucid_syntax::Expr::List { elements, .. }
+                        | lucid_syntax::Expr::Set { elements, .. } => {
+                            for element in elements {
+                                let value = lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                                contains |= contains_value(value, instructions)?;
+                            }
+                        }
+                        lucid_syntax::Expr::Dict { entries, .. } => {
+                            for (key, value) in entries {
+                                let key =
+                                    lower(key, bindings, aggregate_bindings, instructions, next)?;
+                                let _ =
+                                    lower(value, bindings, aggregate_bindings, instructions, next)?;
+                                contains |= contains_value(key, instructions)?;
+                            }
+                        }
+                        lucid_syntax::Expr::Ident { name, .. } => {
+                            match aggregate_bindings
+                                .get(name)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                            {
+                                AggregateBinding::List(elements) => {
+                                    for value in elements {
+                                        contains |= contains_value(*value, instructions)?;
+                                    }
+                                }
+                                AggregateBinding::Dict(entries) => {
+                                    for (key, _) in entries {
+                                        contains |= contains_value(*key, instructions)?;
+                                    }
+                                }
+                            }
+                        }
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    }
+                    let value = match op {
+                        lucid_syntax::BinaryOp::In => contains,
+                        lucid_syntax::BinaryOp::NotIn => !contains,
+                        _ => unreachable!(),
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Binary {
                     left, op, right, ..
                 } => {
                     let left = lower(left, bindings, aggregate_bindings, instructions, next)?;
@@ -19420,6 +19488,22 @@ return total
             ("values = {1: 10, 2: 20}\nreturn len(values)\n", 2),
             ("return len({1: 10, 2: 20})\n", 2),
             ("return len(\"abc\")\n", 3),
+        ] {
+            let module = lucid_syntax::parse(source).unwrap();
+            let function = Function::from_module_linear(&module).unwrap();
+            assert_eq!(function.execute(), Ok(Some(expected)), "{source}");
+        }
+    }
+
+    #[test]
+    fn linear_module_lowering_lowers_membership_of_constant_aggregates() {
+        for (source, expected) in [
+            ("return 2 in [1, 2, 3]\n", 1),
+            ("values = [1, 2, 3]\nreturn 4 not in values\n", 1),
+            ("return 4 in [1, 2, 3]\n", 0),
+            ("return 2 in {1: 10, 2: 20}\n", 1),
+            ("values = {1: 10, 2: 20}\nreturn 3 not in values\n", 1),
+            ("return 10 in {1: 10, 2: 20}\n", 0),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();
