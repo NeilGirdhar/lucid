@@ -8317,6 +8317,7 @@ impl Function {
             Set(Vec<ValueId>),
             Dict(Vec<(ValueId, ValueId)>),
             String(String),
+            Range(Vec<i64>),
         }
         let mut instructions = Vec::new();
         let mut bindings = HashMap::<String, ValueId>::new();
@@ -8425,6 +8426,7 @@ impl Function {
                             AggregateBinding::Set(elements) => elements.len(),
                             AggregateBinding::Dict(entries) => entries.len(),
                             AggregateBinding::String(value) => value.chars().count(),
+                            AggregateBinding::Range(values) => values.len(),
                         },
                         _ => return Err(LowerError::UnsupportedExpression),
                     };
@@ -8505,6 +8507,7 @@ impl Function {
                             AggregateBinding::Set(elements) => !elements.is_empty(),
                             AggregateBinding::Dict(entries) => !entries.is_empty(),
                             AggregateBinding::String(value) => !value.is_empty(),
+                            AggregateBinding::Range(values) => !values.is_empty(),
                         },
                         _ => {
                             let value = lower(
@@ -8669,6 +8672,13 @@ impl Function {
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::Range(values) => {
+                                    for value in values {
+                                        total = total
+                                            .checked_add(*value)
+                                            .ok_or(LowerError::UnsupportedExpression)?;
+                                    }
+                                }
                             }
                         }
                         _ => return Err(LowerError::UnsupportedExpression),
@@ -8734,6 +8744,14 @@ impl Function {
                                 }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::Range(values) => {
+                                    seen_any |= !values.is_empty();
+                                    if is_all {
+                                        result_value &= values.iter().all(|value| *value != 0);
+                                    } else {
+                                        result_value |= values.iter().any(|value| *value != 0);
+                                    }
                                 }
                             }
                         }
@@ -8821,6 +8839,9 @@ impl Function {
                                         .ok_or(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::String(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::Range(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                             }
@@ -9031,6 +9052,9 @@ impl Function {
                                 }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::Range(values) => {
+                                    contains = values.contains(&needle);
                                 }
                             }
                         }
@@ -9637,6 +9661,7 @@ impl Function {
                         AggregateBinding::Set(elements) => Some(!elements.is_empty()),
                         AggregateBinding::Dict(entries) => Some(!entries.is_empty()),
                         AggregateBinding::String(value) => Some(!value.is_empty()),
+                        AggregateBinding::Range(values) => Some(!values.is_empty()),
                     },
                 },
                 lucid_syntax::Expr::Unary {
@@ -9761,6 +9786,9 @@ impl Function {
                     value: lucid_syntax::LiteralValue::Str(value),
                     ..
                 } => Ok(Some(AggregateBinding::String(value.clone()))),
+                lucid_syntax::Expr::Call { .. } => {
+                    Ok(const_range_values(expr).map(AggregateBinding::Range))
+                }
                 _ => Ok(None),
             }
         }
@@ -20098,6 +20126,13 @@ return total
             ("return len(range(5))\n", 5),
             ("return sum(range(5))\n", 10),
             ("return sum(range(1, 8, 2))\n", 16),
+            ("values = range(5)\nreturn len(values)\n", 5),
+            ("values = range(5)\nreturn sum(values)\n", 10),
+            ("values = range(5)\nreturn 3 in values\n", 1),
+            ("values = range(5)\nreturn 7 not in values\n", 1),
+            ("values = range(0)\nreturn bool(values)\n", 0),
+            ("values = range(1, 4)\nreturn all(values)\n", 1),
+            ("values = range(0)\nreturn any(values)\n", 0),
             ("return all([true, 1, 2])\n", 1),
             ("return any([false, 0, 2])\n", 1),
             ("return all([])\n", 1),
