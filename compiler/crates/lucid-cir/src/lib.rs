@@ -140,6 +140,12 @@ pub enum Instruction {
         left: ValueId,
         right: ValueId,
     },
+    Select {
+        result: ValueId,
+        condition: ValueId,
+        then_value: ValueId,
+        else_value: ValueId,
+    },
     CheckNonZero {
         result: ValueId,
         operand: ValueId,
@@ -1244,6 +1250,17 @@ impl Function {
                                 left: value(*left),
                                 right: value(*right),
                             },
+                            Instruction::Select {
+                                result,
+                                condition,
+                                then_value,
+                                else_value,
+                            } => Instruction::Select {
+                                result: value(*result),
+                                condition: value(*condition),
+                                then_value: value(*then_value),
+                                else_value: value(*else_value),
+                            },
                             Instruction::Phi { result, incomings } => Instruction::Phi {
                                 result: value(*result),
                                 incomings: incomings
@@ -1282,6 +1299,7 @@ impl Function {
                             | Instruction::Not { result, .. }
                             | Instruction::And { result, .. }
                             | Instruction::Or { result, .. }
+                            | Instruction::Select { result, .. }
                             | Instruction::CheckNonZero { result, .. }
                             | Instruction::Phi { result, .. } => *result,
                         }
@@ -3208,6 +3226,7 @@ impl Function {
                     {
                         let mut lowered_args = Vec::with_capacity(node.children.len() - 1);
                         let mut selected = None::<(usize, i64)>;
+                        let mut all_ordered = true;
                         for (index, arg) in node.children.iter().copied().skip(1).enumerate() {
                             let order = typed_constant_order(
                                 arg,
@@ -3215,8 +3234,7 @@ impl Function {
                                 nodes,
                                 parameter_names,
                                 local_bindings,
-                            )
-                            .ok_or(LowerError::UnsupportedExpression)?;
+                            );
                             let value = lower(
                                 arg,
                                 nodes,
@@ -3227,23 +3245,58 @@ impl Function {
                                 local_bindings,
                             )?;
                             lowered_args.push(value);
-                            let replace = match (
-                                callee.detail.as_deref(),
-                                selected.map(|(_, value)| value),
-                            ) {
-                                (_, None) => true,
-                                (Some("min"), Some(current)) => order < current,
-                                (Some("max"), Some(current)) => order > current,
-                                _ => unreachable!(),
-                            };
-                            if replace {
-                                selected = Some((index, order));
+                            if let Some(order) = order {
+                                let replace = match (
+                                    callee.detail.as_deref(),
+                                    selected.map(|(_, value)| value),
+                                ) {
+                                    (_, None) => true,
+                                    (Some("min"), Some(current)) => order < current,
+                                    (Some("max"), Some(current)) => order > current,
+                                    _ => unreachable!(),
+                                };
+                                if replace {
+                                    selected = Some((index, order));
+                                }
+                            } else {
+                                all_ordered = false;
                             }
                         }
-                        let Some((selected, _)) = selected else {
-                            return Err(LowerError::UnsupportedExpression);
-                        };
-                        result = lowered_args[selected];
+                        if all_ordered {
+                            let Some((selected, _)) = selected else {
+                                return Err(LowerError::UnsupportedExpression);
+                            };
+                            result = lowered_args[selected];
+                        } else {
+                            result = lowered_args[0];
+                            for candidate in lowered_args.iter().copied().skip(1) {
+                                let comparison = ValueId(*next);
+                                *next += 1;
+                                let detail = callee.detail.as_deref();
+                                instructions.push(match detail {
+                                    Some("min") => Instruction::CmpLt {
+                                        result: comparison,
+                                        left: candidate,
+                                        right: result,
+                                    },
+                                    Some("max") => Instruction::CmpGt {
+                                        result: comparison,
+                                        left: candidate,
+                                        right: result,
+                                    },
+                                    _ => unreachable!(),
+                                });
+                                let selected = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::Select {
+                                    result: selected,
+                                    condition: comparison,
+                                    then_value: candidate,
+                                    else_value: result,
+                                });
+                                result = selected;
+                            }
+                        }
                         lowered.insert(id, result);
                         return Ok(result);
                     }
@@ -3773,6 +3826,7 @@ impl Function {
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
                 | Instruction::Or { result, .. }
+                | Instruction::Select { result, .. }
                 | Instruction::CheckNonZero { result, .. }
                 | Instruction::Phi { result, .. } => *result,
             }
@@ -3997,6 +4051,17 @@ impl Function {
                     result: value(*result),
                     left: value(*left),
                     right: value(*right),
+                },
+                Instruction::Select {
+                    result,
+                    condition,
+                    then_value,
+                    else_value,
+                } => Instruction::Select {
+                    result: value(*result),
+                    condition: value(*condition),
+                    then_value: value(*then_value),
+                    else_value: value(*else_value),
                 },
                 Instruction::Phi { .. } => instruction.clone(),
             }
@@ -4212,6 +4277,7 @@ impl Function {
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
                 | Instruction::Or { result, .. }
+                | Instruction::Select { result, .. }
                 | Instruction::CheckNonZero { result, .. }
                 | Instruction::Phi { result, .. } => *result,
             }
@@ -4436,6 +4502,17 @@ impl Function {
                     result: value(*result),
                     left: value(*left),
                     right: value(*right),
+                },
+                Instruction::Select {
+                    result,
+                    condition,
+                    then_value,
+                    else_value,
+                } => Instruction::Select {
+                    result: value(*result),
+                    condition: value(*condition),
+                    then_value: value(*then_value),
+                    else_value: value(*else_value),
                 },
                 Instruction::Phi { .. } => instruction.clone(),
             }
@@ -4943,6 +5020,17 @@ impl Function {
                     left: value(*left),
                     right: value(*right),
                 },
+                Instruction::Select {
+                    result,
+                    condition,
+                    then_value,
+                    else_value,
+                } => Instruction::Select {
+                    result: value(*result),
+                    condition: value(*condition),
+                    then_value: value(*then_value),
+                    else_value: value(*else_value),
+                },
                 Instruction::Phi { result, incomings } => Instruction::Phi {
                     result: value(*result),
                     incomings: incomings
@@ -4981,6 +5069,7 @@ impl Function {
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
                 | Instruction::Or { result, .. }
+                | Instruction::Select { result, .. }
                 | Instruction::CheckNonZero { result, .. }
                 | Instruction::Phi { result, .. } => *result,
             }
@@ -5765,6 +5854,17 @@ impl Function {
                     result: s(*result),
                     left: s(*left),
                     right: s(*right),
+                },
+                Instruction::Select {
+                    result,
+                    condition,
+                    then_value,
+                    else_value,
+                } => Instruction::Select {
+                    result: s(*result),
+                    condition: s(*condition),
+                    then_value: s(*then_value),
+                    else_value: s(*else_value),
                 },
                 Instruction::Phi { result, incomings } => Instruction::Phi {
                     result: s(*result),
@@ -14139,6 +14239,7 @@ impl Function {
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
                 | Instruction::Or { result, .. }
+                | Instruction::Select { result, .. }
                 | Instruction::CheckNonZero { result, .. }
                 | Instruction::Phi { result, .. } => *result,
             }
@@ -22802,6 +22903,7 @@ impl Function {
                     | Instruction::Not { result, .. }
                     | Instruction::And { result, .. }
                     | Instruction::Or { result, .. }
+                    | Instruction::Select { result, .. }
                     | Instruction::CheckNonZero { result, .. }
                     | Instruction::Phi { result, .. } => result,
                 };
@@ -22967,6 +23069,16 @@ impl Function {
                     Instruction::And { left, right, .. } | Instruction::Or { left, right, .. } => {
                         require_operand(block.id, index, *left)?;
                         require_operand(block.id, index, *right)?;
+                    }
+                    Instruction::Select {
+                        condition,
+                        then_value,
+                        else_value,
+                        ..
+                    } => {
+                        require_operand(block.id, index, *condition)?;
+                        require_operand(block.id, index, *then_value)?;
+                        require_operand(block.id, index, *else_value)?;
                     }
                     Instruction::Phi { incomings, .. } => {
                         let mut seen_predecessors = std::collections::HashSet::new();
@@ -23289,6 +23401,19 @@ impl Function {
                         right,
                     } => {
                         values.insert(*result, i64::from(values[left] != 0 || values[right] != 0));
+                    }
+                    Instruction::Select {
+                        result,
+                        condition,
+                        then_value,
+                        else_value,
+                    } => {
+                        let value = if values[condition] != 0 {
+                            values[then_value]
+                        } else {
+                            values[else_value]
+                        };
+                        values.insert(*result, value);
                     }
                     Instruction::CheckNonZero { result, operand } => {
                         let value = values[operand];
@@ -32100,6 +32225,81 @@ return total
             Function::from_typed_function_body_with_locals(&nodes, 16, &[], &[("items".into(), 9)])
                 .expect("typed min/max should lower constant aggregate literals");
         assert_eq!(function.execute(), Ok(Some(52)));
+    }
+
+    #[test]
+    fn lowers_nested_dynamic_min_max_calls() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("left".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("right".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![7, 6],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body(&nodes, 8, &["left".into(), "right".into()])
+                .expect("nested dynamic min/max should lower as ordinary CIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(34)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(56)));
     }
 
     #[test]

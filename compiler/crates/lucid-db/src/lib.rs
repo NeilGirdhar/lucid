@@ -10172,6 +10172,17 @@ mod tests {
         assert_eq!(function.execute_with_args(&[10, -3]), Ok(Some(13)));
 
         let file = db.add_file(
+            "dynamic-min-max-sum.lucid",
+            "def spread_sum(left: int, right: int):\n    return min(left, right) + max(left, right) + 1\n",
+        );
+        let function = lower_function_body(&db, file, "spread_sum".into())
+            .as_ref()
+            .expect("nested dynamic min/max should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(34)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(56)));
+
+        let file = db.add_file(
             "dynamic-pow.lucid",
             "def power(base: int, exponent: int):\n    return pow(base, exponent)\n",
         );

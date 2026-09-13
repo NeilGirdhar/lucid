@@ -1896,6 +1896,23 @@ fn compile_integer_function_impl(
                     let one = builder.ins().iconst(types::I64, 1);
                     builder.ins().bxor(operand, one)
                 }
+                Instruction::Select {
+                    condition,
+                    then_value,
+                    else_value,
+                    ..
+                } => {
+                    let condition = load(&mut builder, &values, *condition)?;
+                    let then_value = load(&mut builder, &values, *then_value)?;
+                    let else_value = load(&mut builder, &values, *else_value)?;
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let truthy = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+                        condition,
+                        zero,
+                    );
+                    builder.ins().select(truthy, then_value, else_value)
+                }
                 Instruction::Neg { operand, .. } => {
                     let value = load(&mut builder, &values, *operand)?;
                     let minimum = builder.ins().iconst(types::I64, i64::MIN);
@@ -2233,6 +2250,7 @@ fn instruction_result(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::Shr { result, .. }
         | Instruction::And { result, .. }
         | Instruction::Or { result, .. }
+        | Instruction::Select { result, .. }
         | Instruction::Not { result, .. }
         | Instruction::Neg { result, .. }
         | Instruction::Abs { result, .. }
@@ -4472,6 +4490,46 @@ return total
         assert_eq!(
             unsafe { compiled.call_result_with_args(&[i64::MIN]) }.error,
             crate::native_abi::NativeErrorCode::ArithmeticOverflow
+        );
+    }
+
+    #[test]
+    fn result_abi_executes_select_instruction() {
+        let function = Function {
+            entry: lucid_cir::BlockId(0),
+            blocks: vec![lucid_cir::Block {
+                id: lucid_cir::BlockId(0),
+                instructions: vec![
+                    Instruction::Param {
+                        result: ValueId(0),
+                        index: 0,
+                    },
+                    Instruction::ConstInt {
+                        result: ValueId(1),
+                        value: 11,
+                    },
+                    Instruction::ConstInt {
+                        result: ValueId(2),
+                        value: 22,
+                    },
+                    Instruction::Select {
+                        result: ValueId(3),
+                        condition: ValueId(0),
+                        then_value: ValueId(1),
+                        else_value: ValueId(2),
+                    },
+                ],
+                terminator: Terminator::Return(Some(ValueId(3))),
+            }],
+        };
+        let compiled = compile_integer_result_function(&function).expect("select should compile");
+        assert_eq!(
+            unsafe { compiled.call_result_with_args(&[1]) },
+            crate::native_abi::NativeResult::ok(11)
+        );
+        assert_eq!(
+            unsafe { compiled.call_result_with_args(&[0]) },
+            crate::native_abi::NativeResult::ok(22)
         );
     }
 
