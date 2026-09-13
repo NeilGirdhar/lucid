@@ -8389,6 +8389,9 @@ impl Function {
                             }
                             entries.len()
                         }
+                        lucid_syntax::Expr::Call { .. } => const_range_values(&args[0].value)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                            .len(),
                         lucid_syntax::Expr::Literal {
                             value: lucid_syntax::LiteralValue::Str(value),
                             ..
@@ -8502,6 +8505,15 @@ impl Function {
                                     next,
                                 )?;
                                 add_value(value, instructions)?;
+                            }
+                        }
+                        lucid_syntax::Expr::Call { .. } => {
+                            for value in const_range_values(&args[0].value)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                            {
+                                total = total
+                                    .checked_add(value)
+                                    .ok_or(LowerError::UnsupportedExpression)?;
                             }
                         }
                         lucid_syntax::Expr::Ident { name, .. } => {
@@ -8767,6 +8779,11 @@ impl Function {
                                 )?;
                                 contains |= contains_value(value, instructions)?;
                             }
+                        }
+                        lucid_syntax::Expr::Call { .. } => {
+                            contains = const_range_values(right)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .contains(&needle);
                         }
                         lucid_syntax::Expr::Dict { entries, .. } => {
                             for (key, value) in entries {
@@ -19721,6 +19738,9 @@ return total
             ("return sum([10, 20, 12])\n", 42),
             ("values = [10, 20, 12]\nreturn sum(values, 1)\n", 43),
             ("values = {10, 20, 12}\nreturn sum(values)\n", 42),
+            ("return len(range(5))\n", 5),
+            ("return sum(range(5))\n", 10),
+            ("return sum(range(1, 8, 2))\n", 16),
             ("return all([true, 1, 2])\n", 1),
             ("return any([false, 0, 2])\n", 1),
             ("return all([])\n", 1),
@@ -19741,6 +19761,8 @@ return total
             ("return 4 in [1, 2, 3]\n", 0),
             ("return 2 in {1, 2, 3}\n", 1),
             ("values = {1, 2, 3}\nreturn 4 not in values\n", 1),
+            ("return 3 in range(5)\n", 1),
+            ("return 7 not in range(5)\n", 1),
             ("return 2 in {1: 10, 2: 20}\n", 1),
             ("values = {1: 10, 2: 20}\nreturn 3 not in values\n", 1),
             ("return 10 in {1: 10, 2: 20}\n", 0),
