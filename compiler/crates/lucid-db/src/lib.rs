@@ -9478,6 +9478,23 @@ mod tests {
     }
 
     #[test]
+    fn function_body_cir_preserves_unused_prefix_rhs_overflow() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "unused-prefix-rhs-overflow.lucid",
+            "def answer(value: int):\n    unused = value + 1\n    return 42\n",
+        );
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("unused prefix RHS should still lower");
+        assert_eq!(
+            lowered.execute_with_args(&[i64::MAX]),
+            Err(lucid_cir::ExecuteError::ArithmeticOverflow)
+        );
+        assert_eq!(lowered.execute_with_args(&[0]), Ok(Some(42)));
+    }
+
+    #[test]
     fn function_body_cir_preserves_discarded_prefix_expression_evaluation() {
         let mut db = CompilerDatabase::default();
         let file = db.add_file(

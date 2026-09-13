@@ -15953,6 +15953,53 @@ return total
     }
 
     #[test]
+    fn ordered_typed_hir_prefix_preserves_unused_binding_overflow() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(42)),
+            },
+        ];
+        let function = Function::from_typed_function_body_with_ordered_prefix(
+            &nodes,
+            &[2],
+            3,
+            &["value".into()],
+            &[("unused".into(), 2)],
+        )
+        .expect("ordered prefix should lower");
+        assert_eq!(
+            function.execute_with_args(&[i64::MAX]),
+            Err(ExecuteError::ArithmeticOverflow)
+        );
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(42)));
+    }
+
+    #[test]
     fn executes_parameterized_cir_with_explicit_arguments() {
         let function = Function {
             entry: BlockId(0),
