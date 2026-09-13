@@ -12902,6 +12902,128 @@ impl Function {
                 }
                 lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Ident(name, _),
+                    iterable: lucid_syntax::Expr::Call { func, args, .. },
+                    body,
+                    ..
+                } if args.is_empty()
+                    && matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Attribute { attr, .. }
+                            if attr == "keys" || attr == "values" || attr == "items"
+                    ) =>
+                {
+                    let lucid_syntax::Expr::Attribute { value, attr, .. } = func.as_ref() else {
+                        unreachable!();
+                    };
+                    let lucid_syntax::Expr::Dict { entries, .. } = value.as_ref() else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    if entries.is_empty() {
+                        return Ok(());
+                    }
+                    if contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for (key, value) in entries {
+                        match attr.as_str() {
+                            "keys" => {
+                                let _ =
+                                    lower(value, bindings, aggregate_bindings, instructions, next)?;
+                                if let Some(aggregate) = lower_aggregate_literal(
+                                    key,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )? {
+                                    bindings.remove(name);
+                                    aggregate_bindings.insert(name.clone(), aggregate);
+                                } else {
+                                    let key = lower(
+                                        key,
+                                        bindings,
+                                        aggregate_bindings,
+                                        instructions,
+                                        next,
+                                    )?;
+                                    bindings.insert(name.clone(), key);
+                                    aggregate_bindings.remove(name);
+                                }
+                            }
+                            "values" => {
+                                let _ =
+                                    lower(key, bindings, aggregate_bindings, instructions, next)?;
+                                if let Some(aggregate) = lower_aggregate_literal(
+                                    value,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )? {
+                                    bindings.remove(name);
+                                    aggregate_bindings.insert(name.clone(), aggregate);
+                                } else {
+                                    let value = lower(
+                                        value,
+                                        bindings,
+                                        aggregate_bindings,
+                                        instructions,
+                                        next,
+                                    )?;
+                                    bindings.insert(name.clone(), value);
+                                    aggregate_bindings.remove(name);
+                                }
+                            }
+                            "items" => {
+                                let key =
+                                    lower(key, bindings, aggregate_bindings, instructions, next)?;
+                                let value =
+                                    lower(value, bindings, aggregate_bindings, instructions, next)?;
+                                bindings.remove(name);
+                                aggregate_bindings.insert(
+                                    name.clone(),
+                                    AggregateBinding::Record(vec![key, value]),
+                                );
+                            }
+                            _ => unreachable!(),
+                        }
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Wildcard(_),
+                    iterable: lucid_syntax::Expr::Call { func, args, .. },
+                    body,
+                    ..
+                } if args.is_empty()
+                    && matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Attribute { attr, .. }
+                            if attr == "keys" || attr == "values" || attr == "items"
+                    ) =>
+                {
+                    let lucid_syntax::Expr::Attribute { value, .. } = func.as_ref() else {
+                        unreachable!();
+                    };
+                    let lucid_syntax::Expr::Dict { entries, .. } = value.as_ref() else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    if entries.is_empty() {
+                        return Ok(());
+                    }
+                    if contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for (key, value) in entries {
+                        let _ = lower(key, bindings, aggregate_bindings, instructions, next)?;
+                        let _ = lower(value, bindings, aggregate_bindings, instructions, next)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Ident(name, _),
                     iterable: lucid_syntax::Expr::Dict { entries, .. },
                     body,
                     ..
@@ -22107,6 +22229,46 @@ return total
                 .expect("constant dictionary loops should iterate keys")
                 .execute(),
             Ok(Some(4))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\nfor item in {1: 10, 2: 20}.keys():\n    value = value + item\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("constant dictionary key views should iterate keys")
+                .execute(),
+            Ok(Some(3))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\nfor item in {1: 10, 2: 20}.values():\n    value = value + item\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("constant dictionary value views should iterate values")
+                .execute(),
+            Ok(Some(30))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\nfor item in {1: 10, 2: 20}.items():\n    value = value + item[0] + item[1]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("constant dictionary item views should iterate key-value records")
+                .execute(),
+            Ok(Some(33))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\nfor item in {1: \"a\", 2: \"bc\"}.values():\n    value = value + len(item)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("constant dictionary string value views should bind aggregates")
+                .execute(),
+            Ok(Some(3))
         );
         let module = lucid_syntax::parse("for item in {1: 1 / 0}:\n    pass\nvalue = 4\n").unwrap();
         assert_eq!(

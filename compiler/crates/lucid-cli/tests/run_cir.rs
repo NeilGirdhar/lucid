@@ -1360,6 +1360,35 @@ fn run_cir_executes_constant_chars_for_loop_in_typed_function_body() {
 }
 
 #[test]
+fn run_cir_executes_constant_dict_view_for_loops_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_dict_views_for_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    for key in {1: 10, 2: 20}.keys():\n        total += key\n    for value in {1: 10, 2: 20}.values():\n        total += value\n    for item in {1: 10, 2: 20}.items():\n        total += item[0] + item[1]\n    for text in {1: \"a\", 2: \"bc\"}.values():\n        total += len(text)\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function dict view for loops failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "69");
+}
+
+#[test]
 fn run_cir_lowers_constant_string_predicates_in_typed_function_body() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_string_predicates_{}.lucid",
