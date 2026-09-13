@@ -7973,8 +7973,14 @@ pub fn lower_function_body(
             .last()
             .map(|(_, id)| *id)
             .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
-        let mut lowered = lucid_cir::Function::from_typed_function_body_with_locals(
+        let prefix_roots = local_bindings
+            .iter()
+            .take(local_bindings.len().saturating_sub(1))
+            .map(|(_, id)| *id)
+            .collect::<Vec<_>>();
+        let mut lowered = lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
             &nodes,
+            &prefix_roots,
             root_id,
             &function.parameter_names,
             &local_bindings,
@@ -8451,8 +8457,10 @@ pub fn lower_function_body(
     } else {
         root.id
     };
-    match lucid_cir::Function::from_typed_function_body_with_locals(
+    let prefix_roots = local_bindings.iter().map(|(_, id)| *id).collect::<Vec<_>>();
+    match lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
         &nodes,
+        &prefix_roots,
         root_id,
         &function.parameter_names,
         &local_bindings,
@@ -9354,6 +9362,22 @@ mod tests {
             .as_ref()
             .expect("inferred-return function should lower");
         assert_eq!(lowered.execute(), Ok(Some(42)));
+    }
+
+    #[test]
+    fn function_body_cir_preserves_unused_prefix_rhs_evaluation() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "unused-prefix-rhs.lucid",
+            "def answer():\n    unused = 1 // 0\n    return 42\n",
+        );
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("unused prefix RHS should still lower");
+        assert_eq!(
+            lowered.execute(),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
     }
 
     #[test]

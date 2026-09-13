@@ -487,6 +487,10 @@ diverged:
   `return` or final `pass`, preserving initializer instructions while emitting
   a verified void terminator; this shape no longer needs the AST linear
   fallback.
+  Value-returning function bodies now also lower each simple pre-return
+  binding RHS as an ordered typed-HIR root before the returned value, so an
+  unused binding such as `unused = 1 // 0` still reports the recoverable
+  division error instead of being skipped as a dead alias.
   Straight-line augmented assignments, including updates inside statically
   selected branches and before final `pass`, now route through the shared
   linear CIR builder as well, so read-modify-write updates no longer bounce

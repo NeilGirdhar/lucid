@@ -434,6 +434,23 @@ impl Function {
         Self::from_typed_graph(nodes, &[root], parameter_names, local_bindings)
     }
 
+    /// Lower a function body whose prefix expressions must be evaluated before
+    /// the returned value.  Local bindings still provide name resolution, while
+    /// `prefix_roots` preserves statement evaluation order for RHS expressions
+    /// whose value may be unused by the final return.
+    pub fn from_typed_function_body_with_ordered_prefix(
+        nodes: &[TypedExprNode],
+        prefix_roots: &[u32],
+        root: u32,
+        parameter_names: &[String],
+        local_bindings: &[(String, u32)],
+    ) -> Result<Self, LowerError> {
+        let mut roots = Vec::with_capacity(prefix_roots.len() + 1);
+        roots.extend_from_slice(prefix_roots);
+        roots.push(root);
+        Self::from_typed_graph(nodes, &roots, parameter_names, local_bindings)
+    }
+
     fn from_typed_graph(
         nodes: &[TypedExprNode],
         roots: &[u32],
@@ -15890,6 +15907,49 @@ return total
         )
         .expect("local aliases should lower");
         assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+    }
+
+    #[test]
+    fn ordered_typed_hir_prefix_evaluates_unused_binding_rhs() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(42)),
+            },
+        ];
+        let function = Function::from_typed_function_body_with_ordered_prefix(
+            &nodes,
+            &[2],
+            3,
+            &[],
+            &[("unused".into(), 2)],
+        )
+        .expect("ordered prefix should lower");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
     #[test]
