@@ -155,16 +155,16 @@ Recommended next work:
 - **Callable/method type contracts** (2+ days): `getattr()`, `setattr()`, `hasattr()` and
   method value types still use `Any` in higher-order function contexts.
 
-**Final Status**: Implementation at ~38-41% complete (up from 31-33%). Continuation session
-closed 15 concrete gaps: 12 builtin type improvements + 3 set operation type checks.
-21+/40 builtins (52%+) now have proper typed return contracts. All 1448 workspace tests passing.
+**Final Status**: Implementation at ~38-42% complete (up from 31-33%). Continuation session
+closed 16 concrete gaps: 12 builtin type improvements + 4 collection operation type checks.
+21+/40 builtins (52%+) now have proper typed return contracts. All 1450 workspace tests passing.
 
 **Session Metrics:**
-- Total gaps closed: 15 (12 builtins + 3 set operations)
+- Total gaps closed: 16 (12 builtins + 4 collection operations)
 - Builtin coverage: 30% → 52% (15 → 21+ functions properly typed)
-- Tests added: 10 new type verification tests
-- Workspace tests: 1448 passing (all green, 0 failures)
-- Native rejections fixed: set intersection (&), set union (|), set difference (-), set symmetric difference (^)
+- Tests added: 12 new type verification tests
+- Workspace tests: 1450 passing (all green, 0 failures)
+- Native rejections fixed: set & set, set | set, set - set, set ^ set, list + list, Bytes + Bytes
 
 **Remaining Gaps by Category:**
 1. **Architectural** (2-3 days): Iterator protocol for lazy evaluation
