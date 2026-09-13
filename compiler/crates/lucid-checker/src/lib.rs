@@ -8690,6 +8690,9 @@ impl TypeChecker {
                         let returns_left_operand = (matches!(op, BinaryOp::Add)
                             && matches!(&lt, Type::Class { name, .. } if name == "Bytes")
                             && matches!(&rt, Type::Class { name, .. } if name == "Bytes"))
+                            || (matches!(op, BinaryOp::Add)
+                                && matches!(&lt, Type::Class { name, .. } if name == "list")
+                                && matches!(&rt, Type::Class { name, .. } if name == "list"))
                             || (matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
                                 && matches!(&lt, Type::Class { name, .. } if name == "promote")
                                 && lt == rt)
@@ -18864,6 +18867,39 @@ c = a ^ b
         assert!(
             result.is_ok(),
             "set ^ set should work (symmetric difference): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn list_concatenation_preserves_element_type() {
+        let code = r#"a: list[int] = [1, 2, 3]
+b: list[int] = [4, 5, 6]
+c = a + b
+d: int = c[0]
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "list + list should work (concatenation): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn bytes_concatenation_preserves_type() {
+        let code = r#"a: Bytes = b"hello"
+b: Bytes = b"world"
+c = a + b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "Bytes + Bytes should work (concatenation): {:?}",
             result
         );
     }
