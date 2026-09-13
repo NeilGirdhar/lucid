@@ -10150,6 +10150,16 @@ mod tests {
         );
 
         let file = db.add_file(
+            "static-modular-pow.lucid",
+            "def residue(base: int):\n    return pow(base, 10, 1000)\n",
+        );
+        let function = lower_function_body(&db, file, "residue".into())
+            .as_ref()
+            .expect("static modular pow should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(24)));
+        assert_eq!(function.execute_with_args(&[-2]), Ok(Some(24)));
+
+        let file = db.add_file(
             "dynamic-min.lucid",
             "def lower(left: int, right: int):\n    return min(left, right)\n",
         );

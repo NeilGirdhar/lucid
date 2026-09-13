@@ -2822,7 +2822,7 @@ impl Function {
                         _ => return Err(LowerError::UnsupportedExpression),
                     }
                 }
-                if node.kind == "call" && (node.children.len() == 2 || node.children.len() == 3) {
+                if node.kind == "call" && (2..=4).contains(&node.children.len()) {
                     let callee = nodes
                         .get(node.children[0] as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
@@ -2896,6 +2896,117 @@ impl Function {
                             left,
                             right,
                         });
+                        lowered.insert(id, result);
+                        return Ok(result);
+                    }
+                    if callee.kind == "name"
+                        && callee.detail.as_deref() == Some("pow")
+                        && node.children.len() == 4
+                    {
+                        let exponent = typed_constant_int(
+                            node.children[2],
+                            id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                        let modulus_constant = typed_constant_int(
+                            node.children[3],
+                            id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                        if exponent < 0 || modulus_constant <= 0 {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        let base = lower(
+                            node.children[1],
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        lower(
+                            node.children[2],
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let modulus = lower(
+                            node.children[3],
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let one = ValueId(*next);
+                        *next += 1;
+                        instructions.push(Instruction::ConstInt {
+                            result: one,
+                            value: 1,
+                        });
+                        let mut accumulator = ValueId(*next);
+                        *next += 1;
+                        instructions.push(Instruction::Mod {
+                            result: accumulator,
+                            left: one,
+                            right: modulus,
+                        });
+                        let mut factor = ValueId(*next);
+                        *next += 1;
+                        instructions.push(Instruction::Mod {
+                            result: factor,
+                            left: base,
+                            right: modulus,
+                        });
+                        let mut power = u64::try_from(exponent)
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        while power != 0 {
+                            if power & 1 == 1 {
+                                let product = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::Mul {
+                                    result: product,
+                                    left: accumulator,
+                                    right: factor,
+                                });
+                                accumulator = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::Mod {
+                                    result: accumulator,
+                                    left: product,
+                                    right: modulus,
+                                });
+                            }
+                            power >>= 1;
+                            if power != 0 {
+                                let squared = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::Mul {
+                                    result: squared,
+                                    left: factor,
+                                    right: factor,
+                                });
+                                factor = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::Mod {
+                                    result: factor,
+                                    left: squared,
+                                    right: modulus,
+                                });
+                            }
+                        }
+                        result = accumulator;
                         lowered.insert(id, result);
                         return Ok(result);
                     }
@@ -30848,6 +30959,107 @@ return total
             function.execute_with_args(&[2, 63]),
             Err(ExecuteError::ArithmeticOverflow)
         );
+    }
+
+    #[test]
+    fn lowers_typed_three_argument_pow_with_static_exponent_and_modulus() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("pow".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("base".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1000)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 5, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(3)),
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(5)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 8, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![4, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![11, 10],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 12, &["base".into()])
+            .expect("typed three-argument pow should lower for static exponent and modulus");
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(27)));
+        assert_eq!(function.execute_with_args(&[-2]), Ok(Some(26)));
     }
 
     #[test]
