@@ -10137,6 +10137,17 @@ mod tests {
         assert_eq!(function.execute_with_args(&[42]), Ok(Some(42)));
 
         let file = db.add_file(
+            "dynamic-nested-abs.lucid",
+            "def magnitude_plus_one(value: int):\n    return abs(value) + 1\n",
+        );
+        let function = lower_function_body(&db, file, "magnitude_plus_one".into())
+            .as_ref()
+            .expect("nested dynamic abs should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[-42]), Ok(Some(43)));
+        assert_eq!(function.execute_with_args(&[42]), Ok(Some(43)));
+
+        let file = db.add_file(
             "dynamic-pow.lucid",
             "def power(base: int, exponent: int):\n    return pow(base, exponent)\n",
         );

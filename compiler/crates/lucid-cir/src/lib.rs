@@ -831,6 +831,85 @@ impl Function {
                         local_bindings,
                     );
                 }
+                if node.id == roots[0] && node.kind == "binary" && node.children.len() == 2 {
+                    let abs_child = node.children.iter().enumerate().find_map(|(index, child)| {
+                        let call = nodes.get(*child as usize)?;
+                        if call.kind != "call" || call.children.len() != 2 {
+                            return None;
+                        }
+                        let callee = nodes.get(call.children[0] as usize)?;
+                        (callee.kind == "name" && callee.detail.as_deref() == Some("abs"))
+                            .then_some((index, *child, call.children[1]))
+                    });
+                    if let Some((abs_index, _abs_id, operand_id)) = abs_child {
+                        let other_index = 1 - abs_index;
+                        let other_id = node.children[other_index];
+                        let mut expanded = nodes.to_vec();
+                        let zero_id = u32::try_from(expanded.len())
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        expanded.push(TypedExprNode {
+                            id: zero_id,
+                            kind: "literal".into(),
+                            detail: None,
+                            children: Vec::new(),
+                            literal: Some(TypedLiteral::Int(0)),
+                        });
+                        let is_negative_id = u32::try_from(expanded.len())
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        expanded.push(TypedExprNode {
+                            id: is_negative_id,
+                            kind: "binary".into(),
+                            detail: Some("Lt".into()),
+                            children: vec![operand_id, zero_id],
+                            literal: None,
+                        });
+                        let negated_id = u32::try_from(expanded.len())
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        expanded.push(TypedExprNode {
+                            id: negated_id,
+                            kind: "unary".into(),
+                            detail: Some("Neg".into()),
+                            children: vec![operand_id],
+                            literal: None,
+                        });
+                        let then_binary_id = u32::try_from(expanded.len())
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        let then_children = if abs_index == 0 {
+                            vec![negated_id, other_id]
+                        } else {
+                            vec![other_id, negated_id]
+                        };
+                        expanded.push(TypedExprNode {
+                            id: then_binary_id,
+                            kind: "binary".into(),
+                            detail: node.detail.clone(),
+                            children: then_children,
+                            literal: None,
+                        });
+                        let else_binary_id = u32::try_from(expanded.len())
+                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                        let else_children = if abs_index == 0 {
+                            vec![operand_id, other_id]
+                        } else {
+                            vec![other_id, operand_id]
+                        };
+                        expanded.push(TypedExprNode {
+                            id: else_binary_id,
+                            kind: "binary".into(),
+                            detail: node.detail.clone(),
+                            children: else_children,
+                            literal: None,
+                        });
+                        return Self::from_typed_dynamic_if(
+                            &expanded,
+                            is_negative_id,
+                            then_binary_id,
+                            else_binary_id,
+                            parameter_names,
+                            local_bindings,
+                        );
+                    }
+                }
                 if node.kind == "match" && node.children.len() == 3 {
                     let literal = node.detail.as_deref().and_then(|detail| {
                         detail
@@ -30849,6 +30928,98 @@ return total
             function.execute_with_args(&[i64::MIN]),
             Err(ExecuteError::ArithmeticOverflow)
         );
+    }
+
+    #[test]
+    fn lowers_typed_dynamic_abs_inside_binary_root() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("abs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![2, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &["value".into()])
+            .expect("typed nested dynamic abs should lower through a conditional CFG");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[-42]), Ok(Some(43)));
+        assert_eq!(function.execute_with_args(&[42]), Ok(Some(43)));
+        assert_eq!(
+            function.execute_with_args(&[i64::MIN]),
+            Err(ExecuteError::ArithmeticOverflow)
+        );
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("abs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![3, 2],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &["value".into()])
+            .expect("typed right-hand dynamic abs should lower through a conditional CFG");
+        assert_eq!(function.execute_with_args(&[-42]), Ok(Some(43)));
+        assert_eq!(function.execute_with_args(&[42]), Ok(Some(43)));
     }
 
     #[test]
