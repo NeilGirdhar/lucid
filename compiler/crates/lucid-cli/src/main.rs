@@ -635,21 +635,20 @@ fn emit_c_file(path_str: &str) {
 fn emit_cir_file(path_str: &str, function_name: Option<&str>) {
     let path = Path::new(path_str);
     validate_project_manifest(path);
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
+    let mut database = lucid_db::CompilerDatabase::default();
+    let (project, file) = match load_source_project(&mut database, path) {
+        Ok(project) => project,
         Err(error) => {
-            eprintln!("Error reading {path_str}: {error}");
+            eprintln!("{error}");
             exit(1);
         }
     };
-    let mut database = lucid_db::CompilerDatabase::default();
-    let file = database.add_file(path_str.to_string(), source);
-    let diagnostics = lucid_db::file_diagnostics(&database, file);
+    let diagnostics = lucid_db::project_diagnostics(&database, project);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_database_diagnostics(&database, file, path_str, diagnostics);
+        emit_project_diagnostics(&database, diagnostics);
         exit(1);
     }
     let lowered = function_name.map_or_else(
@@ -673,21 +672,20 @@ fn run_cir_file(
 ) {
     let path = Path::new(path_str);
     validate_project_manifest(path);
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
+    let mut database = lucid_db::CompilerDatabase::default();
+    let (project, file) = match load_source_project(&mut database, path) {
+        Ok(project) => project,
         Err(error) => {
-            eprintln!("Error reading {path_str}: {error}");
+            eprintln!("{error}");
             exit(1);
         }
     };
-    let mut database = lucid_db::CompilerDatabase::default();
-    let file = database.add_file(path_str.to_string(), source);
-    let diagnostics = lucid_db::file_diagnostics(&database, file);
+    let diagnostics = lucid_db::project_diagnostics(&database, project);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_database_diagnostics(&database, file, path_str, diagnostics);
+        emit_project_diagnostics(&database, diagnostics);
         exit(1);
     }
     if let Some(name) = function_name {

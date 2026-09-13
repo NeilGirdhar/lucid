@@ -652,6 +652,72 @@ fn run_cir_renders_source_line_for_type_errors() {
 }
 
 #[test]
+fn cir_commands_report_unresolved_imports_before_lowering() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_cir_missing_import_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let source = root.join("main.lucid");
+    fs::write(&source, "import missing\nvalue = 1\n").expect("source should be writable");
+    for command in ["emit-cir", "run-cir"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args([
+                command,
+                source.to_str().expect("temporary path should be UTF-8"),
+            ])
+            .output()
+            .expect("lucid binary should execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{command} should fail");
+        assert!(
+            stderr.contains("E0300"),
+            "{command}: unexpected stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("import missing"),
+            "{command}: diagnostic should render unresolved import source: {stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn cir_commands_report_imported_module_type_errors() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_cir_import_type_error_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\nvalue = 1\n").expect("main should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child should be writable");
+    for command in ["emit-cir", "run-cir"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args([
+                command,
+                main.to_str().expect("temporary path should be UTF-8"),
+            ])
+            .output()
+            .expect("lucid binary should execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{command} should fail");
+        assert!(
+            stderr.contains("E0200"),
+            "{command}: unexpected stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("child.lucid"),
+            "{command}: diagnostic should point at imported file: {stderr}"
+        );
+        assert!(
+            stderr.contains("value: int = \"wrong\""),
+            "{command}: diagnostic should render imported file source: {stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn check_renders_source_line_for_structured_diagnostics() {
     let path = std::env::temp_dir().join(format!(
         "lucid_check_diagnostic_{}.lucid",
