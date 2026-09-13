@@ -559,6 +559,86 @@ fn check_renders_source_line_for_structured_diagnostics() {
 }
 
 #[test]
+fn check_reports_unresolved_local_imports() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_check_missing_import_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let path = root.join("main.lucid");
+    fs::write(&path, "import missing\nvalue = 1\n").expect("source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0300"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("import missing"),
+        "diagnostic should render unresolved import line: {stderr}"
+    );
+}
+
+#[test]
+fn check_accepts_builtin_and_local_imports() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_check_local_import_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import math\nimport child\nvalue = 1\n").expect("main should be writable");
+    fs::write(&child, "answer: int = 42\n").expect("child should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(
+        output.status.success(),
+        "check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_reports_imported_module_type_errors() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_check_import_type_error_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\n").expect("main should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("child.lucid"),
+        "diagnostic should point at imported file: {stderr}"
+    );
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "diagnostic should render imported file source: {stderr}"
+    );
+}
+
+#[test]
 fn check_preserves_tabs_in_diagnostic_underlines() {
     let path = std::env::temp_dir().join(format!(
         "lucid_check_tab_diagnostic_{}.lucid",

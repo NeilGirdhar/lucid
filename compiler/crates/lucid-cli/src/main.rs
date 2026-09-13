@@ -194,28 +194,36 @@ fn print_help() {
 /// Load the entry module and its local source imports in dependency order for
 /// the native backend. Built-in modules (currently `math` and `sys`) are
 /// handled directly by code generation and do not have source files.
+fn is_builtin_module(module: &str) -> bool {
+    matches!(module, "math" | "sys" | "iteration")
+}
+
+fn resolve_local_import_path(base_file: &Path, module: &str) -> Option<PathBuf> {
+    if is_builtin_module(module) {
+        return None;
+    }
+    let mut parent = base_file.parent()?.to_path_buf();
+    let mut name = module;
+    let mut dots = 0;
+    while name.starts_with('.') {
+        dots += 1;
+        name = &name[1..];
+    }
+    for _ in 1..dots {
+        parent = parent.parent()?.to_path_buf();
+    }
+    let relative = name.replace('.', "/");
+    let candidate = parent.join(format!("{relative}.lucid"));
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    let package = parent.join(relative).join("__init__.lucid");
+    package.is_file().then_some(package)
+}
+
 fn load_native_project(entry: &Path) -> Result<Module, String> {
     fn resolve_import(base_file: &Path, module: &str) -> Option<PathBuf> {
-        if matches!(module, "math" | "sys" | "iteration") {
-            return None;
-        }
-        let mut parent = base_file.parent()?.to_path_buf();
-        let mut name = module;
-        let mut dots = 0;
-        while name.starts_with('.') {
-            dots += 1;
-            name = &name[1..];
-        }
-        for _ in 1..dots {
-            parent = parent.parent()?.to_path_buf();
-        }
-        let relative = name.replace('.', "/");
-        let candidate = parent.join(format!("{relative}.lucid"));
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        let package = parent.join(relative).join("__init__.lucid");
-        package.is_file().then_some(package)
+        resolve_local_import_path(base_file, module)
     }
 
     fn declaration_only(path: &Path) -> bool {
@@ -850,22 +858,20 @@ fn run_native(path_str: &str, entry: Option<&str>) {
 fn check_file(path_str: &str) {
     let path = Path::new(path_str);
     validate_project_manifest(path);
-    let source = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: failed to read file '{path_str}': {e}");
+    let mut database = lucid_db::CompilerDatabase::default();
+    let project = match load_source_project(&mut database, path) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("{error}");
             exit(1);
         }
     };
-
-    let mut database = lucid_db::CompilerDatabase::default();
-    let file = database.add_file(path_str.to_string(), source);
-    let diagnostics = lucid_db::file_diagnostics(&database, file);
+    let diagnostics = lucid_db::project_diagnostics(&database, project);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_database_diagnostics(&database, file, path_str, diagnostics);
+        emit_project_diagnostics(&database, diagnostics);
         exit(1);
     }
     println!("✓ Type check passed: no errors found in {path_str}");
@@ -889,6 +895,91 @@ fn validate_file_with_database(path: &Path) {
     {
         emit_database_diagnostics(&database, file, &path.display().to_string(), diagnostics);
         exit(1);
+    }
+}
+
+fn collect_project_source_files(
+    database: &mut lucid_db::CompilerDatabase,
+    path: &Path,
+    root: &Path,
+    visited: &mut HashSet<PathBuf>,
+    files: &mut Vec<lucid_db::SourceFile>,
+) -> Result<(), String> {
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Error: failed to resolve file '{}': {error}",
+            path.display()
+        )
+    })?;
+    if !visited.insert(canonical.clone()) {
+        return Ok(());
+    }
+    let source = fs::read_to_string(&canonical).map_err(|error| {
+        format!(
+            "Error: failed to read file '{}': {error}",
+            canonical.display()
+        )
+    })?;
+    let project_path = canonical
+        .strip_prefix(root)
+        .unwrap_or(&canonical)
+        .display()
+        .to_string();
+    let file = database.add_file(project_path, source);
+    files.push(file);
+    let imports = lucid_db::parse_ast(database, file)
+        .as_ref()
+        .ok()
+        .map(|module| {
+            module
+                .statements
+                .iter()
+                .filter_map(|statement| match statement {
+                    Stmt::Import { module, .. } | Stmt::FromImport { module, .. } => {
+                        Some(module.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for module_name in imports {
+        if let Some(import_path) = resolve_local_import_path(&canonical, &module_name) {
+            collect_project_source_files(database, &import_path, root, visited, files)?;
+        }
+    }
+    Ok(())
+}
+
+fn load_source_project(
+    database: &mut lucid_db::CompilerDatabase,
+    entry: &Path,
+) -> Result<lucid_db::Project, String> {
+    let canonical_entry = fs::canonicalize(entry).map_err(|error| {
+        format!(
+            "Error: failed to resolve file '{}': {error}",
+            entry.display()
+        )
+    })?;
+    let root = canonical_entry.parent().unwrap_or_else(|| Path::new(""));
+    let mut visited = HashSet::new();
+    let mut files = Vec::new();
+    collect_project_source_files(database, &canonical_entry, root, &mut visited, &mut files)?;
+    Ok(lucid_db::Project::new(database, files))
+}
+
+fn emit_project_diagnostics(
+    database: &lucid_db::CompilerDatabase,
+    diagnostics: &[lucid_db::Diagnostic],
+) {
+    for diagnostic in diagnostics {
+        let label = diagnostic.file.path(database).to_string();
+        emit_database_diagnostics(
+            database,
+            diagnostic.file,
+            &label,
+            std::slice::from_ref(diagnostic),
+        );
     }
 }
 

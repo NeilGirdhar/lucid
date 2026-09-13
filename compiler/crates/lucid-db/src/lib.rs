@@ -529,6 +529,10 @@ pub fn imported_bindings<'db>(
     Arc::from(bindings)
 }
 
+fn is_builtin_module(module: &str) -> bool {
+    matches!(module, "math" | "sys" | "iteration")
+}
+
 fn collect_typed_exprs<'db>(
     db: &'db dyn Db,
     checker: &lucid_checker::TypeChecker,
@@ -9051,6 +9055,9 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
     for file in order.iter().copied() {
         diagnostics.extend(file_diagnostics(db, file).iter().cloned());
         for import in imports(db, file).iter() {
+            if is_builtin_module(import) {
+                continue;
+            }
             if resolve_import(db, project, file, import.clone()).is_none() {
                 let span = parse_ast(db, file)
                     .as_ref()
