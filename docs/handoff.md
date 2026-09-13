@@ -2003,6 +2003,9 @@ diverged:
   Final dynamic `elif` ladders now also merge each branch's lowered result
   value when there is no suffix, so branch-local result names need not match
   merely to produce the final function value.
+  Function-body lowering routes the same final no-`else` dynamic `elif`
+  assignment shape through that CIR path when an earlier initialized value
+  supplies the fall-through result.
   Simple dynamic diamonds no longer have to be the final statement: when both
   arms assign the same local, the Phi result rebinds that local and later
   straight-line statements lower in the merge block.

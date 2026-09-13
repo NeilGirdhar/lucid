@@ -10444,6 +10444,17 @@ mod tests {
         assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(0)));
 
         let file = db.add_file(
+            "parameterized-final-dynamic-elif-assignments-no-else.lucid",
+            "def choose(first: bool, second: bool):\n    fallback = 0\n    if first:\n        high = 100\n    elif second:\n        positive = 1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("final dynamic elif assignment ladder should merge initialized fallback");
+        assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(0)));
+
+        let file = db.add_file(
             "parameterized-mixed-static-false-dynamic-elif.lucid",
             "def choose(value: int):\n    if value > 10:\n        return 100\n    elif false:\n        return 999\n    elif value > 0:\n        return 1\n    else:\n        return -1\n",
         );
