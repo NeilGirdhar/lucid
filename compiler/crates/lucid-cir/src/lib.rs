@@ -9427,6 +9427,16 @@ impl Function {
                             }
                             entries.len()
                         }
+                        lucid_syntax::Expr::Record { fields, .. } => {
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                let _ =
+                                    lower(field, bindings, aggregate_bindings, instructions, next)?;
+                            }
+                            fields.len()
+                        }
                         lucid_syntax::Expr::Call { .. } => const_range_values(&args[0].value)
                             .ok_or(LowerError::UnsupportedExpression)?
                             .len(),
@@ -9466,16 +9476,14 @@ impl Function {
                             AggregateBinding::SingletonStringDict(entries) => entries.len(),
                             AggregateBinding::SingletonIntDict(entries) => entries.len(),
                             AggregateBinding::SingletonFloatDict(entries) => entries.len(),
-                            AggregateBinding::Record(_)
-                            | AggregateBinding::StringRecord(_)
+                            AggregateBinding::Record(elements) => elements.len(),
+                            AggregateBinding::StringRecord(_)
                             | AggregateBinding::FloatRecord(_)
                             | AggregateBinding::SingletonRecord(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::String(value) => value.chars().count(),
-                            AggregateBinding::Bytes(_) => {
-                                return Err(LowerError::UnsupportedExpression);
-                            }
+                            AggregateBinding::Bytes(value) => value.len(),
                             AggregateBinding::Range(values) => values.len(),
                             AggregateBinding::Float(_) => {
                                 return Err(LowerError::UnsupportedExpression);
@@ -10975,6 +10983,16 @@ impl Function {
                                 contains |= contains_value(key, instructions)?;
                             }
                         }
+                        lucid_syntax::Expr::Record { fields, .. } => {
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                let value =
+                                    lower(field, bindings, aggregate_bindings, instructions, next)?;
+                                contains |= contains_value(value, instructions)?;
+                            }
+                        }
                         lucid_syntax::Expr::Ident { name, .. } => {
                             match aggregate_bindings
                                 .get(name)
@@ -11055,8 +11073,10 @@ impl Function {
                                 AggregateBinding::SingletonRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
-                                AggregateBinding::Record(_) => {
-                                    return Err(LowerError::UnsupportedExpression);
+                                AggregateBinding::Record(elements) => {
+                                    for value in elements {
+                                        contains |= contains_value(*value, instructions)?;
+                                    }
                                 }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
@@ -23935,7 +23955,10 @@ return total
             ("return len({1, 2, 3})\n", 3),
             ("values = {1: 10, 2: 20}\nreturn len(values)\n", 2),
             ("return len({1: 10, 2: 20})\n", 2),
+            ("values = (1, 2, 3)\nreturn len(values)\n", 3),
+            ("return len((1, 2, 3))\n", 3),
             ("return len(\"abc\")\n", 3),
+            ("return len(b\"abc\")\n", 3),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();
@@ -24095,6 +24118,8 @@ return total
             ("values = {1, 2, 3}\nreturn 4 not in values\n", 1),
             ("return 3 in range(5)\n", 1),
             ("return 7 not in range(5)\n", 1),
+            ("return 2 in (1, 2, 3)\n", 1),
+            ("values = (1, 2, 3)\nreturn 4 not in values\n", 1),
             ("return 2 in {1: 10, 2: 20}\n", 1),
             ("values = {1: 10, 2: 20}\nreturn 3 not in values\n", 1),
             ("return 10 in {1: 10, 2: 20}\n", 0),

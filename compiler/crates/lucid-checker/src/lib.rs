@@ -8242,6 +8242,12 @@ impl TypeChecker {
                                 }
                                 true
                             }
+                            Type::Record { fields, .. } => {
+                                let element_type = Type::make_union(
+                                    fields.iter().map(|(_, ty)| ty.clone()).collect(),
+                                );
+                                lt.is_subtype_of(&element_type, &self.env)
+                            }
                             Type::Class { name, .. } => self
                                 .env
                                 .class_members
@@ -8560,10 +8566,12 @@ impl TypeChecker {
                     if name == "len" {
                         if let Some(argument) = args.first() {
                             let argument_type = self.type_of_expr(&argument.value)?;
-                            let sized = matches!(&argument_type, Type::Str | Type::Shape(_))
-                                || matches!(&argument_type, Type::TypeVar(name) if name == "Any")
+                            let sized = matches!(
+                                &argument_type,
+                                Type::Str | Type::Shape(_) | Type::Record { .. }
+                            ) || matches!(&argument_type, Type::TypeVar(name) if name == "Any")
                                 || matches!(&argument_type, Type::Class { name, .. }
-                                    if matches!(name.as_str(), "list" | "set" | "dict" | "range" | "str" | "DottedPath")
+                                    if matches!(name.as_str(), "list" | "set" | "dict" | "range" | "str" | "DottedPath" | "Bytes" | "ByteArray" | "MemoryView")
                                         || self.env.class_members.get(name).is_some_and(|members| members.contains("__len__")));
                             if !sized {
                                 return Err(TypeError {
@@ -15651,7 +15659,7 @@ def reject(value: not int) -> none:
         let mut checker = TypeChecker::new();
         checker
             .check_module(
-                &parse("result = sorted([1])\nbackward = reversed((1, 2))\nmapping = dict()\ncopy = dict({\"a\": 1})\nitems = set()\nsmall = min([1.0])\nlarge = max(1, 2)\n").unwrap(),
+                &parse("result = sorted([1])\nbackward = reversed((1, 2))\ntuple_len = len((1, 2))\nbyte_len = len(b\"ab\")\nhas_two = 2 in (1, 2)\nmapping = dict()\ncopy = dict({\"a\": 1})\nitems = set()\nsmall = min([1.0])\nlarge = max(1, 2)\n").unwrap(),
             )
             .unwrap();
         assert!(matches!(
