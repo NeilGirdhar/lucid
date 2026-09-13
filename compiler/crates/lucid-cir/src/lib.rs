@@ -8316,6 +8316,7 @@ impl Function {
             List(Vec<ValueId>),
             Set(Vec<ValueId>),
             Dict(Vec<(ValueId, ValueId)>),
+            Record(Vec<ValueId>),
             String(String),
             Bytes(Vec<u8>),
             Range(Vec<i64>),
@@ -8426,6 +8427,9 @@ impl Function {
                             AggregateBinding::List(elements) => elements.len(),
                             AggregateBinding::Set(elements) => elements.len(),
                             AggregateBinding::Dict(entries) => entries.len(),
+                            AggregateBinding::Record(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
                             AggregateBinding::String(value) => value.chars().count(),
                             AggregateBinding::Bytes(_) => {
                                 return Err(LowerError::UnsupportedExpression);
@@ -8480,6 +8484,16 @@ impl Function {
                             }
                             !entries.is_empty()
                         }
+                        lucid_syntax::Expr::Record { fields, .. } => {
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                let _ =
+                                    lower(field, bindings, aggregate_bindings, instructions, next)?;
+                            }
+                            !fields.is_empty()
+                        }
                         lucid_syntax::Expr::Call { .. } => {
                             if let Some(values) = const_range_values(&args[0].value) {
                                 !values.is_empty()
@@ -8510,6 +8524,7 @@ impl Function {
                             AggregateBinding::List(elements) => !elements.is_empty(),
                             AggregateBinding::Set(elements) => !elements.is_empty(),
                             AggregateBinding::Dict(entries) => !entries.is_empty(),
+                            AggregateBinding::Record(elements) => !elements.is_empty(),
                             AggregateBinding::String(value) => !value.is_empty(),
                             AggregateBinding::Bytes(value) => !value.is_empty(),
                             AggregateBinding::Range(values) => !values.is_empty(),
@@ -8674,6 +8689,9 @@ impl Function {
                                 AggregateBinding::Dict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::Record(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
@@ -8748,6 +8766,9 @@ impl Function {
                                     }
                                 }
                                 AggregateBinding::Dict(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::Record(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::String(_) => {
@@ -8831,6 +8852,27 @@ impl Function {
                             select_mapping(&lowered_entries, instructions)
                                 .ok_or(LowerError::UnsupportedExpression)
                         }
+                        lucid_syntax::Expr::Record { fields, .. } => {
+                            let selected = select_sequence(fields.len())
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            let mut lowered_elements = Vec::with_capacity(fields.len());
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                lowered_elements.push(lower(
+                                    field,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?);
+                            }
+                            lowered_elements
+                                .get(selected)
+                                .copied()
+                                .ok_or(LowerError::UnsupportedExpression)
+                        }
                         lucid_syntax::Expr::Ident { name, .. } => {
                             let aggregate = aggregate_bindings
                                 .get(name)
@@ -8847,6 +8889,14 @@ impl Function {
                                 AggregateBinding::Set(_) => Err(LowerError::UnsupportedExpression),
                                 AggregateBinding::Dict(entries) => {
                                     select_mapping(entries, instructions)
+                                        .ok_or(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::Record(elements) => {
+                                    let selected = select_sequence(elements.len())
+                                        .ok_or(LowerError::UnsupportedExpression)?;
+                                    elements
+                                        .get(selected)
+                                        .copied()
                                         .ok_or(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::String(_) => {
@@ -9071,6 +9121,9 @@ impl Function {
                                     for (key, _) in entries {
                                         contains |= contains_value(*key, instructions)?;
                                     }
+                                }
+                                AggregateBinding::Record(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
@@ -9687,6 +9740,7 @@ impl Function {
                         AggregateBinding::List(elements) => Some(!elements.is_empty()),
                         AggregateBinding::Set(elements) => Some(!elements.is_empty()),
                         AggregateBinding::Dict(entries) => Some(!entries.is_empty()),
+                        AggregateBinding::Record(elements) => Some(!elements.is_empty()),
                         AggregateBinding::String(value) => Some(!value.is_empty()),
                         AggregateBinding::Bytes(value) => Some(!value.is_empty()),
                         AggregateBinding::Range(values) => Some(!values.is_empty()),
@@ -9809,6 +9863,22 @@ impl Function {
                         values.push((key, value));
                     }
                     Ok(Some(AggregateBinding::Dict(values)))
+                }
+                lucid_syntax::Expr::Record { fields, .. } => {
+                    let mut values = Vec::with_capacity(fields.len());
+                    for (name, field) in fields {
+                        if name.is_some() {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        values.push(lower(
+                            field,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )?);
+                    }
+                    Ok(Some(AggregateBinding::Record(values)))
                 }
                 lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Str(value),
@@ -20129,6 +20199,19 @@ return total
     }
 
     #[test]
+    fn linear_module_lowering_indexes_constant_records() {
+        for (source, expected) in [
+            ("return (10, 20, 30)[1]\n", 20),
+            ("values = (10, 20, 30)\nreturn values[1]\n", 20),
+            ("values = (10, 20, 30)\nreturn values[-1]\n", 30),
+        ] {
+            let module = lucid_syntax::parse(source).unwrap();
+            let function = Function::from_module_linear(&module).unwrap();
+            assert_eq!(function.execute(), Ok(Some(expected)), "{source}");
+        }
+    }
+
+    #[test]
     fn linear_module_lowering_lowers_len_of_constant_aggregates() {
         for (source, expected) in [
             ("values = [1, 2, 3]\nreturn len(values)\n", 3),
@@ -20188,6 +20271,9 @@ return total
             ("return bool([])\n", 0),
             ("return bool([1])\n", 1),
             ("return bool({1: 2})\n", 1),
+            ("return bool(())\n", 0),
+            ("return bool((1,))\n", 1),
+            ("values = (1,)\nreturn bool(values)\n", 1),
             ("return bool(range(0))\n", 0),
             ("return bool(range(3))\n", 1),
             ("values = [1]\nreturn bool(values)\n", 1),
