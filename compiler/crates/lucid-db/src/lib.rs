@@ -1775,13 +1775,13 @@ pub fn typed_module<'db>(
         };
         if let lucid_checker::Type::Function { params, .. } = signature.canonical() {
             for (param, ty) in function.params.iter().zip(params.iter()) {
+                if let Some(default) = &param.default {
+                    collect_typed_exprs(db, &body_checker, default, &mut body_expressions)?;
+                }
                 body_checker.env.variables.insert(
                     param.name.clone(),
                     (ty.clone(), lucid_syntax::MutabilityView::Mutable),
                 );
-                if let Some(default) = &param.default {
-                    collect_typed_exprs(db, &body_checker, default, &mut body_expressions)?;
-                }
                 if let Some(pattern) = &param.pattern {
                     body_checker.bind_match_pattern_types(pattern, ty);
                 }
@@ -9565,6 +9565,39 @@ mod tests {
                 .body_expressions
                 .iter()
                 .any(|node| node.detail.as_deref() == Some("right") && node.type_name == "int")
+        );
+    }
+
+    #[test]
+    fn typed_module_collects_parameter_defaults_before_parameter_scope() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "parameter-default-shadowing.lucid",
+            "value = true\n\ndef use_default(value: int = value):\n    return value\n",
+        );
+        let error = typed_module(&db, file)
+            .as_ref()
+            .expect_err("parameter default should see the global value, not the parameter");
+        assert!(error.contains("default value for parameter 'value'"));
+
+        let file = db.add_file(
+            "parameter-default-hir.lucid",
+            "class Base:\n    pass\nclass Child(Base):\n    pass\nvalue = Child()\n\ndef use_default(value: Base = value):\n    return value\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid default should collect from outer scope");
+        let function = typed
+            .functions
+            .iter()
+            .find(|function| function.symbol.name(&db) == "use_default")
+            .expect("use_default should be in typed module");
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("value")
+                    && node.type_name.contains("class(Child;"))
         );
     }
 
