@@ -2086,6 +2086,9 @@ diverged:
   longer blocks later direct-return arms.
   The fallback-arm adapter now covers the mirror shape: direct-return `if` and
   `elif` arms followed by an `else` arm that contains the nested local branch.
+  It is also reused for fall-through code after an `if`/`elif` chain with no
+  syntactic `else`, by normalizing the remaining statements into the fallback
+  arm.
   The two-arm literal/wildcard `match` lowering now recognizes the same nested
   local pattern inside the literal arm and lowers it through the same explicit
   ladder strategy.
@@ -2110,6 +2113,8 @@ diverged:
   through to later literal or wildcard arms when its pattern does not match.
   It also reuses the fallback-arm adapter, so a final wildcard arm with nested
   local control flow preserves earlier direct-return literal arms.
+  Match statements with no final wildcard can now fall through into the same
+  nested local branch shape after their direct-return literal arms.
   A leading wildcard match arm with a live return now routes that selected arm
   through the linear CFG lowerer before considering later unreachable arms, so
   wildcard-first order is preserved even when the arm contains dynamic local

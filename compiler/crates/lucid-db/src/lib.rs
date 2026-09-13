@@ -4617,6 +4617,132 @@ pub fn lower_function_body(
         }
         Ok(None)
     }
+    fn lower_fallthrough_nested_dynamic_local_branch(
+        body: &[lucid_syntax::Stmt],
+        parameter_names: &[String],
+        is_async: bool,
+        error: &'static str,
+    ) -> Result<Option<Arc<lucid_cir::Function>>, Arc<str>> {
+        if let [
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch: None,
+                span,
+            },
+            fallthrough @ ..,
+        ] = body
+            && !fallthrough.is_empty()
+        {
+            let lowered_body = [lucid_syntax::Stmt::If {
+                condition: condition.clone(),
+                then_branch: then_branch.clone(),
+                elif_branches: elif_branches.clone(),
+                else_branch: Some(fallthrough.to_vec()),
+                span: *span,
+            }];
+            return lower_else_nested_dynamic_local_branch(
+                &lowered_body,
+                parameter_names,
+                is_async,
+                error,
+            );
+        }
+        Ok(None)
+    }
+    fn match_arm_condition(
+        subject: &lucid_syntax::Expr,
+        arm: &lucid_syntax::MatchArm,
+    ) -> Option<lucid_syntax::Expr> {
+        match &arm.pattern {
+            lucid_syntax::Pattern::Literal(
+                literal
+                @ (lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_)),
+                span,
+            ) => {
+                let pattern_test = lucid_syntax::Expr::Binary {
+                    op: lucid_syntax::BinaryOp::Eq,
+                    left: Box::new(subject.clone()),
+                    right: Box::new(lucid_syntax::Expr::Literal {
+                        value: literal.clone(),
+                        span: *span,
+                    }),
+                    span: *span,
+                };
+                Some(match &arm.guard {
+                    Some(guard) if static_truth(guard) == Some(true) => pattern_test,
+                    Some(guard) if static_truth(guard) == Some(false) => {
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bool(false),
+                            span: guard.span(),
+                        }
+                    }
+                    Some(guard) => lucid_syntax::Expr::Binary {
+                        op: lucid_syntax::BinaryOp::And,
+                        left: Box::new(pattern_test),
+                        right: Box::new(guard.clone()),
+                        span: guard.span(),
+                    },
+                    None => pattern_test,
+                })
+            }
+            lucid_syntax::Pattern::Wildcard(_) => match &arm.guard {
+                Some(guard) if static_truth(guard) == Some(true) => None,
+                Some(guard) if static_truth(guard) == Some(false) => {
+                    Some(lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Bool(false),
+                        span: guard.span(),
+                    })
+                }
+                other => other.clone(),
+            },
+            _ => None,
+        }
+    }
+    fn lower_match_fallthrough_nested_dynamic_local_branch(
+        body: &[lucid_syntax::Stmt],
+        parameter_names: &[String],
+        is_async: bool,
+        error: &'static str,
+    ) -> Result<Option<Arc<lucid_cir::Function>>, Arc<str>> {
+        if let [
+            lucid_syntax::Stmt::Match {
+                subject,
+                arms,
+                span,
+                ..
+            },
+            fallthrough @ ..,
+        ] = body
+            && !arms.is_empty()
+            && !fallthrough.is_empty()
+        {
+            let mut conditional_arms = Vec::new();
+            for arm in arms {
+                let Some(condition) = match_arm_condition(subject, arm) else {
+                    return Ok(None);
+                };
+                conditional_arms.push((condition, arm.body.clone()));
+            }
+            if let Some(((condition, then_branch), elif_source)) = conditional_arms.split_first() {
+                let lowered_body = [lucid_syntax::Stmt::If {
+                    condition: condition.clone(),
+                    then_branch: then_branch.clone(),
+                    elif_branches: elif_source.to_vec(),
+                    else_branch: Some(fallthrough.to_vec()),
+                    span: *span,
+                }];
+                return lower_else_nested_dynamic_local_branch(
+                    &lowered_body,
+                    parameter_names,
+                    is_async,
+                    error,
+                );
+            }
+        }
+        Ok(None)
+    }
     if let Some(lowered) = lower_outer_elif_nested_dynamic_local_branch(
         source_function.body.as_slice(),
         &function.parameter_names,
@@ -4638,6 +4764,22 @@ pub fn lower_function_body(
         &function.parameter_names,
         function.is_async,
         "unsupported nested dynamic local else branch",
+    )? {
+        return Ok(lowered);
+    }
+    if let Some(lowered) = lower_fallthrough_nested_dynamic_local_branch(
+        source_function.body.as_slice(),
+        &function.parameter_names,
+        function.is_async,
+        "unsupported fallthrough nested dynamic local branch",
+    )? {
+        return Ok(lowered);
+    }
+    if let Some(lowered) = lower_match_fallthrough_nested_dynamic_local_branch(
+        source_function.body.as_slice(),
+        &function.parameter_names,
+        function.is_async,
+        "unsupported match fallthrough nested dynamic local branch",
     )? {
         return Ok(lowered);
     }
@@ -12718,6 +12860,32 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("else arm nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[3, -2]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "statement-fallthrough-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    if tag == 1:\n        return 100\n    elif tag == 2:\n        return 200\n    result = 0\n    if value > 10:\n        result = value + 10\n    elif value > 0:\n        result = value\n    else:\n        result = -value\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("fallthrough nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[3, -2]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "statement-match-fallthrough-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            return 100\n        case 2:\n            return 200\n    result = 0\n    if value > 10:\n        result = value + 10\n    elif value > 0:\n        result = value\n    else:\n        result = -value\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match fallthrough nested dynamic local branch should lower");
         assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
         assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
         assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
