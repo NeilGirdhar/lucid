@@ -8763,11 +8763,14 @@ impl TypeChecker {
                     if name == "map" {
                         // Let the shared arity checker report missing arguments first.
                         if args.len() >= 2 {
+                            let mut mapper_type = None;
                             if let Some(argument) = args.first() {
-                                let mapper_type = self.type_of_expr(&argument.value)?;
-                                let callable = matches!(&mapper_type, Type::Function { .. })
-                                    || matches!(&mapper_type, Type::TypeVar(name) if name == "Any")
-                                    || mapper_type.is_subtype_of(
+                                let resolved_mapper_type = self.type_of_expr(&argument.value)?;
+                                let callable = matches!(
+                                    &resolved_mapper_type,
+                                    Type::Function { .. }
+                                ) || matches!(&resolved_mapper_type, Type::TypeVar(name) if name == "Any")
+                                    || resolved_mapper_type.is_subtype_of(
                                         &Type::Trait {
                                             name: "Callable".into(),
                                             type_args: Vec::new(),
@@ -8779,11 +8782,23 @@ impl TypeChecker {
                                     return Err(TypeError {
                                         message: format!(
                                             "map() first argument must be callable, got {:?}",
-                                            mapper_type
+                                            resolved_mapper_type
                                         ),
                                         span: argument.value.span(),
                                     });
                                 }
+                                if let Type::Function { params, .. } = &resolved_mapper_type {
+                                    if params.len() != 1 {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "map() mapper must accept exactly 1 argument, got {}",
+                                                params.len()
+                                            ),
+                                            span: argument.value.span(),
+                                        });
+                                    }
+                                }
+                                mapper_type = Some(resolved_mapper_type);
                             }
                             if let Some(argument) = args.get(1) {
                                 let argument_type = self.type_of_expr(&argument.value)?;
@@ -8795,6 +8810,23 @@ impl TypeChecker {
                                         ),
                                         span: argument.value.span(),
                                     });
+                                }
+                                if let Some(Type::Function { params, .. }) = mapper_type {
+                                    if let Some(param_type) = params.first() {
+                                        let element_type =
+                                            self.iterable_element_type(&argument_type);
+                                        if !element_type.is_subtype_of(param_type, &self.env)
+                                            && !param_type.is_subtype_of(&element_type, &self.env)
+                                        {
+                                            return Err(TypeError {
+                                                message: format!(
+                                                    "map() iterable element type {:?} is incompatible with mapper parameter {:?}",
+                                                    element_type, param_type
+                                                ),
+                                                span: argument.value.span(),
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -9929,6 +9961,46 @@ impl TypeChecker {
                                                 fields,
                                                 is_open: false,
                                             }],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
+                                    "map" => {
+                                        let iterable_argument = args.get(1).filter(|arg| {
+                                            !arg.is_spread
+                                                && !arg.is_dict_spread
+                                                && !arg.is_gather_spread
+                                        })?;
+                                        let iterable_type =
+                                            self.type_of_expr(&iterable_argument.value).ok()?;
+                                        if !self.is_iterable_type(&iterable_type) {
+                                            return None;
+                                        }
+                                        let element_type = match argument_type {
+                                            Type::Function { return_type, .. } => *return_type,
+                                            Type::TypeVar(name) if name == "Any" => {
+                                                Type::TypeVar("Any".into())
+                                            }
+                                            mapper_type
+                                                if mapper_type.is_subtype_of(
+                                                    &Type::Trait {
+                                                        name: "Callable".into(),
+                                                        type_args: Vec::new(),
+                                                        methods: HashSet::new(),
+                                                    },
+                                                    &self.env,
+                                                ) =>
+                                            {
+                                                Type::TypeVar("Any".into())
+                                            }
+                                            _ => return None,
+                                        };
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![element_type],
                                             parent: None,
                                             traits: Vec::new(),
                                             interfaces: Vec::new(),
@@ -15774,6 +15846,14 @@ def reject(value: not int) -> none:
             ("map(1)\n", "requires at least 2"),
             ("map(1, [1])\n", "first argument must be callable"),
             (
+                "def f() -> int:\n    return 1\nmap(f, [1])\n",
+                "mapper must accept exactly 1",
+            ),
+            (
+                "def f(x: str) -> str:\n    return x\nmap(f, [1])\n",
+                "iterable element type",
+            ),
+            (
                 "def f(x):\n    return x\nmap(f, 1)\n",
                 "iterable argument must be iterable",
             ),
@@ -15867,7 +15947,7 @@ def reject(value: not int) -> none:
         checker
             .check_module(
                 &parse(
-                    "values = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\nenumerated = enumerate(range(3), 5)\nzipped = zip(range(3), sorted(range(3)))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\nenum_index: int = enumerated[0][0]\nenum_value: int = enumerated[0][1]\nzip_left: int = zipped[0][0]\nzip_right: int = zipped[0][1]\n",
+                    "def double(x: int) -> int:\n    return x * 2\nvalues = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\nenumerated = enumerate(range(3), 5)\nzipped = zip(range(3), sorted(range(3)))\nmapped = map(double, range(3))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\nmapped_sum = sum(mapped)\nenum_index: int = enumerated[0][0]\nenum_value: int = enumerated[0][1]\nzip_left: int = zipped[0][0]\nzip_right: int = zipped[0][1]\nmapped_value: int = mapped[0]\n",
                 )
                 .unwrap(),
             )
@@ -15927,11 +16007,20 @@ def reject(value: not int) -> none:
                     )
         ));
         assert!(matches!(
+            checker.env.variables.get("mapped").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "list" && type_args == &vec![Type::Int]
+        ));
+        assert!(matches!(
             checker.env.variables.get("sorted_sum").map(|(ty, _)| ty),
             Some(Type::Int)
         ));
         assert!(matches!(
             checker.env.variables.get("reversed_sum").map(|(ty, _)| ty),
+            Some(Type::Int)
+        ));
+        assert!(matches!(
+            checker.env.variables.get("mapped_sum").map(|(ty, _)| ty),
             Some(Type::Int)
         ));
         let mut checker = TypeChecker::new();
