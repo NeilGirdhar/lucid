@@ -1193,7 +1193,7 @@ fn run_cir_lowers_len_of_constant_aggregates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    values = [1, 2, 3]\n    unique = {4, 5, 6}\n    pairs = {1: 10, 2: 20}\n    tuple_values = (7, 8, 9)\n    data = b\"abc\"\n    return len(values) * 10 + len(unique) + len(pairs) + len([4, 5]) + len(tuple_values) + len(data)\n",
+        "def answer():\n    values = [1, 2, 3]\n    unique = {4, 5, 6}\n    pairs = {1: 10, 2: 20}\n    copied = dict(pairs)\n    empty = dict()\n    tuple_values = (7, 8, 9)\n    data = b\"abc\"\n    return len(values) * 10 + len(unique) + len(pairs) + len(copied) + len(empty) + len([4, 5]) + len(tuple_values) + len(data)\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
@@ -1211,7 +1211,7 @@ fn run_cir_lowers_len_of_constant_aggregates_in_typed_function_body() {
         "run-cir function aggregate len failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "43");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "45");
 }
 
 #[test]
@@ -1251,7 +1251,7 @@ fn run_cir_lowers_membership_of_constant_aggregates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    values = {1, 2, 3}\n    left = [1, 2]\n    right = [1, 2]\n    numbers = range(3)\n    tuple_values = (1, 2, 3)\n    return 2 in values and values == {3, 2, 1} and left == right and numbers == range(3) and 2 in tuple_values and 4 not in tuple_values\n",
+        "def answer():\n    values = {1, 2, 3}\n    left = [1, 2]\n    right = [1, 2]\n    numbers = range(3)\n    tuple_values = (1, 2, 3)\n    copied = dict({1: 10, 2: 20})\n    return 2 in values and values == {3, 2, 1} and left == right and numbers == range(3) and 2 in tuple_values and 4 not in tuple_values and copied[2] == 20\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))

@@ -12339,6 +12339,76 @@ impl Function {
                 lucid_syntax::Expr::Call { func, args, .. } => {
                     if matches!(
                         func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "dict"
+                    ) && args.len() <= 1
+                        && args.iter().all(|arg| {
+                            arg.name.is_none()
+                                && !arg.is_spread
+                                && !arg.is_dict_spread
+                                && !arg.is_gather_spread
+                        })
+                    {
+                        if args.is_empty() {
+                            return Ok(Some(AggregateBinding::Dict(Vec::new())));
+                        }
+                        let source = &args[0].value;
+                        if let lucid_syntax::Expr::Ident { name, .. } = source {
+                            if let Some(aggregate) = aggregate_bindings.get(name).cloned() {
+                                match aggregate {
+                                    AggregateBinding::Dict(_)
+                                    | AggregateBinding::StringDict(_)
+                                    | AggregateBinding::StringIntDict(_)
+                                    | AggregateBinding::StringFloatDict(_)
+                                    | AggregateBinding::StringSingletonDict(_)
+                                    | AggregateBinding::IntStringDict(_)
+                                    | AggregateBinding::IntSingletonDict(_)
+                                    | AggregateBinding::FloatDict(_)
+                                    | AggregateBinding::IntFloatDict(_)
+                                    | AggregateBinding::FloatIntDict(_)
+                                    | AggregateBinding::FloatStringDict(_)
+                                    | AggregateBinding::FloatSingletonDict(_)
+                                    | AggregateBinding::SingletonDict(_)
+                                    | AggregateBinding::SingletonStringDict(_)
+                                    | AggregateBinding::SingletonIntDict(_)
+                                    | AggregateBinding::SingletonFloatDict(_) => {
+                                        return Ok(Some(aggregate));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        if let Some(aggregate) = lower_aggregate_literal(
+                            source,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )? {
+                            match aggregate {
+                                AggregateBinding::Dict(_)
+                                | AggregateBinding::StringDict(_)
+                                | AggregateBinding::StringIntDict(_)
+                                | AggregateBinding::StringFloatDict(_)
+                                | AggregateBinding::StringSingletonDict(_)
+                                | AggregateBinding::IntStringDict(_)
+                                | AggregateBinding::IntSingletonDict(_)
+                                | AggregateBinding::FloatDict(_)
+                                | AggregateBinding::IntFloatDict(_)
+                                | AggregateBinding::FloatIntDict(_)
+                                | AggregateBinding::FloatStringDict(_)
+                                | AggregateBinding::FloatSingletonDict(_)
+                                | AggregateBinding::SingletonDict(_)
+                                | AggregateBinding::SingletonStringDict(_)
+                                | AggregateBinding::SingletonIntDict(_)
+                                | AggregateBinding::SingletonFloatDict(_) => {
+                                    return Ok(Some(aggregate));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if matches!(
+                        func.as_ref(),
                         lucid_syntax::Expr::Ident { name, .. } if name == "sorted"
                     ) && args.len() == 1
                         && args.iter().all(|arg| {
@@ -23948,6 +24018,11 @@ return total
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
 
+        let module =
+            lucid_syntax::parse("values = dict({1: 40, 2: 42})\nreturn values[2]\n").unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
         let module = lucid_syntax::parse("return {1: 40, 2: 42}[1 + 1]\n").unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
@@ -23982,6 +24057,8 @@ return total
             ("return len({1, 2, 3})\n", 3),
             ("values = {1: 10, 2: 20}\nreturn len(values)\n", 2),
             ("return len({1: 10, 2: 20})\n", 2),
+            ("values = dict()\nreturn len(values)\n", 0),
+            ("values = dict({1: 10, 2: 20})\nreturn len(values)\n", 2),
             ("values = (1, 2, 3)\nreturn len(values)\n", 3),
             ("return len((1, 2, 3))\n", 3),
             ("return len(\"abc\")\n", 3),
@@ -24249,6 +24326,7 @@ return total
             ("return \"a\" in {\"a\": \"b\"}\n", 1),
             ("return \"z\" not in {\"a\": \"b\"}\n", 1),
             ("return {\"a\": \"b\"}[\"a\"] == \"b\"\n", 1),
+            ("values = dict({\"a\": \"b\"})\nreturn values[\"a\"] == \"b\"\n", 1),
             ("return len({\"a\": 1})\n", 1),
             ("return {\"a\": 1} == {\"a\": 1}\n", 1),
             ("return \"a\" in {\"a\": 1}\n", 1),
@@ -24409,6 +24487,7 @@ return total
             ("values = {1.5: 2.5}\nreturn len(values)\n", 1),
             ("values = {1.5: 2.5}\nreturn 1.5 in values\n", 1),
             ("values = {1.5: 2.5}\nreturn values[1.5] == 2.5\n", 1),
+            ("values = dict({1.5: 2.5})\nreturn values[1.5] == 2.5\n", 1),
             ("values = {1: 1.5}\nreturn len(values)\n", 1),
             ("return {1: 1.5} == {1: 1.5}\n", 1),
             ("values = {1: 1.5}\nreturn 1 in values\n", 1),
@@ -24473,6 +24552,10 @@ return total
             ("values = {None: None}\nreturn len(values)\n", 1),
             ("values = {None: None}\nreturn None in values\n", 1),
             ("values = {None: None}\nreturn values[None] is None\n", 1),
+            (
+                "values = dict({None: ...})\nreturn values[None] is ...\n",
+                1,
+            ),
             ("values = {\"a\": None}\nreturn len(values)\n", 1),
             ("return {\"a\": None} == {\"a\": None}\n", 1),
             ("values = {\"a\": None}\nreturn \"a\" in values\n", 1),
