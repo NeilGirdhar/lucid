@@ -2319,7 +2319,6 @@ impl TypeChecker {
             "zip",
             "any",
             "all",
-            "sorted",
             "pow",
             "cos",
             "sin",
@@ -2327,7 +2326,6 @@ impl TypeChecker {
             "sqrt",
             "floor",
             "ceil",
-            "monotonic",
         ] {
             env.variables.entry(name.to_string()).or_insert((
                 Type::Function {
@@ -2380,8 +2378,8 @@ impl TypeChecker {
                 vec![any.clone(), Type::Int],
                 any.clone(),
             ),
-            ("reversed", 1, Some(1), vec![any.clone()], any.clone()),
-            ("iter", 1, Some(1), vec![any.clone()], any.clone()),
+            ("reversed", 1, Some(1), vec![any.clone()], Type::TypeVar("ElementType".into())),
+            ("iter", 1, Some(1), vec![any.clone()], Type::TypeVar("ElementType".into())),
             ("locals", 0, Some(0), Vec::new(), Type::Class {
                 name: "dict".into(),
                 type_args: vec![Type::Str, any.clone()],
@@ -2503,6 +2501,7 @@ impl TypeChecker {
             ("tan", 1, Some(1), vec![any.clone()], Type::Float),
             ("floor", 1, Some(1), vec![any.clone()], Type::Int),
             ("ceil", 1, Some(1), vec![any.clone()], Type::Int),
+            ("sorted", 1, Some(2), vec![any.clone(), any.clone()], Type::TypeVar("ElementType".into())),
             ("monotonic", 0, Some(0), Vec::new(), Type::Float),
         ];
         for (name, required, maximum, params, return_type) in builtin_contracts {
@@ -10783,6 +10782,42 @@ impl TypeChecker {
                                             is_sealed: false,
                                         })
                                     }
+                                    "reversed" if self.is_iterable_type(&argument_type) => {
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![self.iterable_element_type(&argument_type)],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
+                                    "sorted" if !args.is_empty() && {
+                                        let first_arg = args.iter().find(|arg| {
+                                            !arg.is_spread && !arg.is_dict_spread && !arg.is_gather_spread
+                                        });
+                                        first_arg.is_some() && self.is_iterable_type(
+                                            &self.type_of_expr(&first_arg.unwrap().value).ok()?
+                                        )
+                                    } => {
+                                        let first_arg = args.iter().find(|arg| {
+                                            !arg.is_spread && !arg.is_dict_spread && !arg.is_gather_spread
+                                        })?;
+                                        let element_type = self.iterable_element_type(
+                                            &self.type_of_expr(&first_arg.value).ok()?
+                                        );
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![element_type],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
+                                    "monotonic" => Some(Type::Float),
                                     "dict" if matches!(&argument_type, Type::Class { name, type_args, .. } if name == "dict" && type_args.len() == 2) => {
                                         if let Type::Class { type_args, .. } = argument_type {
                                             Some(Type::Class { name: "dict".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
@@ -18608,5 +18643,62 @@ total = sum(numbers)
                 error.message
             );
         }
+    }
+
+    #[test]
+    fn reversed_preserves_element_type() {
+        let code = r#"numbers: list[int] = [1, 2, 3]
+reversed_nums = reversed(numbers)
+first: int = reversed_nums[0]
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "reversed() should preserve element type: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn sorted_preserves_element_type() {
+        let code = r#"numbers: list[int] = [3, 1, 2]
+sorted_nums = sorted(numbers)
+first: int = sorted_nums[0]
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "sorted() should preserve element type: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn monotonic_returns_float() {
+        let code = r#"timestamp: float = monotonic()
+x: int = timestamp
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_err(), "monotonic() returns float, not int");
+    }
+
+    #[test]
+    fn monotonic_correct_type() {
+        let code = r#"timestamp: float = monotonic()
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "monotonic() should return float: {:?}",
+            result
+        );
     }
 }
