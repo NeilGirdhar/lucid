@@ -1479,6 +1479,119 @@ impl Function {
                     lowered.insert(id, result);
                     return Ok(result);
                 }
+                if node.kind == "binary"
+                    && matches!(node.detail.as_deref(), Some("Eq" | "NotEq"))
+                    && node.children.len() == 2
+                {
+                    let mut aggregate_ids = [node.children[0], node.children[1]];
+                    for aggregate_id in &mut aggregate_ids {
+                        let aggregate = nodes
+                            .get(*aggregate_id as usize)
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                        *aggregate_id = local_binding_id(
+                            aggregate,
+                            *aggregate_id,
+                            parameter_names,
+                            local_bindings,
+                        )
+                        .unwrap_or(*aggregate_id);
+                    }
+                    let left_aggregate = nodes
+                        .get(aggregate_ids[0] as usize)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let right_aggregate = nodes
+                        .get(aggregate_ids[1] as usize)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let left_is_sequence =
+                        matches!(left_aggregate.kind.as_str(), "list" | "record");
+                    let right_is_sequence =
+                        matches!(right_aggregate.kind.as_str(), "list" | "record");
+                    if left_is_sequence || right_is_sequence {
+                        if !left_is_sequence || !right_is_sequence {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        let mut left_values = Vec::with_capacity(left_aggregate.children.len());
+                        for child in &left_aggregate.children {
+                            left_values.push(lower(
+                                *child,
+                                nodes,
+                                lowered,
+                                instructions,
+                                next,
+                                parameter_names,
+                                local_bindings,
+                            )?);
+                        }
+                        let mut right_values = Vec::with_capacity(right_aggregate.children.len());
+                        for child in &right_aggregate.children {
+                            right_values.push(lower(
+                                *child,
+                                nodes,
+                                lowered,
+                                instructions,
+                                next,
+                                parameter_names,
+                                local_bindings,
+                            )?);
+                        }
+                        if left_aggregate.kind != right_aggregate.kind {
+                            instructions.push(Instruction::ConstBool {
+                                result,
+                                value: node.detail.as_deref() == Some("NotEq"),
+                            });
+                            lowered.insert(id, result);
+                            return Ok(result);
+                        }
+                        if left_values.len() != right_values.len() {
+                            instructions.push(Instruction::ConstBool {
+                                result,
+                                value: node.detail.as_deref() == Some("NotEq"),
+                            });
+                            lowered.insert(id, result);
+                            return Ok(result);
+                        }
+                        if left_values.is_empty() {
+                            instructions.push(Instruction::ConstBool {
+                                result,
+                                value: node.detail.as_deref() == Some("Eq"),
+                            });
+                            lowered.insert(id, result);
+                            return Ok(result);
+                        }
+                        let mut comparisons = Vec::with_capacity(left_values.len());
+                        for (left, right) in left_values.into_iter().zip(right_values) {
+                            let comparison = ValueId(*next);
+                            *next += 1;
+                            instructions.push(Instruction::CmpEq {
+                                result: comparison,
+                                left,
+                                right,
+                            });
+                            comparisons.push(comparison);
+                        }
+                        let mut equal = comparisons[0];
+                        for comparison in comparisons.into_iter().skip(1) {
+                            let combined = ValueId(*next);
+                            *next += 1;
+                            instructions.push(Instruction::And {
+                                result: combined,
+                                left: equal,
+                                right: comparison,
+                            });
+                            equal = combined;
+                        }
+                        result = equal;
+                        if node.detail.as_deref() == Some("NotEq") {
+                            result = provisional_result;
+                            instructions.push(Instruction::Not {
+                                result,
+                                operand: equal,
+                            });
+                        }
+                        lowered.insert(id, result);
+                        return Ok(result);
+                    }
+                }
                 if node.kind == "index" && node.children.len() == 2 {
                     let aggregate_id = node.children[0];
                     let aggregate = nodes
@@ -25388,6 +25501,158 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 6, &[])
             .expect("typed dict indexing should preserve value evaluation");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_sequence_aggregate_equality() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "list".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("left".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "list".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "record".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "record".into(),
+                detail: None,
+                children: vec![0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "binary".into(),
+                detail: Some("NotEq".into()),
+                children: vec![6, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![2, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "unary".into(),
+                detail: Some("Not".into()),
+                children: vec![9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![5, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![11, 10],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body_with_locals(&nodes, 12, &[], &[("left".into(), 2)])
+                .expect("typed sequence equality should lower");
+        assert_eq!(function.execute(), Ok(Some(3)));
+    }
+
+    #[test]
+    fn typed_sequence_equality_evaluates_both_sides() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "list".into(),
+                detail: None,
+                children: vec![0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![0, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "list".into(),
+                detail: None,
+                children: vec![0, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "binary".into(),
+                detail: Some("NotEq".into()),
+                children: vec![1, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 5, &[])
+            .expect("typed sequence equality should preserve side evaluation");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
