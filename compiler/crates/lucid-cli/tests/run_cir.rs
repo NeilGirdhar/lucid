@@ -434,6 +434,35 @@ fn check_renders_source_line_for_structured_diagnostics() {
 }
 
 #[test]
+fn check_preserves_tabs_in_diagnostic_underlines() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_check_tab_diagnostic_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value =\t@\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0001"), "unexpected stderr: {stderr}");
+    assert!(stderr.contains("value =\t@"));
+    let underline = stderr
+        .lines()
+        .find(|line| line.contains('^'))
+        .unwrap_or_else(|| panic!("diagnostic should underline the offending span: {stderr}"));
+    assert!(
+        underline.contains('\t'),
+        "underline prefix should preserve tabs from the source line: {stderr}"
+    );
+}
+
+#[test]
 fn run_cir_uses_statement_and_cfg_lowering() {
     let path = std::env::temp_dir().join(format!("lucid_run_cir_cfg_{}.lucid", std::process::id()));
     fs::write(

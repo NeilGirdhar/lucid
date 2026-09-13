@@ -1662,6 +1662,8 @@ diverged:
   every source file.
 * Source-map columns now count Unicode characters rather than UTF-8 bytes,
   keeping diagnostics correctly positioned in non-ASCII source.
+* CLI diagnostic underlines now preserve tabs from the source-line prefix,
+  keeping carets aligned with spans that appear after tabbed whitespace.
 * The `lucid check` command now uses the same database-backed validation path,
   keeping command-line diagnostics consistent with execution.
 * Native build/run and `eval` entry points also validate through the database

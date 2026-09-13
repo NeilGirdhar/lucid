@@ -362,8 +362,19 @@ fn emit_database_diagnostics(
         } else {
             1
         };
-        eprintln!("  {}{}", " ".repeat(column - 1), "^".repeat(underline_len));
+        eprintln!(
+            "  {}{}",
+            diagnostic_underline_prefix(line.as_ref(), column),
+            "^".repeat(underline_len)
+        );
     }
+}
+
+fn diagnostic_underline_prefix(line: &str, column: usize) -> String {
+    line.chars()
+        .take(column.saturating_sub(1))
+        .map(|character| if character == '\t' { '\t' } else { ' ' })
+        .collect()
 }
 
 fn run_file(path_str: &str, entry: Option<&str>) {
