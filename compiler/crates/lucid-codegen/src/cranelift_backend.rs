@@ -5173,6 +5173,81 @@ return total
     }
 
     #[test]
+    fn result_abi_propagates_overflow_errors_through_branch_local_phi() {
+        let function = Function {
+            entry: lucid_cir::BlockId(0),
+            blocks: vec![
+                lucid_cir::Block {
+                    id: lucid_cir::BlockId(0),
+                    instructions: vec![
+                        Instruction::Param {
+                            result: ValueId(0),
+                            index: 0,
+                        },
+                        Instruction::Param {
+                            result: ValueId(1),
+                            index: 1,
+                        },
+                        Instruction::Param {
+                            result: ValueId(2),
+                            index: 2,
+                        },
+                    ],
+                    terminator: Terminator::Branch {
+                        condition: ValueId(0),
+                        then_block: lucid_cir::BlockId(1),
+                        else_block: lucid_cir::BlockId(2),
+                    },
+                },
+                lucid_cir::Block {
+                    id: lucid_cir::BlockId(1),
+                    instructions: vec![Instruction::Add {
+                        result: ValueId(3),
+                        left: ValueId(1),
+                        right: ValueId(2),
+                    }],
+                    terminator: Terminator::Jump(lucid_cir::BlockId(3)),
+                },
+                lucid_cir::Block {
+                    id: lucid_cir::BlockId(2),
+                    instructions: vec![Instruction::ConstInt {
+                        result: ValueId(4),
+                        value: 7,
+                    }],
+                    terminator: Terminator::Jump(lucid_cir::BlockId(3)),
+                },
+                lucid_cir::Block {
+                    id: lucid_cir::BlockId(3),
+                    instructions: vec![Instruction::Phi {
+                        result: ValueId(5),
+                        incomings: vec![
+                            (lucid_cir::BlockId(1), ValueId(3)),
+                            (lucid_cir::BlockId(2), ValueId(4)),
+                        ],
+                    }],
+                    terminator: Terminator::Return(Some(ValueId(5))),
+                },
+            ],
+        };
+        let compiled = compile_integer_result_function(&function)
+            .expect("branch-local overflow phi should use the result ABI");
+        assert_eq!(
+            unsafe { compiled.call_result_with_args(&[1, 40, 2]) },
+            crate::native_abi::NativeResult::ok(42)
+        );
+        assert_eq!(
+            unsafe { compiled.call_result_with_args(&[1, i64::MAX, 1]) },
+            crate::native_abi::NativeResult::error(
+                crate::native_abi::NativeErrorCode::ArithmeticOverflow
+            )
+        );
+        assert_eq!(
+            unsafe { compiled.call_result_with_args(&[0, i64::MAX, 1]) },
+            crate::native_abi::NativeResult::ok(7)
+        );
+    }
+
+    #[test]
     fn result_abi_preserves_errors_across_multiple_divisions_in_one_block() {
         let function = Function {
             entry: lucid_cir::BlockId(0),

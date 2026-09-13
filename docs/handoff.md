@@ -1905,10 +1905,10 @@ diverged:
   so front ends can select the result ABI without duplicating the instruction
   set.
   The predicate includes checked overflow, exponent, and shift operations.
-  Cranelift's recoverable result ABI now carries division-family status through
-  branch-local Phi merges, so a recoverable error produced on a selected branch
-  survives the jump to the shared return block while an unselected branch stays
-  unexecuted.
+  Cranelift's recoverable result ABI now carries division-family and overflow
+  status through branch-local Phi merges, so a recoverable error produced on a
+  selected branch survives the jump to the shared return block while an
+  unselected branch stays unexecuted.
   Division-family classification is exposed by CIR as well, so that backend
   restriction is shared rather than reimplemented in each caller.
 * Module-to-CIR assignment selection now lives in `lucid-cir`; the database
