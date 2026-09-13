@@ -4451,6 +4451,102 @@ impl TypeChecker {
         self.class_method_type(parent, name)
     }
 
+    fn collection_method_call_return_type(
+        &self,
+        receiver_type: &Type,
+        attr: &str,
+        args: &[Arg],
+    ) -> Result<Option<Type>, TypeError> {
+        let receiver_type = match receiver_type {
+            Type::View { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        let Type::Class {
+            name, type_args, ..
+        } = receiver_type
+        else {
+            return Ok(None);
+        };
+
+        match (name.as_str(), attr, type_args.as_slice()) {
+            ("list", "pop", [element_type]) => {
+                for argument in args.iter().take(2).filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !argument_type.is_subtype_of(&Type::Int, &self.env) {
+                        return Err(TypeError {
+                            message: format!(
+                                "list.pop() index has type {:?}, expected int",
+                                argument_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                }
+                if args.len() == 2 {
+                    Ok(Some(Type::Class {
+                        name: "list".into(),
+                        type_args: vec![element_type.clone()],
+                        parent: None,
+                        traits: Vec::new(),
+                        interfaces: Vec::new(),
+                        fields: HashMap::new(),
+                        is_sealed: false,
+                    }))
+                } else {
+                    Ok(Some(element_type.clone()))
+                }
+            }
+            ("set", "pop", [element_type]) => Ok(Some(element_type.clone())),
+            ("dict", "get", [key_type, value_type]) => {
+                if let Some(argument) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !argument_type.is_subtype_of(key_type, &self.env) {
+                        return Err(TypeError {
+                            message: format!(
+                                "dict.get() key has type {:?}, expected {:?}",
+                                argument_type, key_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                }
+                let fallback_type = if let Some(argument) = args.get(1).filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    self.type_of_expr(&argument.value)?
+                } else {
+                    Type::None
+                };
+                Ok(Some(Type::make_union(vec![
+                    value_type.clone(),
+                    fallback_type,
+                ])))
+            }
+            ("dict", "pop", [key_type, value_type]) => {
+                if let Some(argument) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !argument_type.is_subtype_of(key_type, &self.env) {
+                        return Err(TypeError {
+                            message: format!(
+                                "dict.pop() key has type {:?}, expected {:?}",
+                                argument_type, key_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                }
+                Ok(Some(value_type.clone()))
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Return the element type a checked iterable yields.
     ///
     /// Built-in containers expose their element type directly; user iterators
@@ -9310,7 +9406,7 @@ impl TypeChecker {
                         },
                         Type::Class { ref name, .. } if name == "dict" => match attr.as_str() {
                             "get" => Some((1, 2)),
-                            "pop" => Some((1, 2)),
+                            "pop" => Some((1, 1)),
                             "keys" | "values" | "items" | "clear" => Some((0, 0)),
                             _ => None,
                         },
@@ -9375,6 +9471,13 @@ impl TypeChecker {
                         },
                         _ => None,
                     }
+                } else {
+                    None
+                };
+                let collection_method_return = if let Expr::Attribute { value, attr, .. } = &**func
+                {
+                    let receiver_type = self.type_of_expr(value)?;
+                    self.collection_method_call_return_type(&receiver_type, attr, args)?
                 } else {
                     None
                 };
@@ -10429,7 +10532,10 @@ impl TypeChecker {
                                 if is_contextmanager_call {
                                     Ok(Type::TypeVar("ContextManager".into()))
                                 } else {
-                                    Ok(overload_return.or(generic_return).unwrap_or(return_type))
+                                    Ok(collection_method_return
+                                        .or(overload_return)
+                                        .or(generic_return)
+                                        .unwrap_or(return_type))
                                 }
                             }
                         }
@@ -16258,6 +16364,16 @@ def reject(value: not int) -> none:
             ("help(1, 2)\n", "accepts at most 1"),
             ("fields()\n", "requires at least 1"),
             ("len(1)\n", "not sized"),
+            ("items = {1: \"one\"}\nitems.pop(1, \"fallback\")\n", "invalid argument count"),
+            (
+                "items: dict[str, int] = {\"a\": 1}\nvalue = items.get(1)\n",
+                "dict.get() key",
+            ),
+            (
+                "items: dict[str, int] = {\"a\": 1}\nvalue = items.pop(1)\n",
+                "dict.pop() key",
+            ),
+            ("items = [1]\nvalue = items.pop(\"bad\")\n", "list.pop() index"),
             ("ord(\"ab\")\n", "is not a bare builtin"),
             ("chr(0x110000)\n", "is not a bare builtin"),
         ] {
@@ -16327,6 +16443,15 @@ def reject(value: not int) -> none:
             Some(Type::Class { name, type_args, .. })
                 if name == "dict" && type_args == &vec![Type::Str, Type::Int]
         ));
+        let mut collection_checker = TypeChecker::new();
+        collection_checker
+            .check_module(
+                &parse(
+                    "values: dict[str, int] = {\"a\": 1}\nmaybe: int | none = values.get(\"a\")\nfallback_text: str = \"fallback\"\nfallback: int | str = values.get(\"missing\", fallback_text)\npopped: int = values.pop(\"a\")\nxs: list[int] = [1, 2, 3]\nitem: int = xs.pop()\nitem_at: int = xs.pop(0)\nchunk: list[int] = xs.pop(0, 1)\nunique = set([1])\nset_item: int = unique.pop()\n",
+                )
+                .unwrap(),
+            )
+            .unwrap();
         assert!(matches!(
             checker.env.variables.get("small").map(|(ty, _)| ty),
             Some(Type::Float)
