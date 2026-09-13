@@ -2302,38 +2302,6 @@ impl TypeChecker {
         // through Any at this boundary.  Individual operations still perform
         // their runtime checks, while names remain visible to the checker as
         // ordinary first-class builtins instead of undefined variables.
-        for name in [
-            "enumerate",
-            "map",
-            "reversed",
-            "iter",
-            "locals",
-            "format",
-            "hash",
-            "repr",
-            "getattr",
-            "setattr",
-            "hasattr",
-            "zip",
-            "any",
-            "all",
-            "pow",
-            "cos",
-            "sin",
-            "tan",
-            "sqrt",
-            "floor",
-            "ceil",
-        ] {
-            env.variables.entry(name.to_string()).or_insert((
-                Type::Function {
-                    params: vec![Type::TypeVar("Any".into())],
-                    return_type: Box::new(Type::TypeVar("Any".into())),
-                },
-                MutabilityView::ReadOnly,
-            ));
-        }
-
         // Give the remaining builtins explicit arity and argument contracts.
         // Their result types may stay dynamic, but malformed calls must not
         // cross the static boundary and fail only inside a backend.
@@ -2464,21 +2432,6 @@ impl TypeChecker {
                 Some(2),
                 vec![any.clone(), any.clone()],
                 Type::TypeVar("SumType".into()),
-            ),
-            (
-                "sorted",
-                1,
-                Some(2),
-                vec![any.clone(), any.clone()],
-                Type::Class {
-                    name: "list".into(),
-                    type_args: vec![any.clone()],
-                    parent: None,
-                    traits: Vec::new(),
-                    interfaces: Vec::new(),
-                    fields: HashMap::new(),
-                    is_sealed: false,
-                },
             ),
             (
                 "min",
