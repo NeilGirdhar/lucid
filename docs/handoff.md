@@ -6,10 +6,43 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13 (third continuation session - IN PROGRESS)
+## Resume snapshot: 2026-09-13 (third continuation session - COMPLETED)
 
 Work is on branch `codex/lucid-implementation`. Latest checkpoint
-is implementing type narrowing for if statements.
+is after implementing type narrowing for if statements (simple variable narrowing only).
+
+**Gap Closure Work (2026-09-13 third continuation — 1 major gap partially closed):**
+Type narrowing infrastructure for flow-sensitive type analysis in if statements.
+
+**Completed Today (Type Narrowing - partial):**
+1. **Type narrowing for simple variables** (WORKING)
+   - Extract narrowing patterns from conditions in if statements
+   - Support for `x is None` pattern (narrows to None in then, not None in else)
+   - Support for `x is not None` pattern (narrows to not None in then, None in else)  
+   - Support for `not (x is None)` pattern (equivalent to is not)
+   - Proper handling of union type narrowing (filters out None from union types)
+   - Applied narrowing works correctly in else branches and with function calls
+   - 5 new test cases added covering all patterns
+
+2. **Limitations documented**
+   - Attribute path narrowing (e.g., `node.left is None`) requires deeper architectural changes
+   - Workaround: store attributes in local variables first (e.g., `left = node.left; if left is None:`)
+   - This workaround is already functional with current type narrowing
+   - Full attribute narrowing would require modifying type_of_expr() to track narrowing constraints
+
+**Session Metrics:**
+- Type narrowing tests: 5 new tests, all passing
+- Checker tests: 220 total (215 pre-existing + 5 new)
+- Spec tests: 55 passing
+- Narrowing patterns supported: 3 (is None, is not None, not (is None))
+- Union type narrowing: Yes, working correctly
+
+**Next Steps for Attribute Narrowing:**
+To fully support attribute narrowing, would need:
+1. Store narrowing constraints in environment (currently only variables)
+2. Modify type_of_expr() to check narrowing constraints before computing types
+3. Handle invalidation of constraints when attributes might be modified
+4. Estimated effort: 1-2 days of architectural work
 
 **Gap Closure Work (2026-09-13 second continuation — 3 structural improvements):**
 The session closed gaps in type validation for immutable/non-indexable types,
