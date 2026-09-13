@@ -13354,6 +13354,17 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5, 1, 5]), Ok(Some(3)));
 
         let file = db.add_file(
+            "counted-while-compound-conditional-else-accumulate.lucid",
+            "def signed_compound_sum(n: int, high: int, low: int):\n    total = 0\n    while n > 0:\n        if not false and n < high - 1 or n <= low:\n            total += n\n        else:\n            total -= n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "signed_compound_sum".into())
+            .as_ref()
+            .expect(
+                "counted while compound conditional else accumulation should lower through CIR",
+            );
+        assert_eq!(function.execute_with_args(&[5, 4, 1]), Ok(Some(-9)));
+
+        let file = db.add_file(
             "counted-while-conditional-elif-accumulate.lucid",
             "def tiered_sum(n: int, high: int, low: int):\n    total = 0\n    while n > 0:\n        if n > high:\n            total += n\n        elif n > low:\n            total += 1\n        else:\n            total -= n\n        n -= 1\n    return total\n",
         );

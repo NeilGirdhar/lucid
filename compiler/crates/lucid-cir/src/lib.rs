@@ -14710,6 +14710,25 @@ return total
         let module = lucid_syntax::parse(
             r#"total = 0
 while n > 0:
+    if not false and n < high - 1 or n <= low:
+        total += n
+    else:
+        total -= n
+    n -= 1
+return total
+"#,
+        )
+        .expect("compound guarded while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "high".into(), "low".into()],
+        )
+        .expect("compound guarded while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 4, 1]), Ok(Some(-9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
     if n > high:
         total += n
     elif n > low:
