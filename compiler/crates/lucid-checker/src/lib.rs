@@ -4746,6 +4746,15 @@ impl TypeChecker {
                     .cloned()
                     .unwrap_or(Type::TypeVar("Any".into()))
             }
+            Type::Class {
+                name, type_args, ..
+            } if name == "Arguments" =>
+            {
+                type_args
+                    .first()
+                    .cloned()
+                    .unwrap_or(Type::TypeVar("Any".into()))
+            }
             Type::Class { name, .. } if name == "range" => Type::Int,
             Type::Class { name, .. }
                 if matches!(name.as_str(), "Bytes" | "ByteArray" | "MemoryView") =>
@@ -4857,6 +4866,7 @@ impl TypeChecker {
                         | "Bytes"
                         | "ByteArray"
                         | "MemoryView"
+                        | "Arguments"
                 )
         ) || matches!(base, Type::Shape(_) | Type::Record { .. })
             || matches!(base, Type::Class { name, .. }
@@ -5709,11 +5719,23 @@ impl TypeChecker {
                             span: param.span,
                         });
                     }
-                    let pt = if let Some(ref t) = param.type_annotation {
+                    let mut pt = if let Some(ref t) = param.type_annotation {
                         self.resolve_type_expr(t)?
                     } else {
                         Type::TypeVar("Any".to_string())
                     };
+                    // Wrap variadic parameters in Arguments[T]
+                    if param.is_variadic_positional {
+                        pt = Type::Class {
+                            name: "Arguments".into(),
+                            type_args: vec![pt],
+                            parent: None,
+                            traits: Vec::new(),
+                            interfaces: Vec::new(),
+                            fields: HashMap::new(),
+                            is_sealed: false,
+                        };
+                    }
                     if let Some(default) = &param.default {
                         let default_type = self.type_of_expr(default)?;
                         if !default_type.is_subtype_of(&pt, &self.env) {
@@ -14046,6 +14068,14 @@ class Child(Base):
     #[test]
     fn test_parameter_destructuring_binds_nested_names() {
         let module = parse("class Pair:\n    left: int\n    right: int\ndef total(Pair(a, b): Pair) -> int:\n    return a + b\n\ndef distance(Pair(x1, y1): Pair, Pair(x2, y2): Pair) -> int:\n    return x1 + y1 + x2 + y2\n").unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn variadic_positional_parameters_type_as_arguments() {
+        let module = parse("def greet(*names: str):\n    for name in names:\n        print(name)\n\ngreet(\"Alice\", \"Bob\")\n").unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_ok(), "{result:?}");
