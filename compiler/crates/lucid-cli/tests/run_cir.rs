@@ -728,6 +728,106 @@ fn run_cir_preserves_logical_condition_effects_in_void_if() {
 }
 
 #[test]
+fn run_cir_preserves_logical_condition_effects_in_void_elif() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_void_elif_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def should_error(flag: int, x: int):\n    if flag > 0:\n        return\n    elif x == 0 and 10 // x > 1:\n        return\n\ndef should_skip(flag: int, x: int):\n    if flag > 0:\n        return\n    elif x != 0 and 10 // x > 1:\n        return\n",
+    )
+    .expect("temporary source should be writable");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let skipped = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !error.status.success(),
+        "true left operand in elif must evaluate the RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division error, got {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+    assert!(
+        skipped.status.success(),
+        "false left operand in elif should short-circuit before division: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+}
+
+#[test]
+fn run_cir_preserves_initial_logical_condition_effects_in_void_elif_chain() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_initial_void_elif_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def should_error(x: int, y: int):\n    if x == 0 and 10 // x > 1:\n        return\n    elif y > 0:\n        return\n\ndef should_skip(x: int, y: int):\n    if x != 0 and 10 // x > 1:\n        return\n    elif y > 0:\n        return\n",
+    )
+    .expect("temporary source should be writable");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let skipped = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !error.status.success(),
+        "true left operand in initial if must evaluate the RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division error, got {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+    assert!(
+        skipped.status.success(),
+        "false left operand in initial if should short-circuit before division: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+}
+
+#[test]
 fn run_cir_executes_dynamic_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_if_{}.lucid",
