@@ -1782,6 +1782,9 @@ pub fn typed_module<'db>(
                 if let Some(default) = &param.default {
                     collect_typed_exprs(db, &body_checker, default, &mut body_expressions)?;
                 }
+                if let Some(pattern) = &param.pattern {
+                    body_checker.bind_match_pattern_types(pattern, ty);
+                }
             }
         }
         body_checker.env.current_return_type = Some(body_return_type);
@@ -9534,6 +9537,35 @@ mod tests {
         assert!(function.body_expressions.iter().any(|node| {
             node.detail.as_deref() == Some("selected") && node.type_name == "LiteralBool(true)"
         }));
+    }
+
+    #[test]
+    fn typed_module_scopes_parameter_patterns_in_function_body() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "parameter-pattern.lucid",
+            "class Pair:\n    left: int\n    right: int\n\ndef sum_pair(Pair(left, right): Pair):\n    return left + right\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("parameter patterns should be scoped while collecting typed HIR");
+        let function = typed
+            .functions
+            .iter()
+            .find(|function| function.symbol.name(&db) == "sum_pair")
+            .expect("sum_pair should be in typed module");
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("left") && node.type_name == "int")
+        );
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("right") && node.type_name == "int")
+        );
     }
 
     #[test]
