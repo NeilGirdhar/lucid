@@ -9886,6 +9886,56 @@ impl TypeChecker {
                                             is_sealed: false,
                                         })
                                     }
+                                    "enumerate" if self.is_iterable_type(&argument_type) => {
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![Type::Record {
+                                                fields: vec![
+                                                    (None, Type::Int),
+                                                    (
+                                                        None,
+                                                        self.iterable_element_type(&argument_type),
+                                                    ),
+                                                ],
+                                                is_open: false,
+                                            }],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
+                                    "zip" => {
+                                        let mut fields = Vec::new();
+                                        for argument in args.iter().filter(|arg| {
+                                            !arg.is_spread
+                                                && !arg.is_dict_spread
+                                                && !arg.is_gather_spread
+                                        }) {
+                                            let argument_type =
+                                                self.type_of_expr(&argument.value).ok()?;
+                                            if !self.is_iterable_type(&argument_type) {
+                                                return None;
+                                            }
+                                            fields.push((
+                                                None,
+                                                self.iterable_element_type(&argument_type),
+                                            ));
+                                        }
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![Type::Record {
+                                                fields,
+                                                is_open: false,
+                                            }],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
                                     "dict" if matches!(&argument_type, Type::Class { name, type_args, .. } if name == "dict" && type_args.len() == 2) => {
                                         if let Type::Class { type_args, .. } = argument_type {
                                             Some(Type::Class { name: "dict".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
@@ -15817,7 +15867,7 @@ def reject(value: not int) -> none:
         checker
             .check_module(
                 &parse(
-                    "values = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\n",
+                    "values = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\nenumerated = enumerate(range(3), 5)\nzipped = zip(range(3), sorted(range(3)))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\nenum_index: int = enumerated[0][0]\nenum_value: int = enumerated[0][1]\nzip_left: int = zipped[0][0]\nzip_right: int = zipped[0][1]\n",
                 )
                 .unwrap(),
             )
@@ -15855,6 +15905,26 @@ def reject(value: not int) -> none:
             checker.env.variables.get("reversed_values").map(|(ty, _)| ty),
             Some(Type::Class { name, type_args, .. })
                 if name == "list" && type_args == &vec![Type::Int]
+        ));
+        assert!(matches!(
+            checker.env.variables.get("enumerated").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "list"
+                    && matches!(
+                        type_args.as_slice(),
+                        [Type::Record { fields, is_open: false }]
+                            if fields == &vec![(None, Type::Int), (None, Type::Int)]
+                    )
+        ));
+        assert!(matches!(
+            checker.env.variables.get("zipped").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "list"
+                    && matches!(
+                        type_args.as_slice(),
+                        [Type::Record { fields, is_open: false }]
+                            if fields == &vec![(None, Type::Int), (None, Type::Int)]
+                    )
         ));
         assert!(matches!(
             checker.env.variables.get("sorted_sum").map(|(ty, _)| ty),
