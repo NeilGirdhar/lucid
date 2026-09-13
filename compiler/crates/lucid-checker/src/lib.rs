@@ -14253,6 +14253,28 @@ d.clear()
     }
 
     #[test]
+    fn list_extend_validates_argument_type() {
+        let code = r#"xs: list[int] = [1, 2]
+xs.extend([3, 4])
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "list.extend with matching element types should succeed: {:?}", result);
+    }
+
+    #[test]
+    fn list_extend_rejects_mismatched_types() {
+        let code = r#"xs: list[int] = [1, 2]
+xs.extend(["bad"])
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_err(), "list.extend with mismatched element types should fail: {:?}", result);
+    }
+
+    #[test]
     fn read_file_propagates_parse_error_with_question_mark() {
         let module = parse(
             "def load(path: str) -> str | ParseError:\n    text = read_file(path)?\n    return text\n",
