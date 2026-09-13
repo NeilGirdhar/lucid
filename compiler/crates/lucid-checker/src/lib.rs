@@ -19346,4 +19346,33 @@ else:
             result
         );
     }
+
+    #[test]
+    fn type_narrowing_in_recursive_pattern() {
+        let code = r#"class Node:
+    value: int
+    left: Node | None
+    right: Node | None
+
+def process(node: Node) -> int:
+    left = node.left
+    right = node.right
+
+    if left is None:
+        return node.value
+
+    if right is None:
+        return node.value + process(left)
+
+    return node.value + process(left) + process(right)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "type narrowing should work in recursive patterns: {:?}",
+            result
+        );
+    }
 }
