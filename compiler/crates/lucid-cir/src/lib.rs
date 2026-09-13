@@ -1411,6 +1411,20 @@ impl Function {
                         source_id,
                         member_positions: (0..node.children.len()).step_by(2).collect(),
                     }),
+                    "call" if node.children.len() == 1 => {
+                        let callee = nodes
+                            .get(node.children[0] as usize)
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                        if callee.detail.as_deref() == Some("dict") {
+                            Some(TypedAggregateShape {
+                                kind: "dict",
+                                source_id,
+                                member_positions: Vec::new(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
                     "call" if node.children.len() == 2 => {
                         let callee = nodes
                             .get(node.children[0] as usize)
@@ -1418,6 +1432,7 @@ impl Function {
                         let kind = match callee.detail.as_deref() {
                             Some("list") => "list",
                             Some("set") => "set",
+                            Some("dict") => "dict",
                             _ => return Ok(None),
                         };
                         let mut operand_id = node.children[1];
@@ -1431,17 +1446,39 @@ impl Function {
                             .get(operand_id as usize)
                             .ok_or(LowerError::UnsupportedExpression)?;
                         match operand.kind.as_str() {
-                            "list" | "record" => Some(TypedAggregateShape {
+                            "list" | "record" if kind != "dict" => Some(TypedAggregateShape {
                                 kind,
                                 source_id: operand_id,
                                 member_positions: (0..operand.children.len()).collect(),
                             }),
+                            "dict" if kind == "dict" && operand.children.len() % 2 == 0 => {
+                                Some(TypedAggregateShape {
+                                    kind,
+                                    source_id: operand_id,
+                                    member_positions: (0..operand.children.len())
+                                        .step_by(2)
+                                        .collect(),
+                                })
+                            }
                             _ => None,
                         }
                     }
                     _ => None,
                 };
                 Ok(shape)
+            }
+            fn typed_aggregate_child_ids(
+                shape: &TypedAggregateShape,
+                nodes: &[TypedExprNode],
+            ) -> Result<Vec<u32>, LowerError> {
+                let aggregate = nodes
+                    .get(shape.source_id as usize)
+                    .ok_or(LowerError::UnsupportedExpression)?;
+                if aggregate.kind == "call" && aggregate.children.len() == 1 {
+                    Ok(Vec::new())
+                } else {
+                    Ok(aggregate.children.clone())
+                }
             }
             if node.kind == "name"
                 && !parameter_names
@@ -1485,10 +1522,7 @@ impl Function {
                         local_bindings,
                     )?
                     .ok_or(LowerError::UnsupportedExpression)?;
-                    let aggregate = nodes
-                        .get(shape.source_id as usize)
-                        .ok_or(LowerError::UnsupportedExpression)?;
-                    let member_positions = shape.member_positions;
+                    let member_positions = &shape.member_positions;
                     if member_positions.is_empty() {
                         instructions.push(Instruction::ConstBool {
                             result,
@@ -1506,8 +1540,9 @@ impl Function {
                         parameter_names,
                         local_bindings,
                     )?;
-                    let mut lowered_children = Vec::with_capacity(aggregate.children.len());
-                    for child in &aggregate.children {
+                    let child_ids = typed_aggregate_child_ids(&shape, nodes)?;
+                    let mut lowered_children = Vec::with_capacity(child_ids.len());
+                    for child in &child_ids {
                         lowered_children.push(lower(
                             *child,
                             nodes,
@@ -1521,7 +1556,7 @@ impl Function {
                     let mut comparisons = Vec::with_capacity(member_positions.len());
                     for position in member_positions {
                         let right = *lowered_children
-                            .get(position)
+                            .get(*position)
                             .ok_or(LowerError::UnsupportedExpression)?;
                         let comparison = ValueId(*next);
                         *next += 1;
@@ -1591,11 +1626,9 @@ impl Function {
                              parameter_names: &[String],
                              local_bindings: &[(String, u32)]|
                              -> Result<Vec<ValueId>, LowerError> {
-                                let aggregate = nodes
-                                    .get(shape.source_id as usize)
-                                    .ok_or(LowerError::UnsupportedExpression)?;
-                                let mut values = Vec::with_capacity(aggregate.children.len());
-                                for child in &aggregate.children {
+                                let child_ids = typed_aggregate_child_ids(shape, nodes)?;
+                                let mut values = Vec::with_capacity(child_ids.len());
+                                for child in &child_ids {
                                     values.push(lower(
                                         *child,
                                         nodes,
@@ -1880,11 +1913,56 @@ impl Function {
                         let aggregate = nodes
                             .get(shape.source_id as usize)
                             .ok_or(LowerError::UnsupportedExpression)?;
-                        if shape.kind != "list" && shape.kind != "record" {
-                            // Dictionary indexing is handled by the keyed
-                            // path below; sets remain unsupported as indexable
-                            // aggregates.
-                        } else {
+                        if shape.kind == "dict" {
+                            let Some(needle) = index_node.literal else {
+                                return Err(LowerError::UnsupportedExpression);
+                            };
+                            let child_ids = typed_aggregate_child_ids(&shape, nodes)?;
+                            let mut lowered_values = Vec::with_capacity(child_ids.len() / 2);
+                            let mut selected = None;
+                            for pair in child_ids.chunks_exact(2) {
+                                let key = nodes
+                                    .get(pair[0] as usize)
+                                    .ok_or(LowerError::UnsupportedExpression)?;
+                                lower(
+                                    pair[0],
+                                    nodes,
+                                    lowered,
+                                    instructions,
+                                    next,
+                                    parameter_names,
+                                    local_bindings,
+                                )?;
+                                let value = lower(
+                                    pair[1],
+                                    nodes,
+                                    lowered,
+                                    instructions,
+                                    next,
+                                    parameter_names,
+                                    local_bindings,
+                                )?;
+                                lowered_values.push(value);
+                                if key.literal == Some(needle) {
+                                    selected = Some(lowered_values.len() - 1);
+                                }
+                            }
+                            lower(
+                                node.children[1],
+                                nodes,
+                                lowered,
+                                instructions,
+                                next,
+                                parameter_names,
+                                local_bindings,
+                            )?;
+                            let Some(selected) = selected else {
+                                return Err(LowerError::UnsupportedExpression);
+                            };
+                            result = lowered_values[selected];
+                            lowered.insert(id, result);
+                            return Ok(result);
+                        } else if shape.kind == "list" || shape.kind == "record" {
                             let Some(TypedLiteral::Int(index)) = index_node.literal else {
                                 return Err(LowerError::UnsupportedExpression);
                             };
@@ -2155,8 +2233,14 @@ impl Function {
                             _ => return Err(LowerError::UnsupportedExpression),
                         };
                         let (length, member_positions, aggregate) = aggregate_shape;
+                        let child_ids = if aggregate.kind == "call" && aggregate.children.len() == 1
+                        {
+                            Vec::new()
+                        } else {
+                            aggregate.children.clone()
+                        };
                         let mut lowered_members = Vec::with_capacity(member_positions.len());
-                        for (position, child) in aggregate.children.iter().enumerate() {
+                        for (position, child) in child_ids.iter().enumerate() {
                             let lowered_child = lower(
                                 *child,
                                 nodes,
@@ -26810,6 +26894,232 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 7, &[])
             .expect("typed dict equality should preserve value evaluation");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_dict_constructor_consumers() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("dict".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("len".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("bool".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![3, 4, 5, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "name".into(),
+                detail: Some("source".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "index".into(),
+                detail: None,
+                children: vec![9, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![5, 6, 3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![9, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "unary".into(),
+                detail: Some("Not".into()),
+                children: vec![15],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![10, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![17, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 19,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![18, 16],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body_with_locals(
+            &nodes,
+            19,
+            &[],
+            &[("source".into(), 7)],
+        )
+        .expect("typed dict constructor consumers should lower");
+        assert_eq!(function.execute(), Ok(Some(22)));
+    }
+
+    #[test]
+    fn typed_dict_constructor_indexing_evaluates_values() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("dict".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![1, 3, 4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "index".into(),
+                detail: None,
+                children: vec![7, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 8, &[])
+            .expect("typed dict constructor indexing should preserve value evaluation");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
