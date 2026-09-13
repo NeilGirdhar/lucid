@@ -18331,7 +18331,52 @@ z_float = abs(y)
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
-        assert!(result.is_ok(), "abs() should preserve numeric types: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "abs() should preserve numeric types: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn trig_functions_return_float() {
+        let code = r#"x: float = 1.5
+s = sin(x)
+c = cos(x)
+t = tan(x)
+q = sqrt(x)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "trig functions should type-check: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn floor_ceil_return_int() {
+        let code = r#"x: float = 3.7
+f = floor(x)
+c = ceil(x)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "floor/ceil should type-check: {:?}", result);
+    }
+
+    #[test]
+    fn floor_returns_int_not_float() {
+        let code = r#"x: float = 3.7
+f: float = floor(x)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_err(), "floor returns int, not float");
     }
 
     #[test]
