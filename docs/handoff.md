@@ -6,10 +6,10 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13 (second continuation session - IN PROGRESS)
+## Resume snapshot: 2026-09-13 (third continuation session - IN PROGRESS)
 
 Work is on branch `codex/lucid-implementation`. Latest checkpoint
-is at `49599d6 Remove empty placeholder loop for builtin functions`.
+is implementing type narrowing for if statements.
 
 **Gap Closure Work (2026-09-13 second continuation — 3 structural improvements):**
 The session closed gaps in type validation for immutable/non-indexable types,
@@ -203,10 +203,12 @@ closed 17 concrete gaps: 12 builtin type improvements + 5 type validation improv
    - Currently map/zip/enumerate return list instead of lazy Iterator
    - Significant architectural impact across parser, checker, interpreter, native
 
-2. **Type Narrowing** (2-3 days): Flow-sensitive type narrowing from pattern guards
-   - After `if x is None:`, type of x is not narrowed in the else branch
-   - Requires flow analysis architecture tracking type constraints through branches
-   - Affects benchmarks: binary_trees.lucid
+2. **Type Narrowing** (PARTIALLY IMPLEMENTED - 1-2 days remaining):
+   - Basic narrowing for simple variables: `if x is None:` now narrows x in branches
+   - Supported patterns: `x is None`, `x is not None`, `not (x is None)`
+   - Still missing: attribute/property narrowing (e.g., `node.left is None`)
+   - Affects benchmarks: binary_trees.lucid (needs attribute narrowing)
+   - Further work: extend to attribute paths like `obj.field` and union type narrowing
    
 3. **User Education Gap (Resolved - not a type gap):**
    - fasta.lucid uses `[["a", 1]]` syntax expecting tuple behavior
@@ -215,9 +217,9 @@ closed 17 concrete gaps: 12 builtin type improvements + 5 type validation improv
    - Type system correctly rejects field access on union-typed lists
    - When using correct record syntax, code type-checks correctly
 
-Condition "keep going until ALL gaps are closed" NOT satisfied. 
-Remaining work: 4-6 days on 2 architectural gaps (Iterator, Type Narrowing).
-User confusion about record syntax was investigated but not a type-system gap.
+Condition "keep going until ALL gaps are closed" PARTIALLY SATISFIED. 
+Type narrowing is partially implemented (simple variable narrowing working).
+Remaining work: ~2-3 days on Iterator protocol + 1-2 days on advanced type narrowing features (attribute paths, union narrowing).
 
 - Keep landing small vertical slices with focused tests, then the full gate,
   then a pushed checkpoint.
