@@ -4766,7 +4766,7 @@ pub fn lower_function_body(
                 _ => false,
             }
         }
-        let initial_value = match initial {
+        let initial_binding = match initial {
             lucid_syntax::Stmt::Assignment {
                 target: lucid_syntax::Expr::Ident { name, .. },
                 value,
@@ -4776,51 +4776,44 @@ pub fn lower_function_body(
                 pattern: lucid_syntax::Pattern::Ident(name, _),
                 value: Some(value),
                 ..
-            } if name == returned && !mentions_name(value, returned) => Some(value),
+            } if name == returned && !mentions_name(value, returned) => {
+                Some((name.as_str(), value))
+            }
             _ => None,
         };
-        if let Some(initial_value) = initial_value {
+        if let Some((initial_name, initial_value)) = initial_binding {
+            let then_is_pass = pass_only(then_branch);
             let then_value = match assigned_value(then_branch) {
                 Some((name, value)) if name == returned && !mentions_name(value, returned) => {
                     Some(value)
                 }
-                None if pass_only(then_branch) => Some(initial_value),
+                None if then_is_pass => None,
                 _ => None,
             };
+            let else_is_pass = pass_only(else_branch);
             let else_value = match assigned_value(else_branch) {
                 Some((name, value)) if name == returned && !mentions_name(value, returned) => {
                     Some(value)
                 }
-                None if pass_only(else_branch) => Some(initial_value),
+                None if else_is_pass => None,
                 _ => None,
             };
-            if let (Some(then_value), Some(else_value)) = (then_value, else_value) {
+            if (then_value.is_some() || then_is_pass) && (else_value.is_some() || else_is_pass) {
                 if function.is_async {
                     return Err(Arc::from(
                         "async function bodies are not yet supported by CIR lowering",
                     ));
                 }
-                let lower = if has_division(then_value)
-                    || has_division(else_value)
-                    || has_division(initial_value)
-                {
-                    lucid_cir::Function::from_parameterized_if_direct(
-                        condition,
-                        then_value,
-                        else_value,
-                        &function.parameter_names,
-                    )
-                } else {
-                    lucid_cir::Function::from_parameterized_if(
-                        condition,
-                        then_value,
-                        else_value,
-                        &function.parameter_names,
-                    )
-                };
-                return lower
-                    .map(Arc::new)
-                    .map_err(|_| Arc::from("unsupported initialized local else conditional"));
+                return lucid_cir::Function::from_parameterized_initialized_if_direct(
+                    initial_name,
+                    initial_value,
+                    condition,
+                    then_value,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported initialized local else conditional"));
             }
         }
     }
@@ -10429,6 +10422,24 @@ mod tests {
             .expect("initialized branch-local else assignment should lower through CIR");
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-else-division.lucid",
+            "def choose(seed: int, flag: bool, scale: int):\n    result = seed // scale\n    if flag:\n        result = seed + 1\n    else:\n        result = seed + 2\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local division should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 2]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 2]), Ok(Some(12)));
+        assert_eq!(
+            function.execute_with_args(&[10, 1, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+        assert_eq!(
+            function.execute_with_args(&[10, 0, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
 
         let file = db.add_file(
             "parameterized-initialized-local-pass-else-conditional.lucid",

@@ -9515,16 +9515,33 @@ impl Function {
         instructions: &mut Vec<Instruction>,
         next: &mut u32,
     ) -> Result<ValueId, LowerError> {
+        Self::lower_parameter_expr_with_locals(expr, parameters, &[], instructions, next)
+    }
+
+    fn lower_parameter_expr_with_locals(
+        expr: &lucid_syntax::Expr,
+        parameters: &[String],
+        local_bindings: &[(&str, ValueId)],
+        instructions: &mut Vec<Instruction>,
+        next: &mut u32,
+    ) -> Result<ValueId, LowerError> {
         let result = |next: &mut u32| {
             let value = ValueId(*next);
             *next += 1;
             value
         };
         match expr {
-            lucid_syntax::Expr::Ident { name, .. } => parameters
+            lucid_syntax::Expr::Ident { name, .. } => local_bindings
                 .iter()
-                .position(|parameter| parameter == name)
-                .map(|index| ValueId(index as u32))
+                .rev()
+                .find(|(local, _)| *local == name)
+                .map(|(_, value)| *value)
+                .or_else(|| {
+                    parameters
+                        .iter()
+                        .position(|parameter| parameter == name)
+                        .map(|index| ValueId(index as u32))
+                })
                 .ok_or(LowerError::UnsupportedExpression),
             lucid_syntax::Expr::Literal {
                 value: lucid_syntax::LiteralValue::Int(value),
@@ -9549,7 +9566,13 @@ impl Function {
                 Ok(value_id)
             }
             lucid_syntax::Expr::Unary { op, expr, .. } => {
-                let operand = Self::lower_parameter_expr(expr, parameters, instructions, next)?;
+                let operand = Self::lower_parameter_expr_with_locals(
+                    expr,
+                    parameters,
+                    local_bindings,
+                    instructions,
+                    next,
+                )?;
                 let value_id = result(next);
                 let instruction = match op {
                     lucid_syntax::UnaryOp::Neg => Instruction::Neg {
@@ -9575,8 +9598,20 @@ impl Function {
             lucid_syntax::Expr::Binary {
                 left, op, right, ..
             } => {
-                let left = Self::lower_parameter_expr(left, parameters, instructions, next)?;
-                let right = Self::lower_parameter_expr(right, parameters, instructions, next)?;
+                let left = Self::lower_parameter_expr_with_locals(
+                    left,
+                    parameters,
+                    local_bindings,
+                    instructions,
+                    next,
+                )?;
+                let right = Self::lower_parameter_expr_with_locals(
+                    right,
+                    parameters,
+                    local_bindings,
+                    instructions,
+                    next,
+                )?;
                 let value_id = result(next);
                 let instruction = match op {
                     lucid_syntax::BinaryOp::Add => Instruction::Add {
@@ -10799,6 +10834,94 @@ impl Function {
         function.blocks[1].terminator = Terminator::Return(Some(then_value));
         function.blocks[2].terminator = Terminator::Return(Some(else_value));
         function.blocks.truncate(3);
+        function
+            .verify()
+            .map_err(|_| LowerError::UnsupportedExpression)?;
+        Ok(function)
+    }
+
+    /// Lower `local = setup; if condition: local = then; else: local = else;
+    /// return local` without dropping the setup expression. The setup value is
+    /// evaluated in the entry block before the condition, so recoverable
+    /// operations in the initializer happen in source order even when every
+    /// branch overwrites the local.
+    pub fn from_parameterized_initialized_if_direct(
+        local_name: &str,
+        setup_expr: &lucid_syntax::Expr,
+        condition: &lucid_syntax::Expr,
+        then_expr: Option<&lucid_syntax::Expr>,
+        else_expr: Option<&lucid_syntax::Expr>,
+        parameter_names: &[String],
+    ) -> Result<Self, LowerError> {
+        let mut entry_instructions = parameter_names
+            .iter()
+            .enumerate()
+            .map(|(index, _)| Instruction::Param {
+                result: ValueId(index as u32),
+                index: index as u32,
+            })
+            .collect::<Vec<_>>();
+        let mut next = parameter_names.len() as u32;
+        let setup_value = Self::lower_parameter_expr(
+            setup_expr,
+            parameter_names,
+            &mut entry_instructions,
+            &mut next,
+        )?;
+        let local_bindings = [(local_name, setup_value)];
+        let condition_value = Self::lower_parameter_expr_with_locals(
+            condition,
+            parameter_names,
+            &local_bindings,
+            &mut entry_instructions,
+            &mut next,
+        )?;
+        let mut then_instructions = Vec::new();
+        let then_value = match then_expr {
+            Some(expr) => Self::lower_parameter_expr_with_locals(
+                expr,
+                parameter_names,
+                &local_bindings,
+                &mut then_instructions,
+                &mut next,
+            )?,
+            None => setup_value,
+        };
+        let mut else_instructions = Vec::new();
+        let else_value = match else_expr {
+            Some(expr) => Self::lower_parameter_expr_with_locals(
+                expr,
+                parameter_names,
+                &local_bindings,
+                &mut else_instructions,
+                &mut next,
+            )?,
+            None => setup_value,
+        };
+        let function = Self {
+            entry: BlockId(0),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    instructions: entry_instructions,
+                    terminator: Terminator::Branch {
+                        condition: condition_value,
+                        then_block: BlockId(1),
+                        else_block: BlockId(2),
+                    },
+                },
+                Block {
+                    id: BlockId(1),
+                    instructions: then_instructions,
+                    terminator: Terminator::Return(Some(then_value)),
+                },
+                Block {
+                    id: BlockId(2),
+                    instructions: else_instructions,
+                    terminator: Terminator::Return(Some(else_value)),
+                },
+            ],
+        };
         function
             .verify()
             .map_err(|_| LowerError::UnsupportedExpression)?;
