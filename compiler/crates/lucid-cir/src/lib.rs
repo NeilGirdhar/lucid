@@ -8551,6 +8551,20 @@ impl Function {
                 lucid_syntax::Expr::Call { func, args, .. }
                     if matches!(
                         func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "list"
+                    ) && args.len() == 1
+                        && args.iter().all(|arg| {
+                            arg.name.is_none()
+                                && !arg.is_spread
+                                && !arg.is_dict_spread
+                                && !arg.is_gather_spread
+                        }) =>
+                {
+                    constant_string_list(&args[0].value, aggregate_bindings)
+                }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
                         lucid_syntax::Expr::Attribute { attr, .. } if attr == "split"
                     ) && args.len() <= 1 =>
                 {
@@ -8610,6 +8624,20 @@ impl Function {
                     AggregateBinding::StringSet(values) => Some(values.clone()),
                     _ => None,
                 },
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "set"
+                    ) && args.len() == 1
+                        && args.iter().all(|arg| {
+                            arg.name.is_none()
+                                && !arg.is_spread
+                                && !arg.is_dict_spread
+                                && !arg.is_gather_spread
+                        }) =>
+                {
+                    constant_string_list(&args[0].value, aggregate_bindings)
+                }
                 _ => None,
             }
         }
@@ -10697,10 +10725,76 @@ impl Function {
                                 contains |= contains_value(value, instructions)?;
                             }
                         }
-                        lucid_syntax::Expr::Call { .. } => {
-                            contains = const_range_values(right)
-                                .ok_or(LowerError::UnsupportedExpression)?
-                                .contains(&needle);
+                        lucid_syntax::Expr::Call { func, args, .. } => {
+                            if let Some(values) = const_range_values(right) {
+                                contains = values.contains(&needle);
+                            } else if matches!(
+                                func.as_ref(),
+                                lucid_syntax::Expr::Ident { name, .. }
+                                    if name == "list" || name == "set"
+                            ) && args.len() == 1
+                                && args.iter().all(|arg| {
+                                    arg.name.is_none()
+                                        && !arg.is_spread
+                                        && !arg.is_dict_spread
+                                        && !arg.is_gather_spread
+                                })
+                            {
+                                if let Some(values) = const_range_values(&args[0].value) {
+                                    contains = values.contains(&needle);
+                                } else if let lucid_syntax::Expr::Call {
+                                    func: view_func,
+                                    args: view_args,
+                                    ..
+                                } = &args[0].value
+                                {
+                                    if !view_args.is_empty() {
+                                        return Err(LowerError::UnsupportedExpression);
+                                    }
+                                    let lucid_syntax::Expr::Attribute { value, attr, .. } =
+                                        view_func.as_ref()
+                                    else {
+                                        return Err(LowerError::UnsupportedExpression);
+                                    };
+                                    if !matches!(attr.as_str(), "keys" | "values") {
+                                        return Err(LowerError::UnsupportedExpression);
+                                    }
+                                    let lucid_syntax::Expr::Dict { entries, .. } = value.as_ref()
+                                    else {
+                                        return Err(LowerError::UnsupportedExpression);
+                                    };
+                                    contains = entries.iter().any(|(key, value)| {
+                                        let selected = match attr.as_str() {
+                                            "keys" => key,
+                                            "values" => value,
+                                            _ => unreachable!(),
+                                        };
+                                        constant_index(selected) == Some(needle)
+                                    });
+                                } else {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                            } else if let lucid_syntax::Expr::Attribute { value, attr, .. } =
+                                func.as_ref()
+                            {
+                                if !args.is_empty() || !matches!(attr.as_str(), "keys" | "values") {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                let lucid_syntax::Expr::Dict { entries, .. } = value.as_ref()
+                                else {
+                                    return Err(LowerError::UnsupportedExpression);
+                                };
+                                contains = entries.iter().any(|(key, value)| {
+                                    let selected = match attr.as_str() {
+                                        "keys" => key,
+                                        "values" => value,
+                                        _ => unreachable!(),
+                                    };
+                                    constant_index(selected) == Some(needle)
+                                });
+                            } else {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
                         }
                         lucid_syntax::Expr::Literal {
                             value: lucid_syntax::LiteralValue::Bytes(values),
@@ -23162,6 +23256,8 @@ return total
                 30,
             ),
             ("values = set(range(3))\nreturn 2 in values\n", 1),
+            ("return 2 in list(range(3))\n", 1),
+            ("return 2 in set(range(3))\n", 1),
             (
                 "values = set({1: 10, 2: 20}.keys())\nreturn 2 in values\n",
                 1,
@@ -23170,6 +23266,9 @@ return total
                 "values = set({1: 10, 2: 20}.values())\nreturn 20 in values\n",
                 1,
             ),
+            ("return 2 in {1: 10, 2: 20}.keys()\n", 1),
+            ("return 20 in {1: 10, 2: 20}.values()\n", 1),
+            ("return 20 in list({1: 10, 2: 20}.values())\n", 1),
             ("values = {10, 20, 12}\nreturn sum(values)\n", 42),
             ("return len(range(5))\n", 5),
             ("return sum(range(5))\n", 10),
@@ -23300,6 +23399,8 @@ return total
             ("return \"abc\".split(\"\")[1] == \"a\"\n", 1),
             ("values = list(\"ab\".chars)\nreturn values[1] == \"b\"\n", 1),
             ("values = set(\"ab\".chars)\nreturn \"b\" in values\n", 1),
+            ("return \"b\" in list(\"ab\".chars)\n", 1),
+            ("return \"b\" in set(\"ab\".chars)\n", 1),
             (
                 "values = set({1: \"a\", 2: \"bc\"}.values())\nreturn \"bc\" in values\n",
                 1,

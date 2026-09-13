@@ -1447,6 +1447,35 @@ fn run_cir_materializes_constant_iterables_with_set_in_typed_function_body() {
 }
 
 #[test]
+fn run_cir_lowers_direct_membership_in_constant_materialized_iterables() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_direct_materialized_membership_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    return 2 in list(range(3)) and 2 in set(range(3)) and 2 in {1: 10, 2: 20}.keys() and 20 in {1: 10, 2: 20}.values() and 20 in list({1: 10, 2: 20}.values()) and \"b\" in list(\"ab\".chars) and \"b\" in set(\"ab\".chars)\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function direct materialized membership failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
 fn run_cir_lowers_constant_string_predicates_in_typed_function_body() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_string_predicates_{}.lucid",
