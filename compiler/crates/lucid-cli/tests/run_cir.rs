@@ -1418,6 +1418,35 @@ fn run_cir_materializes_constant_iterables_with_list_in_typed_function_body() {
 }
 
 #[test]
+fn run_cir_materializes_constant_iterables_with_set_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_set_materialize_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    numbers = set(range(3))\n    chars = set(\"ab\".chars)\n    keys = set({1: 10, 2: 20}.keys())\n    values = set({1: 10, 2: 20}.values())\n    texts = set({1: \"a\", 2: \"bc\"}.values())\n    missing = set({1: None}.values())\n    return 2 in numbers and \"b\" in chars and 2 in keys and 20 in values and \"bc\" in texts and None in missing\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function set materialization failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
 fn run_cir_lowers_constant_string_predicates_in_typed_function_body() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_string_predicates_{}.lucid",
