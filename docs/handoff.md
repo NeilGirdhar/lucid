@@ -2149,6 +2149,8 @@ diverged:
   iteration and merging either the updated or carried accumulator value.
   The guarded shape also accepts an `else` accumulator update and merges the
   selected then/else accumulator value before applying the induction step.
+  A single `elif` accumulator update is supported as well, with all selected
+  accumulator values merging before the shared induction step.
   Its guard now shares the range-loop boolean condition lowering for `and`,
   `or`, and `not`, including arithmetic comparison operands.
 * The compiler database now exposes an incremental resolved-module HIR
