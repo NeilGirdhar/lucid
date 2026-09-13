@@ -1951,10 +1951,6 @@ pub fn lower_function_body(
         matches!(statement, lucid_syntax::Stmt::Pass(_))
             || matches!(
                 statement,
-                lucid_syntax::Stmt::Expr(expr) if is_pure_expression(expr)
-            )
-            || matches!(
-                statement,
                 lucid_syntax::Stmt::Assert { condition, .. }
                     if static_truth(condition) == Some(true)
             )
@@ -7774,39 +7770,14 @@ pub fn lower_function_body(
             None => StaticBranch::Unknown,
         }
     }
-    fn is_pure_expression(expr: &lucid_syntax::Expr) -> bool {
-        match expr {
-            lucid_syntax::Expr::Literal { .. } | lucid_syntax::Expr::Ident { .. } => true,
-            lucid_syntax::Expr::Unary { expr, .. } => is_pure_expression(expr),
-            lucid_syntax::Expr::Binary { left, right, .. } => {
-                is_pure_expression(left) && is_pure_expression(right)
-            }
-            lucid_syntax::Expr::IfExpr {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                is_pure_expression(condition)
-                    && is_pure_expression(then_branch)
-                    && is_pure_expression(else_branch)
-            }
-            _ => false,
-        }
-    }
     fn collect_pre_return_binding(
         statement: &lucid_syntax::Stmt,
         bindings: &mut Vec<(String, lucid_syntax::Span)>,
+        ordered_roots: &mut Vec<lucid_syntax::Span>,
     ) -> Result<(), Arc<str>> {
-        if let lucid_syntax::Stmt::Expr(expr) = statement
-            && is_pure_expression(expr)
-        {
+        if let lucid_syntax::Stmt::Expr(expr) = statement {
+            ordered_roots.push(expr.span());
             return Ok(());
-        }
-        if matches!(statement, lucid_syntax::Stmt::Expr(_)) {
-            return Err(Arc::from(
-                "effectful discarded expression is not supported by typed CIR lowering",
-            ));
         }
         if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
             return Ok(());
@@ -7842,7 +7813,7 @@ pub fn lower_function_body(
             ) {
                 StaticBranch::Selected(branch) => {
                     for statement in branch {
-                        collect_pre_return_binding(statement, bindings)?;
+                        collect_pre_return_binding(statement, bindings, ordered_roots)?;
                     }
                     return Ok(());
                 }
@@ -7868,6 +7839,7 @@ pub fn lower_function_body(
             }
         };
         bindings.push((name.clone(), value.span()));
+        ordered_roots.push(value.span());
         Ok(())
     }
     enum StaticReturn {
@@ -7877,12 +7849,13 @@ pub fn lower_function_body(
     fn collect_static_branch_return(
         branch: &[lucid_syntax::Stmt],
         bindings: &mut Vec<(String, lucid_syntax::Span)>,
+        ordered_roots: &mut Vec<lucid_syntax::Span>,
     ) -> Result<StaticReturn, Arc<str>> {
         let Some((last, prefix)) = branch.split_last() else {
             return Ok(StaticReturn::Void);
         };
         for statement in prefix {
-            collect_pre_return_binding(statement, bindings)?;
+            collect_pre_return_binding(statement, bindings, ordered_roots)?;
         }
         match last {
             lucid_syntax::Stmt::Return {
@@ -7903,14 +7876,16 @@ pub fn lower_function_body(
                 elif_branches,
                 else_branch.as_ref(),
             ) {
-                StaticBranch::Selected(branch) => collect_static_branch_return(branch, bindings),
+                StaticBranch::Selected(branch) => {
+                    collect_static_branch_return(branch, bindings, ordered_roots)
+                }
                 StaticBranch::Empty => Ok(StaticReturn::Void),
                 StaticBranch::Unknown => Err(Arc::from(
                     "constant function branch has no lowerable return",
                 )),
             },
             _ => {
-                collect_pre_return_binding(last, bindings)?;
+                collect_pre_return_binding(last, bindings, ordered_roots)?;
                 Ok(StaticReturn::Void)
             }
         }
@@ -7942,106 +7917,340 @@ pub fn lower_function_body(
             .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
         Ok(Arc::new(function))
     };
-    let lower_bindings_to_void = |local_specs: &[(String, lucid_syntax::Span)]| {
-        if local_specs.is_empty() {
-            return void_function();
-        }
-        let nodes = function
-            .body_expressions
-            .iter()
-            .map(|node| lucid_cir::TypedExprNode {
-                id: node.id,
-                kind: node.kind.clone(),
-                detail: node.detail.clone(),
-                children: node.children.to_vec(),
-                literal: node.literal,
-            })
-            .collect::<Vec<_>>();
-        let local_bindings = local_specs
-            .iter()
-            .map(|(name, span)| {
-                function
-                    .body_expressions
-                    .iter()
-                    .rev()
-                    .find(|node| node.span == *span)
-                    .map(|node| (name.clone(), node.id))
-                    .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let root_id = local_bindings
-            .last()
-            .map(|(_, id)| *id)
-            .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
-        let prefix_roots = local_bindings
-            .iter()
-            .take(local_bindings.len().saturating_sub(1))
-            .map(|(_, id)| *id)
-            .collect::<Vec<_>>();
-        let mut lowered = lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
-            &nodes,
-            &prefix_roots,
-            root_id,
-            &function.parameter_names,
-            &local_bindings,
-        )
-        .map_err(|_| Arc::<str>::from("unsupported expression before bare return"))?;
-        if let Some(block) = lowered.blocks.last_mut() {
-            block.terminator = lucid_cir::Terminator::Return(None);
-        }
-        lowered
-            .verify()
-            .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
-        Ok(Arc::new(lowered))
-    };
-    let (root_span, local_specs): (lucid_syntax::Span, Vec<(String, lucid_syntax::Span)>) =
-        match source_function.body.as_slice() {
-            [
-                lucid_syntax::Stmt::Return {
-                    value: Some(value), ..
-                },
-            ] => (value.span(), Vec::new()),
-            [lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)] => {
+    let lower_prefix_to_void =
+        |ordered_root_spans: &[lucid_syntax::Span],
+         local_specs: &[(String, lucid_syntax::Span)]| {
+            if ordered_root_spans.is_empty() {
                 return void_function();
             }
-            [
-                lucid_syntax::Stmt::If {
-                    condition,
-                    then_branch,
-                    elif_branches,
-                    else_branch,
-                    ..
-                },
-            ] => {
-                if let Some(span) = selected_return_span(
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            let local_bindings = local_specs
+                .iter()
+                .map(|(name, span)| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| (name.clone(), node.id))
+                        .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let ordered_roots = ordered_root_spans
+                .iter()
+                .map(|span| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| node.id)
+                        .ok_or_else(|| {
+                            Arc::<str>::from("prefix expression has no typed expression")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let root_id = ordered_roots
+                .last()
+                .copied()
+                .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
+            let prefix_roots = ordered_roots
+                .iter()
+                .take(ordered_roots.len().saturating_sub(1))
+                .copied()
+                .collect::<Vec<_>>();
+            let mut lowered = lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+                &nodes,
+                &prefix_roots,
+                root_id,
+                &function.parameter_names,
+                &local_bindings,
+            )
+            .map_err(|_| Arc::<str>::from("unsupported expression before bare return"))?;
+            if let Some(block) = lowered.blocks.last_mut() {
+                block.terminator = lucid_cir::Terminator::Return(None);
+            }
+            lowered
+                .verify()
+                .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+            Ok(Arc::new(lowered))
+        };
+    let (root_span, ordered_root_spans, local_specs): (
+        lucid_syntax::Span,
+        Vec<lucid_syntax::Span>,
+        Vec<(String, lucid_syntax::Span)>,
+    ) = match source_function.body.as_slice() {
+        [
+            lucid_syntax::Stmt::Return {
+                value: Some(value), ..
+            },
+        ] => (value.span(), Vec::new(), Vec::new()),
+        [lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)] => {
+            return void_function();
+        }
+        [
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            },
+        ] => {
+            if let Some(span) =
+                selected_return_span(condition, then_branch, elif_branches, else_branch.as_ref())
+            {
+                (span, Vec::new(), Vec::new())
+            } else {
+                match static_branch_selection(
                     condition,
                     then_branch,
                     elif_branches,
                     else_branch.as_ref(),
                 ) {
-                    (span, Vec::new())
-                } else {
-                    match static_branch_selection(
-                        condition,
-                        then_branch,
-                        elif_branches,
-                        else_branch.as_ref(),
-                    ) {
-                        StaticBranch::Selected([lucid_syntax::Stmt::Pass(_)])
-                        | StaticBranch::Empty => return void_function(),
-                        StaticBranch::Selected(branch) => {
-                            let mut bindings = Vec::new();
-                            match collect_static_branch_return(branch, &mut bindings)? {
-                                StaticReturn::Value(span) => (span, bindings),
-                                StaticReturn::Void => return lower_bindings_to_void(&bindings),
+                    StaticBranch::Selected([lucid_syntax::Stmt::Pass(_)]) | StaticBranch::Empty => {
+                        return void_function();
+                    }
+                    StaticBranch::Selected(branch) => {
+                        let mut bindings = Vec::new();
+                        let mut ordered_roots = Vec::new();
+                        match collect_static_branch_return(
+                            branch,
+                            &mut bindings,
+                            &mut ordered_roots,
+                        )? {
+                            StaticReturn::Value(span) => (span, ordered_roots, bindings),
+                            StaticReturn::Void => {
+                                return lower_prefix_to_void(&ordered_roots, &bindings);
                             }
                         }
-                        StaticBranch::Unknown => {
-                            if function.is_async {
-                                return Err(Arc::from(
-                                    "async function bodies are not yet supported by CIR lowering",
-                                ));
-                            }
+                    }
+                    StaticBranch::Unknown => {
+                        if function.is_async {
+                            return Err(Arc::from(
+                                "async function bodies are not yet supported by CIR lowering",
+                            ));
+                        }
+                        let module = lucid_syntax::Module {
+                            statements: source_function.body.clone(),
+                            span: source_function.span,
+                        };
+                        if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                            &module,
+                            &function.parameter_names,
+                        ) {
+                            return Ok(Arc::new(function));
+                        }
+                        return Err(Arc::from(
+                            "constant function branch has no lowerable return",
+                        ));
+                    }
+                }
+            }
+        }
+        statements if statements.len() >= 2 => {
+            let Some(last) = statements.last() else {
+                return Err(Arc::from(
+                    "multi-statement function bodies are not yet supported by CIR lowering",
+                ));
+            };
+            if !matches!(
+                last,
+                lucid_syntax::Stmt::Return { .. } | lucid_syntax::Stmt::Pass(_)
+            ) {
+                if let lucid_syntax::Stmt::If {
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch: Some(else_branch),
+                    ..
+                } = last
+                    && static_truth(condition).is_none()
+                    && has_identifier(condition)
+                    && elif_branches.iter().all(|(elif_condition, branch)| {
+                        static_truth(elif_condition).is_none()
+                            && has_identifier(elif_condition)
+                            && single_return_expr(branch).is_some()
+                    })
+                    && let Some(then_return) = single_return_expr(then_branch)
+                    && let Some(else_return) = single_return_expr(else_branch)
+                {
+                    if function.is_async {
+                        return Err(Arc::from(
+                            "async function bodies are not yet supported by CIR lowering",
+                        ));
+                    }
+                    let mut local_specs = Vec::new();
+                    let mut ordered_roots = Vec::new();
+                    for statement in &statements[..statements.len() - 1] {
+                        collect_pre_return_binding(
+                            statement,
+                            &mut local_specs,
+                            &mut ordered_roots,
+                        )?;
+                    }
+                    if ordered_roots.len() != local_specs.len() {
+                        let module = lucid_syntax::Module {
+                            statements: source_function.body.clone(),
+                            span: source_function.span,
+                        };
+                        if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                            &module,
+                            &function.parameter_names,
+                        ) {
+                            return Ok(Arc::new(function));
+                        }
+                        return Err(Arc::from("unsupported setup guard return chain"));
+                    }
+                    let nodes = function
+                        .body_expressions
+                        .iter()
+                        .map(|node| lucid_cir::TypedExprNode {
+                            id: node.id,
+                            kind: node.kind.clone(),
+                            detail: node.detail.clone(),
+                            children: node.children.to_vec(),
+                            literal: node.literal,
+                        })
+                        .collect::<Vec<_>>();
+                    let find_id = |span: lucid_syntax::Span| {
+                        function
+                            .body_expressions
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == span)
+                            .map(|node| node.id)
+                    };
+                    let local_bindings = local_specs
+                        .into_iter()
+                        .map(|(name, span)| {
+                            find_id(span).map(|id| (name, id)).ok_or_else(|| {
+                                Arc::<str>::from("local binding has no typed expression")
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if let Some(condition_id) = find_id(condition.span()) {
+                        let then_id = then_return
+                            .map(|value| {
+                                find_id(value.span()).ok_or_else(|| {
+                                    Arc::<str>::from("function has no lowerable expression")
+                                })
+                            })
+                            .transpose()?;
+                        let elif_ids = elif_branches
+                            .iter()
+                            .map(|(elif_condition, branch)| {
+                                let elif_return = single_return_expr(branch).ok_or_else(|| {
+                                    Arc::<str>::from("function has no lowerable expression")
+                                })?;
+                                let condition_id =
+                                    find_id(elif_condition.span()).ok_or_else(|| {
+                                        Arc::<str>::from("function has no lowerable expression")
+                                    })?;
+                                let value_id = elif_return
+                                    .map(|value| {
+                                        find_id(value.span()).ok_or_else(|| {
+                                            Arc::<str>::from("function has no lowerable expression")
+                                        })
+                                    })
+                                    .transpose()?;
+                                Ok((condition_id, value_id))
+                            })
+                            .collect::<Result<Vec<_>, Arc<str>>>()?;
+                        let else_id = else_return
+                            .map(|value| {
+                                find_id(value.span()).ok_or_else(|| {
+                                    Arc::<str>::from("function has no lowerable expression")
+                                })
+                            })
+                            .transpose()?;
+                        return lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
+                                &nodes,
+                                condition_id,
+                                then_id,
+                                &elif_ids,
+                                else_id,
+                                &function.parameter_names,
+                                &local_bindings,
+                            )
+                            .map(Arc::new)
+                            .map_err(|_| Arc::from("unsupported setup guard return chain"));
+                    }
+                    return Err(Arc::from("function has no lowerable expression"));
+                }
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let module = lucid_syntax::Module {
+                    statements: source_function.body.clone(),
+                    span: source_function.span,
+                };
+                if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                    &module,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(function));
+                }
+                return Err(Arc::from(
+                    "multi-statement function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let mut bindings = Vec::new();
+            let mut ordered_roots = Vec::new();
+            for statement in &statements[..statements.len() - 1] {
+                if let Err(error) =
+                    collect_pre_return_binding(statement, &mut bindings, &mut ordered_roots)
+                {
+                    if let lucid_syntax::Stmt::Return {
+                        value: Some(fallback_value),
+                        ..
+                    } = last
+                        && let Some((
+                            lucid_syntax::Stmt::If {
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch: None,
+                                ..
+                            },
+                            setup,
+                        )) = statements[..statements.len() - 1].split_last()
+                        && static_truth(condition).is_none()
+                        && has_identifier(condition)
+                        && elif_branches.iter().all(|(elif_condition, branch)| {
+                            static_truth(elif_condition).is_none()
+                                && has_identifier(elif_condition)
+                                && single_return_expr(branch).is_some()
+                        })
+                        && let Some(then_return) = single_return_expr(then_branch)
+                    {
+                        if function.is_async {
+                            return Err(Arc::from(
+                                "async function bodies are not yet supported by CIR lowering",
+                            ));
+                        }
+                        let mut local_specs = Vec::new();
+                        let mut setup_ordered_roots = Vec::new();
+                        for statement in setup {
+                            collect_pre_return_binding(
+                                statement,
+                                &mut local_specs,
+                                &mut setup_ordered_roots,
+                            )?;
+                        }
+                        if setup_ordered_roots.len() != local_specs.len() {
                             let module = lucid_syntax::Module {
                                 statements: source_function.body.clone(),
                                 span: source_function.span,
@@ -8054,48 +8263,7 @@ pub fn lower_function_body(
                             {
                                 return Ok(Arc::new(function));
                             }
-                            return Err(Arc::from(
-                                "constant function branch has no lowerable return",
-                            ));
-                        }
-                    }
-                }
-            }
-            statements if statements.len() >= 2 => {
-                let Some(last) = statements.last() else {
-                    return Err(Arc::from(
-                        "multi-statement function bodies are not yet supported by CIR lowering",
-                    ));
-                };
-                if !matches!(
-                    last,
-                    lucid_syntax::Stmt::Return { .. } | lucid_syntax::Stmt::Pass(_)
-                ) {
-                    if let lucid_syntax::Stmt::If {
-                        condition,
-                        then_branch,
-                        elif_branches,
-                        else_branch: Some(else_branch),
-                        ..
-                    } = last
-                        && static_truth(condition).is_none()
-                        && has_identifier(condition)
-                        && elif_branches.iter().all(|(elif_condition, branch)| {
-                            static_truth(elif_condition).is_none()
-                                && has_identifier(elif_condition)
-                                && single_return_expr(branch).is_some()
-                        })
-                        && let Some(then_return) = single_return_expr(then_branch)
-                        && let Some(else_return) = single_return_expr(else_branch)
-                    {
-                        if function.is_async {
-                            return Err(Arc::from(
-                                "async function bodies are not yet supported by CIR lowering",
-                            ));
-                        }
-                        let mut local_specs = Vec::new();
-                        for statement in &statements[..statements.len() - 1] {
-                            collect_pre_return_binding(statement, &mut local_specs)?;
+                            return Err(Arc::from("unsupported setup guard return chain"));
                         }
                         let nodes = function
                             .body_expressions
@@ -8124,7 +8292,9 @@ pub fn lower_function_body(
                                 })
                             })
                             .collect::<Result<Vec<_>, _>>()?;
-                        if let Some(condition_id) = find_id(condition.span()) {
+                        if let (Some(condition_id), Some(fallback_id)) =
+                            (find_id(condition.span()), find_id(fallback_value.span()))
+                        {
                             let then_id = then_return
                                 .map(|value| {
                                     find_id(value.span()).ok_or_else(|| {
@@ -8155,31 +8325,19 @@ pub fn lower_function_body(
                                     Ok((condition_id, value_id))
                                 })
                                 .collect::<Result<Vec<_>, Arc<str>>>()?;
-                            let else_id = else_return
-                                .map(|value| {
-                                    find_id(value.span()).ok_or_else(|| {
-                                        Arc::<str>::from("function has no lowerable expression")
-                                    })
-                                })
-                                .transpose()?;
                             return lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
-                                &nodes,
-                                condition_id,
-                                then_id,
-                                &elif_ids,
-                                else_id,
-                                &function.parameter_names,
-                                &local_bindings,
-                            )
-                            .map(Arc::new)
-                            .map_err(|_| Arc::from("unsupported setup guard return chain"));
+                                    &nodes,
+                                    condition_id,
+                                    then_id,
+                                    &elif_ids,
+                                    Some(fallback_id),
+                                    &function.parameter_names,
+                                    &local_bindings,
+                                )
+                                .map(Arc::new)
+                                .map_err(|_| Arc::from("unsupported setup guard return chain"));
                         }
                         return Err(Arc::from("function has no lowerable expression"));
-                    }
-                    if function.is_async {
-                        return Err(Arc::from(
-                            "async function bodies are not yet supported by CIR lowering",
-                        ));
                     }
                     let module = lucid_syntax::Module {
                         statements: source_function.body.clone(),
@@ -8191,158 +8349,31 @@ pub fn lower_function_body(
                     ) {
                         return Ok(Arc::new(function));
                     }
-                    return Err(Arc::from(
-                        "multi-statement function bodies are not yet supported by CIR lowering",
-                    ));
+                    return Err(error);
                 }
-                let mut bindings = Vec::new();
-                for statement in &statements[..statements.len() - 1] {
-                    if let Err(error) = collect_pre_return_binding(statement, &mut bindings) {
-                        if let lucid_syntax::Stmt::Return {
-                            value: Some(fallback_value),
-                            ..
-                        } = last
-                            && let Some((
-                                lucid_syntax::Stmt::If {
-                                    condition,
-                                    then_branch,
-                                    elif_branches,
-                                    else_branch: None,
-                                    ..
-                                },
-                                setup,
-                            )) = statements[..statements.len() - 1].split_last()
-                            && static_truth(condition).is_none()
-                            && has_identifier(condition)
-                            && elif_branches.iter().all(|(elif_condition, branch)| {
-                                static_truth(elif_condition).is_none()
-                                    && has_identifier(elif_condition)
-                                    && single_return_expr(branch).is_some()
-                            })
-                            && let Some(then_return) = single_return_expr(then_branch)
-                        {
-                            if function.is_async {
-                                return Err(Arc::from(
-                                    "async function bodies are not yet supported by CIR lowering",
-                                ));
-                            }
-                            let mut local_specs = Vec::new();
-                            for statement in setup {
-                                collect_pre_return_binding(statement, &mut local_specs)?;
-                            }
-                            let nodes = function
-                                .body_expressions
-                                .iter()
-                                .map(|node| lucid_cir::TypedExprNode {
-                                    id: node.id,
-                                    kind: node.kind.clone(),
-                                    detail: node.detail.clone(),
-                                    children: node.children.to_vec(),
-                                    literal: node.literal,
-                                })
-                                .collect::<Vec<_>>();
-                            let find_id = |span: lucid_syntax::Span| {
-                                function
-                                    .body_expressions
-                                    .iter()
-                                    .rev()
-                                    .find(|node| node.span == span)
-                                    .map(|node| node.id)
-                            };
-                            let local_bindings = local_specs
-                                .into_iter()
-                                .map(|(name, span)| {
-                                    find_id(span).map(|id| (name, id)).ok_or_else(|| {
-                                        Arc::<str>::from("local binding has no typed expression")
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, _>>()?;
-                            if let (Some(condition_id), Some(fallback_id)) =
-                                (find_id(condition.span()), find_id(fallback_value.span()))
-                            {
-                                let then_id = then_return
-                                    .map(|value| {
-                                        find_id(value.span()).ok_or_else(|| {
-                                            Arc::<str>::from("function has no lowerable expression")
-                                        })
-                                    })
-                                    .transpose()?;
-                                let elif_ids = elif_branches
-                                    .iter()
-                                    .map(|(elif_condition, branch)| {
-                                        let elif_return =
-                                            single_return_expr(branch).ok_or_else(|| {
-                                                Arc::<str>::from(
-                                                    "function has no lowerable expression",
-                                                )
-                                            })?;
-                                        let condition_id = find_id(elif_condition.span())
-                                            .ok_or_else(|| {
-                                                Arc::<str>::from(
-                                                    "function has no lowerable expression",
-                                                )
-                                            })?;
-                                        let value_id = elif_return
-                                            .map(|value| {
-                                                find_id(value.span()).ok_or_else(|| {
-                                                    Arc::<str>::from(
-                                                        "function has no lowerable expression",
-                                                    )
-                                                })
-                                            })
-                                            .transpose()?;
-                                        Ok((condition_id, value_id))
-                                    })
-                                    .collect::<Result<Vec<_>, Arc<str>>>()?;
-                                return lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
-                                    &nodes,
-                                    condition_id,
-                                    then_id,
-                                    &elif_ids,
-                                    Some(fallback_id),
-                                    &function.parameter_names,
-                                    &local_bindings,
-                                )
-                                .map(Arc::new)
-                                .map_err(|_| Arc::from("unsupported setup guard return chain"));
-                            }
-                            return Err(Arc::from("function has no lowerable expression"));
-                        }
-                        let module = lucid_syntax::Module {
-                            statements: source_function.body.clone(),
-                            span: source_function.span,
-                        };
-                        if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
-                            &module,
-                            &function.parameter_names,
-                        ) {
-                            return Ok(Arc::new(function));
-                        }
-                        return Err(error);
-                    }
-                }
-                if matches!(
-                    last,
-                    lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)
-                ) {
-                    return lower_bindings_to_void(&bindings);
-                }
-                let lucid_syntax::Stmt::Return {
-                    value: Some(value), ..
-                } = last
-                else {
-                    return Err(Arc::from(
-                        "multi-statement function bodies are not yet supported by CIR lowering",
-                    ));
-                };
-                (value.span(), bindings)
             }
-            _ => {
+            if matches!(
+                last,
+                lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)
+            ) {
+                return lower_prefix_to_void(&ordered_roots, &bindings);
+            }
+            let lucid_syntax::Stmt::Return {
+                value: Some(value), ..
+            } = last
+            else {
                 return Err(Arc::from(
                     "multi-statement function bodies are not yet supported by CIR lowering",
                 ));
-            }
-        };
+            };
+            (value.span(), ordered_roots, bindings)
+        }
+        _ => {
+            return Err(Arc::from(
+                "multi-statement function bodies are not yet supported by CIR lowering",
+            ));
+        }
+    };
     if function.is_async {
         return Err(Arc::from(
             "async function bodies are not yet supported by CIR lowering",
@@ -8457,7 +8488,18 @@ pub fn lower_function_body(
     } else {
         root.id
     };
-    let prefix_roots = local_bindings.iter().map(|(_, id)| *id).collect::<Vec<_>>();
+    let prefix_roots = ordered_root_spans
+        .iter()
+        .map(|span| {
+            function
+                .body_expressions
+                .iter()
+                .rev()
+                .find(|node| node.span == *span)
+                .map(|node| node.id)
+                .ok_or_else(|| Arc::<str>::from("prefix expression has no typed expression"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     match lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
         &nodes,
         &prefix_roots,
@@ -9374,6 +9416,22 @@ mod tests {
         let lowered = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect("unused prefix RHS should still lower");
+        assert_eq!(
+            lowered.execute(),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+    }
+
+    #[test]
+    fn function_body_cir_preserves_discarded_prefix_expression_evaluation() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "discarded-prefix-expression.lucid",
+            "def answer():\n    1 // 0\n    return 42\n",
+        );
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("discarded prefix expression should still lower");
         assert_eq!(
             lowered.execute(),
             Err(lucid_cir::ExecuteError::DivisionByZero)
@@ -11214,7 +11272,7 @@ mod tests {
         let error = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect_err("effectful fallthrough setup must not be erased");
-        assert!(error.contains("effectful discarded expression"));
+        assert!(error.contains("unsupported expression"));
 
         let file = db.add_file(
             "dynamic-elif-pass-branch.lucid",
@@ -12632,8 +12690,15 @@ mod tests {
         );
         let function = lower_function_body(&db, file, "answer".into())
             .as_ref()
-            .expect("a pure discarded expression before pass should be skipped during lowering");
+            .expect("a pure discarded expression before pass should lower before the void return");
         assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
 
         let file = db.add_file(
             "effectful-discard-before-pass.lucid",
@@ -12642,7 +12707,7 @@ mod tests {
         let error = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect_err("effectful discarded expression before pass must not be erased");
-        assert!(error.contains("effectful discarded expression"));
+        assert!(error.contains("unsupported expression"));
 
         let file = db.add_file(
             "empty-descending-range-before-return.lucid",
@@ -12693,6 +12758,13 @@ mod tests {
             .as_ref()
             .expect("pure discarded expression should lower through CIR");
         assert_eq!(function.execute_with_args(&[21]), Ok(Some(42)));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
     }
 
     #[test]
@@ -12705,7 +12777,7 @@ mod tests {
         let error = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect_err("effectful discarded expression must not be erased");
-        assert!(error.contains("effectful discarded expression"));
+        assert!(error.contains("unsupported expression"));
     }
 
     #[test]

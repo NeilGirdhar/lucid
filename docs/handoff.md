@@ -491,6 +491,9 @@ diverged:
   binding RHS as an ordered typed-HIR root before the returned value, so an
   unused binding such as `unused = 1 // 0` still reports the recoverable
   division error instead of being skipped as a dead alias.
+  Discarded expression statements before value or void returns use the same
+  ordered-prefix path, so `1 // 0; return 42` and `value + 1; pass` execute the
+  prefix expression instead of treating it as a no-op.
   Straight-line augmented assignments, including updates inside statically
   selected branches and before final `pass`, now route through the shared
   linear CIR builder as well, so read-modify-write updates no longer bounce
