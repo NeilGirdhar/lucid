@@ -11494,6 +11494,59 @@ impl Function {
             })
             .collect::<Vec<_>>();
         let mut next = parameter_names.len() as u32;
+        if let lucid_syntax::Expr::Binary {
+            op, left, right, ..
+        } = condition
+        {
+            if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                let left_value = Self::lower_parameter_expr(
+                    left,
+                    parameter_names,
+                    &mut instructions,
+                    &mut next,
+                )?;
+                let mut right_instructions = Vec::new();
+                let _right_value = Self::lower_parameter_expr(
+                    right,
+                    parameter_names,
+                    &mut right_instructions,
+                    &mut next,
+                )?;
+                let (then_block, else_block) = match op {
+                    lucid_syntax::BinaryOp::Or => (BlockId(1), BlockId(2)),
+                    lucid_syntax::BinaryOp::And => (BlockId(2), BlockId(1)),
+                    _ => return Err(LowerError::UnsupportedExpression),
+                };
+                let function = Self {
+                    entry: BlockId(0),
+                    blocks: vec![
+                        Block {
+                            id: BlockId(0),
+                            instructions,
+                            terminator: Terminator::Branch {
+                                condition: left_value,
+                                then_block,
+                                else_block,
+                            },
+                        },
+                        Block {
+                            id: BlockId(1),
+                            instructions: Vec::new(),
+                            terminator: Terminator::Return(None),
+                        },
+                        Block {
+                            id: BlockId(2),
+                            instructions: right_instructions,
+                            terminator: Terminator::Return(None),
+                        },
+                    ],
+                };
+                function
+                    .verify()
+                    .map_err(|_| LowerError::UnsupportedExpression)?;
+                return Ok(function);
+            }
+        }
         let condition_value = {
             // Reuse the expression lowering by placing a dummy value in a
             // temporary diamond, then retain only its entry instructions.
