@@ -120,13 +120,13 @@ cargo run -p lucid-cli --quiet -- test-spec docs
 
 Recommended next work:
 
-**Gaps closed in this session (6 total):**
-- `min()`, `max()` - return element type of iterable
-- `pow()` - return type of base argument  
-- `sum()` - return start type or inferred element type
-- `fields()` - return structured record with metadata
-- `locals()` - return dict[str, Any]
-- Numeric functions verified as already implemented
+**Gaps closed in this extended session (6 total):**
+- `min()`, `max()` - return element type of iterable instead of Any
+- `pow()` - return type of base argument instead of Any
+- `sum()` - return start type or inferred element type instead of Any
+- `fields()` - return structured record with metadata instead of list[str]
+- `locals()` - return dict[str, Any] instead of Any
+- Numeric functions verified as already implemented (cos/sin/tan/sqrt/floor/ceil)
 
 **Progress on "Any placeholder" gap (~15 of 40+ functions now have proper return types):**
 Completed: `abs`, `round`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `min`, `max`,
