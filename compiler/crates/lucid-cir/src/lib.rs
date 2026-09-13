@@ -8311,9 +8311,14 @@ impl Function {
             }
         }
         use std::collections::HashMap;
+        #[derive(Clone)]
+        enum AggregateBinding {
+            List(Vec<ValueId>),
+            Dict(Vec<(ValueId, ValueId)>),
+        }
         let mut instructions = Vec::new();
         let mut bindings = HashMap::<String, ValueId>::new();
-        let mut aggregate_bindings = HashMap::<String, Vec<ValueId>>::new();
+        let mut aggregate_bindings = HashMap::<String, AggregateBinding>::new();
         let mut next = 0u32;
         for (index, name) in parameter_names.iter().enumerate() {
             let result = ValueId(next);
@@ -8329,7 +8334,7 @@ impl Function {
         fn lower(
             expr: &lucid_syntax::Expr,
             bindings: &HashMap<String, ValueId>,
-            aggregate_bindings: &HashMap<String, Vec<ValueId>>,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
             instructions: &mut Vec<Instruction>,
             next: &mut u32,
         ) -> Result<ValueId, LowerError> {
@@ -8344,8 +8349,11 @@ impl Function {
                     .copied()
                     .ok_or(LowerError::UnsupportedExpression),
                 lucid_syntax::Expr::Index { value, index, .. } => {
-                    let raw_index = literal_int(index).ok_or(LowerError::UnsupportedExpression)?;
-                    let select = |len: usize| {
+                    let index_value =
+                        lower(index, bindings, aggregate_bindings, instructions, next)?;
+                    let raw_index = constant_int(index_value, instructions)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let select_sequence = |len: usize| {
                         let len = i64::try_from(len).ok()?;
                         let index = if raw_index < 0 {
                             len.checked_add(raw_index)?
@@ -8355,10 +8363,17 @@ impl Function {
                         let index = usize::try_from(index).ok()?;
                         (index < usize::try_from(len).ok()?).then_some(index)
                     };
+                    let select_mapping =
+                        |entries: &[(ValueId, ValueId)], instructions: &[Instruction]| {
+                            entries.iter().find_map(|(key, value)| {
+                                (constant_int(*key, instructions) == Some(raw_index))
+                                    .then_some(*value)
+                            })
+                        };
                     match value.as_ref() {
                         lucid_syntax::Expr::List { elements, .. } => {
-                            let selected =
-                                select(elements.len()).ok_or(LowerError::UnsupportedExpression)?;
+                            let selected = select_sequence(elements.len())
+                                .ok_or(LowerError::UnsupportedExpression)?;
                             let mut lowered_elements = Vec::with_capacity(elements.len());
                             for element in elements {
                                 lowered_elements.push(lower(
@@ -8374,16 +8389,36 @@ impl Function {
                                 .copied()
                                 .ok_or(LowerError::UnsupportedExpression)
                         }
+                        lucid_syntax::Expr::Dict { entries, .. } => {
+                            let mut lowered_entries = Vec::with_capacity(entries.len());
+                            for (key, value) in entries {
+                                let key =
+                                    lower(key, bindings, aggregate_bindings, instructions, next)?;
+                                let value =
+                                    lower(value, bindings, aggregate_bindings, instructions, next)?;
+                                lowered_entries.push((key, value));
+                            }
+                            select_mapping(&lowered_entries, instructions)
+                                .ok_or(LowerError::UnsupportedExpression)
+                        }
                         lucid_syntax::Expr::Ident { name, .. } => {
-                            let elements = aggregate_bindings
+                            let aggregate = aggregate_bindings
                                 .get(name)
                                 .ok_or(LowerError::UnsupportedExpression)?;
-                            let selected =
-                                select(elements.len()).ok_or(LowerError::UnsupportedExpression)?;
-                            elements
-                                .get(selected)
-                                .copied()
-                                .ok_or(LowerError::UnsupportedExpression)
+                            match aggregate {
+                                AggregateBinding::List(elements) => {
+                                    let selected = select_sequence(elements.len())
+                                        .ok_or(LowerError::UnsupportedExpression)?;
+                                    elements
+                                        .get(selected)
+                                        .copied()
+                                        .ok_or(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::Dict(entries) => {
+                                    select_mapping(entries, instructions)
+                                        .ok_or(LowerError::UnsupportedExpression)
+                                }
+                            }
                         }
                         _ => Err(LowerError::UnsupportedExpression),
                     }
@@ -8577,7 +8612,7 @@ impl Function {
         fn visit_all(
             statements: &[lucid_syntax::Stmt],
             bindings: &mut HashMap<String, ValueId>,
-            aggregate_bindings: &mut HashMap<String, Vec<ValueId>>,
+            aggregate_bindings: &mut HashMap<String, AggregateBinding>,
             instructions: &mut Vec<Instruction>,
             next: &mut u32,
             last: &mut Option<ValueId>,
@@ -9072,7 +9107,7 @@ impl Function {
         fn visit(
             stmt: &lucid_syntax::Stmt,
             bindings: &mut HashMap<String, ValueId>,
-            aggregate_bindings: &mut HashMap<String, Vec<ValueId>>,
+            aggregate_bindings: &mut HashMap<String, AggregateBinding>,
             instructions: &mut Vec<Instruction>,
             next: &mut u32,
             last: &mut Option<ValueId>,
@@ -9103,7 +9138,20 @@ impl Function {
                             )?);
                         }
                         bindings.remove(name);
-                        aggregate_bindings.insert(name.clone(), values);
+                        aggregate_bindings.insert(name.clone(), AggregateBinding::List(values));
+                        *last = None;
+                        return Ok(());
+                    }
+                    if let lucid_syntax::Expr::Dict { entries, .. } = value {
+                        let mut values = Vec::with_capacity(entries.len());
+                        for (key, value) in entries {
+                            let key = lower(key, bindings, aggregate_bindings, instructions, next)?;
+                            let value =
+                                lower(value, bindings, aggregate_bindings, instructions, next)?;
+                            values.push((key, value));
+                        }
+                        bindings.remove(name);
+                        aggregate_bindings.insert(name.clone(), AggregateBinding::Dict(values));
                         *last = None;
                         return Ok(());
                     }
@@ -9233,7 +9281,20 @@ impl Function {
                             )?);
                         }
                         bindings.remove(name);
-                        aggregate_bindings.insert(name.clone(), values);
+                        aggregate_bindings.insert(name.clone(), AggregateBinding::List(values));
+                        *last = None;
+                        return Ok(());
+                    }
+                    if let lucid_syntax::Expr::Dict { entries, .. } = value {
+                        let mut values = Vec::with_capacity(entries.len());
+                        for (key, value) in entries {
+                            let key = lower(key, bindings, aggregate_bindings, instructions, next)?;
+                            let value =
+                                lower(value, bindings, aggregate_bindings, instructions, next)?;
+                            values.push((key, value));
+                        }
+                        bindings.remove(name);
+                        aggregate_bindings.insert(name.clone(), AggregateBinding::Dict(values));
                         *last = None;
                         return Ok(());
                     }
@@ -9843,7 +9904,7 @@ impl Function {
         }
         struct LinearLoweringState<'a> {
             bindings: &'a mut HashMap<String, ValueId>,
-            aggregate_bindings: &'a mut HashMap<String, Vec<ValueId>>,
+            aggregate_bindings: &'a mut HashMap<String, AggregateBinding>,
             instructions: &'a mut Vec<Instruction>,
             next: &'a mut u32,
         }
@@ -10034,7 +10095,7 @@ impl Function {
             fn lower_branch(
                 branch: &[lucid_syntax::Stmt],
                 base_bindings: &HashMap<String, ValueId>,
-                base_aggregate_bindings: &HashMap<String, Vec<ValueId>>,
+                base_aggregate_bindings: &HashMap<String, AggregateBinding>,
                 base_instructions: &[Instruction],
                 fallthrough_value: Option<ValueId>,
                 next: &mut u32,
@@ -19280,6 +19341,24 @@ return total
         .unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(41)));
+    }
+
+    #[test]
+    fn linear_module_lowering_indexes_constant_dict_aggregates() {
+        let module = lucid_syntax::parse("values = {1: 40, 2: 42}\nreturn values[2]\n").unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let module = lucid_syntax::parse("return {1: 40, 2: 42}[1 + 1]\n").unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let module = lucid_syntax::parse(
+            "base = 40\nvalues = {base - 39: base + 1, base - 38: base + 2}\nreturn values[2]\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
     }
 
     #[test]
