@@ -8845,6 +8845,37 @@ impl TypeChecker {
                                 span: left.span(),
                             });
                         }
+                        // For ordering operators, validate type compatibility
+                        if matches!(
+                            op,
+                            BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq
+                        ) {
+                            // Allow numeric to numeric comparisons
+                            let left_numeric = matches!(&lt, Type::Int | Type::LiteralInt(_) | Type::Float)
+                                || matches!(&lt, Type::Class { name, .. } if name == "complex");
+                            let right_numeric = matches!(&rt, Type::Int | Type::LiteralInt(_) | Type::Float)
+                                || matches!(&rt, Type::Class { name, .. } if name == "complex");
+                            let both_numeric = left_numeric && right_numeric;
+
+                            // Allow same type comparisons
+                            let same_type = lt == rt;
+
+                            // Allow Any
+                            let has_any = matches!(&lt, Type::TypeVar(n) if n == "Any") || matches!(&rt, Type::TypeVar(n) if n == "Any");
+
+                            // Allow subtype relationships
+                            let subtype_ok = lt.is_subtype_of(&rt, &self.env) || rt.is_subtype_of(&lt, &self.env);
+
+                            if !(both_numeric || same_type || has_any || subtype_ok) {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "cannot compare {:?} and {:?}",
+                                        lt, rt
+                                    ),
+                                    span: left.span(),
+                                });
+                            }
+                        }
                         Ok(Type::Bool)
                     }
                     BinaryOp::In | BinaryOp::NotIn => {
@@ -18900,6 +18931,50 @@ c = a + b
         assert!(
             result.is_ok(),
             "Bytes + Bytes should work (concatenation): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn comparison_requires_compatible_types() {
+        let code = r#"a: str = "hello"
+b: int = 5
+c = a < b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_err(), "str < int should be rejected");
+    }
+
+    #[test]
+    fn comparison_allows_compatible_types() {
+        let code = r#"a: int = 5
+b: float = 3.14
+c = a < b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "int < float should be allowed (both numeric): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn comparison_allows_same_type() {
+        let code = r#"a: str = "hello"
+b: str = "world"
+c = a < b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "str < str should be allowed (same type): {:?}",
             result
         );
     }
