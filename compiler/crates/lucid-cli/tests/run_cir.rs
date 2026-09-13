@@ -3456,6 +3456,74 @@ fn run_cir_executes_setup_before_guard_elif_else_return() {
 }
 
 #[test]
+fn run_cir_short_circuits_setup_guard_elif_else_division() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_setup_guard_elif_else_division_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, first: bool, second: bool, scale: int):\n    base = seed + 1\n    if first:\n        return base // scale\n    elif second:\n        return base * 2\n    else:\n        return base * 3\n",
+    )
+    .expect("temporary source should be writable");
+    let skipped = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,1,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1,0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        skipped.status.success(),
+        "unchosen division arm should not fail: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&skipped.stdout).trim(), "22");
+    assert!(
+        !selected.status.success(),
+        "chosen division-by-zero arm should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&selected.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallback arm should not fail: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "33");
+}
+
+#[test]
 fn run_cir_executes_setup_before_mixed_guard_elif_return() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_setup_mixed_guard_elif_return_{}.lucid",

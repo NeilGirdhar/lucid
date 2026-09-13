@@ -1180,7 +1180,9 @@ diverged:
   branch result instead of merging `base` and then always evaluating the
   fallback return. Explicit `else` ladders and mixed ladders where one
   selected arm is a bare `return` and another returns a value use the same
-  direct-return CIR path.
+  direct-return CIR path. Recoverable operations inside an unchosen guard arm
+  remain unexecuted, while selecting that arm reports the recoverable error
+  through `run-cir`.
 * Checker union/intersection normalization and callable-parameter metadata
   lookups now use recoverable fallbacks instead of internal panics when fed
   malformed intermediate state.

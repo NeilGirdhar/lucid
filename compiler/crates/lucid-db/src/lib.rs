@@ -11145,6 +11145,20 @@ mod tests {
         assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
 
         let file = db.add_file(
+            "setup-guard-elif-else-division.lucid",
+            "def choose(seed: int, first: bool, second: bool, scale: int):\n    base = seed + 1\n    if first:\n        return base // scale\n    elif second:\n        return base * 2\n    else:\n        return base * 3\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before guard elif else division should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 0, 1, 0]), Ok(Some(22)));
+        assert_eq!(
+            function.execute_with_args(&[10, 1, 0, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+        assert_eq!(function.execute_with_args(&[10, 0, 0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
             "setup-mixed-guard-elif-return.lucid",
             "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return\n    elif second:\n        return base * 2\n    return base * 3\n",
         );
