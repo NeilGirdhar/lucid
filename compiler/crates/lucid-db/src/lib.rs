@@ -8423,7 +8423,7 @@ pub fn lower_function_body(
             Some(lucid_syntax::Stmt::Return { value: None, .. })
         )
     {
-        if !local_specs.is_empty() {
+        if !ordered_root_spans.is_empty() {
             let nodes = function
                 .body_expressions
                 .iter()
@@ -8447,16 +8447,38 @@ pub fn lower_function_body(
                         .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let root_id = local_bindings
+            let ordered_roots = ordered_root_spans
+                .iter()
+                .map(|span| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| node.id)
+                        .ok_or_else(|| {
+                            Arc::<str>::from("prefix expression has no typed expression")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let root_id = ordered_roots
                 .last()
-                .map(|(_, id)| *id)
+                .copied()
                 .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
-            if let Ok(mut lowered) = lucid_cir::Function::from_typed_function_body_with_locals(
-                &nodes,
-                root_id,
-                &function.parameter_names,
-                &local_bindings,
-            ) {
+            let prefix_roots = ordered_roots
+                .iter()
+                .take(ordered_roots.len().saturating_sub(1))
+                .copied()
+                .collect::<Vec<_>>();
+            if let Ok(mut lowered) =
+                lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+                    &nodes,
+                    &prefix_roots,
+                    root_id,
+                    &function.parameter_names,
+                    &local_bindings,
+                )
+            {
                 if let Some(block) = lowered.blocks.last_mut() {
                     block.terminator = lucid_cir::Terminator::Return(None);
                 }
