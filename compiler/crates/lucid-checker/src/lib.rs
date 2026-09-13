@@ -9073,7 +9073,7 @@ impl TypeChecker {
                                                 span: args
                                                     .last()
                                                     .map(|argument| argument.value.span())
-                                                    .unwrap_or_default(),
+                                                    .unwrap_or_else(|| func.span()),
                                             });
                                         }
                                     }
@@ -9089,7 +9089,7 @@ impl TypeChecker {
                                     span: args
                                         .last()
                                         .map(|argument| argument.value.span())
-                                        .unwrap_or_default(),
+                                        .unwrap_or_else(|| func.span()),
                                 });
                             }
                             if let Some(maximum) = maximum {
@@ -9102,7 +9102,7 @@ impl TypeChecker {
                                         span: args
                                             .last()
                                             .map(|argument| argument.value.span())
-                                            .unwrap_or_default(),
+                                            .unwrap_or_else(|| func.span()),
                                     });
                                 }
                             }
@@ -9139,7 +9139,7 @@ impl TypeChecker {
                                 span: args
                                     .last()
                                     .map(|argument| argument.value.span())
-                                    .unwrap_or_default(),
+                                    .unwrap_or_else(|| func.span()),
                             });
                         }
                         let field_names = self.class_constructor_field_names(name);
@@ -9291,7 +9291,7 @@ impl TypeChecker {
                                             span: args
                                                 .first()
                                                 .map(|argument| argument.value.span())
-                                                .unwrap_or_default(),
+                                                .unwrap_or_else(|| func.span()),
                                         });
                                             }
                                         }
@@ -9349,7 +9349,7 @@ impl TypeChecker {
                                 span: args
                                     .first()
                                     .map(|argument| argument.value.span())
-                                    .unwrap_or_default(),
+                                    .unwrap_or_else(|| func.span()),
                             });
                         }
                         // Multiple dispatch must not depend on declaration
@@ -9379,7 +9379,7 @@ impl TypeChecker {
                                 span: args
                                     .first()
                                     .map(|argument| argument.value.span())
-                                    .unwrap_or_default(),
+                                    .unwrap_or_else(|| func.span()),
                             });
                         }
                         maximal.first().map(|(_, return_type)| return_type.clone())
@@ -9480,7 +9480,7 @@ impl TypeChecker {
                                 span: args
                                     .last()
                                     .map(|argument| argument.value.span())
-                                    .unwrap_or_default(),
+                                    .unwrap_or_else(|| func.span()),
                             });
                         }
                         if called_name.is_none()
@@ -9609,7 +9609,7 @@ impl TypeChecker {
                                             span: args
                                                 .first()
                                                 .map(|argument| argument.value.span())
-                                                .unwrap_or_default(),
+                                                .unwrap_or_else(|| func.span()),
                                         });
                                     }
                                     if maximum.is_some_and(|maximum| supplied > maximum) {
@@ -9622,7 +9622,7 @@ impl TypeChecker {
                                             span: args
                                                 .last()
                                                 .map(|argument| argument.value.span())
-                                                .unwrap_or_default(),
+                                                .unwrap_or_else(|| func.span()),
                                         });
                                     }
                                 }
@@ -16738,5 +16738,11 @@ def reject(value: not int) -> none:
             error.message.contains("requires at least")
                 || error.message.contains("required argument")
         );
+
+        let zero_args =
+            parse("def f(value: int) -> int:\n    return value\nresult = f()\n").unwrap();
+        let error = TypeChecker::new().check_module(&zero_args).unwrap_err();
+        assert!(error.message.contains("requires at least"));
+        assert_ne!(error.span, Span::default());
     }
 }
