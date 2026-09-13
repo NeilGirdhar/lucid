@@ -1273,6 +1273,35 @@ fn run_cir_lowers_membership_of_constant_aggregates_in_typed_function_body() {
 }
 
 #[test]
+fn run_cir_executes_constant_tuple_for_loop_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_tuple_for_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    for item in (1, 2, 3):\n        total += item\n    for _ in ():\n        total = 100\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function tuple for loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+#[test]
 fn run_cir_lowers_constant_string_predicates_in_typed_function_body() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_string_predicates_{}.lucid",

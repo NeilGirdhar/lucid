@@ -346,6 +346,7 @@ pub fn is_const_empty_iterable(expr: &lucid_syntax::Expr) -> bool {
         lucid_syntax::Expr::List { elements, .. } | lucid_syntax::Expr::Set { elements, .. } => {
             elements.is_empty()
         }
+        lucid_syntax::Expr::Record { fields, .. } => fields.is_empty(),
         lucid_syntax::Expr::Dict { entries, .. } => entries.is_empty(),
         lucid_syntax::Expr::Literal {
             value: lucid_syntax::LiteralValue::Str(value),
@@ -12537,6 +12538,28 @@ impl Function {
                     Ok(())
                 }
                 lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Ident(name, _),
+                    iterable: lucid_syntax::Expr::Record { fields, .. },
+                    body,
+                    ..
+                } => {
+                    if fields.is_empty() {
+                        return Ok(());
+                    }
+                    if contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for (field_name, field) in fields {
+                        if field_name.is_some() {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        let value = lower(field, bindings, aggregate_bindings, instructions, next)?;
+                        bindings.insert(name.clone(), value);
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Wildcard(_),
                     iterable:
                         lucid_syntax::Expr::List { elements, .. }
@@ -12552,6 +12575,27 @@ impl Function {
                     }
                     for element in elements {
                         let _ = lower(element, bindings, aggregate_bindings, instructions, next)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Wildcard(_),
+                    iterable: lucid_syntax::Expr::Record { fields, .. },
+                    body,
+                    ..
+                } => {
+                    if fields.is_empty() {
+                        return Ok(());
+                    }
+                    if contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for (field_name, field) in fields {
+                        if field_name.is_some() {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        let _ = lower(field, bindings, aggregate_bindings, instructions, next)?;
                         visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
@@ -12588,6 +12632,37 @@ impl Function {
                 }
                 lucid_syntax::Stmt::For {
                     target:
+                        lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(expected), _),
+                    iterable: lucid_syntax::Expr::Record { fields, .. },
+                    body,
+                    ..
+                } => {
+                    let has_match = fields.iter().any(|(field_name, field)| {
+                        field_name.is_none() && literal_int(field) == Some(*expected)
+                    });
+                    if has_match && contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for (field_name, field) in fields {
+                        if field_name.is_some() {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        let _ = lower(field, bindings, aggregate_bindings, instructions, next)?;
+                        if literal_int(field) == Some(*expected) {
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
+                        }
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target:
                         lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bool(expected), _),
                     iterable:
                         lucid_syntax::Expr::List { elements, .. }
@@ -12604,6 +12679,37 @@ impl Function {
                     for element in elements {
                         let _ = lower(element, bindings, aggregate_bindings, instructions, next)?;
                         if literal_bool(element) == Some(*expected) {
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
+                        }
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target:
+                        lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bool(expected), _),
+                    iterable: lucid_syntax::Expr::Record { fields, .. },
+                    body,
+                    ..
+                } => {
+                    let has_match = fields.iter().any(|(field_name, field)| {
+                        field_name.is_none() && literal_bool(field) == Some(*expected)
+                    });
+                    if has_match && contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for (field_name, field) in fields {
+                        if field_name.is_some() {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        let _ = lower(field, bindings, aggregate_bindings, instructions, next)?;
+                        if literal_bool(field) == Some(*expected) {
                             visit_all(
                                 body,
                                 bindings,
@@ -21757,6 +21863,22 @@ return total
             Ok(Some(6))
         );
         let module =
+            lucid_syntax::parse("value = 0\nfor item in (1, 2, 3):\n    value = value + item\n")
+                .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("constant tuple accumulation should unroll in order")
+                .execute(),
+            Ok(Some(6))
+        );
+        let module = lucid_syntax::parse("for item in ():\n    return 1\nvalue = 7\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("empty tuple loops should fold away")
+                .execute(),
+            Ok(Some(7))
+        );
+        let module =
             lucid_syntax::parse("value = 0\nfor item in {1, 2, 3}:\n    value = value + item\n")
                 .unwrap();
         assert_eq!(
@@ -21790,6 +21912,14 @@ return total
             Ok(Some(3))
         );
         let module =
+            lucid_syntax::parse("value = 0\nfor _ in (1, 2, 3):\n    value = value + 1\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("wildcard tuple loops should discard the binding")
+                .execute(),
+            Ok(Some(3))
+        );
+        let module =
             lucid_syntax::parse("value = 0\nfor 2 in [1, 2, 3, 2]:\n    value = value + 1\n")
                 .unwrap();
         assert_eq!(
@@ -21805,6 +21935,15 @@ return total
                 .expect("literal loop patterns should ignore unreachable returns")
                 .execute(),
             Ok(Some(12))
+        );
+        let module =
+            lucid_syntax::parse("value = 0\nfor 2 in (1, 2, 3, 2):\n    value = value + 1\n")
+                .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("literal tuple loop patterns should filter elements")
+                .execute(),
+            Ok(Some(2))
         );
         let module = lucid_syntax::parse(
             "value = 0\nfor true in [false, true, true]:\n    value = value + 1\n",
@@ -21823,6 +21962,16 @@ return total
                 .expect("boolean literal loop patterns should ignore unreachable returns")
                 .execute(),
             Ok(Some(13))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\nfor true in (false, true, true):\n    value = value + 1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("boolean literal tuple loop patterns should filter elements")
+                .execute(),
+            Ok(Some(2))
         );
         let module =
             lucid_syntax::parse("value = 0\nfor item in range(1, 4):\n    value = value + item\n")
