@@ -749,30 +749,6 @@ fn collect_typed_exprs<'db>(
     push_typed_expr_node(db, checker, expr, kind, child_ids, nodes)
 }
 
-/// Collect every expression-bearing statement in a function body. Keeping
-/// this traversal here makes the HIR independent of parser statement layout
-/// while still preserving all expression nodes needed by later lowering.
-fn pattern_identifier_binds(name: &str) -> bool {
-    !matches!(
-        name,
-        "_" | "int"
-            | "float"
-            | "bool"
-            | "str"
-            | "complex"
-            | "bytes"
-            | "Bytes"
-            | "MemoryView"
-            | "list"
-            | "set"
-            | "dict"
-            | "range"
-            | "DottedPath"
-            | "none"
-            | "None"
-    ) && !name.chars().next().is_some_and(char::is_uppercase)
-}
-
 fn collect_typed_body<'db>(
     db: &'db dyn Db,
     checker: &lucid_checker::TypeChecker,
@@ -799,46 +775,10 @@ fn collect_typed_body<'db>(
                 for item in items {
                     collect_typed_exprs(db, checker, &item.context_expr, nodes)?;
                     if let Some(pattern) = &item.target {
-                        fn bind_with_pattern(
-                            checker: &mut lucid_checker::TypeChecker,
-                            pattern: &lucid_syntax::Pattern,
-                        ) {
-                            let bind = |checker: &mut lucid_checker::TypeChecker, name: &String| {
-                                checker.env.variables.insert(
-                                    name.clone(),
-                                    (
-                                        lucid_checker::Type::TypeVar("Any".into()),
-                                        lucid_syntax::MutabilityView::Mutable,
-                                    ),
-                                );
-                            };
-                            match pattern {
-                                lucid_syntax::Pattern::Ident(name, _)
-                                    if pattern_identifier_binds(name) =>
-                                {
-                                    bind(checker, name);
-                                }
-                                lucid_syntax::Pattern::Ident(_, _) => {}
-                                lucid_syntax::Pattern::ClassDestructure { fields, .. }
-                                | lucid_syntax::Pattern::RecordDestructure(fields, _) => {
-                                    for (_, nested) in fields {
-                                        bind_with_pattern(checker, nested);
-                                    }
-                                }
-                                lucid_syntax::Pattern::Tuple(items, _) => {
-                                    for item in items {
-                                        bind_with_pattern(checker, item);
-                                    }
-                                }
-                                lucid_syntax::Pattern::Star(nested, _) => {
-                                    bind_with_pattern(checker, nested)
-                                }
-                                lucid_syntax::Pattern::Literal(_, _)
-                                | lucid_syntax::Pattern::Wildcard(_)
-                                | lucid_syntax::Pattern::Type(_, _) => {}
-                            }
-                        }
-                        bind_with_pattern(&mut body_checker, pattern);
+                        let context_type = checker
+                            .type_of_expr(&item.context_expr)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        body_checker.bind_match_pattern_types(pattern, &context_type);
                     }
                 }
                 for statement in body {
@@ -984,42 +924,11 @@ fn collect_typed_body<'db>(
             } => {
                 collect_typed_exprs(db, checker, iterable, nodes)?;
                 let mut body_checker = checker.clone();
-                fn bind_pattern(
-                    checker: &mut lucid_checker::TypeChecker,
-                    pattern: &lucid_syntax::Pattern,
-                ) {
-                    let bind = |checker: &mut lucid_checker::TypeChecker, name: &String| {
-                        checker.env.variables.insert(
-                            name.clone(),
-                            (
-                                lucid_checker::Type::TypeVar("Any".into()),
-                                lucid_syntax::MutabilityView::Mutable,
-                            ),
-                        );
-                    };
-                    match pattern {
-                        lucid_syntax::Pattern::Ident(name, _) if pattern_identifier_binds(name) => {
-                            bind(checker, name);
-                        }
-                        lucid_syntax::Pattern::Ident(_, _) => {}
-                        lucid_syntax::Pattern::ClassDestructure { fields, .. }
-                        | lucid_syntax::Pattern::RecordDestructure(fields, _) => {
-                            for (_, nested) in fields {
-                                bind_pattern(checker, nested);
-                            }
-                        }
-                        lucid_syntax::Pattern::Tuple(items, _) => {
-                            for item in items {
-                                bind_pattern(checker, item);
-                            }
-                        }
-                        lucid_syntax::Pattern::Star(nested, _) => bind_pattern(checker, nested),
-                        lucid_syntax::Pattern::Literal(_, _)
-                        | lucid_syntax::Pattern::Wildcard(_)
-                        | lucid_syntax::Pattern::Type(_, _) => {}
-                    }
-                }
-                bind_pattern(&mut body_checker, target);
+                let iterable_type = checker
+                    .type_of_expr(iterable)
+                    .map_err(|error| Arc::<str>::from(error.message))?;
+                let element_type = checker.iterable_element_type(&iterable_type);
+                body_checker.bind_match_pattern_types(target, &element_type);
                 body_checker.env.loop_depth += 1;
                 let body_result = (|| {
                     for statement in body {
@@ -1092,48 +1001,12 @@ fn collect_typed_body<'db>(
             }
             Stmt::Match { subject, arms, .. } => {
                 let subject_id = collect_typed_exprs(db, checker, subject, nodes)?;
+                let subject_type = checker
+                    .type_of_expr(subject)
+                    .map_err(|error| Arc::<str>::from(error.message))?;
                 for arm in arms {
                     let mut arm_checker = checker.clone();
-                    fn bind_match_pattern(
-                        checker: &mut lucid_checker::TypeChecker,
-                        pattern: &lucid_syntax::Pattern,
-                    ) {
-                        let bind = |checker: &mut lucid_checker::TypeChecker, name: &String| {
-                            checker.env.variables.insert(
-                                name.clone(),
-                                (
-                                    lucid_checker::Type::TypeVar("Any".into()),
-                                    lucid_syntax::MutabilityView::Mutable,
-                                ),
-                            );
-                        };
-                        match pattern {
-                            lucid_syntax::Pattern::Ident(name, _)
-                                if pattern_identifier_binds(name) =>
-                            {
-                                bind(checker, name);
-                            }
-                            lucid_syntax::Pattern::Ident(_, _) => {}
-                            lucid_syntax::Pattern::ClassDestructure { fields, .. }
-                            | lucid_syntax::Pattern::RecordDestructure(fields, _) => {
-                                for (_, nested) in fields {
-                                    bind_match_pattern(checker, nested);
-                                }
-                            }
-                            lucid_syntax::Pattern::Tuple(items, _) => {
-                                for item in items {
-                                    bind_match_pattern(checker, item);
-                                }
-                            }
-                            lucid_syntax::Pattern::Star(nested, _) => {
-                                bind_match_pattern(checker, nested)
-                            }
-                            lucid_syntax::Pattern::Literal(_, _)
-                            | lucid_syntax::Pattern::Wildcard(_)
-                            | lucid_syntax::Pattern::Type(_, _) => {}
-                        }
-                    }
-                    bind_match_pattern(&mut arm_checker, &arm.pattern);
+                    arm_checker.bind_match_pattern_types(&arm.pattern, &subject_type);
                     if let Some(guard) = &arm.guard {
                         collect_typed_exprs(db, &arm_checker, guard, nodes)?;
                     }
@@ -9358,22 +9231,6 @@ mod tests {
     use salsa::Setter;
 
     #[test]
-    fn typed_body_pattern_scope_skips_type_like_identifiers() {
-        assert!(!pattern_identifier_binds("Cat"));
-        assert!(!pattern_identifier_binds("int"));
-        assert!(!pattern_identifier_binds("complex"));
-        assert!(!pattern_identifier_binds("bytes"));
-        assert!(!pattern_identifier_binds("MemoryView"));
-        assert!(!pattern_identifier_binds("list"));
-        assert!(!pattern_identifier_binds("set"));
-        assert!(!pattern_identifier_binds("dict"));
-        assert!(!pattern_identifier_binds("range"));
-        assert!(!pattern_identifier_binds("DottedPath"));
-        assert!(!pattern_identifier_binds("_"));
-        assert!(pattern_identifier_binds("value"));
-    }
-
-    #[test]
     fn source_files_parse_incrementally_and_round_trip() {
         let mut db = CompilerDatabase::default();
         let file = db.add_file("main.lucid", "x = 1  # keep\n");
@@ -9768,6 +9625,23 @@ mod tests {
                 .filter(|node| node.detail.as_deref() == Some("Add"))
                 .count()
                 >= 2
+        );
+
+        let file = db.add_file(
+            "loop-item-destructure-hir.lucid",
+            "def sum_items():\n    total = 0\n    source = {1: 10, 2: 20}\n    for key, value in source.items():\n        total = total + key + value\n    return total\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid item destructuring loop module");
+        let body = &typed.functions[0].body_expressions;
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("key") && node.type_name == "int")
+        );
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("value") && node.type_name == "int")
         );
 
         let file = db.add_file(
