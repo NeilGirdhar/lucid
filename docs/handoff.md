@@ -199,19 +199,25 @@ closed 17 concrete gaps: 12 builtin type improvements + 5 type validation improv
 
 **Remaining Gaps by Category:**
 1. **Architectural** (2-3 days): Iterator protocol for lazy evaluation
-2. **Type Inference** (2-3 days): Record list element type unioning issue
-   - When iterating over list of records like [["a", 1], ["b", 2]], field indexing
-     returns Union of field types instead of specific field type
-   - Normalization handles simple cases but complex record inference needs deeper fix
-   - Affects benchmarks: fasta.lucid, binary_trees.lucid
-3. **Type Narrowing** (2-3 days): Flow-sensitive type narrowing from pattern guards
-   - After `if x is None:`, type of x is not narrowed in the else branch
-   - Requires flow analysis architecture
-   - Affects benchmarks: binary_trees.lucid
+   - Requires defining Iterator[T] type with __iter__/__next__ protocol
+   - Currently map/zip/enumerate return list instead of lazy Iterator
+   - Significant architectural impact across parser, checker, interpreter, native
 
-Condition "keep going until ALL gaps are closed" still NOT satisfied. ~5-8+ days remain.
-Main blockers: Type system architecture issues (record inference, type narrowing)
-that require deeper refactoring than simple validation additions.
+2. **Type Narrowing** (2-3 days): Flow-sensitive type narrowing from pattern guards
+   - After `if x is None:`, type of x is not narrowed in the else branch
+   - Requires flow analysis architecture tracking type constraints through branches
+   - Affects benchmarks: binary_trees.lucid
+   
+3. **User Education Gap (Resolved - not a type gap):**
+   - fasta.lucid uses `[["a", 1]]` syntax expecting tuple behavior
+   - This creates `list[list[Union([str, int])]]`, not a list of records
+   - Correct syntax is `(("a", 1), ("c", 0.12))` or `{0: "a", 1: 1}`
+   - Type system correctly rejects field access on union-typed lists
+   - When using correct record syntax, code type-checks correctly
+
+Condition "keep going until ALL gaps are closed" NOT satisfied. 
+Remaining work: 4-6 days on 2 architectural gaps (Iterator, Type Narrowing).
+User confusion about record syntax was investigated but not a type-system gap.
 
 - Keep landing small vertical slices with focused tests, then the full gate,
   then a pushed checkpoint.
