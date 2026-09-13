@@ -205,6 +205,67 @@ fn run_reports_unresolved_imports_before_runtime() {
 }
 
 #[test]
+fn native_commands_report_unresolved_imports_with_source() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_native_missing_import_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let source = root.join("main.lucid");
+    let output_bin = root.join("out");
+    fs::write(&source, "import missing\nvalue = 1\n").expect("source should be writable");
+    for args in [
+        vec![
+            "run".to_string(),
+            source
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+            "--native".to_string(),
+        ],
+        vec![
+            "emit-c".to_string(),
+            source
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "build".to_string(),
+            source
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+            "-o".to_string(),
+            output_bin
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args(args.iter().map(String::as_str))
+            .output()
+            .expect("lucid binary should execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?} should fail");
+        assert!(
+            stderr.contains("E0300"),
+            "{args:?}: unexpected stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("import missing"),
+            "{args:?}: diagnostic should render unresolved import source: {stderr}"
+        );
+        assert!(
+            !stderr.contains("Import Error: cannot resolve"),
+            "{args:?}: native commands should use structured diagnostics: {stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn run_reports_imported_module_type_errors_before_runtime() {
     let root = std::env::temp_dir().join(format!(
         "lucid_run_import_type_error_{}",

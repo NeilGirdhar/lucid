@@ -222,6 +222,19 @@ fn resolve_local_import_path(base_file: &Path, module: &str) -> Option<PathBuf> 
 }
 
 fn load_native_project(entry: &Path) -> Result<Module, String> {
+    let mut diagnostic_database = lucid_db::CompilerDatabase::default();
+    let (diagnostic_project, _) = load_source_project(&mut diagnostic_database, entry)?;
+    let diagnostics = lucid_db::project_diagnostics(&diagnostic_database, diagnostic_project);
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
+    {
+        return Err(render_project_diagnostics(
+            &diagnostic_database,
+            diagnostics.as_ref(),
+        ));
+    }
+
     fn resolve_import(base_file: &Path, module: &str) -> Option<PathBuf> {
         resolve_local_import_path(base_file, module)
     }
@@ -969,15 +982,24 @@ fn emit_project_diagnostics(
     database: &lucid_db::CompilerDatabase,
     diagnostics: &[lucid_db::Diagnostic],
 ) {
+    eprint!("{}", render_project_diagnostics(database, diagnostics));
+}
+
+fn render_project_diagnostics(
+    database: &lucid_db::CompilerDatabase,
+    diagnostics: &[lucid_db::Diagnostic],
+) -> String {
+    let mut rendered = String::new();
     for diagnostic in diagnostics {
         let label = diagnostic.file.path(database).to_string();
-        emit_database_diagnostics(
+        rendered.push_str(&render_database_diagnostics(
             database,
             diagnostic.file,
             &label,
             std::slice::from_ref(diagnostic),
-        );
+        ));
     }
+    rendered
 }
 
 fn load_project_manifest(path: &Path) -> Option<lucid_config::ProjectConfig> {
