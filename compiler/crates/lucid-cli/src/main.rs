@@ -690,16 +690,13 @@ fn run_cir_file(
                 .find(|function| function.symbol.name(&database).as_str() == name)
                 .map(|function| function.parameter_names.len())
         });
-        if let Some(expected) = parameter_count {
-            if expected != arguments.len() {
-                eprintln!(
-                    "run-cir: function '{name}' expects {expected} integer arguments, got {}",
-                    arguments.len()
-                );
-                exit(1);
-            }
-        } else {
-            eprintln!("run-cir: function '{name}' not found");
+        if let Some(expected) = parameter_count
+            && expected != arguments.len()
+        {
+            eprintln!(
+                "run-cir: function '{name}' expects {expected} integer arguments, got {}",
+                arguments.len()
+            );
             exit(1);
         }
     } else if !arguments.is_empty() {

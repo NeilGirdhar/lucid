@@ -27288,4 +27288,18 @@ return total
         let oversized = expression("range(2048)");
         assert_eq!(const_range_values(&oversized), None);
     }
+
+    #[test]
+    fn lowers_item_dict_comprehension_in_parameterized_body() {
+        let module = lucid_syntax::parse(
+            r#"source_items = {1: 10, 2: 20}
+comp = {key: value + 1 for key, value in source_items.items()}
+return comp[2]
+"#,
+        )
+        .expect("dict comprehension fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &[])
+            .expect("dict item comprehension should lower");
+        assert_eq!(function.execute(), Ok(Some(21)));
+    }
 }

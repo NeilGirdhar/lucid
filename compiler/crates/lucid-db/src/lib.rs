@@ -1928,12 +1928,6 @@ pub fn lower_function_body(
     file: SourceFile,
     function_name: String,
 ) -> Result<Arc<lucid_cir::Function>, Arc<str>> {
-    let typed = typed_module(db, file).as_ref().map_err(Arc::clone)?;
-    let function = typed
-        .functions
-        .iter()
-        .find(|function| function.symbol.name(db).as_str() == function_name)
-        .ok_or_else(|| Arc::<str>::from("function not found"))?;
     let module = parse_ast(db, file).as_ref().map_err(Arc::clone)?;
     let Some(source_function) = module.statements.iter().find_map(|statement| {
         let statement = match statement {
@@ -1949,6 +1943,144 @@ pub fn lower_function_body(
     }) else {
         return Err(Arc::from("function not found"));
     };
+    fn expr_contains_comprehension(expr: &lucid_syntax::Expr) -> bool {
+        match expr {
+            lucid_syntax::Expr::ListComp { .. }
+            | lucid_syntax::Expr::SetComp { .. }
+            | lucid_syntax::Expr::DictComp { .. } => true,
+            lucid_syntax::Expr::Unary { expr, .. }
+            | lucid_syntax::Expr::Await { expr, .. }
+            | lucid_syntax::Expr::Propagate { expr, .. }
+            | lucid_syntax::Expr::Trust { expr, .. }
+            | lucid_syntax::Expr::Freeze { expr, .. }
+            | lucid_syntax::Expr::Attribute { value: expr, .. } => {
+                expr_contains_comprehension(expr)
+            }
+            lucid_syntax::Expr::Binary { left, right, .. } => {
+                expr_contains_comprehension(left) || expr_contains_comprehension(right)
+            }
+            lucid_syntax::Expr::IfExpr {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                expr_contains_comprehension(condition)
+                    || expr_contains_comprehension(then_branch)
+                    || expr_contains_comprehension(else_branch)
+            }
+            lucid_syntax::Expr::Call { func, args, .. } => {
+                expr_contains_comprehension(func)
+                    || args
+                        .iter()
+                        .any(|arg| expr_contains_comprehension(&arg.value))
+            }
+            lucid_syntax::Expr::Index { value, index, .. } => {
+                expr_contains_comprehension(value) || expr_contains_comprehension(index)
+            }
+            lucid_syntax::Expr::Record { fields, .. } => fields
+                .iter()
+                .any(|(_, value)| expr_contains_comprehension(value)),
+            lucid_syntax::Expr::List { elements, .. }
+            | lucid_syntax::Expr::Set { elements, .. } => {
+                elements.iter().any(expr_contains_comprehension)
+            }
+            lucid_syntax::Expr::Dict { entries, .. } => entries.iter().any(|(key, value)| {
+                expr_contains_comprehension(key) || expr_contains_comprehension(value)
+            }),
+            _ => false,
+        }
+    }
+    fn statement_contains_comprehension(statement: &lucid_syntax::Stmt) -> bool {
+        match statement {
+            lucid_syntax::Stmt::Export(inner) => statement_contains_comprehension(inner),
+            lucid_syntax::Stmt::VarDef { value, .. } => {
+                value.as_ref().is_some_and(expr_contains_comprehension)
+            }
+            lucid_syntax::Stmt::Assignment { target, value, .. }
+            | lucid_syntax::Stmt::AugAssign { target, value, .. } => {
+                expr_contains_comprehension(target) || expr_contains_comprehension(value)
+            }
+            lucid_syntax::Stmt::Return { value, .. } => {
+                value.as_ref().is_some_and(expr_contains_comprehension)
+            }
+            lucid_syntax::Stmt::Assert {
+                condition, message, ..
+            } => {
+                expr_contains_comprehension(condition)
+                    || message.as_ref().is_some_and(expr_contains_comprehension)
+            }
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => {
+                expr_contains_comprehension(condition)
+                    || then_branch.iter().any(statement_contains_comprehension)
+                    || elif_branches.iter().any(|(condition, branch)| {
+                        expr_contains_comprehension(condition)
+                            || branch.iter().any(statement_contains_comprehension)
+                    })
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|branch| branch.iter().any(statement_contains_comprehension))
+            }
+            lucid_syntax::Stmt::For {
+                iterable,
+                body,
+                if_broken,
+                ..
+            } => {
+                expr_contains_comprehension(iterable)
+                    || body.iter().any(statement_contains_comprehension)
+                    || if_broken
+                        .as_ref()
+                        .is_some_and(|branch| branch.iter().any(statement_contains_comprehension))
+            }
+            lucid_syntax::Stmt::While {
+                condition,
+                body,
+                if_broken,
+                ..
+            } => {
+                expr_contains_comprehension(condition)
+                    || body.iter().any(statement_contains_comprehension)
+                    || if_broken
+                        .as_ref()
+                        .is_some_and(|branch| branch.iter().any(statement_contains_comprehension))
+            }
+            _ => false,
+        }
+    }
+    if !source_function.is_async
+        && source_function
+            .body
+            .iter()
+            .any(statement_contains_comprehension)
+    {
+        let module = lucid_syntax::Module {
+            statements: source_function.body.clone(),
+            span: source_function.span,
+        };
+        let parameter_names: Vec<String> = source_function
+            .params
+            .iter()
+            .map(|parameter| parameter.name.clone())
+            .collect();
+        if let Ok(lowered) =
+            lucid_cir::Function::from_module_linear_with_params(&module, &parameter_names)
+        {
+            return Ok(Arc::new(lowered));
+        }
+    }
+    let typed = typed_module(db, file).as_ref().map_err(Arc::clone)?;
+    let function = typed
+        .functions
+        .iter()
+        .find(|function| function.symbol.name(db).as_str() == function_name)
+        .ok_or_else(|| Arc::<str>::from("function not found"))?;
     if function.is_dispatch && function.overload_types.len() != 1 {
         return Err(Arc::from(
             "dispatch overload set bodies require a selected overload for CIR lowering",
@@ -13665,6 +13797,19 @@ mod tests {
             .as_ref()
             .expect("a single dispatch overload has an unambiguous body to lower");
         assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn database_lowers_item_dict_comprehension_body_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "dict-comp.lucid",
+            "def answer():\n    source_items = {1: 10, 2: 20}\n    comp = {key: value + 1 for key, value in source_items.items()}\n    return comp[2]\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dict item comprehension body should lower through CIR");
+        assert_eq!(function.execute(), Ok(Some(21)));
     }
 
     #[test]
