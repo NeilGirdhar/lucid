@@ -1112,8 +1112,16 @@ fn collect_typed_body<'db>(
                             true
                         }
                         lucid_syntax::Expr::Unary { expr, .. } => typed_match_pure_expr(expr),
-                        lucid_syntax::Expr::Binary { left, right, .. } => {
-                            typed_match_pure_expr(left) && typed_match_pure_expr(right)
+                        lucid_syntax::Expr::Binary {
+                            op, left, right, ..
+                        } => {
+                            !matches!(
+                                op,
+                                lucid_syntax::BinaryOp::Div
+                                    | lucid_syntax::BinaryOp::FloorDiv
+                                    | lucid_syntax::BinaryOp::Mod
+                            ) && typed_match_pure_expr(left)
+                                && typed_match_pure_expr(right)
                         }
                         lucid_syntax::Expr::IfExpr {
                             condition,
@@ -2339,12 +2347,14 @@ pub fn lower_function_body(
             match_statement_value(&arm.body)
         }
         type MatchLocalBinding = (String, lucid_syntax::Span);
-        type MatchValueWithBindings<'a> = (&'a lucid_syntax::Expr, Vec<MatchLocalBinding>);
+        type MatchPrefix = (Vec<lucid_syntax::Span>, Vec<MatchLocalBinding>);
+        type MatchValueWithBindings<'a> = (&'a lucid_syntax::Expr, MatchPrefix);
         fn match_statement_value_with_bindings(
             statements: &[lucid_syntax::Stmt],
         ) -> Result<Option<MatchValueWithBindings<'_>>, Arc<str>> {
             fn collect<'a>(
                 statements: &'a [lucid_syntax::Stmt],
+                ordered_roots: &mut Vec<lucid_syntax::Span>,
                 bindings: &mut Vec<MatchLocalBinding>,
             ) -> Result<Option<&'a lucid_syntax::Expr>, Arc<str>> {
                 for (index, statement) in statements.iter().enumerate() {
@@ -2371,7 +2381,11 @@ pub fn lower_function_body(
                             pattern: lucid_syntax::Pattern::Ident(name, _),
                             value: Some(value),
                             ..
-                        } => bindings.push((name.clone(), value.span())),
+                        } => {
+                            bindings.push((name.clone(), value.span()));
+                            ordered_roots.push(value.span());
+                        }
+                        lucid_syntax::Stmt::Expr(expr) => ordered_roots.push(expr.span()),
                         lucid_syntax::Stmt::If {
                             condition,
                             then_branch,
@@ -2384,23 +2398,21 @@ pub fn lower_function_body(
                             elif_branches,
                             else_branch.as_ref(),
                         ) {
-                            StaticBranch::Selected(branch) => return collect(branch, bindings),
+                            StaticBranch::Selected(branch) => {
+                                return collect(branch, ordered_roots, bindings);
+                            }
                             StaticBranch::Empty => continue,
                             StaticBranch::Unknown => return Ok(None),
                         },
-                        lucid_syntax::Stmt::Expr(_) => {
-                            return Err(Arc::from(
-                                "effectful discarded expression is not supported by typed CIR lowering",
-                            ));
-                        }
                         _ => return Ok(None),
                     }
                 }
                 Ok(None)
             }
             let mut bindings = Vec::new();
-            let value = collect(statements, &mut bindings)?;
-            Ok(value.map(|value| (value, bindings)))
+            let mut ordered_roots = Vec::new();
+            let value = collect(statements, &mut ordered_roots, &mut bindings)?;
+            Ok(value.map(|value| (value, (ordered_roots, bindings))))
         }
         fn match_arm_value_with_bindings(
             arm: &lucid_syntax::MatchArm,
@@ -2451,17 +2463,19 @@ pub fn lower_function_body(
         }
         fn match_arm_void_bindings(
             arm: &lucid_syntax::MatchArm,
-        ) -> Result<Option<Vec<(String, lucid_syntax::Span)>>, Arc<str>> {
+        ) -> Result<Option<MatchPrefix>, Arc<str>> {
             let statements = arm.body.as_slice();
             let setup = match statements.split_last() {
                 Some((lucid_syntax::Stmt::Return { value: None, .. }, prefix))
                 | Some((lucid_syntax::Stmt::Pass(_), prefix)) => prefix,
                 Some((_, _)) => statements,
-                None => return Ok(Some(Vec::new())),
+                None => return Ok(Some((Vec::new(), Vec::new()))),
             };
             let mut bindings = Vec::new();
+            let mut ordered_roots = Vec::new();
             fn collect_match_void_binding(
                 statement: &lucid_syntax::Stmt,
+                ordered_roots: &mut Vec<lucid_syntax::Span>,
                 bindings: &mut Vec<(String, lucid_syntax::Span)>,
             ) -> Result<bool, Arc<str>> {
                 if branch_noop_statement(statement) {
@@ -2478,10 +2492,9 @@ pub fn lower_function_body(
                         value: Some(value),
                         ..
                     } => (name, value),
-                    lucid_syntax::Stmt::Expr(_) => {
-                        return Err(Arc::from(
-                            "effectful discarded expression is not supported by typed CIR lowering",
-                        ));
+                    lucid_syntax::Stmt::Expr(expr) => {
+                        ordered_roots.push(expr.span());
+                        return Ok(true);
                     }
                     lucid_syntax::Stmt::Return { value: None, .. } => return Ok(true),
                     lucid_syntax::Stmt::If {
@@ -2499,7 +2512,11 @@ pub fn lower_function_body(
                         ) {
                             StaticBranch::Selected(branch) => {
                                 for statement in branch {
-                                    if !collect_match_void_binding(statement, bindings)? {
+                                    if !collect_match_void_binding(
+                                        statement,
+                                        ordered_roots,
+                                        bindings,
+                                    )? {
                                         return Ok(false);
                                     }
                                 }
@@ -2512,81 +2529,103 @@ pub fn lower_function_body(
                     _ => return Ok(false),
                 };
                 bindings.push((name.clone(), value.span()));
+                ordered_roots.push(value.span());
                 Ok(true)
             }
             for statement in setup {
-                if !collect_match_void_binding(statement, &mut bindings)? {
+                if !collect_match_void_binding(statement, &mut ordered_roots, &mut bindings)? {
                     return Ok(None);
                 }
             }
-            Ok(Some(bindings))
+            Ok(Some((ordered_roots, bindings)))
         }
-        let lower_match_bindings_to_void =
-            |bindings: &[(String, lucid_syntax::Span)]| -> Result<Arc<lucid_cir::Function>, Arc<str>> {
-                if bindings.is_empty() {
-                    let function = lucid_cir::Function {
-                        entry: lucid_cir::BlockId(0),
-                        blocks: vec![lucid_cir::Block {
-                            id: lucid_cir::BlockId(0),
-                            instructions: function
-                                .parameter_names
-                                .iter()
-                                .enumerate()
-                                .map(|(index, _)| lucid_cir::Instruction::Param {
-                                    result: lucid_cir::ValueId(index as u32),
-                                    index: index as u32,
-                                })
-                                .collect(),
-                            terminator: lucid_cir::Terminator::Return(None),
-                        }],
-                    };
-                    function
-                        .verify()
-                        .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
-                    return Ok(Arc::new(function));
-                }
-                let nodes = function
-                    .body_expressions
-                    .iter()
-                    .map(|node| lucid_cir::TypedExprNode {
-                        id: node.id,
-                        kind: node.kind.clone(),
-                        detail: node.detail.clone(),
-                        children: node.children.to_vec(),
-                        literal: node.literal,
-                    })
-                    .collect::<Vec<_>>();
-                let local_bindings = bindings
-                    .iter()
-                    .map(|(name, span)| {
-                        function
-                            .body_expressions
+        let lower_match_bindings_to_void = |ordered_root_spans: &[lucid_syntax::Span],
+                                            bindings: &[(String, lucid_syntax::Span)]|
+         -> Result<Arc<lucid_cir::Function>, Arc<str>> {
+            if ordered_root_spans.is_empty() {
+                let function = lucid_cir::Function {
+                    entry: lucid_cir::BlockId(0),
+                    blocks: vec![lucid_cir::Block {
+                        id: lucid_cir::BlockId(0),
+                        instructions: function
+                            .parameter_names
                             .iter()
-                            .rev()
-                            .find(|node| node.span == *span)
-                            .map(|node| (name.clone(), node.id))
-                            .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let root_id = local_bindings
-                    .last()
-                    .map(|(_, id)| *id)
-                    .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
-                let mut lowered = lucid_cir::Function::from_typed_function_body_with_locals(
-                    &nodes,
-                    root_id,
-                    &function.parameter_names,
-                    &local_bindings,
-                )
-                .map_err(|_| Arc::<str>::from("unsupported constant match expression"))?;
-                if let Some(block) = lowered.blocks.last_mut() {
-                    block.terminator = lucid_cir::Terminator::Return(None);
-                }
-                lowered
+                            .enumerate()
+                            .map(|(index, _)| lucid_cir::Instruction::Param {
+                                result: lucid_cir::ValueId(index as u32),
+                                index: index as u32,
+                            })
+                            .collect(),
+                        terminator: lucid_cir::Terminator::Return(None),
+                    }],
+                };
+                function
                     .verify()
                     .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
-                Ok(Arc::new(lowered))
-            };
+                return Ok(Arc::new(function));
+            }
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            let local_bindings = bindings
+                .iter()
+                .map(|(name, span)| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| (name.clone(), node.id))
+                        .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let ordered_roots = ordered_root_spans
+                .iter()
+                .map(|span| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| node.id)
+                        .ok_or_else(|| {
+                            Arc::<str>::from("prefix expression has no typed expression")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let root_id = ordered_roots
+                .last()
+                .copied()
+                .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
+            let prefix_roots = ordered_roots
+                .iter()
+                .take(ordered_roots.len().saturating_sub(1))
+                .copied()
+                .collect::<Vec<_>>();
+            let mut lowered = lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+                &nodes,
+                &prefix_roots,
+                root_id,
+                &function.parameter_names,
+                &local_bindings,
+            )
+            .map_err(|_| Arc::<str>::from("unsupported constant match expression"))?;
+            if let Some(block) = lowered.blocks.last_mut() {
+                block.terminator = lucid_cir::Terminator::Return(None);
+            }
+            lowered
+                .verify()
+                .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+            Ok(Arc::new(lowered))
+        };
         fn pattern_literal(pattern: &lucid_syntax::Pattern) -> Option<PrimitiveMatchLiteral<'_>> {
             match pattern {
                 lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(value), _) => {
@@ -2710,19 +2749,9 @@ pub fn lower_function_body(
         });
         if let Some(selected_arm) = constant_selected_arm {
             let selected_statements = normalize_static_match_statements(&selected_arm.body);
-            if match_contains_explicit_return(&selected_statements) {
-                let selected_module = lucid_syntax::Module {
-                    statements: selected_statements,
-                    span: source_function.span,
-                };
-                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
-                    &selected_module,
-                    &function.parameter_names,
-                ) {
-                    return Ok(Arc::new(lowered));
-                }
-            }
-            if let Some((value, bindings)) = match_arm_value_with_bindings(selected_arm)? {
+            if let Some((value, (ordered_root_spans, bindings))) =
+                match_arm_value_with_bindings(selected_arm)?
+            {
                 let nodes = function
                     .body_expressions
                     .iter()
@@ -2748,27 +2777,55 @@ pub fn lower_function_body(
                             })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let prefix_roots = ordered_root_spans
+                    .iter()
+                    .map(|span| {
+                        function
+                            .body_expressions
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == *span)
+                            .map(|node| node.id)
+                            .ok_or_else(|| {
+                                Arc::<str>::from("prefix expression has no typed expression")
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 if let Some(root) = function
                     .body_expressions
                     .iter()
                     .rev()
                     .find(|node| node.span == value.span())
-                    && let Ok(lowered) = lucid_cir::Function::from_typed_function_body_with_locals(
-                        &nodes,
-                        root.id,
-                        &function.parameter_names,
-                        &local_bindings,
-                    )
+                    && let Ok(lowered) =
+                        lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+                            &nodes,
+                            &prefix_roots,
+                            root.id,
+                            &function.parameter_names,
+                            &local_bindings,
+                        )
                 {
                     return Ok(Arc::new(lowered));
                 }
                 return Err(Arc::from("unsupported constant match expression"));
             }
-            if match_arm_is_void(selected_arm) {
-                return lower_match_bindings_to_void(&[]);
+            if match_contains_explicit_return(&selected_statements) {
+                let selected_module = lucid_syntax::Module {
+                    statements: selected_statements,
+                    span: source_function.span,
+                };
+                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                    &selected_module,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(lowered));
+                }
             }
-            if let Some(bindings) = match_arm_void_bindings(selected_arm)? {
-                return lower_match_bindings_to_void(&bindings);
+            if match_arm_is_void(selected_arm) {
+                return lower_match_bindings_to_void(&[], &[]);
+            }
+            if let Some((ordered_roots, bindings)) = match_arm_void_bindings(selected_arm)? {
+                return lower_match_bindings_to_void(&ordered_roots, &bindings);
             }
             return Err(Arc::from("unsupported constant match expression"));
         }
@@ -2779,7 +2836,7 @@ pub fn lower_function_body(
                     .is_some_and(|guard| static_truth(guard) == Some(false))
             })
         {
-            return lower_match_bindings_to_void(&[]);
+            return lower_match_bindings_to_void(&[], &[]);
         }
         if let Some((live_index, live_arm)) = arms.iter().enumerate().find(|(_, arm)| {
             !arm.guard
@@ -2824,10 +2881,10 @@ pub fn lower_function_body(
                 ));
             }
             if match_arm_is_void(live_arm) {
-                return lower_match_bindings_to_void(&[]);
+                return lower_match_bindings_to_void(&[], &[]);
             }
-            if let Some(bindings) = match_arm_void_bindings(live_arm)? {
-                return lower_match_bindings_to_void(&bindings);
+            if let Some((ordered_roots, bindings)) = match_arm_void_bindings(live_arm)? {
+                return lower_match_bindings_to_void(&ordered_roots, &bindings);
             }
         }
         let arm_condition = |arm: &lucid_syntax::MatchArm| match &arm.pattern {
@@ -3731,10 +3788,10 @@ pub fn lower_function_body(
                 return Err(Arc::from("unsupported leading wildcard match expression"));
             }
             if match_arm_is_void(first_arm) {
-                return lower_match_bindings_to_void(&[]);
+                return lower_match_bindings_to_void(&[], &[]);
             }
-            if let Some(bindings) = match_arm_void_bindings(first_arm)? {
-                return lower_match_bindings_to_void(&bindings);
+            if let Some((ordered_roots, bindings)) = match_arm_void_bindings(first_arm)? {
+                return lower_match_bindings_to_void(&ordered_roots, &bindings);
             }
         }
         if arms.len() != 2 {
@@ -10312,7 +10369,31 @@ mod tests {
         let error = lower_function_body(&db, file, "answer".into())
             .as_ref()
             .expect_err("effectful selected match setup must not be erased");
-        assert!(error.contains("effectful discarded expression"));
+        assert!(error.contains("unsupported"));
+
+        let file = db.add_file(
+            "constant-subject-discarded-error-match.lucid",
+            "def answer():\n    match true as flag:\n        case true:\n            1 // 0\n            return 42\n        case _:\n            return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected match discarded expression should lower before return");
+        assert_eq!(
+            function.execute(),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "constant-subject-discarded-error-void-match.lucid",
+            "def answer():\n    match true as flag:\n        case true:\n            1 // 0\n        case _:\n            return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected match discarded expression should lower before void fallthrough");
+        assert_eq!(
+            function.execute(),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
 
         let file = db.add_file(
             "constant-subject-dead-invalid-match.lucid",
