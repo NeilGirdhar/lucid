@@ -10444,6 +10444,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
 
         let file = db.add_file(
+            "parameterized-exported-dynamic-if-continuation.lucid",
+            "def choose(value: int):\n    export if value > 10:\n        result = 100\n    else:\n        result = 1\n    return result + 1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("exported dynamic comparison diamond should lower before a suffix");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(2)));
+
+        let file = db.add_file(
             "parameterized-final-dynamic-elif-assignments-no-else.lucid",
             "def choose(value: int):\n    fallback = 0\n    if value > 10:\n        high = 100\n    elif value > 0:\n        positive = 1\n",
         );
