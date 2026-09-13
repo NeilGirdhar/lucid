@@ -6671,6 +6671,35 @@ impl TypeChecker {
                                     }
                                 }
                             }
+                            Type::Class {
+                                name, type_args, ..
+                            } if name == "dict" => {
+                                let index_type = self.type_of_expr(index)?;
+                                if let Some(key_type) = type_args.first() {
+                                    if !index_type.is_subtype_of(key_type, &self.env) {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "cannot assign to dict with key type {:?}, got index type {:?}",
+                                                key_type, index_type
+                                            ),
+                                            span: index.span(),
+                                        });
+                                    }
+                                }
+                                if let Some(value_type) = type_args.get(1) {
+                                    if !val_type.is_subtype_of(value_type, &self.env) {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "cannot assign {:?} into dict[{:?}, {:?}]",
+                                                val_type,
+                                                type_args.first(),
+                                                value_type
+                                            ),
+                                            span: *span,
+                                        });
+                                    }
+                                }
+                            }
                             Type::Class { name, .. }
                                 if matches!(name.as_str(), "ByteArray" | "MemoryView") =>
                             {
@@ -6697,6 +6726,25 @@ impl TypeChecker {
                             Type::Class { name, .. } if name == "Bytes" => {
                                 return Err(TypeError {
                                     message: "cannot assign into immutable Bytes".into(),
+                                    span: *span,
+                                });
+                            }
+                            Type::Class { name, .. } if name == "tuple" => {
+                                return Err(TypeError {
+                                    message: "cannot assign into immutable tuple".into(),
+                                    span: *span,
+                                });
+                            }
+                            Type::Str => {
+                                return Err(TypeError {
+                                    message: "cannot assign into immutable str".into(),
+                                    span: *span,
+                                });
+                            }
+                            Type::Class { name, .. } if name == "set" => {
+                                return Err(TypeError {
+                                    message: "cannot assign into set (sets do not support index assignment)"
+                                        .into(),
                                     span: *span,
                                 });
                             }
