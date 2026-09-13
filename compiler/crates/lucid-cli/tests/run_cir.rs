@@ -1222,7 +1222,7 @@ fn run_cir_lowers_constant_integer_builtins_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    base = 40\n    values = [1, 2]\n    return max(abs(-base), min(42, base + 1)) + sum(values, 1)\n",
+        "def answer():\n    values = [1, 2]\n    flags = {false, 0, 2}\n    return all(values) and any(flags)\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
@@ -1240,7 +1240,7 @@ fn run_cir_lowers_constant_integer_builtins_in_typed_function_body() {
         "run-cir function integer builtins failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "45");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
 }
 
 #[test]

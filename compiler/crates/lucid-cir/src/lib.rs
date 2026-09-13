@@ -8529,6 +8529,72 @@ impl Function {
                     });
                     Ok(id)
                 }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "all" || name == "any"
+                    ) && args.len() == 1 =>
+                {
+                    let is_all = matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "all"
+                    );
+                    let mut seen_any = false;
+                    let mut result_value = is_all;
+                    let mut fold_value =
+                        |value: ValueId, instructions: &[Instruction]| -> Result<(), LowerError> {
+                            let truth = constant_value_truth(value, instructions)
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            seen_any = true;
+                            if is_all {
+                                result_value &= truth;
+                            } else {
+                                result_value |= truth;
+                            }
+                            Ok(())
+                        };
+                    match &args[0].value {
+                        lucid_syntax::Expr::List { elements, .. }
+                        | lucid_syntax::Expr::Set { elements, .. } => {
+                            for element in elements {
+                                let value = lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                                fold_value(value, instructions)?;
+                            }
+                        }
+                        lucid_syntax::Expr::Ident { name, .. } => {
+                            match aggregate_bindings
+                                .get(name)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                            {
+                                AggregateBinding::List(elements)
+                                | AggregateBinding::Set(elements) => {
+                                    for value in elements {
+                                        fold_value(*value, instructions)?;
+                                    }
+                                }
+                                AggregateBinding::Dict(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                            }
+                        }
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    }
+                    if !seen_any && !is_all {
+                        result_value = false;
+                    }
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool {
+                        result: id,
+                        value: result_value,
+                    });
+                    Ok(id)
+                }
                 lucid_syntax::Expr::Index { value, index, .. } => {
                     let index_value =
                         lower(index, bindings, aggregate_bindings, instructions, next)?;
@@ -19655,6 +19721,11 @@ return total
             ("return sum([10, 20, 12])\n", 42),
             ("values = [10, 20, 12]\nreturn sum(values, 1)\n", 43),
             ("values = {10, 20, 12}\nreturn sum(values)\n", 42),
+            ("return all([true, 1, 2])\n", 1),
+            ("return any([false, 0, 2])\n", 1),
+            ("return all([])\n", 1),
+            ("return any([])\n", 0),
+            ("values = {false, 0, 2}\nreturn any(values)\n", 1),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();
