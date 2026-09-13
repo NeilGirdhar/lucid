@@ -1367,7 +1367,7 @@ fn run_cir_lowers_constant_none_predicates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    missing = None\n    marker = ...\n    values = [None, ...]\n    lookup = {None: None}\n    string_lookup = {\"a\": None}\n    singleton_lookup = {None: \"a\"}\n    return not bool(missing) and bool(marker) and None == None and None is None and not (None != None) and not (None is not None) and marker is ... and None is not marker and len(values) == 2 and values[0] is None and marker in values and lookup[None] is None and len(string_lookup) == 1 and \"a\" in string_lookup and string_lookup[\"a\"] is None and len(singleton_lookup) == 1 and None in singleton_lookup and singleton_lookup[None] == \"a\"\n",
+        "def answer():\n    missing = None\n    marker = ...\n    values = [None, ...]\n    lookup = {None: None}\n    string_lookup = {\"a\": None}\n    singleton_lookup = {None: \"a\"}\n    int_lookup = {1: None}\n    singleton_int_lookup = {None: 1}\n    return not bool(missing) and bool(marker) and None == None and None is None and not (None != None) and not (None is not None) and marker is ... and None is not marker and len(values) == 2 and values[0] is None and marker in values and lookup[None] is None and len(string_lookup) == 1 and \"a\" in string_lookup and string_lookup[\"a\"] is None and len(singleton_lookup) == 1 and None in singleton_lookup and singleton_lookup[None] == \"a\" and len(int_lookup) == 1 and 1 in int_lookup and int_lookup[1] is None and len(singleton_int_lookup) == 1 and None in singleton_int_lookup and singleton_int_lookup[None] == 1\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))

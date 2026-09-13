@@ -8327,12 +8327,14 @@ impl Function {
             StringFloatDict(Vec<(String, f64)>),
             StringSingletonDict(Vec<(String, SingletonBinding)>),
             IntStringDict(Vec<(i64, String)>),
+            IntSingletonDict(Vec<(i64, SingletonBinding)>),
             FloatDict(Vec<(f64, f64)>),
             IntFloatDict(Vec<(i64, f64)>),
             FloatIntDict(Vec<(f64, i64)>),
             FloatStringDict(Vec<(f64, String)>),
             SingletonDict(Vec<(SingletonBinding, SingletonBinding)>),
             SingletonStringDict(Vec<(SingletonBinding, String)>),
+            SingletonIntDict(Vec<(SingletonBinding, i64)>),
             Record(Vec<ValueId>),
             StringRecord(Vec<String>),
             FloatRecord(Vec<f64>),
@@ -8868,6 +8870,27 @@ impl Function {
                 _ => None,
             }
         }
+        fn constant_int_singleton_dict(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<(i64, SingletonBinding)>> {
+            match expr {
+                lucid_syntax::Expr::Dict { entries, .. } => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Some((
+                            constant_index(key)?,
+                            constant_singleton(value, aggregate_bindings)?,
+                        ))
+                    })
+                    .collect(),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::IntSingletonDict(entries) => Some(entries.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
         fn constant_float_int_dict(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -8884,6 +8907,27 @@ impl Function {
                     .collect(),
                 lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
                     AggregateBinding::FloatIntDict(entries) => Some(entries.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        fn constant_singleton_int_dict(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<(SingletonBinding, i64)>> {
+            match expr {
+                lucid_syntax::Expr::Dict { entries, .. } => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Some((
+                            constant_singleton(key, aggregate_bindings)?,
+                            constant_index(value)?,
+                        ))
+                    })
+                    .collect(),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::SingletonIntDict(entries) => Some(entries.clone()),
                     _ => None,
                 },
                 _ => None,
@@ -8943,10 +8987,16 @@ impl Function {
                             entries
                                 .iter()
                                 .find_map(|(key, value)| (key == &index).then_some(*value))
-                        } else {
-                            let entries =
-                                constant_string_singleton_dict(value, aggregate_bindings)?;
+                        } else if let Some(entries) =
+                            constant_string_singleton_dict(value, aggregate_bindings)
+                        {
                             let index = constant_string(index, aggregate_bindings)?;
+                            entries
+                                .iter()
+                                .find_map(|(key, value)| (key == &index).then_some(*value))
+                        } else {
+                            let entries = constant_int_singleton_dict(value, aggregate_bindings)?;
+                            let index = constant_index(index)?;
                             entries
                                 .iter()
                                 .find_map(|(key, value)| (key == &index).then_some(*value))
@@ -9180,6 +9230,11 @@ impl Function {
                                 .ok_or(LowerError::UnsupportedExpression)?
                                 .len()
                         }
+                        expr if constant_int_singleton_dict(expr, aggregate_bindings).is_some() => {
+                            constant_int_singleton_dict(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .len()
+                        }
                         expr if constant_float_int_dict(expr, aggregate_bindings).is_some() => {
                             constant_float_int_dict(expr, aggregate_bindings)
                                 .ok_or(LowerError::UnsupportedExpression)?
@@ -9199,6 +9254,11 @@ impl Function {
                             .is_some() =>
                         {
                             constant_singleton_string_dict(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .len()
+                        }
+                        expr if constant_singleton_int_dict(expr, aggregate_bindings).is_some() => {
+                            constant_singleton_int_dict(expr, aggregate_bindings)
                                 .ok_or(LowerError::UnsupportedExpression)?
                                 .len()
                         }
@@ -9264,12 +9324,14 @@ impl Function {
                             AggregateBinding::StringFloatDict(entries) => entries.len(),
                             AggregateBinding::StringSingletonDict(entries) => entries.len(),
                             AggregateBinding::IntStringDict(entries) => entries.len(),
+                            AggregateBinding::IntSingletonDict(entries) => entries.len(),
                             AggregateBinding::FloatDict(entries) => entries.len(),
                             AggregateBinding::IntFloatDict(entries) => entries.len(),
                             AggregateBinding::FloatIntDict(entries) => entries.len(),
                             AggregateBinding::FloatStringDict(entries) => entries.len(),
                             AggregateBinding::SingletonDict(entries) => entries.len(),
                             AggregateBinding::SingletonStringDict(entries) => entries.len(),
+                            AggregateBinding::SingletonIntDict(entries) => entries.len(),
                             AggregateBinding::Record(_)
                             | AggregateBinding::StringRecord(_)
                             | AggregateBinding::FloatRecord(_)
@@ -9410,7 +9472,8 @@ impl Function {
                             AggregateBinding::StringIntDict(_)
                             | AggregateBinding::StringFloatDict(_)
                             | AggregateBinding::StringSingletonDict(_)
-                            | AggregateBinding::IntStringDict(_) => {
+                            | AggregateBinding::IntStringDict(_)
+                            | AggregateBinding::IntSingletonDict(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::FloatDict(_) => {
@@ -9424,7 +9487,8 @@ impl Function {
                             AggregateBinding::SingletonDict(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
-                            AggregateBinding::SingletonStringDict(_) => {
+                            AggregateBinding::SingletonStringDict(_)
+                            | AggregateBinding::SingletonIntDict(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::Record(elements) => !elements.is_empty(),
@@ -9626,7 +9690,8 @@ impl Function {
                                 AggregateBinding::StringIntDict(_)
                                 | AggregateBinding::StringFloatDict(_)
                                 | AggregateBinding::StringSingletonDict(_)
-                                | AggregateBinding::IntStringDict(_) => {
+                                | AggregateBinding::IntStringDict(_)
+                                | AggregateBinding::IntSingletonDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::FloatDict(_) => {
@@ -9640,7 +9705,8 @@ impl Function {
                                 AggregateBinding::SingletonDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
-                                AggregateBinding::SingletonStringDict(_) => {
+                                AggregateBinding::SingletonStringDict(_)
+                                | AggregateBinding::SingletonIntDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::StringSet(_) => {
@@ -9761,7 +9827,8 @@ impl Function {
                                 AggregateBinding::StringIntDict(_)
                                 | AggregateBinding::StringFloatDict(_)
                                 | AggregateBinding::StringSingletonDict(_)
-                                | AggregateBinding::IntStringDict(_) => {
+                                | AggregateBinding::IntStringDict(_)
+                                | AggregateBinding::IntSingletonDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::FloatDict(_) => {
@@ -9775,7 +9842,8 @@ impl Function {
                                 AggregateBinding::SingletonDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
-                                AggregateBinding::SingletonStringDict(_) => {
+                                AggregateBinding::SingletonStringDict(_)
+                                | AggregateBinding::SingletonIntDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::StringSet(_) => {
@@ -9856,6 +9924,17 @@ impl Function {
                     }
                     if let Some(index_key) = constant_string(index, aggregate_bindings) {
                         let entries = constant_string_int_dict(value, aggregate_bindings)
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                        let value = entries
+                            .iter()
+                            .find_map(|(key, value)| (key == &index_key).then_some(*value))
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                        let id = result(next);
+                        instructions.push(Instruction::ConstInt { result: id, value });
+                        return Ok(id);
+                    }
+                    if let Some(index_key) = constant_singleton(index, aggregate_bindings) {
+                        let entries = constant_singleton_int_dict(value, aggregate_bindings)
                             .ok_or(LowerError::UnsupportedExpression)?;
                         let value = entries
                             .iter()
@@ -10004,7 +10083,8 @@ impl Function {
                                 AggregateBinding::StringIntDict(_)
                                 | AggregateBinding::StringFloatDict(_)
                                 | AggregateBinding::StringSingletonDict(_)
-                                | AggregateBinding::IntStringDict(_) => {
+                                | AggregateBinding::IntStringDict(_)
+                                | AggregateBinding::IntSingletonDict(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::FloatDict(_) => {
@@ -10018,7 +10098,8 @@ impl Function {
                                 AggregateBinding::SingletonDict(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
-                                AggregateBinding::SingletonStringDict(_) => {
+                                AggregateBinding::SingletonStringDict(_)
+                                | AggregateBinding::SingletonIntDict(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::Record(elements) => {
@@ -10409,7 +10490,8 @@ impl Function {
                     && (constant_singleton_list(right, aggregate_bindings).is_some()
                         || constant_singleton_set(right, aggregate_bindings).is_some()
                         || constant_singleton_dict(right, aggregate_bindings).is_some()
-                        || constant_singleton_string_dict(right, aggregate_bindings).is_some()) =>
+                        || constant_singleton_string_dict(right, aggregate_bindings).is_some()
+                        || constant_singleton_int_dict(right, aggregate_bindings).is_some()) =>
                 {
                     let needle = constant_singleton(left, aggregate_bindings)
                         .ok_or(LowerError::UnsupportedExpression)?;
@@ -10422,6 +10504,10 @@ impl Function {
                         haystack.contains(&needle)
                     } else if let Some(entries) =
                         constant_singleton_string_dict(right, aggregate_bindings)
+                    {
+                        entries.iter().any(|(key, _)| key == &needle)
+                    } else if let Some(entries) =
+                        constant_singleton_int_dict(right, aggregate_bindings)
                     {
                         entries.iter().any(|(key, _)| key == &needle)
                     } else {
@@ -10446,15 +10532,19 @@ impl Function {
                     ..
                 } if constant_index(left).is_some()
                     && (constant_int_string_dict(right, aggregate_bindings).is_some()
-                        || constant_int_float_dict(right, aggregate_bindings).is_some()) =>
+                        || constant_int_float_dict(right, aggregate_bindings).is_some()
+                        || constant_int_singleton_dict(right, aggregate_bindings).is_some()) =>
                 {
                     let needle = constant_index(left).ok_or(LowerError::UnsupportedExpression)?;
                     let contains = if let Some(entries) =
                         constant_int_string_dict(right, aggregate_bindings)
                     {
                         entries.iter().any(|(key, _)| key == &needle)
+                    } else if let Some(entries) = constant_int_float_dict(right, aggregate_bindings)
+                    {
+                        entries.iter().any(|(key, _)| key == &needle)
                     } else {
-                        constant_int_float_dict(right, aggregate_bindings)
+                        constant_int_singleton_dict(right, aggregate_bindings)
                             .ok_or(LowerError::UnsupportedExpression)?
                             .iter()
                             .any(|(key, _)| key == &needle)
@@ -10564,6 +10654,9 @@ impl Function {
                                 AggregateBinding::IntFloatDict(entries) => {
                                     contains = entries.iter().any(|(key, _)| *key == needle);
                                 }
+                                AggregateBinding::IntSingletonDict(entries) => {
+                                    contains = entries.iter().any(|(key, _)| *key == needle);
+                                }
                                 AggregateBinding::FloatIntDict(_)
                                 | AggregateBinding::FloatStringDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
@@ -10574,7 +10667,8 @@ impl Function {
                                 AggregateBinding::SingletonDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
-                                AggregateBinding::SingletonStringDict(_) => {
+                                AggregateBinding::SingletonStringDict(_)
+                                | AggregateBinding::SingletonIntDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::StringList(_) => {
@@ -11334,6 +11428,16 @@ impl Function {
                     right.sort_unstable();
                     Some(left == right)
                 }
+                (
+                    AggregateBinding::IntSingletonDict(left),
+                    AggregateBinding::IntSingletonDict(right),
+                ) => {
+                    let mut left = left.clone();
+                    let mut right = right.clone();
+                    left.sort_unstable();
+                    right.sort_unstable();
+                    Some(left == right)
+                }
                 (AggregateBinding::FloatDict(left), AggregateBinding::FloatDict(right)) => {
                     let mut left = left.clone();
                     let mut right = right.clone();
@@ -11406,6 +11510,16 @@ impl Function {
                     right.sort_unstable();
                     Some(left == right)
                 }
+                (
+                    AggregateBinding::SingletonIntDict(left),
+                    AggregateBinding::SingletonIntDict(right),
+                ) => {
+                    let mut left = left.clone();
+                    let mut right = right.clone();
+                    left.sort_unstable();
+                    right.sort_unstable();
+                    Some(left == right)
+                }
                 (AggregateBinding::String(left), AggregateBinding::String(right)) => {
                     Some(left == right)
                 }
@@ -11435,12 +11549,14 @@ impl Function {
                     | AggregateBinding::StringFloatDict(_)
                     | AggregateBinding::StringSingletonDict(_)
                     | AggregateBinding::IntStringDict(_)
+                    | AggregateBinding::IntSingletonDict(_)
                     | AggregateBinding::FloatDict(_)
                     | AggregateBinding::IntFloatDict(_)
                     | AggregateBinding::FloatIntDict(_)
                     | AggregateBinding::FloatStringDict(_)
                     | AggregateBinding::SingletonDict(_)
                     | AggregateBinding::SingletonStringDict(_)
+                    | AggregateBinding::SingletonIntDict(_)
                     | AggregateBinding::Record(_)
                     | AggregateBinding::StringRecord(_)
                     | AggregateBinding::FloatRecord(_)
@@ -11465,12 +11581,14 @@ impl Function {
                     | AggregateBinding::StringFloatDict(_)
                     | AggregateBinding::StringSingletonDict(_)
                     | AggregateBinding::IntStringDict(_)
+                    | AggregateBinding::IntSingletonDict(_)
                     | AggregateBinding::FloatDict(_)
                     | AggregateBinding::IntFloatDict(_)
                     | AggregateBinding::FloatIntDict(_)
                     | AggregateBinding::FloatStringDict(_)
                     | AggregateBinding::SingletonDict(_)
                     | AggregateBinding::SingletonStringDict(_)
+                    | AggregateBinding::SingletonIntDict(_)
                     | AggregateBinding::Record(_)
                     | AggregateBinding::StringRecord(_)
                     | AggregateBinding::FloatRecord(_)
@@ -11508,12 +11626,14 @@ impl Function {
                         AggregateBinding::StringFloatDict(_) => None,
                         AggregateBinding::StringSingletonDict(_) => None,
                         AggregateBinding::IntStringDict(_) => None,
+                        AggregateBinding::IntSingletonDict(_) => None,
                         AggregateBinding::FloatDict(_) => None,
                         AggregateBinding::IntFloatDict(_) => None,
                         AggregateBinding::FloatIntDict(_) => None,
                         AggregateBinding::FloatStringDict(_) => None,
                         AggregateBinding::SingletonDict(_) => None,
                         AggregateBinding::SingletonStringDict(_) => None,
+                        AggregateBinding::SingletonIntDict(_) => None,
                         AggregateBinding::Record(elements) => Some(!elements.is_empty()),
                         AggregateBinding::StringRecord(_) => None,
                         AggregateBinding::FloatRecord(_) => None,
@@ -11695,6 +11815,9 @@ impl Function {
                     if let Some(entries) = constant_int_string_dict(expr, aggregate_bindings) {
                         return Ok(Some(AggregateBinding::IntStringDict(entries)));
                     }
+                    if let Some(entries) = constant_int_singleton_dict(expr, aggregate_bindings) {
+                        return Ok(Some(AggregateBinding::IntSingletonDict(entries)));
+                    }
                     if let Some(entries) = constant_float_dict(expr, aggregate_bindings) {
                         return Ok(Some(AggregateBinding::FloatDict(entries)));
                     }
@@ -11713,6 +11836,9 @@ impl Function {
                     if let Some(entries) = constant_singleton_string_dict(expr, aggregate_bindings)
                     {
                         return Ok(Some(AggregateBinding::SingletonStringDict(entries)));
+                    }
+                    if let Some(entries) = constant_singleton_int_dict(expr, aggregate_bindings) {
+                        return Ok(Some(AggregateBinding::SingletonIntDict(entries)));
                     }
                     let mut values = Vec::with_capacity(entries.len());
                     for (key, value) in entries {
@@ -22481,6 +22607,14 @@ return total
             ("return {None: \"a\"} == {None: \"a\"}\n", 1),
             ("values = {None: \"a\"}\nreturn None in values\n", 1),
             ("values = {None: \"a\"}\nreturn values[None] == \"a\"\n", 1),
+            ("values = {1: None}\nreturn len(values)\n", 1),
+            ("return {1: None} == {1: None}\n", 1),
+            ("values = {1: None}\nreturn 1 in values\n", 1),
+            ("values = {1: None}\nreturn values[1] is None\n", 1),
+            ("values = {None: 1}\nreturn len(values)\n", 1),
+            ("return {None: 1} == {None: 1}\n", 1),
+            ("values = {None: 1}\nreturn None in values\n", 1),
+            ("values = {None: 1}\nreturn values[None] == 1\n", 1),
             ("values = [...]\nreturn values[0] is ...\n", 1),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
