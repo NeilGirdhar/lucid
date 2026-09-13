@@ -177,6 +177,66 @@ fn run_entry_rejects_unknown_manifest_entry_point() {
 }
 
 #[test]
+fn run_reports_unresolved_imports_before_runtime() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_run_missing_import_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let source = root.join("main.lucid");
+    fs::write(&source, "import missing\nvalue = 1\n").expect("source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            source.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0300"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("import missing"),
+        "diagnostic should render unresolved import source: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Runtime Error"),
+        "unresolved imports should fail before runtime: {stderr}"
+    );
+}
+
+#[test]
+fn run_reports_imported_module_type_errors_before_runtime() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_run_import_type_error_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\n").expect("main should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("child.lucid"),
+        "diagnostic should point at imported file: {stderr}"
+    );
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "diagnostic should render imported file source: {stderr}"
+    );
+}
+
+#[test]
 fn native_run_resolves_manifest_entry_point_target() {
     let root = std::env::temp_dir().join(format!(
         "lucid_native_manifest_entry_{}",

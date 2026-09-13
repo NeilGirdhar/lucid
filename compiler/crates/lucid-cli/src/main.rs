@@ -462,22 +462,20 @@ fn run_file(path_str: &str, entry: Option<&str>) {
     let library_context = project
         .as_ref()
         .and_then(|config| config.library_context.as_deref());
-    let source = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: failed to read file '{path_str}': {e}");
+    let mut database = lucid_db::CompilerDatabase::default();
+    let (source_project, file) = match load_source_project(&mut database, path) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("{error}");
             exit(1);
         }
     };
-
-    let mut database = lucid_db::CompilerDatabase::default();
-    let file = database.add_file(path_str.to_string(), source.clone());
-    let diagnostics = lucid_db::file_diagnostics(&database, file);
+    let diagnostics = lucid_db::project_diagnostics(&database, source_project);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_database_diagnostics(&database, file, path_str, diagnostics);
+        emit_project_diagnostics(&database, diagnostics);
         exit(1);
     }
     let module = match lucid_db::parse_ast(&database, file).as_ref() {
@@ -487,11 +485,6 @@ fn run_file(path_str: &str, entry: Option<&str>) {
             exit(1);
         }
     };
-    if let Err(error) = lucid_db::type_check_file(&database, file) {
-        eprintln!("Type Error: {error}");
-        exit(1);
-    }
-
     let mut interp = lucid_runtime::Interpreter::new();
     if let Ok(canon) = fs::canonicalize(path) {
         interp.set_current_file(Some(canon));
@@ -859,7 +852,7 @@ fn check_file(path_str: &str) {
     let path = Path::new(path_str);
     validate_project_manifest(path);
     let mut database = lucid_db::CompilerDatabase::default();
-    let project = match load_source_project(&mut database, path) {
+    let (project, _) = match load_source_project(&mut database, path) {
         Ok(project) => project,
         Err(error) => {
             eprintln!("{error}");
@@ -954,7 +947,7 @@ fn collect_project_source_files(
 fn load_source_project(
     database: &mut lucid_db::CompilerDatabase,
     entry: &Path,
-) -> Result<lucid_db::Project, String> {
+) -> Result<(lucid_db::Project, lucid_db::SourceFile), String> {
     let canonical_entry = fs::canonicalize(entry).map_err(|error| {
         format!(
             "Error: failed to resolve file '{}': {error}",
@@ -965,7 +958,11 @@ fn load_source_project(
     let mut visited = HashSet::new();
     let mut files = Vec::new();
     collect_project_source_files(database, &canonical_entry, root, &mut visited, &mut files)?;
-    Ok(lucid_db::Project::new(database, files))
+    let entry_file = files
+        .first()
+        .copied()
+        .ok_or_else(|| format!("Error: no source files found for '{}'", entry.display()))?;
+    Ok((lucid_db::Project::new(database, files), entry_file))
 }
 
 fn emit_project_diagnostics(
