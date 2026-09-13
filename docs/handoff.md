@@ -2055,9 +2055,9 @@ diverged:
   the old `match_arm_value` extractor.
   The new regression covers a guarded literal arm and wildcard fallback whose
   bodies define locals before returning.
-  Nested dynamic control flow inside a synthesized match arm still requires
-  nested CFG inlining, because branch lowering does not yet splice a complete
-  inner CFG into the outer match ladder.
+  Nested dynamic local control flow inside synthesized match arms now lowers
+  through the explicit-ladder adapters described below, including literal,
+  guarded wildcard, and final wildcard arms.
   Constant-subject matches are farther along: once an arm is selected
   statically, its body is normalized for statically selected nested branches
   and then routed through the linear CFG lowerer when it contains a live
