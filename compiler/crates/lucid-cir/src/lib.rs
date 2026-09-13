@@ -12083,6 +12083,15 @@ impl Function {
                         AggregateLoopValue::Aggregate(AggregateBinding::String(value.clone()))
                     })
                     .collect(),
+                ("items", AggregateBinding::StringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::StringRecord(vec![
+                            key.clone(),
+                            value.clone(),
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::StringIntDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| {
@@ -12161,6 +12170,14 @@ impl Function {
                         AggregateLoopValue::Aggregate(AggregateBinding::Float(*value))
                     })
                     .collect(),
+                ("items", AggregateBinding::FloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::FloatRecord(vec![
+                            *key, *value,
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::FloatIntDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| AggregateLoopValue::Aggregate(AggregateBinding::Float(*key)))
@@ -12196,6 +12213,14 @@ impl Function {
                 ("values", AggregateBinding::SingletonDict(entries)) => entries
                     .iter()
                     .map(|(_, value)| AggregateLoopValue::Aggregate(singleton_aggregate(*value)))
+                    .collect(),
+                ("items", AggregateBinding::SingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::SingletonRecord(vec![
+                            *key, *value,
+                        ]))
+                    })
                     .collect(),
                 ("keys", AggregateBinding::SingletonStringDict(entries)) => entries
                     .iter()
@@ -24136,6 +24161,26 @@ return total
                 .expect("bound dictionary item views should iterate key-value records")
                 .execute(),
             Ok(Some(33))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\npairs = {\"a\": \"bc\", \"de\": \"f\"}\nfor item in pairs.items():\n    value = value + len(item[0]) + len(item[1])\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound string dictionary item views should iterate key-value records")
+                .execute(),
+            Ok(Some(6))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\npairs = {1.5: 2.5, 3.5: 4.5}\nfor item in pairs.items():\n    value = value + int(item[0] < item[1])\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound float dictionary item views should iterate key-value records")
+                .execute(),
+            Ok(Some(2))
         );
         let module = lucid_syntax::parse(
             "value = 0\nfor item in {1: \"a\", 2: \"bc\"}.values():\n    value = value + len(item)\n",
