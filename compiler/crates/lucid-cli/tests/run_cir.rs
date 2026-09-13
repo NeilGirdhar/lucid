@@ -1251,7 +1251,7 @@ fn run_cir_lowers_bound_integer_dictionary_views_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    pairs = {1: 10, 2: 20}\n    keys = list(pairs.keys())\n    values = set(pairs.values())\n    sorted_keys = sorted(pairs.keys())\n    return keys[0] + keys[1] == 3 and 20 in values and 2 in pairs.keys() and 20 in pairs.values() and sorted_keys[0] == 1\n",
+        "def answer():\n    pairs = {1: 10, 2: 20}\n    keys = list(pairs.keys())\n    values = set(pairs.values())\n    sorted_keys = sorted(pairs.keys())\n    reversed_values = reversed(pairs.values())\n    return keys[0] + keys[1] == 3 and 20 in values and 2 in pairs.keys() and 20 in pairs.values() and sorted_keys[0] == 1 and reversed_values[0] == 20\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))

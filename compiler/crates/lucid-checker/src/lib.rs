@@ -4357,6 +4357,38 @@ impl TypeChecker {
         substitute_type(&member_type, &substitutions)
     }
 
+    fn builtin_dict_view_method_type(
+        &self,
+        class_name: &str,
+        type_args: &[Type],
+        attr: &str,
+    ) -> Option<Type> {
+        if !matches!(class_name, "dict" | "frozendict") || type_args.len() != 2 {
+            return None;
+        }
+        let element = match attr {
+            "keys" => type_args[0].clone(),
+            "values" => type_args[1].clone(),
+            "items" => Type::Record {
+                fields: vec![(None, type_args[0].clone()), (None, type_args[1].clone())],
+                is_open: false,
+            },
+            _ => return None,
+        };
+        Some(Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::Class {
+                name: "list".into(),
+                type_args: vec![element],
+                parent: None,
+                traits: Vec::new(),
+                interfaces: Vec::new(),
+                fields: HashMap::new(),
+                is_sealed: false,
+            }),
+        })
+    }
+
     fn class_method_type(&self, class_name: &str, name: &str) -> Option<Type> {
         if let Some(method) = self
             .env
@@ -4770,7 +4802,8 @@ impl TypeChecker {
             Type::Class {
                 name, type_args, ..
             } => self
-                .class_getter_type(name, attr)
+                .builtin_dict_view_method_type(name, type_args, attr)
+                .or_else(|| self.class_getter_type(name, attr))
                 .map(|ty| self.instantiate_class_member_type(name, type_args, ty))
                 .or_else(|| {
                     self.class_field_type(name, attr)
@@ -10435,7 +10468,11 @@ impl TypeChecker {
                                 span: expr.span(),
                             });
                         }
-                        if let Some(getter_type) = self.class_getter_type(name, attr) {
+                        if let Some(method_type) =
+                            self.builtin_dict_view_method_type(name, type_args, attr)
+                        {
+                            Ok(method_type)
+                        } else if let Some(getter_type) = self.class_getter_type(name, attr) {
                             Ok(getter_type)
                         } else if let Some(field_type) = self.class_field_type(name, attr) {
                             Ok(self.instantiate_class_member_type(name, type_args, field_type))
@@ -13433,6 +13470,17 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("dict[str, V] should satisfy Mapping[str, V]");
+    }
+
+    #[test]
+    fn dictionary_view_methods_preserve_key_and_value_types() {
+        let module = parse(
+            "pairs: dict[str, int] = {\"a\": 1}\nkeys = pairs.keys()\nvalues = pairs.values()\nitems = pairs.items()\nkey: str = keys[0]\nvalue: int = values[0]\nitem_key: str = items[0][0]\nitem_value: int = items[0][1]\nbackward = reversed(pairs.values())\n",
+        )
+        .unwrap();
+        TypeChecker::new()
+            .check_module(&module)
+            .expect("dictionary view methods should preserve key and value types");
     }
 
     #[test]
