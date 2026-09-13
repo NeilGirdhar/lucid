@@ -12047,7 +12047,86 @@ impl Function {
                     value: lucid_syntax::LiteralValue::Ellipsis,
                     ..
                 } => Ok(Some(AggregateBinding::Ellipsis)),
-                lucid_syntax::Expr::Call { .. } => {
+                lucid_syntax::Expr::Call { func, args, .. } => {
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "list"
+                    ) && args.len() == 1
+                        && args.iter().all(|arg| {
+                            arg.name.is_none()
+                                && !arg.is_spread
+                                && !arg.is_dict_spread
+                                && !arg.is_gather_spread
+                        })
+                    {
+                        let iterable = &args[0].value;
+                        if let Some(values) = constant_string_list(iterable, aggregate_bindings) {
+                            return Ok(Some(AggregateBinding::StringList(values)));
+                        }
+                        if let Some(values) = const_range_values(iterable) {
+                            let mut elements = Vec::with_capacity(values.len());
+                            for value in values {
+                                let id = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::ConstInt { result: id, value });
+                                elements.push(id);
+                            }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
+                        if let lucid_syntax::Expr::Call {
+                            func: view_func,
+                            args: view_args,
+                            ..
+                        } = iterable
+                        {
+                            if view_args.is_empty() {
+                                if let lucid_syntax::Expr::Attribute { value, attr, .. } =
+                                    view_func.as_ref()
+                                {
+                                    if matches!(attr.as_str(), "keys" | "values") {
+                                        if let lucid_syntax::Expr::Dict { entries, .. } =
+                                            value.as_ref()
+                                        {
+                                            let mut elements = Vec::with_capacity(entries.len());
+                                            for (key, value) in entries {
+                                                let selected = match attr.as_str() {
+                                                    "keys" => {
+                                                        let _ = lower(
+                                                            value,
+                                                            bindings,
+                                                            aggregate_bindings,
+                                                            instructions,
+                                                            next,
+                                                        )?;
+                                                        key
+                                                    }
+                                                    "values" => {
+                                                        let _ = lower(
+                                                            key,
+                                                            bindings,
+                                                            aggregate_bindings,
+                                                            instructions,
+                                                            next,
+                                                        )?;
+                                                        value
+                                                    }
+                                                    _ => unreachable!(),
+                                                };
+                                                elements.push(lower(
+                                                    selected,
+                                                    bindings,
+                                                    aggregate_bindings,
+                                                    instructions,
+                                                    next,
+                                                )?);
+                                            }
+                                            return Ok(Some(AggregateBinding::List(elements)));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if let Some(values) = const_range_values(expr) {
                         Ok(Some(AggregateBinding::Range(values)))
                     } else {
@@ -22953,6 +23032,15 @@ return total
             ("base = 40\nreturn max(abs(-base), min(42, base + 1))\n", 41),
             ("return sum([10, 20, 12])\n", 42),
             ("values = [10, 20, 12]\nreturn sum(values, 1)\n", 43),
+            ("values = list(range(3))\nreturn values[2]\n", 2),
+            (
+                "values = list({1: 10, 2: 20}.keys())\nreturn values[0] + values[1]\n",
+                3,
+            ),
+            (
+                "values = list({1: 10, 2: 20}.values())\nreturn values[0] + values[1]\n",
+                30,
+            ),
             ("values = {10, 20, 12}\nreturn sum(values)\n", 42),
             ("return len(range(5))\n", 5),
             ("return sum(range(5))\n", 10),
@@ -23081,6 +23169,7 @@ return total
             ("return len(\"abc\".split(\"\"))\n", 5),
             ("return \"a,b\".split(\",\")[1] == \"b\"\n", 1),
             ("return \"abc\".split(\"\")[1] == \"a\"\n", 1),
+            ("values = list(\"ab\".chars)\nreturn values[1] == \"b\"\n", 1),
             ("return \",\".join([\"a\", \"b\"]) == \"a,b\"\n", 1),
             ("return [\"a\", \"b\"] == [\"a\", \"b\"]\n", 1),
             ("return \"a\" in [\"a\", \"b\"]\n", 1),
