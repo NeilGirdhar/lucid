@@ -2144,6 +2144,9 @@ diverged:
   induction variable, such as `i + 1 < high`.
   Guarded accumulator updates are covered for dynamic range steps, including
   descending ranges expressed with a negated dynamic step.
+* Counted `while` accumulator lowering now accepts a single guarded accumulator
+  update before the induction update, preserving the induction step on every
+  iteration and merging either the updated or carried accumulator value.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,

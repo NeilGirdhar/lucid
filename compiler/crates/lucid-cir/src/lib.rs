@@ -5510,8 +5510,97 @@ impl Function {
                 _ => None,
             }
         }
+        fn while_guard_condition(
+            expr: &lucid_syntax::Expr,
+            induction_name: &str,
+            parameter_names: &[String],
+            alias_initial: Option<&lucid_syntax::Stmt>,
+        ) -> Option<(Vec<Instruction>, ValueId)> {
+            let lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } = expr
+            else {
+                return None;
+            };
+            let mut instructions = Vec::new();
+            let left_value = if matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == induction_name)
+            {
+                ValueId(2)
+            } else {
+                let (left_instructions, _) = operand_instruction(
+                    left,
+                    ValueId(16),
+                    ValueId(20),
+                    ValueId(21),
+                    parameter_names,
+                    alias_initial,
+                    true,
+                )?;
+                instructions.extend(left_instructions);
+                ValueId(16)
+            };
+            let right_value = if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == induction_name)
+            {
+                ValueId(2)
+            } else {
+                let (right_instructions, _) = operand_instruction(
+                    right,
+                    ValueId(17),
+                    ValueId(22),
+                    ValueId(23),
+                    parameter_names,
+                    alias_initial,
+                    true,
+                )?;
+                instructions.extend(right_instructions);
+                ValueId(17)
+            };
+            instructions.push(match op {
+                lucid_syntax::BinaryOp::NotEq
+                | lucid_syntax::BinaryOp::NotIdentity
+                | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
+                    result: ValueId(18),
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
+                    result: ValueId(18),
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
+                    result: ValueId(18),
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
+                    result: ValueId(18),
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
+                    result: ValueId(18),
+                    left: left_value,
+                    right: right_value,
+                },
+                _ => return None,
+            });
+            Some((instructions, ValueId(18)))
+        }
+        let (guard_condition, accumulator_statement, induction_statement) = match &body[0] {
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch: None,
+                ..
+            } if elif_branches.is_empty() && then_branch.len() == 1 && body.len() >= 2 => {
+                (Some(condition), &then_branch[0], &body[1])
+            }
+            statement => (None, statement, &body[1]),
+        };
         let (acc_op, acc_operand, used_acc_alias) = accumulator_self_update(
-            &body[0],
+            accumulator_statement,
             acc_name,
             induction_name,
             parameter_names,
@@ -5519,7 +5608,7 @@ impl Function {
         )?;
         let (induction_op, induction_step_instructions, used_induction_alias) =
             operand_self_update(
-                &body[1],
+                induction_statement,
                 induction_name,
                 ValueId(8),
                 parameter_names,
@@ -5562,14 +5651,19 @@ impl Function {
             AccumulatorOperand::Materialized(_) => ValueId(6),
             AccumulatorOperand::Induction => ValueId(2),
         };
+        let accumulator_update_result = if guard_condition.is_some() {
+            ValueId(19)
+        } else {
+            ValueId(7)
+        };
         let accumulator_update = match acc_op {
             lucid_syntax::BinaryOp::Add => Instruction::Add {
-                result: ValueId(7),
+                result: accumulator_update_result,
                 left: ValueId(3),
                 right: acc_operand_value,
             },
             lucid_syntax::BinaryOp::Sub => Instruction::Sub {
-                result: ValueId(7),
+                result: accumulator_update_result,
                 left: ValueId(3),
                 right: acc_operand_value,
             },
@@ -5588,16 +5682,87 @@ impl Function {
             },
             _ => return None,
         };
-        let mut body_instructions = Vec::new();
+        let mut update_instructions = Vec::new();
         if let AccumulatorOperand::Materialized(instructions) = acc_operand {
-            body_instructions.extend(instructions);
+            update_instructions.extend(instructions);
         }
-        body_instructions.push(accumulator_update);
-        body_instructions.extend(induction_step_instructions);
-        body_instructions.push(induction_update);
-        let function = Self {
-            entry: BlockId(0),
-            blocks: vec![
+        update_instructions.push(accumulator_update);
+        let mut step_instructions = induction_step_instructions;
+        step_instructions.push(induction_update);
+        let blocks = if let Some(guard_condition) = guard_condition {
+            let (guard_instructions, guard_value) = while_guard_condition(
+                guard_condition,
+                induction_name,
+                parameter_names,
+                alias_initial,
+            )?;
+            vec![
+                Block {
+                    id: BlockId(0),
+                    instructions: entry_instructions,
+                    terminator: Terminator::Jump(BlockId(1)),
+                },
+                Block {
+                    id: BlockId(1),
+                    instructions: {
+                        let mut instructions = vec![
+                            Instruction::Phi {
+                                result: ValueId(2),
+                                incomings: vec![(BlockId(0), ValueId(0)), (BlockId(4), ValueId(9))],
+                            },
+                            Instruction::Phi {
+                                result: ValueId(3),
+                                incomings: vec![(BlockId(0), ValueId(1)), (BlockId(4), ValueId(7))],
+                            },
+                        ];
+                        instructions.push(comparison);
+                        instructions
+                    },
+                    terminator: Terminator::Branch {
+                        condition: ValueId(5),
+                        then_block: BlockId(2),
+                        else_block: BlockId(5),
+                    },
+                },
+                Block {
+                    id: BlockId(2),
+                    instructions: guard_instructions,
+                    terminator: Terminator::Branch {
+                        condition: guard_value,
+                        then_block: BlockId(3),
+                        else_block: BlockId(4),
+                    },
+                },
+                Block {
+                    id: BlockId(3),
+                    instructions: update_instructions,
+                    terminator: Terminator::Jump(BlockId(4)),
+                },
+                Block {
+                    id: BlockId(4),
+                    instructions: [
+                        vec![Instruction::Phi {
+                            result: ValueId(7),
+                            incomings: vec![
+                                (BlockId(2), ValueId(3)),
+                                (BlockId(3), accumulator_update_result),
+                            ],
+                        }],
+                        step_instructions,
+                    ]
+                    .concat(),
+                    terminator: Terminator::Jump(BlockId(1)),
+                },
+                Block {
+                    id: BlockId(5),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Some(ValueId(3))),
+                },
+            ]
+        } else {
+            let mut body_instructions = update_instructions;
+            body_instructions.extend(step_instructions);
+            vec![
                 Block {
                     id: BlockId(0),
                     instructions: entry_instructions,
@@ -5635,7 +5800,11 @@ impl Function {
                     instructions: Vec::new(),
                     terminator: Terminator::Return(Some(ValueId(3))),
                 },
-            ],
+            ]
+        };
+        let function = Self {
+            entry: BlockId(0),
+            blocks,
         };
         Some(
             function
@@ -14085,6 +14254,21 @@ return total
         let function =
             Function::from_module_linear_with_params(&module, &["n".into(), "limit".into()])
                 .expect("local-bound while accumulator should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    if n > cutoff:
+        total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("guarded while accumulator fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["n".into(), "cutoff".into()])
+                .expect("guarded while accumulator should lower through CIR");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
 
         let module = lucid_syntax::parse(
