@@ -10189,7 +10189,12 @@ impl TypeChecker {
                                     .unwrap_or_else(|| func.span()),
                             });
                         }
-                        if called_name.is_none()
+                        let validate_callable_value = called_name.is_none_or(|name| {
+                            !self.env.function_param_names.contains_key(name)
+                                && !self.env.function_arity.contains_key(name)
+                                && !self.env.overloaded_functions.contains(name)
+                        });
+                        if validate_callable_value
                             && !args.iter().any(|argument| {
                                 argument.is_spread
                                     || argument.is_dict_spread
@@ -11106,7 +11111,11 @@ impl TypeChecker {
                             return_type: Box::new(Type::Str),
                         }),
                         "join" => Ok(Type::Function {
-                            params: vec![Type::TypeVar("Any".into())],
+                            params: vec![Type::Trait {
+                                name: "Iterable".into(),
+                                type_args: Vec::new(),
+                                methods: HashSet::new(),
+                            }],
                             return_type: Box::new(Type::Str),
                         }),
                         "replace" => Ok(Type::Function {
@@ -16559,6 +16568,11 @@ def reject(value: not int) -> none:
             ("len(1)\n", "not sized"),
             ("parts = \"a b\".split(1)\n", "str.split() argument has incompatible type"),
             ("joined = \",\".join(1)\n", "str.join() argument must be iterable"),
+            ("joiner = \",\".join\njoined = joiner(1)\n", "argument 1 has incompatible type"),
+            (
+                "def double(x: int) -> int:\n    return x * 2\nf = double\nvalue = f(\"bad\")\n",
+                "argument 1 has incompatible type",
+            ),
             ("trimmed = \" x\".lstrip()\n", "has no attribute 'lstrip'"),
             ("items = {1: \"one\"}\nitems.pop(1, \"fallback\")\n", "invalid argument count"),
             (
@@ -16662,7 +16676,7 @@ def reject(value: not int) -> none:
         string_checker
             .check_module(
                 &parse(
-                    "words: list[str] = \"a b\".split()\nparts: list[str] = \"a,b\".split(\",\")\njoined: str = \",\".join([1, 2])\ntrimmed: str = \" x \".strip()\n",
+                    "words: list[str] = \"a b\".split()\nparts: list[str] = \"a,b\".split(\",\")\njoined: str = \",\".join([1, 2])\njoiner = \",\".join\njoined_later: str = joiner([1, 2])\ntrimmed: str = \" x \".strip()\n",
                 )
                 .unwrap(),
             )
