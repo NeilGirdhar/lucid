@@ -11191,9 +11191,20 @@ impl TypeChecker {
                     .filter(|e| !matches!(e, Expr::Skip(_)))
                     .map(|e| self.type_of_expr(e))
                     .collect::<Result<Vec<_>, TypeError>>()?;
+                // Normalize literal types to their base types
+                let normalized: Vec<Type> = elem_types
+                    .into_iter()
+                    .map(|t| match t {
+                        Type::LiteralBool(_) => Type::Bool,
+                        Type::LiteralInt(_) => Type::Int,
+                        Type::LiteralFloat(_) => Type::Float,
+                        Type::LiteralStr(_) => Type::Str,
+                        other => other,
+                    })
+                    .collect();
                 Ok(Type::Class {
                     name: "list".to_string(),
-                    type_args: vec![Type::make_union(elem_types)],
+                    type_args: vec![Type::make_union(normalized)],
                     parent: None,
                     traits: Vec::new(),
                     interfaces: Vec::new(),
@@ -11207,7 +11218,18 @@ impl TypeChecker {
                     .filter(|e| !matches!(e, Expr::Skip(_)))
                     .map(|e| self.type_of_expr(e))
                     .collect::<Result<Vec<_>, TypeError>>()?;
-                if let Some(unhashable) = elem_types
+                // Normalize literal types to their base types
+                let normalized: Vec<Type> = elem_types
+                    .into_iter()
+                    .map(|t| match t {
+                        Type::LiteralBool(_) => Type::Bool,
+                        Type::LiteralInt(_) => Type::Int,
+                        Type::LiteralFloat(_) => Type::Float,
+                        Type::LiteralStr(_) => Type::Str,
+                        other => other,
+                    })
+                    .collect();
+                if let Some(unhashable) = normalized
                     .iter()
                     .find(|element_type| !type_is_hashable_key(element_type, &self.env))
                 {
@@ -11218,7 +11240,7 @@ impl TypeChecker {
                 }
                 Ok(Type::Class {
                     name: "set".to_string(),
-                    type_args: vec![Type::make_union(elem_types)],
+                    type_args: vec![Type::make_union(normalized)],
                     parent: None,
                     traits: Vec::new(),
                     interfaces: Vec::new(),
