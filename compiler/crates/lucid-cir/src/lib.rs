@@ -13183,6 +13183,141 @@ impl Function {
                 _ => constant_truth(expr),
             }
         }
+        fn lower_static_integer_iterable(
+            expr: &lucid_syntax::Expr,
+            bindings: &HashMap<String, ValueId>,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+            instructions: &mut Vec<Instruction>,
+            next: &mut u32,
+        ) -> Result<Option<Vec<ValueId>>, LowerError> {
+            if let Some(elements) = lower_int_dict_view_elements(
+                expr,
+                bindings,
+                aggregate_bindings,
+                instructions,
+                next,
+            )? {
+                return Ok(Some(elements));
+            }
+            if let Some(values) = const_range_values(expr) {
+                let elements = values
+                    .into_iter()
+                    .map(|value| push_const_int(value, instructions, next))
+                    .collect();
+                return Ok(Some(elements));
+            }
+            match expr {
+                lucid_syntax::Expr::List { elements, .. }
+                | lucid_syntax::Expr::Set { elements, .. } => {
+                    let mut values = Vec::with_capacity(elements.len());
+                    for element in elements {
+                        values.push(lower(
+                            element,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )?);
+                    }
+                    Ok(Some(values))
+                }
+                lucid_syntax::Expr::Record { fields, .. } => {
+                    let mut values = Vec::with_capacity(fields.len());
+                    for (name, field) in fields {
+                        if name.is_some() {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        values.push(lower(
+                            field,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )?);
+                    }
+                    Ok(Some(values))
+                }
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name) {
+                    Some(AggregateBinding::List(elements))
+                    | Some(AggregateBinding::Set(elements))
+                    | Some(AggregateBinding::Record(elements)) => Ok(Some(elements.clone())),
+                    Some(AggregateBinding::Range(values)) => Ok(Some(
+                        values
+                            .iter()
+                            .map(|value| push_const_int(*value, instructions, next))
+                            .collect(),
+                    )),
+                    _ => Ok(None),
+                },
+                _ => Ok(None),
+            }
+        }
+        struct AggregateLowerState<'a> {
+            bindings: &'a HashMap<String, ValueId>,
+            aggregate_bindings: &'a HashMap<String, AggregateBinding>,
+            instructions: &'a mut Vec<Instruction>,
+            next: &'a mut u32,
+        }
+        fn lower_integer_comprehension_elements(
+            element: &lucid_syntax::Expr,
+            target: &lucid_syntax::Pattern,
+            iter: &lucid_syntax::Expr,
+            condition: Option<&lucid_syntax::Expr>,
+            state: &mut AggregateLowerState<'_>,
+        ) -> Result<Option<Vec<ValueId>>, LowerError> {
+            let Some(iter_values) = lower_static_integer_iterable(
+                iter,
+                state.bindings,
+                state.aggregate_bindings,
+                state.instructions,
+                state.next,
+            )?
+            else {
+                return Ok(None);
+            };
+            let mut values = Vec::with_capacity(iter_values.len());
+            for item in iter_values {
+                let mut local_bindings = state.bindings.clone();
+                let mut local_aggregate_bindings = state.aggregate_bindings.clone();
+                bind_scalar_pattern(
+                    target,
+                    item,
+                    &mut local_bindings,
+                    &mut local_aggregate_bindings,
+                )?;
+                if let Some(condition) = condition {
+                    let keep = if let Some(truth) = statement_static_truth(
+                        condition,
+                        &local_bindings,
+                        &local_aggregate_bindings,
+                        state.instructions,
+                    ) {
+                        truth
+                    } else {
+                        let value = lower(
+                            condition,
+                            &local_bindings,
+                            &local_aggregate_bindings,
+                            state.instructions,
+                            state.next,
+                        )?;
+                        constant_value_truth(value, state.instructions)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                    };
+                    if !keep {
+                        continue;
+                    }
+                }
+                values.push(lower(
+                    element,
+                    &local_bindings,
+                    &local_aggregate_bindings,
+                    state.instructions,
+                    state.next,
+                )?);
+            }
+            Ok(Some(values))
+        }
         fn lower_aggregate_literal(
             expr: &lucid_syntax::Expr,
             bindings: &HashMap<String, ValueId>,
@@ -13213,6 +13348,31 @@ impl Function {
                     }
                     Ok(Some(AggregateBinding::List(values)))
                 }
+                lucid_syntax::Expr::ListComp {
+                    element,
+                    target,
+                    iter,
+                    condition,
+                    ..
+                } => {
+                    let mut state = AggregateLowerState {
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    };
+                    let Some(values) = lower_integer_comprehension_elements(
+                        element,
+                        target,
+                        iter,
+                        condition.as_deref(),
+                        &mut state,
+                    )?
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(Some(AggregateBinding::List(values)))
+                }
                 lucid_syntax::Expr::Set { elements, .. } => {
                     if let Some(values) = constant_string_set(expr, aggregate_bindings) {
                         return Ok(Some(AggregateBinding::StringSet(values)));
@@ -13233,6 +13393,31 @@ impl Function {
                             next,
                         )?);
                     }
+                    Ok(Some(AggregateBinding::Set(values)))
+                }
+                lucid_syntax::Expr::SetComp {
+                    element,
+                    target,
+                    iter,
+                    condition,
+                    ..
+                } => {
+                    let mut state = AggregateLowerState {
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    };
+                    let Some(values) = lower_integer_comprehension_elements(
+                        element,
+                        target,
+                        iter,
+                        condition.as_deref(),
+                        &mut state,
+                    )?
+                    else {
+                        return Ok(None);
+                    };
                     Ok(Some(AggregateBinding::Set(values)))
                 }
                 lucid_syntax::Expr::Dict { entries, .. } => {
@@ -25589,6 +25774,25 @@ return total
         .unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(41)));
+
+        let module =
+            lucid_syntax::parse("values = [item + 40 for item in range(3)]\nreturn values[2]\n")
+                .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let module = lucid_syntax::parse(
+            "values = [item * 10 for item in [1, 2, 3] if item != 2]\nreturn len(values) + values[1]\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(32)));
+
+        let module =
+            lucid_syntax::parse("values = {item + 1 for item in range(3)}\nreturn len(values)\n")
+                .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(3)));
     }
 
     #[test]
