@@ -4987,6 +4987,7 @@ impl TypeChecker {
 
     fn extract_type_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
         // Extract type narrowing from conditions like "x is None", "x is not None"
+        // Note: Currently only handles simple variable names, not complex expressions
         if let Expr::Binary {
             op: op_type,
             left,
@@ -4994,6 +4995,7 @@ impl TypeChecker {
             ..
         } = condition
         {
+            // Only narrow simple identifiers for now, not complex attribute accesses
             if let Expr::Ident { name, .. } = &**left {
                 if let Some((current_type, _)) = self.env.variables.get(name) {
                     // Check if right side is None
@@ -19227,6 +19229,29 @@ else:
         assert!(
             result.is_ok(),
             "type narrowing on 'x is not None' should work: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn type_narrowing_with_function_call() {
+        let code = r#"def expect_int(x: int) -> int:
+    return x + 1
+
+y: int | None = None
+
+if y is None:
+    print("y is None")
+else:
+    # y should be narrowed to int here
+    result = expect_int(y)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "type narrowing should work with function calls: {:?}",
             result
         );
     }
