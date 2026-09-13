@@ -42,6 +42,7 @@ pub enum Type {
         return_type: Box<Type>,
     },
     Future(Box<Type>),
+    Iterator(Box<Type>),
     Union(Vec<Type>),
     Intersection(Vec<Type>),
     Negation(Box<Type>),
@@ -92,6 +93,7 @@ impl Type {
                 return_type: Box::new(return_type.canonical()),
             },
             Type::Future(inner) => Type::Future(Box::new(inner.canonical())),
+            Type::Iterator(inner) => Type::Iterator(Box::new(inner.canonical())),
             Type::Negation(inner) => Type::Negation(Box::new(inner.canonical())),
             Type::Exact(inner) => Type::Exact(Box::new(inner.canonical())),
             Type::Record { fields, is_open } => Type::Record {
@@ -260,6 +262,7 @@ impl Type {
                 return_type.canonical_string()
             ),
             Type::Future(inner) => format!("future({})", inner.canonical_string()),
+            Type::Iterator(inner) => format!("iterator({})", inner.canonical_string()),
             Type::Union(parts) => format!(
                 "union({})",
                 parts
@@ -306,6 +309,7 @@ impl Type {
             Type::Record { .. } => "record".into(),
             Type::Function { .. } => "function".into(),
             Type::Future(_) => "future".into(),
+            Type::Iterator(_) => "iterator".into(),
             Type::Shape(_)
             | Type::Never
             | Type::Union(_)
@@ -1013,6 +1017,7 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
             return_type: Box::new(substitute_type(return_type, substitutions)),
         },
         Type::Future(inner) => Type::Future(Box::new(substitute_type(inner, substitutions))),
+        Type::Iterator(inner) => Type::Iterator(Box::new(substitute_type(inner, substitutions))),
         Type::Union(parts) => Type::make_union(
             parts
                 .iter()
@@ -1079,7 +1084,7 @@ fn collect_type_vars(ty: &Type, vars: &mut HashSet<String>) {
             }
             collect_type_vars(return_type, vars);
         }
-        Type::Future(inner) | Type::Negation(inner) | Type::Exact(inner) => {
+        Type::Future(inner) | Type::Iterator(inner) | Type::Negation(inner) | Type::Exact(inner) => {
             collect_type_vars(inner, vars);
         }
         Type::Union(parts) | Type::Intersection(parts) => {
@@ -1302,6 +1307,8 @@ pub struct TypeEnvironment {
 #[derive(Clone)]
 pub struct TypeChecker {
     pub env: TypeEnvironment,
+    // Maps attribute paths (e.g., "obj.field") to narrowed types (e.g., when "obj.field is None")
+    narrowing_constraints: HashMap<String, Type>,
 }
 
 impl Default for TypeChecker {
@@ -2512,7 +2519,8 @@ impl TypeChecker {
         }
 
         Self {
-            env
+            env,
+            narrowing_constraints: HashMap::new(),
         }
     }
 
@@ -5015,6 +5023,142 @@ impl TypeChecker {
         false
     }
 
+    // Convert expression to a path string for attribute narrowing (e.g., "node.left")
+    fn expr_to_path(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident { name, .. } => Some(name.clone()),
+            Expr::Attribute { value, attr, .. } => {
+                let obj_path = self.expr_to_path(value)?;
+                Some(format!("{}.{}", obj_path, attr))
+            }
+            _ => None,
+        }
+    }
+
+    // Invalidate narrowing constraints for a given assignment target path
+    fn invalidate_narrowing_constraints(&mut self, target_path: &str) {
+        // Remove constraints that:
+        // 1. Match exactly the target path
+        // 2. Are nested under the target path (e.g., "node.left.value" when "node.left" is assigned)
+        self.narrowing_constraints.retain(|path, _| {
+            // Keep the constraint if it doesn't start with target_path or target_path.
+            !(path == target_path || path.starts_with(&format!("{}.", target_path)))
+        });
+    }
+
+    // Extract attribute narrowing constraints (e.g., "node.left is None")
+    fn extract_attribute_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
+        // Handle binary operations (is/is not) on attribute expressions
+        if let Expr::Binary {
+            op: op_type,
+            left,
+            right,
+            ..
+        } = condition
+        {
+            // Check if left is an attribute expression (but not a simple variable)
+            if !matches!(&**left, Expr::Ident { .. }) {
+                if let Some(attr_path) = self.expr_to_path(&**left) {
+                    if let Ok(current_type) = self.type_of_expr(&**left) {
+                        // Check if right side is None
+                        if let Expr::Literal {
+                            value: LiteralValue::None,
+                            ..
+                        } = &**right
+                        {
+                            match op_type {
+                                BinaryOp::Is => {
+                                    let not_none = match &current_type {
+                                        Type::Union(types) => {
+                                            Type::make_union(
+                                                types
+                                                    .iter()
+                                                    .filter(|t| !matches!(t, Type::None))
+                                                    .cloned()
+                                                    .collect(),
+                                            )
+                                        }
+                                        Type::None => Type::Never,
+                                        _ => current_type.clone(),
+                                    };
+                                    return (
+                                        Some((attr_path.clone(), Type::None)),
+                                        Some((attr_path, not_none)),
+                                    );
+                                }
+                                BinaryOp::IsNot => {
+                                    let not_none = match &current_type {
+                                        Type::Union(types) => {
+                                            Type::make_union(
+                                                types
+                                                    .iter()
+                                                    .filter(|t| !matches!(t, Type::None))
+                                                    .cloned()
+                                                    .collect(),
+                                            )
+                                        }
+                                        Type::None => Type::Never,
+                                        _ => current_type.clone(),
+                                    };
+                                    return (
+                                        Some((attr_path.clone(), not_none)),
+                                        Some((attr_path, Type::None)),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Expr::Unary {
+            op: UnaryOp::Not,
+            expr,
+            ..
+        } = condition
+        {
+            // Handle "not (x.y is None)" which is equivalent to "x.y is not None"
+            if let Expr::Binary {
+                op: BinaryOp::Is,
+                left,
+                right,
+                ..
+            } = &**expr
+            {
+                if !matches!(&**left, Expr::Ident { .. }) {
+                    if let Some(attr_path) = self.expr_to_path(&**left) {
+                        if let Ok(current_type) = self.type_of_expr(&**left) {
+                            if let Expr::Literal {
+                                value: LiteralValue::None,
+                                ..
+                            } = &**right
+                            {
+                                let not_none = match &current_type {
+                                    Type::Union(types) => {
+                                        Type::make_union(
+                                            types
+                                                .iter()
+                                                .filter(|t| !matches!(t, Type::None))
+                                                .cloned()
+                                                .collect(),
+                                        )
+                                    }
+                                    Type::None => Type::Never,
+                                    _ => current_type.clone(),
+                                };
+                                return (
+                                    Some((attr_path.clone(), not_none)),
+                                    Some((attr_path, Type::None)),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (None, None)
+    }
+
     fn extract_type_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
         // Extract type narrowing from conditions like:
         // - "x is None" / "x is not None" / "not (x is None)"
@@ -5028,7 +5172,7 @@ impl TypeChecker {
             ..
         } = condition
         {
-            // Only narrow simple identifiers for now, not complex attribute accesses
+            // Only narrow simple identifiers for now
             if let Expr::Ident { name, .. } = &**left {
                 if let Some((current_type, _)) = self.env.variables.get(name) {
                     // Check if right side is None
@@ -6039,6 +6183,8 @@ impl TypeChecker {
                 let old_vars = std::mem::replace(&mut self.env.variables, local_vars);
                 let old_exact_vars =
                     std::mem::replace(&mut self.env.exact_variables, local_exact_vars);
+                let old_narrowing_constraints =
+                    std::mem::replace(&mut self.narrowing_constraints, HashMap::new());
 
                 for s in &func.body {
                     self.check_statement(s)?;
@@ -6046,6 +6192,7 @@ impl TypeChecker {
 
                 self.env.variables = old_vars;
                 self.env.exact_variables = old_exact_vars;
+                self.narrowing_constraints = old_narrowing_constraints;
                 self.env.current_return_type = prev_ret;
                 self.env.type_var_bounds = saved_type_var_bounds;
                 Ok(())
@@ -6351,6 +6498,8 @@ impl TypeChecker {
                     self.env
                         .variables
                         .insert(name.clone(), (target_type.clone(), MutabilityView::Mutable));
+                    // Invalidate narrowing constraints for this variable
+                    self.invalidate_narrowing_constraints(name);
                     if let Some(value) = value {
                         if let Some(class_name) = self.exact_class_of_expr(value) {
                             self.env.exact_variables.insert(name.clone(), class_name);
@@ -6893,6 +7042,10 @@ impl TypeChecker {
                     }
                     _ => {}
                 }
+                // Invalidate narrowing constraints for the assigned target
+                if let Some(target_path) = self.expr_to_path(target) {
+                    self.invalidate_narrowing_constraints(&target_path);
+                }
                 Ok(())
             }
             Stmt::Match {
@@ -6985,10 +7138,15 @@ impl TypeChecker {
                 let (narrow_to_type, narrow_else_to_type) =
                     self.extract_type_narrowing(condition);
 
+                // Extract attribute narrowing from condition
+                let (narrow_attr_to_type, narrow_attr_else_to_type) =
+                    self.extract_attribute_narrowing(condition);
+
                 // Save environment
                 let saved_vars = self.env.variables.clone();
+                let saved_attr_constraints = self.narrowing_constraints.clone();
 
-                // Apply narrowing to then_branch
+                // Apply variable narrowing to then_branch
                 if let Some((var_name, new_type)) = &narrow_to_type {
                     if let Some((_, mutability)) = self.env.variables.get(var_name) {
                         self.env.variables.insert(
@@ -6996,6 +7154,11 @@ impl TypeChecker {
                             (new_type.clone(), mutability.clone()),
                         );
                     }
+                }
+
+                // Apply attribute narrowing to then_branch
+                if let Some((attr_path, new_type)) = &narrow_attr_to_type {
+                    self.narrowing_constraints.insert(attr_path.clone(), new_type.clone());
                 }
 
                 for s in then_branch {
@@ -7007,6 +7170,8 @@ impl TypeChecker {
 
                 // Restore and apply else narrowing
                 self.env.variables = saved_vars.clone();
+                self.narrowing_constraints = saved_attr_constraints.clone();
+
                 if let Some((var_name, new_type)) = &narrow_else_to_type {
                     if let Some((_, mutability)) = saved_vars.get(var_name) {
                         self.env.variables.insert(
@@ -7014,6 +7179,11 @@ impl TypeChecker {
                             (new_type.clone(), mutability.clone()),
                         );
                     }
+                }
+
+                // Apply attribute narrowing to else branches
+                if let Some((attr_path, new_type)) = &narrow_attr_else_to_type {
+                    self.narrowing_constraints.insert(attr_path.clone(), new_type.clone());
                 }
 
                 for (c, b) in elif_branches {
@@ -7050,9 +7220,14 @@ impl TypeChecker {
                             );
                         }
                     }
+                    // Apply attribute narrowing after if for post-if conditions
+                    if let Some((attr_path, new_type)) = &narrow_attr_else_to_type {
+                        self.narrowing_constraints.insert(attr_path.clone(), new_type.clone());
+                    }
                 } else {
                     // Restore original environment if we're not applying post-if narrowing
                     self.env.variables = saved_vars;
+                    self.narrowing_constraints = saved_attr_constraints;
                 }
                 Ok(())
             }
@@ -11588,6 +11763,13 @@ impl TypeChecker {
                 Ok(class_type)
             }
             Expr::Attribute { value, attr, .. } => {
+                // Check for attribute narrowing constraints first
+                if let Some(attr_path) = self.expr_to_path(expr) {
+                    if let Some(narrowed_type) = self.narrowing_constraints.get(&attr_path) {
+                        return Ok(narrowed_type.clone());
+                    }
+                }
+
                 let obj_type = match self.type_of_expr(value)? {
                     Type::LiteralStr(_) => Type::Str,
                     Type::LiteralFloat(_) => Type::Float,
@@ -19374,6 +19556,55 @@ def process(node: Node) -> int:
         assert!(
             result.is_ok(),
             "type narrowing should work in recursive patterns: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn type_narrowing_with_attribute_path() {
+        let code = r#"class Node:
+    value: int
+    left: Node | None
+
+def process(node: Node) -> int:
+    if node.left is None:
+        return node.value
+
+    # node.left should be narrowed to Node here
+    return node.value + process(node.left)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "type narrowing should work with attribute paths: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn type_narrowing_invalidated_by_assignment() {
+        let code = r#"class Node:
+    value: int
+    left: Node | None
+
+def f(node: Node) -> int:
+    if node.left is not None:
+        node.left = None
+        # node.left is now None again, not Node - should be rejected
+        return process(node.left)
+    return 0
+
+def process(node: Node) -> int:
+    return node.value
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_err(),
+            "assignment should invalidate narrowing constraints: {:?}",
             result
         );
     }
