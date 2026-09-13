@@ -8541,6 +8541,20 @@ impl TypeChecker {
                             }
                         }
                     }
+                    if matches!(name.as_str(), "getattr" | "setattr" | "hasattr") {
+                        if let Some(argument) = args.get(1) {
+                            let attr_type = self.type_of_expr(&argument.value)?;
+                            if !attr_type.is_subtype_of(&Type::Str, &self.env) {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "{}() attribute name must be str, got {:?}",
+                                        name, attr_type
+                                    ),
+                                    span: argument.value.span(),
+                                });
+                            }
+                        }
+                    }
                     if name == "round" && args.len() == 2 {
                         let digits = self.type_of_expr(&args[1].value)?;
                         if !digits.is_subtype_of(&Type::Int, &self.env) {
@@ -10160,6 +10174,40 @@ impl TypeChecker {
                                             Type::None
                                         };
                                         Some(Type::make_union(vec![Type::Str, fallback_type]))
+                                    }
+                                    "getattr" => {
+                                        let attr_name = match args.get(1) {
+                                            Some(Arg {
+                                                value:
+                                                    Expr::Literal {
+                                                        value: LiteralValue::Str(attr_name),
+                                                        ..
+                                                    },
+                                                is_spread: false,
+                                                is_dict_spread: false,
+                                                is_gather_spread: false,
+                                                ..
+                                            }) => attr_name.clone(),
+                                            _ => return None,
+                                        };
+                                        let attribute_expr = Expr::Attribute {
+                                            value: Box::new(argument.value.clone()),
+                                            attr: attr_name,
+                                            span: argument.value.span(),
+                                        };
+                                        match self.type_of_expr(&attribute_expr) {
+                                            Ok(attribute_type) => Some(attribute_type),
+                                            Err(_) => args.get(2).and_then(|fallback| {
+                                                if fallback.is_spread
+                                                    || fallback.is_dict_spread
+                                                    || fallback.is_gather_spread
+                                                {
+                                                    None
+                                                } else {
+                                                    self.type_of_expr(&fallback.value).ok()
+                                                }
+                                            }),
+                                        }
                                     }
                                     "sum" => match argument_type {
                                         Type::Class { type_args, .. } => type_args.first().map(|ty| match ty {
@@ -15959,7 +16007,10 @@ def reject(value: not int) -> none:
             ("hash()\n", "requires at least 1"),
             ("locals(1)\n", "accepts at most 0"),
             ("getattr(1)\n", "requires at least 2"),
+            ("getattr(1, 1)\n", "attribute name must be str"),
             ("setattr(1, \"x\")\n", "requires at least 3"),
+            ("setattr(1, 1, 2)\n", "attribute name must be str"),
+            ("hasattr(1, 1)\n", "attribute name must be str"),
             ("any()\n", "requires at least 1"),
             ("pow(1)\n", "requires at least 2"),
             ("sorted(1)\n", "argument must be iterable"),
@@ -16188,6 +16239,15 @@ def reject(value: not int) -> none:
             .check_module(
                 &parse(
                     "optional: str | none = env_var(\"LUCID_MISSING\")\nwith_text: str = env_var(\"LUCID_MISSING\", \"fallback\")\nwith_code: str | int = env_var(\"LUCID_MISSING\", 404)\n",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(
+                &parse(
+                    "class Point:\n    x: int\n    y: str\np = Point(4, \"ok\")\nx: int = getattr(p, \"x\")\ny: str = getattr(p, \"y\")\nfallback: int = getattr(p, \"missing\", 42)\n",
                 )
                 .unwrap(),
             )
