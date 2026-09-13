@@ -685,6 +685,57 @@ impl Function {
                         local_bindings,
                     );
                 }
+                if node.kind == "call"
+                    && node.children.len() == 2
+                    && nodes.get(node.children[0] as usize).is_some_and(|callee| {
+                        callee.kind == "name" && callee.detail.as_deref() == Some("abs")
+                    })
+                {
+                    let operand_id = node.children[1];
+                    let mut expanded = nodes.to_vec();
+                    let zero_id = u32::try_from(expanded.len())
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    expanded.push(TypedExprNode {
+                        id: zero_id,
+                        kind: "literal".into(),
+                        detail: None,
+                        children: Vec::new(),
+                        literal: Some(TypedLiteral::Int(0)),
+                    });
+                    let is_negative_id = u32::try_from(expanded.len())
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    expanded.push(TypedExprNode {
+                        id: is_negative_id,
+                        kind: "binary".into(),
+                        detail: Some("Lt".into()),
+                        children: vec![operand_id, zero_id],
+                        literal: None,
+                    });
+                    let negated_id = u32::try_from(expanded.len())
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    expanded.push(TypedExprNode {
+                        id: negated_id,
+                        kind: "unary".into(),
+                        detail: Some("Neg".into()),
+                        children: vec![operand_id],
+                        literal: None,
+                    });
+                    let if_id = u32::try_from(expanded.len())
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    expanded.push(TypedExprNode {
+                        id: if_id,
+                        kind: "if".into(),
+                        detail: None,
+                        children: vec![is_negative_id, negated_id, operand_id],
+                        literal: None,
+                    });
+                    return Self::from_typed_graph(
+                        &expanded,
+                        &[if_id],
+                        parameter_names,
+                        local_bindings,
+                    );
+                }
                 if node.kind == "match" && node.children.len() == 3 {
                     let literal = node.detail.as_deref().and_then(|detail| {
                         detail
@@ -30470,6 +30521,43 @@ return total
         let function = Function::from_typed_function_body(&nodes, 2, &[])
             .expect("typed abs should preserve integer overflow");
         assert_eq!(function.execute(), Err(ExecuteError::ArithmeticOverflow));
+    }
+
+    #[test]
+    fn lowers_typed_dynamic_abs_to_selective_cfg() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("abs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 2, &["value".into()])
+            .expect("typed dynamic abs should lower through a conditional CFG");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[-42]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[42]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+        assert_eq!(
+            function.execute_with_args(&[i64::MIN]),
+            Err(ExecuteError::ArithmeticOverflow)
+        );
     }
 
     #[test]
