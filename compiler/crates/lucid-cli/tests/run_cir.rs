@@ -596,6 +596,88 @@ fn run_cir_passes_integer_arguments_to_typed_function_body() {
 }
 
 #[test]
+fn run_cir_short_circuits_logical_condition_inside_typed_if() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_typed_if_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def safe_or(x: int) -> bool:\n    return true if (x == 0 or 10 // x > 1) else false\n\ndef safe_and(x: int) -> bool:\n    return true if (x != 0 and 10 // x > 1) else false\n",
+    )
+    .expect("temporary source should be writable");
+    let or_zero = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "safe_or",
+            "--args",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let or_nonzero = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "safe_or",
+            "--args",
+            "10",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let and_zero = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "safe_and",
+            "--args",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let and_nonzero = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "safe_and",
+            "--args",
+            "2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        or_zero.status.success(),
+        "or zero argument should short-circuit before division: {}",
+        String::from_utf8_lossy(&or_zero.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&or_zero.stdout).trim(), "1");
+    assert!(
+        or_nonzero.status.success(),
+        "or nonzero argument failed: {}",
+        String::from_utf8_lossy(&or_nonzero.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&or_nonzero.stdout).trim(), "0");
+    assert!(
+        and_zero.status.success(),
+        "and zero argument should short-circuit before division: {}",
+        String::from_utf8_lossy(&and_zero.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&and_zero.stdout).trim(), "0");
+    assert!(
+        and_nonzero.status.success(),
+        "and nonzero argument failed: {}",
+        String::from_utf8_lossy(&and_nonzero.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&and_nonzero.stdout).trim(), "1");
+}
+
+#[test]
 fn run_cir_executes_dynamic_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_if_{}.lucid",

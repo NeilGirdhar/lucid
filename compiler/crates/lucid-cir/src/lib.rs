@@ -1263,6 +1263,44 @@ impl Function {
                         Some(TypedLiteral::Bool(_))
                     )
                 {
+                    if let Some(condition) = nodes.get(node.children[0] as usize) {
+                        if condition.kind == "binary"
+                            && matches!(condition.detail.as_deref(), Some("And") | Some("Or"))
+                            && condition.children.len() == 2
+                        {
+                            if condition.detail.as_deref() == Some("Or") {
+                                return Self::from_typed_statement_if_elif_chain_direct(
+                                    nodes,
+                                    condition.children[0],
+                                    node.children[1],
+                                    &[(condition.children[1], node.children[1])],
+                                    node.children[2],
+                                    parameter_names,
+                                    local_bindings,
+                                );
+                            } else {
+                                let mut expanded = nodes.to_vec();
+                                let not_left_id = u32::try_from(expanded.len())
+                                    .map_err(|_| LowerError::UnsupportedExpression)?;
+                                expanded.push(TypedExprNode {
+                                    id: not_left_id,
+                                    kind: "unary".into(),
+                                    detail: Some("Not".into()),
+                                    children: vec![condition.children[0]],
+                                    literal: None,
+                                });
+                                return Self::from_typed_statement_if_elif_chain_direct(
+                                    &expanded,
+                                    not_left_id,
+                                    node.children[2],
+                                    &[(condition.children[1], node.children[1])],
+                                    node.children[2],
+                                    parameter_names,
+                                    local_bindings,
+                                );
+                            }
+                        }
+                    }
                     return Self::from_typed_dynamic_if(
                         nodes,
                         node.children[0],
@@ -10839,6 +10877,106 @@ impl Function {
             ..
         } = expr
         {
+            if let lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } = condition.as_ref()
+            {
+                if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                    let mut left_instructions = Vec::new();
+                    let left_value = lower(left, &mut left_instructions, &mut next)?;
+                    let mut right_instructions = Vec::new();
+                    let right_value = lower(right, &mut right_instructions, &mut next)?;
+                    let mut first_true_instructions = Vec::new();
+                    let first_true_value =
+                        lower(then_branch, &mut first_true_instructions, &mut next)?;
+                    let mut second_true_instructions = Vec::new();
+                    let second_true_value =
+                        lower(then_branch, &mut second_true_instructions, &mut next)?;
+                    let mut first_false_instructions = Vec::new();
+                    let first_false_value =
+                        lower(else_branch, &mut first_false_instructions, &mut next)?;
+                    let mut second_false_instructions = Vec::new();
+                    let second_false_value =
+                        lower(else_branch, &mut second_false_instructions, &mut next)?;
+                    let result = ValueId(next);
+                    let merge_block = BlockId(5);
+                    let (left_then, left_else, right_then, right_else) = match op {
+                        lucid_syntax::BinaryOp::Or => {
+                            (BlockId(2), BlockId(1), BlockId(3), BlockId(4))
+                        }
+                        lucid_syntax::BinaryOp::And => {
+                            (BlockId(1), BlockId(3), BlockId(2), BlockId(4))
+                        }
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    };
+                    let function = Self {
+                        entry: BlockId(0),
+                        blocks: vec![
+                            Block {
+                                id: BlockId(0),
+                                instructions: left_instructions,
+                                terminator: Terminator::Branch {
+                                    condition: left_value,
+                                    then_block: left_then,
+                                    else_block: left_else,
+                                },
+                            },
+                            Block {
+                                id: BlockId(1),
+                                instructions: right_instructions,
+                                terminator: Terminator::Branch {
+                                    condition: right_value,
+                                    then_block: right_then,
+                                    else_block: right_else,
+                                },
+                            },
+                            Block {
+                                id: BlockId(2),
+                                instructions: first_true_instructions,
+                                terminator: Terminator::Jump(merge_block),
+                            },
+                            Block {
+                                id: BlockId(3),
+                                instructions: if matches!(op, lucid_syntax::BinaryOp::Or) {
+                                    second_true_instructions
+                                } else {
+                                    first_false_instructions
+                                },
+                                terminator: Terminator::Jump(merge_block),
+                            },
+                            Block {
+                                id: BlockId(4),
+                                instructions: second_false_instructions,
+                                terminator: Terminator::Jump(merge_block),
+                            },
+                            Block {
+                                id: merge_block,
+                                instructions: vec![Instruction::Phi {
+                                    result,
+                                    incomings: if matches!(op, lucid_syntax::BinaryOp::Or) {
+                                        vec![
+                                            (BlockId(2), first_true_value),
+                                            (BlockId(3), second_true_value),
+                                            (BlockId(4), second_false_value),
+                                        ]
+                                    } else {
+                                        vec![
+                                            (BlockId(2), first_true_value),
+                                            (BlockId(3), first_false_value),
+                                            (BlockId(4), second_false_value),
+                                        ]
+                                    },
+                                }],
+                                terminator: Terminator::Return(Some(result)),
+                            },
+                        ],
+                    };
+                    function
+                        .verify()
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    return Ok(function);
+                }
+            }
             if matches!(
                 condition.as_ref(),
                 lucid_syntax::Expr::Literal {
@@ -11160,6 +11298,127 @@ impl Function {
             })
             .collect::<Vec<_>>();
         let mut next = parameter_names.len() as u32;
+        if let lucid_syntax::Expr::Binary {
+            op, left, right, ..
+        } = condition
+        {
+            if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                let left_value = Self::lower_parameter_expr(
+                    left,
+                    parameter_names,
+                    &mut entry_instructions,
+                    &mut next,
+                )?;
+                let mut right_instructions = Vec::new();
+                let right_value = Self::lower_parameter_expr(
+                    right,
+                    parameter_names,
+                    &mut right_instructions,
+                    &mut next,
+                )?;
+                let mut first_true_instructions = Vec::new();
+                let first_true_value = Self::lower_parameter_expr(
+                    then_expr,
+                    parameter_names,
+                    &mut first_true_instructions,
+                    &mut next,
+                )?;
+                let mut second_true_instructions = Vec::new();
+                let second_true_value = Self::lower_parameter_expr(
+                    then_expr,
+                    parameter_names,
+                    &mut second_true_instructions,
+                    &mut next,
+                )?;
+                let mut first_false_instructions = Vec::new();
+                let first_false_value = Self::lower_parameter_expr(
+                    else_expr,
+                    parameter_names,
+                    &mut first_false_instructions,
+                    &mut next,
+                )?;
+                let mut second_false_instructions = Vec::new();
+                let second_false_value = Self::lower_parameter_expr(
+                    else_expr,
+                    parameter_names,
+                    &mut second_false_instructions,
+                    &mut next,
+                )?;
+                let result = ValueId(next);
+                let merge_block = BlockId(5);
+                let (left_then, left_else, right_then, right_else) = match op {
+                    lucid_syntax::BinaryOp::Or => (BlockId(2), BlockId(1), BlockId(3), BlockId(4)),
+                    lucid_syntax::BinaryOp::And => (BlockId(1), BlockId(3), BlockId(2), BlockId(4)),
+                    _ => return Err(LowerError::UnsupportedExpression),
+                };
+                let function = Self {
+                    entry: BlockId(0),
+                    blocks: vec![
+                        Block {
+                            id: BlockId(0),
+                            instructions: entry_instructions,
+                            terminator: Terminator::Branch {
+                                condition: left_value,
+                                then_block: left_then,
+                                else_block: left_else,
+                            },
+                        },
+                        Block {
+                            id: BlockId(1),
+                            instructions: right_instructions,
+                            terminator: Terminator::Branch {
+                                condition: right_value,
+                                then_block: right_then,
+                                else_block: right_else,
+                            },
+                        },
+                        Block {
+                            id: BlockId(2),
+                            instructions: first_true_instructions,
+                            terminator: Terminator::Jump(merge_block),
+                        },
+                        Block {
+                            id: BlockId(3),
+                            instructions: if matches!(op, lucid_syntax::BinaryOp::Or) {
+                                second_true_instructions
+                            } else {
+                                first_false_instructions
+                            },
+                            terminator: Terminator::Jump(merge_block),
+                        },
+                        Block {
+                            id: BlockId(4),
+                            instructions: second_false_instructions,
+                            terminator: Terminator::Jump(merge_block),
+                        },
+                        Block {
+                            id: merge_block,
+                            instructions: vec![Instruction::Phi {
+                                result,
+                                incomings: if matches!(op, lucid_syntax::BinaryOp::Or) {
+                                    vec![
+                                        (BlockId(2), first_true_value),
+                                        (BlockId(3), second_true_value),
+                                        (BlockId(4), second_false_value),
+                                    ]
+                                } else {
+                                    vec![
+                                        (BlockId(2), first_true_value),
+                                        (BlockId(3), first_false_value),
+                                        (BlockId(4), second_false_value),
+                                    ]
+                                },
+                            }],
+                            terminator: Terminator::Return(Some(result)),
+                        },
+                    ],
+                };
+                function
+                    .verify()
+                    .map_err(|_| LowerError::UnsupportedExpression)?;
+                return Ok(function);
+            }
+        }
         let condition_value = Self::lower_parameter_expr(
             condition,
             parameter_names,
@@ -12187,6 +12446,104 @@ impl Function {
         then_expr: &lucid_syntax::Expr,
         parameter_names: &[String],
     ) -> Result<Self, LowerError> {
+        if let lucid_syntax::Expr::Binary {
+            op, left, right, ..
+        } = condition
+        {
+            if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                let mut entry_instructions = parameter_names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| Instruction::Param {
+                        result: ValueId(index as u32),
+                        index: index as u32,
+                    })
+                    .collect::<Vec<_>>();
+                let mut next = parameter_names.len() as u32;
+                let left_value = Self::lower_parameter_expr(
+                    left,
+                    parameter_names,
+                    &mut entry_instructions,
+                    &mut next,
+                )?;
+                let mut right_instructions = Vec::new();
+                let right_value = Self::lower_parameter_expr(
+                    right,
+                    parameter_names,
+                    &mut right_instructions,
+                    &mut next,
+                )?;
+                let mut first_then_instructions = Vec::new();
+                let first_then_value = Self::lower_parameter_expr(
+                    then_expr,
+                    parameter_names,
+                    &mut first_then_instructions,
+                    &mut next,
+                )?;
+                let mut second_then_instructions = Vec::new();
+                let second_then_value = Self::lower_parameter_expr(
+                    then_expr,
+                    parameter_names,
+                    &mut second_then_instructions,
+                    &mut next,
+                )?;
+                let (left_then, left_else, right_then, right_else) = match op {
+                    lucid_syntax::BinaryOp::Or => (BlockId(2), BlockId(1), BlockId(3), BlockId(4)),
+                    lucid_syntax::BinaryOp::And => (BlockId(1), BlockId(3), BlockId(2), BlockId(4)),
+                    _ => return Err(LowerError::UnsupportedExpression),
+                };
+                let function = Self {
+                    entry: BlockId(0),
+                    blocks: vec![
+                        Block {
+                            id: BlockId(0),
+                            instructions: entry_instructions,
+                            terminator: Terminator::Branch {
+                                condition: left_value,
+                                then_block: left_then,
+                                else_block: left_else,
+                            },
+                        },
+                        Block {
+                            id: BlockId(1),
+                            instructions: right_instructions,
+                            terminator: Terminator::Branch {
+                                condition: right_value,
+                                then_block: right_then,
+                                else_block: right_else,
+                            },
+                        },
+                        Block {
+                            id: BlockId(2),
+                            instructions: first_then_instructions,
+                            terminator: Terminator::Return(Some(first_then_value)),
+                        },
+                        Block {
+                            id: BlockId(3),
+                            instructions: if matches!(op, lucid_syntax::BinaryOp::Or) {
+                                second_then_instructions
+                            } else {
+                                Vec::new()
+                            },
+                            terminator: if matches!(op, lucid_syntax::BinaryOp::Or) {
+                                Terminator::Return(Some(second_then_value))
+                            } else {
+                                Terminator::Return(None)
+                            },
+                        },
+                        Block {
+                            id: BlockId(4),
+                            instructions: Vec::new(),
+                            terminator: Terminator::Return(None),
+                        },
+                    ],
+                };
+                function
+                    .verify()
+                    .map_err(|_| LowerError::UnsupportedExpression)?;
+                return Ok(function);
+            }
+        }
         let zero = lucid_syntax::Expr::Literal {
             value: lucid_syntax::LiteralValue::Int(0),
             span: condition.span(),
@@ -16123,6 +16480,178 @@ return total
         assert_eq!(function.blocks.len(), 4);
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+    }
+
+    #[test]
+    fn short_circuits_logical_condition_inside_typed_if() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("x".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![3, 0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "binary".into(),
+                detail: Some("Gt".into()),
+                children: vec![4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "binary".into(),
+                detail: Some("Or".into()),
+                children: vec![2, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(true)),
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(false)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "if".into(),
+                detail: None,
+                children: vec![7, 8, 9],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 10, &["x".into()])
+            .expect("logical typed-if condition should lower as short-circuit control flow");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[10]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(1)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("x".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("NotEq".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![3, 0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "binary".into(),
+                detail: Some("Gt".into()),
+                children: vec![4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "binary".into(),
+                detail: Some("And".into()),
+                children: vec![2, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(true)),
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(false)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "if".into(),
+                detail: None,
+                children: vec![7, 8, 9],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 10, &["x".into()])
+            .expect("typed and condition should lower as short-circuit control flow");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(1)));
     }
 
     #[test]
