@@ -3722,6 +3722,14 @@ pub fn lower_function_body(
             _ => None,
         }
     }
+    fn and_expr(left: &lucid_syntax::Expr, right: &lucid_syntax::Expr) -> lucid_syntax::Expr {
+        lucid_syntax::Expr::Binary {
+            op: lucid_syntax::BinaryOp::And,
+            left: Box::new(left.clone()),
+            right: Box::new(right.clone()),
+            span: right.span(),
+        }
+    }
     fn contains_explicit_return(statements: &[lucid_syntax::Stmt]) -> bool {
         statements.iter().any(|statement| match statement {
             lucid_syntax::Stmt::Return { .. } => true,
@@ -3838,12 +3846,7 @@ pub fn lower_function_body(
             && !has_division(inner_condition)
             && let Some(inner_then_value) = assignment_value_for_name(inner_then, name)
         {
-            let combined_condition = lucid_syntax::Expr::Binary {
-                op: lucid_syntax::BinaryOp::And,
-                left: Box::new(condition.clone()),
-                right: Box::new(inner_condition.clone()),
-                span: inner_condition.span(),
-            };
+            let combined_condition = and_expr(condition, inner_condition);
             let inner_fallback = inner_else
                 .as_deref()
                 .and_then(|branch| assignment_value_for_name(branch, name))
@@ -3862,6 +3865,76 @@ pub fn lower_function_body(
             )
             .map(Arc::new)
             .map_err(|_| Arc::from("unsupported nested dynamic local branch"));
+        }
+        if let [
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value: initial_value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(initial_value),
+                ..
+            },
+            lucid_syntax::Stmt::If {
+                condition: inner_condition,
+                then_branch: inner_then,
+                elif_branches: inner_elifs,
+                else_branch: None,
+                ..
+            },
+            lucid_syntax::Stmt::Return {
+                value:
+                    Some(lucid_syntax::Expr::Ident {
+                        name: returned_name,
+                        ..
+                    }),
+                ..
+            },
+        ] = meaningful_then.as_slice()
+            && name == returned_name
+            && !inner_elifs.is_empty()
+            && static_truth(inner_condition).is_none()
+            && has_identifier(inner_condition)
+            && !has_division(inner_condition)
+            && inner_elifs.iter().all(|(elif_condition, _)| {
+                static_truth(elif_condition).is_none()
+                    && has_identifier(elif_condition)
+                    && !has_division(elif_condition)
+            })
+            && let Some(inner_then_value) = assignment_value_for_name(inner_then, name)
+        {
+            let Some(inner_elif_values) = inner_elifs
+                .iter()
+                .map(|(elif_condition, branch)| {
+                    assignment_value_for_name(branch, name)
+                        .map(|value| (and_expr(condition, elif_condition), value))
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return Err(Arc::from("unsupported nested dynamic local elif branch"));
+            };
+            let combined_condition = and_expr(condition, inner_condition);
+            let mut elif_values = inner_elif_values
+                .iter()
+                .map(|(condition, value)| (condition, *value))
+                .collect::<Vec<_>>();
+            elif_values.push((condition, initial_value));
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                &combined_condition,
+                inner_then_value,
+                &elif_values,
+                else_value,
+                &function.parameter_names,
+            )
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported nested dynamic local elif branch"));
         }
     }
     if let [
@@ -11860,6 +11933,18 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
         assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-elif-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = 0\n        if value > 10:\n            result = 100\n        elif value > 0:\n            result = value + 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested dynamic local elif branch should lower through an explicit ladder");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[0, 11]), Ok(Some(-1)));
     }
 
     #[test]

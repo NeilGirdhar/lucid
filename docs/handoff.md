@@ -2077,6 +2077,8 @@ diverged:
 * A dynamic outer `if` whose selected arm initializes a local, conditionally
   overwrites it in a nested dynamic `if`, and returns that local now lowers by
   rewriting the shape into an explicit conditional ladder.
+  The same adapter handles a nested dynamic `elif` ladder without an inner
+  `else`, using the initialized local as the selected-arm fall-through result.
   The adapter is limited to primitive, non-division guard conditions so it does
   not introduce eager recoverable errors while nested CFG splicing is still
   incomplete.
