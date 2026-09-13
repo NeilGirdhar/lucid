@@ -8442,6 +8442,32 @@ impl Function {
                 _ => None,
             }
         }
+        fn constant_binding_candidate(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> bool {
+            match expr {
+                lucid_syntax::Expr::List { .. }
+                | lucid_syntax::Expr::Set { .. }
+                | lucid_syntax::Expr::Dict { .. }
+                | lucid_syntax::Expr::Record { .. }
+                | lucid_syntax::Expr::Literal {
+                    value:
+                        lucid_syntax::LiteralValue::Str(_)
+                        | lucid_syntax::LiteralValue::Bytes(_)
+                        | lucid_syntax::LiteralValue::Float(_)
+                        | lucid_syntax::LiteralValue::None
+                        | lucid_syntax::LiteralValue::Ellipsis,
+                    ..
+                } => true,
+                lucid_syntax::Expr::Unary { expr, .. } => {
+                    constant_float(expr, aggregate_bindings).is_some()
+                }
+                lucid_syntax::Expr::Call { .. } => const_range_values(expr).is_some(),
+                lucid_syntax::Expr::Ident { name, .. } => aggregate_bindings.contains_key(name),
+                _ => false,
+            }
+        }
         fn lower(
             expr: &lucid_syntax::Expr,
             bindings: &HashMap<String, ValueId>,
@@ -9191,6 +9217,53 @@ impl Function {
                     let value = match op {
                         lucid_syntax::BinaryOp::In => contains,
                         lucid_syntax::BinaryOp::NotIn => !contains,
+                        _ => unreachable!(),
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Binary {
+                    left,
+                    op: op @ (lucid_syntax::BinaryOp::Eq | lucid_syntax::BinaryOp::NotEq),
+                    right,
+                    ..
+                } if constant_binding_candidate(left, aggregate_bindings)
+                    && constant_binding_candidate(right, aggregate_bindings) =>
+                {
+                    let left_binding = match left.as_ref() {
+                        lucid_syntax::Expr::Ident { name, .. } => aggregate_bindings
+                            .get(name)
+                            .cloned()
+                            .ok_or(LowerError::UnsupportedExpression)?,
+                        _ => lower_aggregate_literal(
+                            left,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )?
+                        .ok_or(LowerError::UnsupportedExpression)?,
+                    };
+                    let right_binding = match right.as_ref() {
+                        lucid_syntax::Expr::Ident { name, .. } => aggregate_bindings
+                            .get(name)
+                            .cloned()
+                            .ok_or(LowerError::UnsupportedExpression)?,
+                        _ => lower_aggregate_literal(
+                            right,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )?
+                        .ok_or(LowerError::UnsupportedExpression)?,
+                    };
+                    let equal = aggregate_equal(&left_binding, &right_binding, instructions)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let value = match op {
+                        lucid_syntax::BinaryOp::Eq => equal,
+                        lucid_syntax::BinaryOp::NotEq => !equal,
                         _ => unreachable!(),
                     };
                     let id = result(next);
@@ -9969,6 +10042,85 @@ impl Function {
                         || constant_value_truth(*right, instructions)?,
                 ),
                 _ => constant_int(value, instructions).map(|value| value != 0),
+            }
+        }
+        fn aggregate_equal(
+            left: &AggregateBinding,
+            right: &AggregateBinding,
+            instructions: &[Instruction],
+        ) -> Option<bool> {
+            let int_values = |values: &[ValueId]| -> Option<Vec<i64>> {
+                values
+                    .iter()
+                    .map(|value| constant_int(*value, instructions))
+                    .collect()
+            };
+            let int_pairs = |values: &[(ValueId, ValueId)]| -> Option<Vec<(i64, i64)>> {
+                values
+                    .iter()
+                    .map(|(key, value)| {
+                        Some((
+                            constant_int(*key, instructions)?,
+                            constant_int(*value, instructions)?,
+                        ))
+                    })
+                    .collect()
+            };
+            match (left, right) {
+                (AggregateBinding::List(left), AggregateBinding::List(right))
+                | (AggregateBinding::Record(left), AggregateBinding::Record(right)) => {
+                    Some(int_values(left)? == int_values(right)?)
+                }
+                (AggregateBinding::Set(left), AggregateBinding::Set(right)) => {
+                    let mut left = int_values(left)?;
+                    let mut right = int_values(right)?;
+                    left.sort_unstable();
+                    right.sort_unstable();
+                    Some(left == right)
+                }
+                (AggregateBinding::Dict(left), AggregateBinding::Dict(right)) => {
+                    let mut left = int_pairs(left)?;
+                    let mut right = int_pairs(right)?;
+                    left.sort_unstable();
+                    right.sort_unstable();
+                    Some(left == right)
+                }
+                (AggregateBinding::String(left), AggregateBinding::String(right)) => {
+                    Some(left == right)
+                }
+                (AggregateBinding::Bytes(left), AggregateBinding::Bytes(right)) => {
+                    Some(left == right)
+                }
+                (AggregateBinding::Range(left), AggregateBinding::Range(right)) => {
+                    Some(left == right)
+                }
+                (AggregateBinding::Float(left), AggregateBinding::Float(right)) => {
+                    Some(left == right)
+                }
+                (AggregateBinding::None, AggregateBinding::None)
+                | (AggregateBinding::Ellipsis, AggregateBinding::Ellipsis) => Some(true),
+                (
+                    AggregateBinding::List(_)
+                    | AggregateBinding::Set(_)
+                    | AggregateBinding::Dict(_)
+                    | AggregateBinding::Record(_)
+                    | AggregateBinding::String(_)
+                    | AggregateBinding::Bytes(_)
+                    | AggregateBinding::Range(_)
+                    | AggregateBinding::Float(_)
+                    | AggregateBinding::None
+                    | AggregateBinding::Ellipsis,
+                    AggregateBinding::List(_)
+                    | AggregateBinding::Set(_)
+                    | AggregateBinding::Dict(_)
+                    | AggregateBinding::Record(_)
+                    | AggregateBinding::String(_)
+                    | AggregateBinding::Bytes(_)
+                    | AggregateBinding::Range(_)
+                    | AggregateBinding::Float(_)
+                    | AggregateBinding::None
+                    | AggregateBinding::Ellipsis,
+                ) => Some(false),
             }
         }
         fn statement_static_truth(
@@ -20591,6 +20743,29 @@ return total
             ("return 2 in {1: 10, 2: 20}\n", 1),
             ("values = {1: 10, 2: 20}\nreturn 3 not in values\n", 1),
             ("return 10 in {1: 10, 2: 20}\n", 0),
+        ] {
+            let module = lucid_syntax::parse(source).unwrap();
+            let function = Function::from_module_linear(&module).unwrap();
+            assert_eq!(function.execute(), Ok(Some(expected)), "{source}");
+        }
+    }
+
+    #[test]
+    fn linear_module_lowering_lowers_equality_of_constant_aggregates() {
+        for (source, expected) in [
+            ("return [1, 2] == [1, 2]\n", 1),
+            ("return [1, 2] != [2, 1]\n", 1),
+            ("left = [1, 2]\nright = [1, 2]\nreturn left == right\n", 1),
+            ("return {1, 2} == {2, 1}\n", 1),
+            ("return {1: 2} == {1: 2}\n", 1),
+            ("return (1, 2) == (1, 2)\n", 1),
+            ("left = (1, 2)\nright = (1, 2)\nreturn left == right\n", 1),
+            ("return range(3) == range(3)\n", 1),
+            ("return range(3) != range(4)\n", 1),
+            (
+                "left = range(3)\nright = range(3)\nreturn left == right\n",
+                1,
+            ),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();

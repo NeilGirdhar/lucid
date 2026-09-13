@@ -1251,7 +1251,7 @@ fn run_cir_lowers_membership_of_constant_aggregates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    values = {1, 2, 3}\n    return 2 in values\n",
+        "def answer():\n    values = {1, 2, 3}\n    left = [1, 2]\n    right = [1, 2]\n    numbers = range(3)\n    return 2 in values and values == {3, 2, 1} and left == right and numbers == range(3)\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
