@@ -3698,6 +3698,27 @@ pub fn lower_function_body(
             }
             None => None,
         };
+        if let Some(selected_branch) = selected_branch
+            && selected_branch
+                .iter()
+                .any(|statement| matches!(statement, lucid_syntax::Stmt::Return { .. }))
+        {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let selected_module = lucid_syntax::Module {
+                statements: selected_branch.to_vec(),
+                span: source_function.span,
+            };
+            if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                &selected_module,
+                &function.parameter_names,
+            ) {
+                return Ok(Arc::new(lowered));
+            }
+        }
         if let Some(
             [
                 lucid_syntax::Stmt::If {
@@ -9469,6 +9490,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "static-selected-dynamic-branch-body.lucid",
+            "def choose(value: int):\n    if true:\n        result = 0\n        if value > 0:\n            result = value + 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("static outer branch should route selected dynamic body through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(0)));
 
         let file = db.add_file(
             "multi-match-expression.lucid",

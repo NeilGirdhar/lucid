@@ -2048,9 +2048,15 @@ diverged:
   the old `match_arm_value` extractor.
   The new regression covers a guarded literal arm and wildcard fallback whose
   bodies define locals before returning.
-  Nested dynamic control flow inside an arm still requires nested CFG inlining:
-  the equivalent nested `if` inside an `if` branch currently reports
-  `constant function branch has no lowerable return`.
+  Nested dynamic control flow inside a synthesized match arm still requires
+  nested CFG inlining, because branch lowering does not yet splice a complete
+  inner CFG into the outer match ladder.
+* A statically selected outer `if` branch that contains a dynamic inner `if`
+  and an explicit return now routes the selected branch body through the
+  linear CFG lowerer.
+  The fallback is intentionally limited to branches with a top-level `return`,
+  because setup-only selected branches are void in function-body semantics even
+  though raw module lowering would otherwise return the last assignment.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
