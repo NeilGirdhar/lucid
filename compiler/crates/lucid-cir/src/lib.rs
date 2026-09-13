@@ -15956,6 +15956,14 @@ return total
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
         let module = lucid_syntax::parse(
+            "export if value > 10:\n    result = 100\nelse:\n    result = 1\nresult = result + 1\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["value".into()])
+            .expect("exported dynamic comparison diamond should lower before a suffix");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(2)));
+        let module = lucid_syntax::parse(
             "fallback = 40\nif first:\n    left = 10\nelif second:\n    middle = 20\n",
         )
         .unwrap();

@@ -2011,7 +2011,8 @@ diverged:
   diverted to the older parameter-free module-`if` adapter.
   The same parameter-aware discovery now unwraps a top-level `export` wrapper
   around such an `if`, so exported conditional initializers do not fall back to
-  the static-only visitor.
+  the static-only visitor. That applies both when the exported conditional is
+  final and when a later suffix consumes its merged value.
   Simple dynamic diamonds no longer have to be the final statement: when both
   arms assign the same local, the Phi result rebinds that local and later
   straight-line statements lower in the merge block.
