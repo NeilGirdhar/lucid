@@ -7561,6 +7561,35 @@ impl TypeChecker {
         }
         match pattern {
             Pattern::Type(type_expr, _) => {
+                if let TypeExpr::Named { name, args, .. } = type_expr {
+                    let known = matches!(
+                        name.as_str(),
+                        "int"
+                            | "float"
+                            | "bool"
+                            | "str"
+                            | "bytes"
+                            | "Bytes"
+                            | "none"
+                            | "Never"
+                            | "class"
+                            | "Self"
+                            | "Literal"
+                            | "typing.shape"
+                            | "shape"
+                            | "typing.Shape"
+                    ) || self.env.classes.contains_key(name)
+                        || self.env.interfaces.contains_key(name)
+                        || self.env.traits.contains_key(name)
+                        || self.env.type_aliases.contains_key(name)
+                        || self.env.type_var_bounds.contains_key(name);
+                    if !known && !args.is_empty() {
+                        return Err(TypeError {
+                            message: format!("unsupported type pattern '{name}'"),
+                            span,
+                        });
+                    }
+                }
                 let pattern_type = self.resolve_type_expr(type_expr)?;
                 if pattern_type_may_match(&pattern_type, subject_type, &self.env) {
                     Ok(())
@@ -14356,6 +14385,16 @@ class Child(Base):
         TypeChecker::new()
             .check_module(&module)
             .expect("type patterns should narrow the matched subject inside each arm");
+    }
+
+    #[test]
+    fn match_rejects_unknown_parameterized_type_patterns() {
+        let module = parse(
+            "value = 3\nmatch value:\n    case Unknown[int]:\n        pass\n    case _:\n        pass\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new().check_module(&module).unwrap_err();
+        assert!(error.message.contains("unsupported type pattern 'Unknown'"));
     }
 
     #[test]

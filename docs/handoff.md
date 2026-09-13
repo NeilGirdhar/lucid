@@ -6,6 +6,69 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
+## Resume snapshot: 2026-09-13
+
+Work is on branch `codex/lucid-implementation`. The latest pushed checkpoint
+before this snapshot is `0ec4421 Validate function value calls`; later commits
+may include this handoff and the current checker slice.
+
+The implementation is still incomplete. A realistic completion estimate is
+about 31-33 percent: the parser, checker, interpreter, native backend, and
+spec-snippet runner are active and broad, but they still do not implement the
+full specification architecture. In particular, the evaluator and native
+backend still make many semantic decisions directly from the AST instead of
+sharing one typed control-flow IR.
+
+Recent completed slices:
+
+- Literal `getattr` and `setattr` now use declared member and setter types
+  instead of falling back to `Any`.
+- Typed builtins now cover math, `env_var`, `iter`, `enumerate`, `zip`, `map`,
+  aggregate constructors, and several collection result paths.
+- `dict.get`, `dict.pop`, `list.pop`, and `set.pop` now preserve element,
+  key, and value types.
+- Mutating collection methods now validate element, key, and iterable argument
+  types at the checker boundary.
+- String methods now match the implemented runtime surface more closely:
+  `split` accepts an optional string separator, `join` requires an iterable,
+  and unimplemented `lstrip`/`rstrip` are no longer accepted.
+- Function-valued variables are now checked when called, so aliases such as
+  `f = double; f("bad")` cannot bypass callable parameter types.
+
+Current checker slice:
+
+- Unknown parameterized match type patterns such as `case Unknown[int]` now
+  fail in the checker instead of reaching native codegen.
+- Documented `Literal[...]` match patterns remain valid, including the
+  iterator example in `docs/for-and-while.md`.
+- Focused checks run for this slice:
+  `cargo test -p lucid-checker --lib match_rejects_unknown_parameterized_type_patterns --quiet`
+  and `cargo run -p lucid-cli --quiet -- test-spec docs --verbose`.
+
+Before handing off or merging, run the full gate:
+
+```bash
+cargo fmt --all
+git diff --check
+cargo test --workspace --all-targets --quiet
+cargo test --workspace --all-features --all-targets --quiet
+cargo clippy --workspace --all-features --all-targets -- -D warnings
+uv run zensical build --clean --strict
+cargo run -p lucid-cli --quiet -- test-spec docs
+```
+
+Recommended next work:
+
+- Finish moving native-only rejection cases into the checker where the spec
+  makes them statically knowable.
+- Design and implement the richer `fields()` result shape described in
+  `docs/construction.md` and `docs/class-members.md`; the current runtime and
+  native backend mostly expose `list[str]`.
+- Continue replacing `Any` placeholder signatures with concrete checked
+  contracts, especially for first-class builtins and method values.
+- Keep landing small vertical slices with focused tests, then the full gate,
+  then a pushed checkpoint.
+
 ## Current status
 
 The workspace contains a working lexer, parser, checker, runtime, native
