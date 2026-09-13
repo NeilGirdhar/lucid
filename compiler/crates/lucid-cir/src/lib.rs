@@ -8586,6 +8586,153 @@ impl Function {
                 _ => None,
             }
         }
+        fn dict_view_parts(expr: &lucid_syntax::Expr) -> Option<(&lucid_syntax::Expr, &str)> {
+            let lucid_syntax::Expr::Call { func, args, .. } = expr else {
+                return None;
+            };
+            if !args.is_empty() {
+                return None;
+            }
+            let lucid_syntax::Expr::Attribute { value, attr, .. } = func.as_ref() else {
+                return None;
+            };
+            matches!(attr.as_str(), "keys" | "values").then_some((value.as_ref(), attr.as_str()))
+        }
+        fn constant_string_dict_view_list(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<String>> {
+            let (value, attr) = dict_view_parts(expr)?;
+            if let lucid_syntax::Expr::Dict { entries, .. } = value {
+                return entries
+                    .iter()
+                    .map(|(key, value)| {
+                        let selected = if attr == "keys" { key } else { value };
+                        constant_string(selected, aggregate_bindings)
+                    })
+                    .collect();
+            }
+            let lucid_syntax::Expr::Ident { name, .. } = value else {
+                return None;
+            };
+            match (attr, aggregate_bindings.get(name)?) {
+                ("keys", AggregateBinding::StringDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| key.clone()).collect())
+                }
+                ("keys", AggregateBinding::StringIntDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| key.clone()).collect())
+                }
+                ("keys", AggregateBinding::StringFloatDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| key.clone()).collect())
+                }
+                ("keys", AggregateBinding::StringSingletonDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| key.clone()).collect())
+                }
+                ("values", AggregateBinding::StringDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| value.clone()).collect())
+                }
+                ("values", AggregateBinding::IntStringDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| value.clone()).collect())
+                }
+                ("values", AggregateBinding::FloatStringDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| value.clone()).collect())
+                }
+                ("values", AggregateBinding::SingletonStringDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| value.clone()).collect())
+                }
+                _ => None,
+            }
+        }
+        fn constant_float_dict_view_list(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<f64>> {
+            let (value, attr) = dict_view_parts(expr)?;
+            if let lucid_syntax::Expr::Dict { entries, .. } = value {
+                return entries
+                    .iter()
+                    .map(|(key, value)| {
+                        let selected = if attr == "keys" { key } else { value };
+                        constant_float(selected, aggregate_bindings)
+                    })
+                    .collect();
+            }
+            let lucid_syntax::Expr::Ident { name, .. } = value else {
+                return None;
+            };
+            match (attr, aggregate_bindings.get(name)?) {
+                ("keys", AggregateBinding::FloatDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| *key).collect())
+                }
+                ("keys", AggregateBinding::FloatIntDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| *key).collect())
+                }
+                ("keys", AggregateBinding::FloatStringDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| *key).collect())
+                }
+                ("keys", AggregateBinding::FloatSingletonDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| *key).collect())
+                }
+                ("values", AggregateBinding::FloatDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| *value).collect())
+                }
+                ("values", AggregateBinding::IntFloatDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| *value).collect())
+                }
+                ("values", AggregateBinding::StringFloatDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| *value).collect())
+                }
+                ("values", AggregateBinding::SingletonFloatDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| *value).collect())
+                }
+                _ => None,
+            }
+        }
+        fn constant_singleton_dict_view_list(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<SingletonBinding>> {
+            let (value, attr) = dict_view_parts(expr)?;
+            if let lucid_syntax::Expr::Dict { entries, .. } = value {
+                return entries
+                    .iter()
+                    .map(|(key, value)| {
+                        let selected = if attr == "keys" { key } else { value };
+                        constant_singleton(selected, aggregate_bindings)
+                    })
+                    .collect();
+            }
+            let lucid_syntax::Expr::Ident { name, .. } = value else {
+                return None;
+            };
+            match (attr, aggregate_bindings.get(name)?) {
+                ("keys", AggregateBinding::SingletonDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| *key).collect())
+                }
+                ("keys", AggregateBinding::SingletonStringDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| *key).collect())
+                }
+                ("keys", AggregateBinding::SingletonIntDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| *key).collect())
+                }
+                ("keys", AggregateBinding::SingletonFloatDict(entries)) => {
+                    Some(entries.iter().map(|(key, _)| *key).collect())
+                }
+                ("values", AggregateBinding::SingletonDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| *value).collect())
+                }
+                ("values", AggregateBinding::StringSingletonDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| *value).collect())
+                }
+                ("values", AggregateBinding::IntSingletonDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| *value).collect())
+                }
+                ("values", AggregateBinding::FloatSingletonDict(entries)) => {
+                    Some(entries.iter().map(|(_, value)| *value).collect())
+                }
+                _ => None,
+            }
+        }
         fn constant_string_list(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -8651,6 +8798,9 @@ impl Function {
                     } else {
                         Some(value.split_whitespace().map(str::to_string).collect())
                     }
+                }
+                lucid_syntax::Expr::Call { .. } => {
+                    constant_string_dict_view_list(expr, aggregate_bindings)
                 }
                 _ => None,
             }
@@ -8910,6 +9060,9 @@ impl Function {
                     }
                     _ => None,
                 },
+                lucid_syntax::Expr::Call { .. } => {
+                    constant_float_dict_view_list(expr, aggregate_bindings)
+                }
                 _ => None,
             }
         }
@@ -9195,6 +9348,9 @@ impl Function {
                     | AggregateBinding::SingletonRecord(values) => Some(values.clone()),
                     _ => None,
                 },
+                lucid_syntax::Expr::Call { .. } => {
+                    constant_singleton_dict_view_list(expr, aggregate_bindings)
+                }
                 _ => None,
             }
         }
@@ -24488,6 +24644,17 @@ return total
                 "values = dict([[\"a\", \"b\"]])\nreturn values[\"a\"] == \"b\"\n",
                 1,
             ),
+            ("return \"a\" in {\"a\": \"b\"}.keys()\n", 1),
+            ("return \"b\" in {\"a\": \"b\"}.values()\n", 1),
+            ("values = {\"a\": \"b\"}\nreturn \"b\" in values.values()\n", 1),
+            (
+                "items = list({\"a\": \"b\"}.values())\nreturn items[0] == \"b\"\n",
+                1,
+            ),
+            (
+                "items = set({\"a\": \"b\"}.keys())\nreturn \"a\" in items\n",
+                1,
+            ),
             ("return len({\"a\": 1})\n", 1),
             ("return {\"a\": 1} == {\"a\": 1}\n", 1),
             ("return \"a\" in {\"a\": 1}\n", 1),
@@ -24653,6 +24820,13 @@ return total
                 "values = dict([[1.5, 2.5]])\nreturn values[1.5] == 2.5\n",
                 1,
             ),
+            ("return 1.5 in {1.5: 2.5}.keys()\n", 1),
+            ("return 2.5 in {1.5: 2.5}.values()\n", 1),
+            ("values = {1.5: 2.5}\nreturn 2.5 in values.values()\n", 1),
+            (
+                "items = list({1.5: 2.5}.values())\nreturn items[0] == 2.5\n",
+                1,
+            ),
             ("values = {1: 1.5}\nreturn len(values)\n", 1),
             ("return {1: 1.5} == {1: 1.5}\n", 1),
             ("values = {1: 1.5}\nreturn 1 in values\n", 1),
@@ -24723,6 +24897,13 @@ return total
             ),
             (
                 "values = dict([[None, ...]])\nreturn values[None] is ...\n",
+                1,
+            ),
+            ("return None in {None: ...}.keys()\n", 1),
+            ("return ... in {None: ...}.values()\n", 1),
+            ("values = {None: ...}\nreturn ... in values.values()\n", 1),
+            (
+                "items = list({None: ...}.values())\nreturn items[0] is ...\n",
                 1,
             ),
             ("values = {\"a\": None}\nreturn len(values)\n", 1),
