@@ -5960,6 +5960,97 @@ impl Function {
                 },
             }
         }
+        fn loop_condition(
+            expr: &lucid_syntax::Expr,
+            index_name: &str,
+            bound_aliases: &[&lucid_syntax::Stmt],
+            parameter_names: &[String],
+            next_value: &mut u32,
+        ) -> Option<(Vec<Instruction>, ValueId)> {
+            let lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } = expr
+            else {
+                return None;
+            };
+            let left_value = if matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
+            {
+                ValueId(3)
+            } else {
+                let value = ValueId(*next_value);
+                *next_value = next_value.checked_add(1)?;
+                value
+            };
+            let right_value = if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
+            {
+                ValueId(3)
+            } else {
+                let value = ValueId(*next_value);
+                *next_value = next_value.checked_add(1)?;
+                value
+            };
+            let condition_value = ValueId(*next_value);
+            *next_value = next_value.checked_add(1)?;
+            let mut instructions = Vec::new();
+            if left_value != ValueId(3) {
+                instructions.extend(operand(
+                    left,
+                    left_value,
+                    bound_aliases,
+                    parameter_names,
+                    0,
+                    next_value,
+                )?);
+            }
+            if right_value != ValueId(3) {
+                instructions.extend(operand(
+                    right,
+                    right_value,
+                    bound_aliases,
+                    parameter_names,
+                    0,
+                    next_value,
+                )?);
+            }
+            instructions.push(match op {
+                lucid_syntax::BinaryOp::Eq
+                | lucid_syntax::BinaryOp::Identity
+                | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
+                    result: condition_value,
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::NotEq
+                | lucid_syntax::BinaryOp::NotIdentity
+                | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
+                    result: condition_value,
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
+                    result: condition_value,
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
+                    result: condition_value,
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
+                    result: condition_value,
+                    left: left_value,
+                    right: right_value,
+                },
+                lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
+                    result: condition_value,
+                    left: left_value,
+                    right: right_value,
+                },
+                _ => return None,
+            });
+            Some((instructions, condition_value))
+        }
         #[derive(Clone)]
         enum RangeAccumulatorOperand {
             Materialized(Vec<Instruction>),
@@ -5983,7 +6074,22 @@ impl Function {
                     .map(RangeAccumulatorOperand::Materialized),
                 }
             };
-        let accumulator_update = match &body[0] {
+        let (conditional_update_expr, update_statement) = match &body[0] {
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch: None,
+                ..
+            } if elif_branches.is_empty()
+                && then_branch.len() == 1
+                && Self::canonical_loop_tail(&then_branch[1..]) =>
+            {
+                (Some(condition), &then_branch[0])
+            }
+            statement => (None, statement),
+        };
+        let accumulator_update = match update_statement {
             lucid_syntax::Stmt::AugAssign {
                 target:
                     lucid_syntax::Expr::Ident {
@@ -6037,6 +6143,16 @@ impl Function {
         };
         let (accumulator_update, accumulator_operand, accumulator_operand_expr) =
             accumulator_update?;
+        let conditional_update = match conditional_update_expr {
+            Some(condition) => Some(loop_condition(
+                condition,
+                index_name,
+                &bound_aliases,
+                parameter_names,
+                &mut next_value,
+            )?),
+            None => None,
+        };
         let zero = lucid_syntax::Expr::Literal {
             value: lucid_syntax::LiteralValue::Int(0),
             span: func.span(),
@@ -6075,6 +6191,9 @@ impl Function {
                 })
                 && !expr_uses_bound_alias(initial_expr, alias_name, &bound_aliases, 0)?
                 && !expr_uses_bound_alias(accumulator_operand_expr, alias_name, &bound_aliases, 0)?
+                && !conditional_update_expr.is_some_and(|expr| {
+                    expr_uses_bound_alias(expr, alias_name, &bound_aliases, 0).unwrap_or(false)
+                })
             {
                 return None;
             }
@@ -6107,26 +6226,32 @@ impl Function {
             RangeAccumulatorOperand::Materialized(_) => ValueId(9),
             RangeAccumulatorOperand::Induction => ValueId(3),
         };
+        let accumulator_update_result = if conditional_update.is_some() {
+            ValueId(next_value)
+        } else {
+            ValueId(6)
+        };
         let accumulator_update_instruction = match accumulator_update {
             lucid_syntax::BinaryOp::Add => Instruction::Add {
-                result: ValueId(6),
+                result: accumulator_update_result,
                 left: ValueId(4),
                 right: accumulator_operand_value,
             },
             lucid_syntax::BinaryOp::Sub => Instruction::Sub {
-                result: ValueId(6),
+                result: accumulator_update_result,
                 left: ValueId(4),
                 right: accumulator_operand_value,
             },
             _ => return None,
         };
-        let mut body_instructions = Vec::new();
+        let mut update_instructions = Vec::new();
         if let RangeAccumulatorOperand::Materialized(instructions) = accumulator_operand {
-            body_instructions.extend(instructions);
+            update_instructions.extend(instructions);
         }
-        body_instructions.push(accumulator_update_instruction);
+        update_instructions.push(accumulator_update_instruction);
+        let mut step_instructions = Vec::new();
         if let RangeStep::Static(step) = step {
-            body_instructions.push(Instruction::ConstInt {
+            step_instructions.push(Instruction::ConstInt {
                 result: ValueId(8),
                 value: step,
             });
@@ -6135,7 +6260,7 @@ impl Function {
             RangeStep::Static(_) => ValueId(8),
             RangeStep::Dynamic(_) => ValueId(17),
         };
-        body_instructions.push(Instruction::Add {
+        step_instructions.push(Instruction::Add {
             result: ValueId(7),
             left: ValueId(3),
             right: step_value,
@@ -6225,9 +6350,74 @@ impl Function {
         if let Some(instruction) = step_check_instruction {
             entry_instructions.push(instruction);
         }
-        let function = Self {
-            entry: BlockId(0),
-            blocks: vec![
+        let blocks = if let Some((condition_instructions, condition_value)) = conditional_update {
+            vec![
+                Block {
+                    id: BlockId(0),
+                    instructions: entry_instructions,
+                    terminator: Terminator::Jump(BlockId(1)),
+                },
+                Block {
+                    id: BlockId(1),
+                    instructions: [
+                        vec![
+                            Instruction::Phi {
+                                result: ValueId(3),
+                                incomings: vec![(BlockId(0), ValueId(1)), (BlockId(4), ValueId(7))],
+                            },
+                            Instruction::Phi {
+                                result: ValueId(4),
+                                incomings: vec![(BlockId(0), ValueId(2)), (BlockId(4), ValueId(6))],
+                            },
+                        ],
+                        header_condition_instructions,
+                    ]
+                    .concat(),
+                    terminator: Terminator::Branch {
+                        condition: branch_condition,
+                        then_block: BlockId(2),
+                        else_block: BlockId(5),
+                    },
+                },
+                Block {
+                    id: BlockId(2),
+                    instructions: condition_instructions,
+                    terminator: Terminator::Branch {
+                        condition: condition_value,
+                        then_block: BlockId(3),
+                        else_block: BlockId(4),
+                    },
+                },
+                Block {
+                    id: BlockId(3),
+                    instructions: update_instructions,
+                    terminator: Terminator::Jump(BlockId(4)),
+                },
+                Block {
+                    id: BlockId(4),
+                    instructions: [
+                        vec![Instruction::Phi {
+                            result: ValueId(6),
+                            incomings: vec![
+                                (BlockId(2), ValueId(4)),
+                                (BlockId(3), accumulator_update_result),
+                            ],
+                        }],
+                        step_instructions,
+                    ]
+                    .concat(),
+                    terminator: Terminator::Jump(BlockId(1)),
+                },
+                Block {
+                    id: BlockId(5),
+                    instructions: return_instructions,
+                    terminator: Terminator::Return(Some(ValueId(4))),
+                },
+            ]
+        } else {
+            let mut body_instructions = update_instructions;
+            body_instructions.extend(step_instructions);
+            vec![
                 Block {
                     id: BlockId(0),
                     instructions: entry_instructions,
@@ -6265,7 +6455,11 @@ impl Function {
                     instructions: return_instructions,
                     terminator: Terminator::Return(Some(ValueId(4))),
                 },
-            ],
+            ]
+        };
+        let function = Self {
+            entry: BlockId(0),
+            blocks,
         };
         Some(
             function
