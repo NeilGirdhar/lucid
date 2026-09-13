@@ -8344,19 +8344,54 @@ impl Function {
             });
             bindings.insert(name.clone(), result);
         }
-        fn constant_string<'a>(
-            expr: &'a lucid_syntax::Expr,
-            aggregate_bindings: &'a HashMap<String, AggregateBinding>,
-        ) -> Option<&'a str> {
+        fn constant_index(expr: &lucid_syntax::Expr) -> Option<i64> {
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(value),
+                    ..
+                } => Some(*value),
+                lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Neg,
+                    expr,
+                    ..
+                } => constant_index(expr)?.checked_neg(),
+                lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Pos,
+                    expr,
+                    ..
+                } => constant_index(expr),
+                _ => None,
+            }
+        }
+        fn select_constant_index(len: usize, raw_index: i64) -> Option<usize> {
+            let len = i64::try_from(len).ok()?;
+            let index = if raw_index < 0 {
+                len.checked_add(raw_index)?
+            } else {
+                raw_index
+            };
+            let index = usize::try_from(index).ok()?;
+            (index < usize::try_from(len).ok()?).then_some(index)
+        }
+        fn constant_string(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<String> {
             match expr {
                 lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Str(value),
                     ..
-                } => Some(value.as_str()),
+                } => Some(value.clone()),
                 lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
-                    AggregateBinding::String(value) => Some(value.as_str()),
+                    AggregateBinding::String(value) => Some(value.clone()),
                     _ => None,
                 },
+                lucid_syntax::Expr::Index { value, index, .. } => {
+                    let value = constant_string(value, aggregate_bindings)?;
+                    let selected =
+                        select_constant_index(value.chars().count(), constant_index(index)?)?;
+                    value.chars().nth(selected).map(|ch| ch.to_string())
+                }
                 _ => None,
             }
         }
@@ -8609,6 +8644,11 @@ impl Function {
                             constant_float(expr, aggregate_bindings)
                                 .ok_or(LowerError::UnsupportedExpression)?
                                 != 0.0
+                        }
+                        expr if constant_string(expr, aggregate_bindings).is_some() => {
+                            !constant_string(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .is_empty()
                         }
                         _ => {
                             let value = lower(
@@ -8945,6 +8985,21 @@ impl Function {
                             select_mapping(&lowered_entries, instructions)
                                 .ok_or(LowerError::UnsupportedExpression)
                         }
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bytes(values),
+                            ..
+                        } => {
+                            let selected = select_sequence(values.len())
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            let value = i64::from(
+                                *values
+                                    .get(selected)
+                                    .ok_or(LowerError::UnsupportedExpression)?,
+                            );
+                            let id = result(next);
+                            instructions.push(Instruction::ConstInt { result: id, value });
+                            Ok(id)
+                        }
                         lucid_syntax::Expr::Record { fields, .. } => {
                             let selected = select_sequence(fields.len())
                                 .ok_or(LowerError::UnsupportedExpression)?;
@@ -8995,8 +9050,17 @@ impl Function {
                                 AggregateBinding::String(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
-                                AggregateBinding::Bytes(_) => {
-                                    Err(LowerError::UnsupportedExpression)
+                                AggregateBinding::Bytes(values) => {
+                                    let selected = select_sequence(values.len())
+                                        .ok_or(LowerError::UnsupportedExpression)?;
+                                    let value = i64::from(
+                                        *values
+                                            .get(selected)
+                                            .ok_or(LowerError::UnsupportedExpression)?,
+                                    );
+                                    let id = result(next);
+                                    instructions.push(Instruction::ConstInt { result: id, value });
+                                    Ok(id)
                                 }
                                 AggregateBinding::Range(_) => {
                                     Err(LowerError::UnsupportedExpression)
@@ -9117,7 +9181,7 @@ impl Function {
                         .ok_or(LowerError::UnsupportedExpression)?;
                     let haystack = constant_string(right, aggregate_bindings)
                         .ok_or(LowerError::UnsupportedExpression)?;
-                    let contains = haystack.contains(needle);
+                    let contains = haystack.contains(&needle);
                     let value = match op {
                         lucid_syntax::BinaryOp::In => contains,
                         lucid_syntax::BinaryOp::NotIn => !contains,
@@ -9963,7 +10027,7 @@ impl Function {
                 } => {
                     let needle = constant_string(left, aggregate_bindings)?;
                     let haystack = constant_string(right, aggregate_bindings)?;
-                    let contains = haystack.contains(needle);
+                    let contains = haystack.contains(&needle);
                     match op {
                         lucid_syntax::BinaryOp::In => Some(contains),
                         lucid_syntax::BinaryOp::NotIn => Some(!contains),
@@ -20467,6 +20531,9 @@ return total
             ("values = range(0)\nreturn any(values)\n", 0),
             ("return 97 in b\"abc\"\n", 1),
             ("return 120 not in b\"abc\"\n", 1),
+            ("return b\"abc\"[1]\n", 98),
+            ("data = b\"abc\"\nreturn data[1]\n", 98),
+            ("data = b\"abc\"\nreturn data[-1]\n", 99),
             ("data = b\"abc\"\nreturn bool(data)\n", 1),
             ("data = b\"abc\"\nreturn 98 in data\n", 1),
             ("data = b\"abc\"\nreturn 120 not in data\n", 1),
@@ -20532,6 +20599,10 @@ return total
             ("return \"c\" >= \"c\"\n", 1),
             ("return \"u\" in \"lucid\"\n", 1),
             ("return \"z\" not in \"lucid\"\n", 1),
+            ("return \"abc\"[1] == \"b\"\n", 1),
+            ("text = \"abc\"\nreturn text[1] == \"b\"\n", 1),
+            ("text = \"abc\"\nreturn text[-1] == \"c\"\n", 1),
+            ("return bool(\"abc\"[1])\n", 1),
             ("text = \"lucid\"\nreturn len(text)\n", 5),
             ("text = \"lucid\"\nreturn bool(text)\n", 1),
             ("text = \"\"\nreturn bool(text)\n", 0),
