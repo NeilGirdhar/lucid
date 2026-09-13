@@ -8551,6 +8551,10 @@ impl Function {
                             value: lucid_syntax::LiteralValue::Float(value),
                             ..
                         } => *value != 0.0,
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::None,
+                            ..
+                        } => false,
                         lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings
                             .get(name)
                             .ok_or(LowerError::UnsupportedExpression)?
@@ -8968,10 +8972,19 @@ impl Function {
                     else_branch,
                     ..
                 } => {
-                    let condition =
-                        lower(condition, bindings, aggregate_bindings, instructions, next)?;
-                    let condition = constant_value_truth(condition, instructions)
-                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let condition = if let Some(condition) = statement_static_truth(
+                        condition,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                    ) {
+                        condition
+                    } else {
+                        let condition =
+                            lower(condition, bindings, aggregate_bindings, instructions, next)?;
+                        constant_value_truth(condition, instructions)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                    };
                     lower(
                         if condition { then_branch } else { else_branch },
                         bindings,
@@ -9122,6 +9135,43 @@ impl Function {
                         lucid_syntax::BinaryOp::LtEq => left <= right,
                         lucid_syntax::BinaryOp::Gt => left > right,
                         lucid_syntax::BinaryOp::GtEq => left >= right,
+                        _ => unreachable!(),
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Binary {
+                    left, op, right, ..
+                } if matches!(
+                    op,
+                    lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::Is
+                        | lucid_syntax::BinaryOp::IsNot
+                ) && matches!(
+                    (left.as_ref(), right.as_ref()),
+                    (
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::None,
+                            ..
+                        },
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::None,
+                            ..
+                        }
+                    )
+                ) =>
+                {
+                    let value = match op {
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => true,
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => false,
                         _ => unreachable!(),
                     };
                     let id = result(next);
@@ -20479,10 +20529,28 @@ return total
             ("value = 0.0\nreturn bool(value)\n", 0),
             ("value = -1.5\nreturn bool(value)\n", 1),
             ("value = 1.5\nreturn 42 if value < 2.5 else 0\n", 42),
+            ("value = 1.5\nreturn 42 if value else 0\n", 42),
+            ("value = 0.0\nreturn 0 if value else 42\n", 42),
             (
                 "value = 1.5\nif value < 2.5:\n    return 42\nelse:\n    return 0\n",
                 42,
             ),
+        ] {
+            let module = lucid_syntax::parse(source).unwrap();
+            let function = Function::from_module_linear(&module).unwrap();
+            assert_eq!(function.execute(), Ok(Some(expected)), "{source}");
+        }
+    }
+
+    #[test]
+    fn linear_module_lowering_lowers_constant_none_predicates() {
+        for (source, expected) in [
+            ("return bool(None)\n", 0),
+            ("return None == None\n", 1),
+            ("return None is None\n", 1),
+            ("return None != None\n", 0),
+            ("return None is not None\n", 0),
+            ("return 42 if None else 7\n", 7),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();
