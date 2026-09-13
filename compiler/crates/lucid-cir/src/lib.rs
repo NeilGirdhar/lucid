@@ -8488,6 +8488,29 @@ impl Function {
                 lucid_syntax::Expr::Call { func, args, .. }
                     if matches!(
                         func.as_ref(),
+                        lucid_syntax::Expr::Attribute { attr, .. }
+                            if attr == "startswith" || attr == "endswith"
+                    ) && args.len() == 1 =>
+                {
+                    let lucid_syntax::Expr::Attribute { value, attr, .. } = func.as_ref() else {
+                        unreachable!();
+                    };
+                    let receiver = constant_string(value, aggregate_bindings)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let needle = constant_string(&args[0].value, aggregate_bindings)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let value = if attr == "startswith" {
+                        receiver.starts_with(&needle)
+                    } else {
+                        receiver.ends_with(&needle)
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
                         lucid_syntax::Expr::Ident { name, .. } if name == "len"
                     ) && args.len() == 1 =>
                 {
@@ -20784,6 +20807,10 @@ return total
             ("return \"c\" >= \"c\"\n", 1),
             ("return \"u\" in \"lucid\"\n", 1),
             ("return \"z\" not in \"lucid\"\n", 1),
+            ("return \"lucid\".startswith(\"lu\")\n", 1),
+            ("return \"lucid\".endswith(\"id\")\n", 1),
+            ("return \"lucid\".startswith(\"id\")\n", 0),
+            ("return \"lucid\".endswith(\"lu\")\n", 0),
             ("return \"abc\"[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[-1] == \"c\"\n", 1),
@@ -20798,6 +20825,14 @@ return total
             ),
             (
                 "needle = \"z\"\ntext = \"lucid\"\nreturn needle not in text\n",
+                1,
+            ),
+            (
+                "prefix = \"lu\"\ntext = \"lucid\"\nreturn text.startswith(prefix)\n",
+                1,
+            ),
+            (
+                "suffix = \"id\"\ntext = \"lucid\"\nreturn text.endswith(suffix)\n",
                 1,
             ),
             ("text = \"lucid\"\nreturn 1 if \"u\" in text else 0\n", 1),
