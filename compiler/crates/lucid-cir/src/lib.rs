@@ -8598,6 +8598,21 @@ impl Function {
             };
             matches!(attr.as_str(), "keys" | "values").then_some((value.as_ref(), attr.as_str()))
         }
+        fn dict_view_parts_with_items(
+            expr: &lucid_syntax::Expr,
+        ) -> Option<(&lucid_syntax::Expr, &str)> {
+            let lucid_syntax::Expr::Call { func, args, .. } = expr else {
+                return None;
+            };
+            if !args.is_empty() {
+                return None;
+            }
+            let lucid_syntax::Expr::Attribute { value, attr, .. } = func.as_ref() else {
+                return None;
+            };
+            matches!(attr.as_str(), "keys" | "values" | "items")
+                .then_some((value.as_ref(), attr.as_str()))
+        }
         fn constant_string_dict_view_list(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -12036,7 +12051,7 @@ impl Function {
             instructions: &mut Vec<Instruction>,
             next: &mut u32,
         ) -> Option<Vec<AggregateLoopValue>> {
-            let (value, attr) = dict_view_parts(expr)?;
+            let (value, attr) = dict_view_parts_with_items(expr)?;
             let lucid_syntax::Expr::Ident { name, .. } = value else {
                 return None;
             };
@@ -12049,6 +12064,12 @@ impl Function {
                 ("values", AggregateBinding::Dict(entries)) => entries
                     .iter()
                     .map(|(_, value)| AggregateLoopValue::Value(*value))
+                    .collect(),
+                ("items", AggregateBinding::Dict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::Record(vec![*key, *value]))
+                    })
                     .collect(),
                 ("keys", AggregateBinding::StringDict(entries)) => entries
                     .iter()
@@ -24103,6 +24124,16 @@ return total
         assert_eq!(
             Function::from_module(&module)
                 .expect("constant dictionary item views should iterate key-value records")
+                .execute(),
+            Ok(Some(33))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\npairs = {1: 10, 2: 20}\nfor item in pairs.items():\n    value = value + item[0] + item[1]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound dictionary item views should iterate key-value records")
                 .execute(),
             Ok(Some(33))
         );

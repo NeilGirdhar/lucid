@@ -1425,7 +1425,7 @@ fn run_cir_executes_constant_dict_view_for_loops_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    total = 0\n    for key in {1: 10, 2: 20}.keys():\n        total += key\n    for value in {1: 10, 2: 20}.values():\n        total += value\n    for item in {1: 10, 2: 20}.items():\n        total += item[0] + item[1]\n    for text in {1: \"a\", 2: \"bc\"}.values():\n        total += len(text)\n    return total\n",
+        "def answer():\n    total = 0\n    for key in {1: 10, 2: 20}.keys():\n        total += key\n    for value in {1: 10, 2: 20}.values():\n        total += value\n    for item in {1: 10, 2: 20}.items():\n        total += item[0] + item[1]\n    pairs = {1: 10, 2: 20}\n    for item in pairs.items():\n        total += item[0] + item[1]\n    for text in {1: \"a\", 2: \"bc\"}.values():\n        total += len(text)\n    return total\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
@@ -1443,7 +1443,7 @@ fn run_cir_executes_constant_dict_view_for_loops_in_typed_function_body() {
         "run-cir function dict view for loops failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "69");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "102");
 }
 
 #[test]
