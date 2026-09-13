@@ -6,43 +6,53 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13 (third continuation session - COMPLETED)
+## Resume snapshot: 2026-09-13 (third continuation session - IN PROGRESS)
 
 Work is on branch `codex/lucid-implementation`. Latest checkpoint
-is after implementing type narrowing for if statements (simple variable narrowing only).
+is after implementing control-flow sensitive type narrowing for if statements.
 
-**Gap Closure Work (2026-09-13 third continuation — 1 major gap partially closed):**
-Type narrowing infrastructure for flow-sensitive type analysis in if statements.
+**Gap Closure Work (2026-09-13 third continuation — 1 major gap substantially completed):**
+Type narrowing infrastructure for flow-sensitive type analysis in if statements,
+including control-flow aware type propagation after early returns.
 
-**Completed Today (Type Narrowing - partial):**
-1. **Type narrowing for simple variables** (WORKING)
+**Completed Today (Type Narrowing - substantial):**
+1. **Type narrowing for simple variables in branches** (WORKING)
    - Extract narrowing patterns from conditions in if statements
    - Support for `x is None` pattern (narrows to None in then, not None in else)
    - Support for `x is not None` pattern (narrows to not None in then, None in else)  
    - Support for `not (x is None)` pattern (equivalent to is not)
    - Proper handling of union type narrowing (filters out None from union types)
    - Applied narrowing works correctly in else branches and with function calls
-   - 5 new test cases added covering all patterns
 
-2. **Limitations documented**
-   - Attribute path narrowing (e.g., `node.left is None`) requires deeper architectural changes
-   - Workaround: store attributes in local variables first (e.g., `left = node.left; if left is None:`)
-   - This workaround is already functional with current type narrowing
-   - Full attribute narrowing would require modifying type_of_expr() to track narrowing constraints
+2. **Control-flow sensitive type narrowing** (NEW)
+   - Detect when if statements have early returns/breaks/continues via branch_exits()
+   - Propagate narrowing after if statement when then branch exits
+   - Enables common patterns: `if x is None: return ... ; use_x_not_none()`
+   - Type narrowing persists naturally without requiring explicit else blocks
+   - Added 1 new test verifying post-if narrowing works correctly
 
-**Session Metrics:**
-- Type narrowing tests: 5 new tests, all passing
-- Checker tests: 220 total (215 pre-existing + 5 new)
-- Spec tests: 55 passing
-- Narrowing patterns supported: 3 (is None, is not None, not (is None))
-- Union type narrowing: Yes, working correctly
+3. **Test coverage:**
+   - 6 new type narrowing test cases (all passing)
+   - Checker tests: 221 total
+   - Spec tests: 55 passing
+   - Narrowing patterns supported: 3 (is None, is not None, not (is None))
+   - Union type narrowing: Working correctly
+   - Control-flow aware narrowing: Working correctly
 
-**Next Steps for Attribute Narrowing:**
-To fully support attribute narrowing, would need:
-1. Store narrowing constraints in environment (currently only variables)
-2. Modify type_of_expr() to check narrowing constraints before computing types
-3. Handle invalidation of constraints when attributes might be modified
-4. Estimated effort: 1-2 days of architectural work
+**Limitations documented:**
+- Attribute path narrowing (e.g., `node.left is None`) requires deeper architectural changes
+- Workaround: store attributes in local variables first (e.g., `left = node.left; if left is None:`)
+- This workaround works perfectly with current type narrowing implementation
+- Full attribute narrowing would require:
+  1. Store narrowing constraints in environment (currently only variables)
+  2. Modify type_of_expr() to check narrowing constraints before computing types
+  3. Handle invalidation of constraints when attributes might be modified
+  4. Estimated effort: 1-2 days of architectural work
+
+**Session Improvements:**
+- Narrowing now persists after if statements for better coverage
+- Type analysis is more precise for common control-flow patterns
+- 2 commits implementing both basic and control-flow sensitive narrowing
 
 **Gap Closure Work (2026-09-13 second continuation — 3 structural improvements):**
 The session closed gaps in type validation for immutable/non-indexable types,
