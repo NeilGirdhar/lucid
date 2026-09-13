@@ -13036,6 +13036,19 @@ mod tests {
         assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(-1)));
 
         let file = db.add_file(
+            "statement-boolean-guarded-match-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int, limit: int):\n    match tag:\n        case 1 if value > 0 and value < limit:\n            result = 0\n            if value > 10:\n                result = 100\n            elif value > 0:\n                result = value + 10\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("boolean guarded literal match arm should gate nested local branch");
+        assert_eq!(function.execute_with_args(&[1, 11, 20]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2, 20]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, 20, 20]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[1, -2, 20]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[2, 11, 20]), Ok(Some(-1)));
+
+        let file = db.add_file(
             "statement-match-wildcard-nested-dynamic-local-branch.lucid",
             "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            return 100\n        case _:\n            result = 0\n            if value > 10:\n                result = value + 10\n            elif value > 0:\n                result = value\n            else:\n                result = -value\n            return result\n",
         );

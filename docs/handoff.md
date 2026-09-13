@@ -2133,9 +2133,10 @@ diverged:
   same nested local pattern as an explicit guarded ladder, so the guard-false
   path reaches the fallback arm instead of treating the first wildcard as
   unconditional.
-  The adapter is limited to primitive, non-division guard conditions so it does
-  not introduce eager recoverable errors while nested CFG splicing is still
-  incomplete.
+  The adapter accepts boolean-composed, non-division guard conditions, including
+  arithmetic comparisons, while still excluding division-family guards so it
+  does not introduce eager recoverable errors before nested CFG splicing carries
+  result-status edges.
 * Counted `for range` accumulator lowering now accepts a single guarded
   accumulator update in the loop body, such as `if i > cutoff: total += i`.
   CIR lowers this as a condition block, an update block, and a step block whose
