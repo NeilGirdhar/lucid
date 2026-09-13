@@ -3618,6 +3618,69 @@ pub fn lower_function_body(
             || branch.iter().all(branch_noop_statement))
         .then_some(None)
     }
+    fn contains_explicit_return(statements: &[lucid_syntax::Stmt]) -> bool {
+        statements.iter().any(|statement| match statement {
+            lucid_syntax::Stmt::Return { .. } => true,
+            lucid_syntax::Stmt::If {
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => {
+                contains_explicit_return(then_branch)
+                    || elif_branches
+                        .iter()
+                        .any(|(_, branch)| contains_explicit_return(branch))
+                    || else_branch.as_deref().is_some_and(contains_explicit_return)
+            }
+            _ => false,
+        })
+    }
+    fn normalize_static_statement_selection(
+        statements: &[lucid_syntax::Stmt],
+    ) -> Vec<lucid_syntax::Stmt> {
+        let mut normalized = Vec::new();
+        for statement in statements {
+            match statement {
+                lucid_syntax::Stmt::If {
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch,
+                    ..
+                } => match static_truth(condition) {
+                    Some(true) => {
+                        normalized.extend(normalize_static_statement_selection(then_branch))
+                    }
+                    Some(false) => {
+                        let mut selected = None;
+                        let mut unknown = false;
+                        for (elif_condition, branch) in elif_branches {
+                            match static_truth(elif_condition) {
+                                Some(true) => {
+                                    selected = Some(branch.as_slice());
+                                    break;
+                                }
+                                Some(false) => {}
+                                None => {
+                                    unknown = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if unknown {
+                            normalized.push(statement.clone());
+                        } else if let Some(branch) = selected.or(else_branch.as_deref()) {
+                            normalized.extend(normalize_static_statement_selection(branch));
+                        }
+                    }
+                    None => normalized.push(statement.clone()),
+                },
+                _ => normalized.push(statement.clone()),
+            }
+        }
+        normalized
+    }
     if let [
         lucid_syntax::Stmt::If {
             condition,
@@ -3698,25 +3761,24 @@ pub fn lower_function_body(
             }
             None => None,
         };
-        if let Some(selected_branch) = selected_branch
-            && selected_branch
-                .iter()
-                .any(|statement| matches!(statement, lucid_syntax::Stmt::Return { .. }))
-        {
-            if function.is_async {
-                return Err(Arc::from(
-                    "async function bodies are not yet supported by CIR lowering",
-                ));
-            }
-            let selected_module = lucid_syntax::Module {
-                statements: selected_branch.to_vec(),
-                span: source_function.span,
-            };
-            if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
-                &selected_module,
-                &function.parameter_names,
-            ) {
-                return Ok(Arc::new(lowered));
+        if let Some(selected_branch) = selected_branch {
+            let selected_statements = normalize_static_statement_selection(selected_branch);
+            if contains_explicit_return(&selected_statements) {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let selected_module = lucid_syntax::Module {
+                    statements: selected_statements,
+                    span: source_function.span,
+                };
+                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                    &selected_module,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(lowered));
+                }
             }
         }
         if let Some(
@@ -9498,6 +9560,16 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("static outer branch should route selected dynamic body through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "static-selected-nested-dynamic-branch-body.lucid",
+            "def choose(value: int):\n    if true:\n        if true:\n            result = 0\n            if value > 0:\n                result = value + 10\n            return result\n        else:\n            return -2\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested static selected dynamic body should lower through CIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[-1]), Ok(Some(0)));
 

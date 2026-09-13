@@ -2054,9 +2054,13 @@ diverged:
 * A statically selected outer `if` branch that contains a dynamic inner `if`
   and an explicit return now routes the selected branch body through the
   linear CFG lowerer.
-  The fallback is intentionally limited to branches with a top-level `return`,
-  because setup-only selected branches are void in function-body semantics even
-  though raw module lowering would otherwise return the last assignment.
+  The fallback is intentionally limited to branches with a live explicit
+  `return`, because setup-only selected branches are void in function-body
+  semantics even though raw module lowering would otherwise return the last
+  assignment.
+  That route now first normalizes statically selected nested branches, so an
+  explicit return hidden under another `if true` can still reach the shared CFG
+  lowerer while dead `else` returns do not make a setup-only branch value-like.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
