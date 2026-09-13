@@ -1465,6 +1465,72 @@ impl Function {
                                 None => None,
                             }
                         };
+                        if operand.kind == "call" {
+                            let Some(inner_shape) = typed_aggregate_shape(
+                                operand_id,
+                                nodes,
+                                parameter_names,
+                                local_bindings,
+                            )?
+                            else {
+                                return Ok(None);
+                            };
+                            let source = nodes
+                                .get(inner_shape.source_id as usize)
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            let literal_order = |position: usize| {
+                                let child_id = *source.children.get(position)?;
+                                let child = nodes.get(child_id as usize)?;
+                                match child.literal {
+                                    Some(TypedLiteral::Int(value)) => Some(value),
+                                    Some(TypedLiteral::Bool(value)) => Some(i64::from(value)),
+                                    None => None,
+                                }
+                            };
+                            return Ok(match (kind, inner_shape.kind) {
+                                ("list", "list" | "record") => Some(TypedAggregateShape {
+                                    kind: "list",
+                                    source_id: inner_shape.source_id,
+                                    member_positions: inner_shape.member_positions,
+                                }),
+                                ("set", "list" | "record" | "set") => Some(TypedAggregateShape {
+                                    kind: "set",
+                                    source_id: inner_shape.source_id,
+                                    member_positions: inner_shape.member_positions,
+                                }),
+                                ("reversed", "list" | "record") => Some(TypedAggregateShape {
+                                    kind: "list",
+                                    source_id: inner_shape.source_id,
+                                    member_positions: inner_shape
+                                        .member_positions
+                                        .into_iter()
+                                        .rev()
+                                        .collect(),
+                                }),
+                                ("sorted", "list" | "record" | "set") => {
+                                    let mut positions = inner_shape.member_positions;
+                                    positions.sort_by_key(|position| literal_order(*position));
+                                    if positions
+                                        .iter()
+                                        .any(|position| literal_order(*position).is_none())
+                                    {
+                                        None
+                                    } else {
+                                        Some(TypedAggregateShape {
+                                            kind: "list",
+                                            source_id: inner_shape.source_id,
+                                            member_positions: positions,
+                                        })
+                                    }
+                                }
+                                ("dict", "dict") => Some(TypedAggregateShape {
+                                    kind: "dict",
+                                    source_id: inner_shape.source_id,
+                                    member_positions: inner_shape.member_positions,
+                                }),
+                                _ => None,
+                            });
+                        }
                         match operand.kind.as_str() {
                             "list" | "record" if kind != "dict" => {
                                 let member_positions = if kind == "reversed" {
@@ -26292,6 +26358,149 @@ return total
             Function::from_typed_function_body_with_locals(&nodes, 12, &[], &[("items".into(), 4)])
                 .expect("typed set constructor from set should lower");
         assert_eq!(function.execute(), Ok(Some(4)));
+    }
+
+    #[test]
+    fn lowers_typed_composed_aggregate_constructors() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("list".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("reversed".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("sorted".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(3)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "record".into(),
+                detail: None,
+                children: vec![3, 4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "name".into(),
+                detail: Some("items".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "index".into(),
+                detail: None,
+                children: vec![9, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "index".into(),
+                detail: None,
+                children: vec![13, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "index".into(),
+                detail: None,
+                children: vec![15, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![11, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![17, 16],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body_with_locals(&nodes, 18, &[], &[("items".into(), 6)])
+                .expect("typed composed aggregate constructors should lower");
+        assert_eq!(function.execute(), Ok(Some(7)));
     }
 
     #[test]
