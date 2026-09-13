@@ -1222,7 +1222,7 @@ fn run_cir_lowers_constant_integer_builtins_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    values = [1, 2]\n    flags = {false, 0, 2}\n    numbers = range(5)\n    empty = range(0)\n    positives = range(1, 4)\n    return all(values) and any(flags) and bool(range(3)) and not bool([]) and int(true) == 1 and int(\"42\") == 42 and 3 in numbers and 7 not in numbers and sum(numbers) == 10 and len(numbers) == 5 and not bool(empty) and all(positives) and not any(empty)\n",
+        "def answer():\n    values = [1, 2]\n    flags = {false, 0, 2}\n    numbers = range(5)\n    empty = range(0)\n    positives = range(1, 4)\n    data = b\"abc\"\n    return all(values) and any(flags) and bool(range(3)) and not bool([]) and bool(data) and int(true) == 1 and int(\"42\") == 42 and 3 in numbers and 7 not in numbers and 98 in data and 120 not in data and sum(numbers) == 10 and len(numbers) == 5 and not bool(empty) and all(positives) and not any(empty)\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))

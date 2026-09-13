@@ -8317,6 +8317,7 @@ impl Function {
             Set(Vec<ValueId>),
             Dict(Vec<(ValueId, ValueId)>),
             String(String),
+            Bytes(Vec<u8>),
             Range(Vec<i64>),
         }
         let mut instructions = Vec::new();
@@ -8426,6 +8427,9 @@ impl Function {
                             AggregateBinding::Set(elements) => elements.len(),
                             AggregateBinding::Dict(entries) => entries.len(),
                             AggregateBinding::String(value) => value.chars().count(),
+                            AggregateBinding::Bytes(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
                             AggregateBinding::Range(values) => values.len(),
                         },
                         _ => return Err(LowerError::UnsupportedExpression),
@@ -8507,6 +8511,7 @@ impl Function {
                             AggregateBinding::Set(elements) => !elements.is_empty(),
                             AggregateBinding::Dict(entries) => !entries.is_empty(),
                             AggregateBinding::String(value) => !value.is_empty(),
+                            AggregateBinding::Bytes(value) => !value.is_empty(),
                             AggregateBinding::Range(values) => !values.is_empty(),
                         },
                         _ => {
@@ -8672,6 +8677,9 @@ impl Function {
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::Bytes(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::Range(values) => {
                                     for value in values {
                                         total = total
@@ -8743,6 +8751,9 @@ impl Function {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::String(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::Bytes(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::Range(values) => {
@@ -8839,6 +8850,9 @@ impl Function {
                                         .ok_or(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::String(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::Bytes(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::Range(_) => {
@@ -9021,6 +9035,14 @@ impl Function {
                                 .ok_or(LowerError::UnsupportedExpression)?
                                 .contains(&needle);
                         }
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bytes(values),
+                            ..
+                        } => {
+                            let needle = u8::try_from(needle)
+                                .map_err(|_| LowerError::UnsupportedExpression)?;
+                            contains = values.contains(&needle);
+                        }
                         lucid_syntax::Expr::Dict { entries, .. } => {
                             for (key, value) in entries {
                                 let key =
@@ -9052,6 +9074,11 @@ impl Function {
                                 }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::Bytes(values) => {
+                                    let needle = u8::try_from(needle)
+                                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                                    contains = values.contains(&needle);
                                 }
                                 AggregateBinding::Range(values) => {
                                     contains = values.contains(&needle);
@@ -9661,6 +9688,7 @@ impl Function {
                         AggregateBinding::Set(elements) => Some(!elements.is_empty()),
                         AggregateBinding::Dict(entries) => Some(!entries.is_empty()),
                         AggregateBinding::String(value) => Some(!value.is_empty()),
+                        AggregateBinding::Bytes(value) => Some(!value.is_empty()),
                         AggregateBinding::Range(values) => Some(!values.is_empty()),
                     },
                 },
@@ -9786,6 +9814,10 @@ impl Function {
                     value: lucid_syntax::LiteralValue::Str(value),
                     ..
                 } => Ok(Some(AggregateBinding::String(value.clone()))),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bytes(value),
+                    ..
+                } => Ok(Some(AggregateBinding::Bytes(value.clone()))),
                 lucid_syntax::Expr::Call { .. } => {
                     Ok(const_range_values(expr).map(AggregateBinding::Range))
                 }
@@ -20133,6 +20165,11 @@ return total
             ("values = range(0)\nreturn bool(values)\n", 0),
             ("values = range(1, 4)\nreturn all(values)\n", 1),
             ("values = range(0)\nreturn any(values)\n", 0),
+            ("return 97 in b\"abc\"\n", 1),
+            ("return 120 not in b\"abc\"\n", 1),
+            ("data = b\"abc\"\nreturn bool(data)\n", 1),
+            ("data = b\"abc\"\nreturn 98 in data\n", 1),
+            ("data = b\"abc\"\nreturn 120 not in data\n", 1),
             ("return all([true, 1, 2])\n", 1),
             ("return any([false, 0, 2])\n", 1),
             ("return all([])\n", 1),
@@ -20146,6 +20183,8 @@ return total
             ("return bool(abs(-1))\n", 1),
             ("return bool(\"\")\n", 0),
             ("return bool(\"lucid\")\n", 1),
+            ("return bool(b\"\")\n", 0),
+            ("return bool(b\"abc\")\n", 1),
             ("return bool([])\n", 0),
             ("return bool([1])\n", 1),
             ("return bool({1: 2})\n", 1),
