@@ -8699,6 +8699,27 @@ impl TypeChecker {
                             }
                         }
                     }
+                    if name == "getattr" && args.len() == 2 {
+                        if let (
+                            Some(target),
+                            Some(Arg {
+                                value:
+                                    Expr::Literal {
+                                        value: LiteralValue::Str(attr_name),
+                                        ..
+                                    },
+                                ..
+                            }),
+                        ) = (args.first(), args.get(1))
+                        {
+                            let attribute_expr = Expr::Attribute {
+                                value: Box::new(target.value.clone()),
+                                attr: attr_name.clone(),
+                                span: target.value.span(),
+                            };
+                            self.type_of_expr(&attribute_expr)?;
+                        }
+                    }
                     if name == "setattr" {
                         if let (
                             Some(target),
@@ -16174,6 +16195,10 @@ def reject(value: not int) -> none:
             ("locals(1)\n", "accepts at most 0"),
             ("getattr(1)\n", "requires at least 2"),
             ("getattr(1, 1)\n", "attribute name must be str"),
+            (
+                "class Point:\n    x: int\np = Point(1)\nmissing = getattr(p, \"missing\")\n",
+                "has no member 'missing'",
+            ),
             ("setattr(1, \"x\")\n", "requires at least 3"),
             ("setattr(1, 1, 2)\n", "attribute name must be str"),
             (
