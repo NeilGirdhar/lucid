@@ -10205,6 +10205,16 @@ mod tests {
         assert_eq!(function.execute(), Ok(Some(15)));
 
         let file = db.add_file(
+            "ordered-range-alias.lucid",
+            "def ordered_range_total():\n    forward = sorted(range(5))\n    backward = reversed(range(5))\n    return sum(forward) + sum(backward)\n",
+        );
+        let function = lower_function_body(&db, file, "ordered_range_total".into())
+            .as_ref()
+            .expect("sorted/reversed range aliases should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute(), Ok(Some(20)));
+
+        let file = db.add_file(
             "dict-view-aggregate-alias.lucid",
             "def dict_value_total(left: int, right: int):\n    mapping = {1: left, 2: right}\n    values = mapping.values()\n    return sum(values) + len(values)\n",
         );

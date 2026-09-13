@@ -9857,6 +9857,21 @@ impl TypeChecker {
                                             is_sealed: false,
                                         })
                                     }
+                                    "sorted" | "reversed"
+                                        if self.is_iterable_type(&argument_type) =>
+                                    {
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![
+                                                self.iterable_element_type(&argument_type),
+                                            ],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
                                     "dict" if matches!(&argument_type, Type::Class { name, type_args, .. } if name == "dict" && type_args.len() == 2) => {
                                         if let Type::Class { type_args, .. } = argument_type {
                                             Some(Type::Class { name: "dict".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
@@ -15761,7 +15776,7 @@ def reject(value: not int) -> none:
         checker
             .check_module(
                 &parse(
-                    "values = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nrange_sum = sum(range_values)\n",
+                    "values = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\n",
                 )
                 .unwrap(),
             )
@@ -15788,6 +15803,24 @@ def reject(value: not int) -> none:
         ));
         assert!(matches!(
             checker.env.variables.get("range_sum").map(|(ty, _)| ty),
+            Some(Type::Int)
+        ));
+        assert!(matches!(
+            checker.env.variables.get("sorted_values").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "list" && type_args == &vec![Type::Int]
+        ));
+        assert!(matches!(
+            checker.env.variables.get("reversed_values").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "list" && type_args == &vec![Type::Int]
+        ));
+        assert!(matches!(
+            checker.env.variables.get("sorted_sum").map(|(ty, _)| ty),
+            Some(Type::Int)
+        ));
+        assert!(matches!(
+            checker.env.variables.get("reversed_sum").map(|(ty, _)| ty),
             Some(Type::Int)
         ));
         let mut checker = TypeChecker::new();
