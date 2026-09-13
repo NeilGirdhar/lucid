@@ -1563,6 +1563,35 @@ fn run_cir_lowers_enumerate_over_constant_integer_iterables() {
 }
 
 #[test]
+fn run_cir_lowers_zip_over_constant_integer_iterables() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_zip_constant_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    for pair in zip([1, 2], [10, 20]):\n        total = total + pair[0] * pair[1]\n    for left, right in zip(range(2), b\"AB\"):\n        total = total + left + right\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function zip lowering failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "182");
+}
+
+#[test]
 fn run_cir_lowers_constant_string_predicates_in_typed_function_body() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_string_predicates_{}.lucid",

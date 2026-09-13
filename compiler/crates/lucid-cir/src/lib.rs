@@ -12490,30 +12490,34 @@ impl Function {
                 _ => Err(LowerError::UnsupportedExpression),
             }
         }
-        fn bind_enumerate_target(
+        fn bind_record_target(
             target: &lucid_syntax::Pattern,
-            index: ValueId,
-            item: ValueId,
+            items: Vec<ValueId>,
             bindings: &mut HashMap<String, ValueId>,
             aggregate_bindings: &mut HashMap<String, AggregateBinding>,
         ) -> Result<(), LowerError> {
             match target {
                 lucid_syntax::Pattern::Ident(name, _) => {
                     bindings.remove(name);
-                    aggregate_bindings
-                        .insert(name.clone(), AggregateBinding::Record(vec![index, item]));
+                    aggregate_bindings.insert(name.clone(), AggregateBinding::Record(items));
                     Ok(())
                 }
-                lucid_syntax::Pattern::Tuple(elements, _) if elements.len() == 2 => {
-                    bind_scalar_pattern(&elements[0], index, bindings, aggregate_bindings)?;
-                    bind_scalar_pattern(&elements[1], item, bindings, aggregate_bindings)
+                lucid_syntax::Pattern::Tuple(elements, _) if elements.len() == items.len() => {
+                    for (element, item) in elements.iter().zip(items) {
+                        bind_scalar_pattern(element, item, bindings, aggregate_bindings)?;
+                    }
+                    Ok(())
                 }
-                lucid_syntax::Pattern::RecordDestructure(elements, _) if elements.len() == 2 => {
+                lucid_syntax::Pattern::RecordDestructure(elements, _)
+                    if elements.len() == items.len() =>
+                {
                     if elements.iter().any(|(name, _)| name.is_some()) {
                         return Err(LowerError::UnsupportedExpression);
                     }
-                    bind_scalar_pattern(&elements[0].1, index, bindings, aggregate_bindings)?;
-                    bind_scalar_pattern(&elements[1].1, item, bindings, aggregate_bindings)
+                    for ((_, element), item) in elements.iter().zip(items) {
+                        bind_scalar_pattern(element, item, bindings, aggregate_bindings)?;
+                    }
+                    Ok(())
                 }
                 lucid_syntax::Pattern::Wildcard(_) => Ok(()),
                 _ => Err(LowerError::UnsupportedExpression),
@@ -12524,6 +12528,75 @@ impl Function {
             aggregate_bindings: &'a mut HashMap<String, AggregateBinding>,
             instructions: &'a mut Vec<Instruction>,
             next: &'a mut u32,
+        }
+        fn lower_constant_integer_iterable(
+            iterable: &lucid_syntax::Expr,
+            state: &mut EnumerateLoopState<'_>,
+        ) -> Result<Vec<ValueId>, LowerError> {
+            match iterable {
+                lucid_syntax::Expr::List { elements, .. }
+                | lucid_syntax::Expr::Set { elements, .. } => {
+                    let mut values = Vec::with_capacity(elements.len());
+                    for element in elements {
+                        values.push(lower(
+                            element,
+                            state.bindings,
+                            state.aggregate_bindings,
+                            state.instructions,
+                            state.next,
+                        )?);
+                    }
+                    Ok(values)
+                }
+                lucid_syntax::Expr::Record { fields, .. } => {
+                    let mut values = Vec::with_capacity(fields.len());
+                    for (field_name, field) in fields {
+                        if field_name.is_some() {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        values.push(lower(
+                            field,
+                            state.bindings,
+                            state.aggregate_bindings,
+                            state.instructions,
+                            state.next,
+                        )?);
+                    }
+                    Ok(values)
+                }
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bytes(values),
+                    ..
+                } => Ok(values
+                    .iter()
+                    .map(|element| const_int(i64::from(*element), state.instructions, state.next))
+                    .collect()),
+                lucid_syntax::Expr::Ident { name, .. } => {
+                    match state
+                        .aggregate_bindings
+                        .get(name)
+                        .ok_or(LowerError::UnsupportedExpression)?
+                    {
+                        AggregateBinding::List(elements) | AggregateBinding::Set(elements) => {
+                            Ok(elements.clone())
+                        }
+                        AggregateBinding::Range(values) => {
+                            let mut elements = Vec::with_capacity(values.len());
+                            for value in values {
+                                elements.push(const_int(*value, state.instructions, state.next));
+                            }
+                            Ok(elements)
+                        }
+                        _ => Err(LowerError::UnsupportedExpression),
+                    }
+                }
+                _ if const_range_values(iterable).is_some() => Ok(const_range_values(iterable)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|element| const_int(element, state.instructions, state.next))
+                    .collect()),
+                _ => Err(LowerError::UnsupportedExpression),
+            }
         }
         fn lower_enumerate_loop(
             target: &lucid_syntax::Pattern,
@@ -12536,200 +12609,75 @@ impl Function {
             if contains_return(body) {
                 return Err(LowerError::UnsupportedExpression);
             }
-            match iterable {
-                lucid_syntax::Expr::List { elements, .. }
-                | lucid_syntax::Expr::Set { elements, .. } => {
-                    for (offset, element) in elements.iter().enumerate() {
-                        let index = const_int(
-                            start
-                                .checked_add(
-                                    i64::try_from(offset)
-                                        .map_err(|_| LowerError::UnsupportedExpression)?,
-                                )
-                                .ok_or(LowerError::UnsupportedExpression)?,
-                            state.instructions,
-                            state.next,
-                        );
-                        let item = lower(
-                            element,
-                            state.bindings,
-                            state.aggregate_bindings,
-                            state.instructions,
-                            state.next,
-                        )?;
-                        bind_enumerate_target(
-                            target,
-                            index,
-                            item,
-                            state.bindings,
-                            state.aggregate_bindings,
-                        )?;
-                        visit_all(
-                            body,
-                            state.bindings,
-                            state.aggregate_bindings,
-                            state.instructions,
-                            state.next,
-                            last,
-                        )?;
-                    }
-                    Ok(())
-                }
-                lucid_syntax::Expr::Record { fields, .. } => {
-                    for (offset, (field_name, field)) in fields.iter().enumerate() {
-                        if field_name.is_some() {
-                            return Err(LowerError::UnsupportedExpression);
-                        }
-                        let index = const_int(
-                            start
-                                .checked_add(
-                                    i64::try_from(offset)
-                                        .map_err(|_| LowerError::UnsupportedExpression)?,
-                                )
-                                .ok_or(LowerError::UnsupportedExpression)?,
-                            state.instructions,
-                            state.next,
-                        );
-                        let item = lower(
-                            field,
-                            state.bindings,
-                            state.aggregate_bindings,
-                            state.instructions,
-                            state.next,
-                        )?;
-                        bind_enumerate_target(
-                            target,
-                            index,
-                            item,
-                            state.bindings,
-                            state.aggregate_bindings,
-                        )?;
-                        visit_all(
-                            body,
-                            state.bindings,
-                            state.aggregate_bindings,
-                            state.instructions,
-                            state.next,
-                            last,
-                        )?;
-                    }
-                    Ok(())
-                }
-                lucid_syntax::Expr::Literal {
-                    value: lucid_syntax::LiteralValue::Bytes(values),
-                    ..
-                } => {
-                    for (offset, element) in values.iter().enumerate() {
-                        let index = const_int(
-                            start
-                                .checked_add(
-                                    i64::try_from(offset)
-                                        .map_err(|_| LowerError::UnsupportedExpression)?,
-                                )
-                                .ok_or(LowerError::UnsupportedExpression)?,
-                            state.instructions,
-                            state.next,
-                        );
-                        let item = const_int(i64::from(*element), state.instructions, state.next);
-                        bind_enumerate_target(
-                            target,
-                            index,
-                            item,
-                            state.bindings,
-                            state.aggregate_bindings,
-                        )?;
-                        visit_all(
-                            body,
-                            state.bindings,
-                            state.aggregate_bindings,
-                            state.instructions,
-                            state.next,
-                            last,
-                        )?;
-                    }
-                    Ok(())
-                }
-                lucid_syntax::Expr::Ident { name, .. } => {
-                    let elements = match state
-                        .aggregate_bindings
-                        .get(name)
-                        .ok_or(LowerError::UnsupportedExpression)?
-                    {
-                        AggregateBinding::List(elements) | AggregateBinding::Set(elements) => {
-                            elements.clone()
-                        }
-                        AggregateBinding::Range(values) => {
-                            let mut elements = Vec::with_capacity(values.len());
-                            for value in values {
-                                elements.push(const_int(*value, state.instructions, state.next));
-                            }
-                            elements
-                        }
-                        _ => return Err(LowerError::UnsupportedExpression),
-                    };
-                    for (offset, item) in elements.into_iter().enumerate() {
-                        let index = const_int(
-                            start
-                                .checked_add(
-                                    i64::try_from(offset)
-                                        .map_err(|_| LowerError::UnsupportedExpression)?,
-                                )
-                                .ok_or(LowerError::UnsupportedExpression)?,
-                            state.instructions,
-                            state.next,
-                        );
-                        bind_enumerate_target(
-                            target,
-                            index,
-                            item,
-                            state.bindings,
-                            state.aggregate_bindings,
-                        )?;
-                        visit_all(
-                            body,
-                            state.bindings,
-                            state.aggregate_bindings,
-                            state.instructions,
-                            state.next,
-                            last,
-                        )?;
-                    }
-                    Ok(())
-                }
-                _ if const_range_values(iterable).is_some() => {
-                    let values = const_range_values(iterable).unwrap_or_default();
-                    for (offset, element) in values.into_iter().enumerate() {
-                        let index = const_int(
-                            start
-                                .checked_add(
-                                    i64::try_from(offset)
-                                        .map_err(|_| LowerError::UnsupportedExpression)?,
-                                )
-                                .ok_or(LowerError::UnsupportedExpression)?,
-                            state.instructions,
-                            state.next,
-                        );
-                        let item = const_int(element, state.instructions, state.next);
-                        bind_enumerate_target(
-                            target,
-                            index,
-                            item,
-                            state.bindings,
-                            state.aggregate_bindings,
-                        )?;
-                        visit_all(
-                            body,
-                            state.bindings,
-                            state.aggregate_bindings,
-                            state.instructions,
-                            state.next,
-                            last,
-                        )?;
-                    }
-                    Ok(())
-                }
-                _ => Err(LowerError::UnsupportedExpression),
+            let elements = lower_constant_integer_iterable(iterable, state)?;
+            for (offset, item) in elements.into_iter().enumerate() {
+                let index = const_int(
+                    start
+                        .checked_add(
+                            i64::try_from(offset).map_err(|_| LowerError::UnsupportedExpression)?,
+                        )
+                        .ok_or(LowerError::UnsupportedExpression)?,
+                    state.instructions,
+                    state.next,
+                );
+                bind_record_target(
+                    target,
+                    vec![index, item],
+                    state.bindings,
+                    state.aggregate_bindings,
+                )?;
+                visit_all(
+                    body,
+                    state.bindings,
+                    state.aggregate_bindings,
+                    state.instructions,
+                    state.next,
+                    last,
+                )?;
             }
+            Ok(())
+        }
+        fn lower_zip_loop(
+            target: &lucid_syntax::Pattern,
+            iterables: &[lucid_syntax::Arg],
+            body: &[lucid_syntax::Stmt],
+            state: &mut EnumerateLoopState<'_>,
+            last: &mut Option<ValueId>,
+        ) -> Result<(), LowerError> {
+            if contains_return(body) || iterables.is_empty() || !plain_positional_args(iterables) {
+                return Err(LowerError::UnsupportedExpression);
+            }
+            let mut lowered = Vec::with_capacity(iterables.len());
+            for iterable in iterables {
+                lowered.push(lower_constant_integer_iterable(&iterable.value, state)?);
+            }
+            let len = lowered
+                .first()
+                .map(Vec::len)
+                .ok_or(LowerError::UnsupportedExpression)?;
+            if lowered.iter().any(|iterable| iterable.len() != len) {
+                return Err(LowerError::UnsupportedExpression);
+            }
+            for offset in 0..len {
+                let mut items = Vec::with_capacity(lowered.len());
+                for iterable in &lowered {
+                    items.push(
+                        *iterable
+                            .get(offset)
+                            .ok_or(LowerError::UnsupportedExpression)?,
+                    );
+                }
+                bind_record_target(target, items, state.bindings, state.aggregate_bindings)?;
+                visit_all(
+                    body,
+                    state.bindings,
+                    state.aggregate_bindings,
+                    state.instructions,
+                    state.next,
+                    last,
+                )?;
+            }
+            Ok(())
         }
         fn visit(
             stmt: &lucid_syntax::Stmt,
@@ -13217,6 +13165,21 @@ impl Function {
                         next,
                     };
                     lower_enumerate_loop(target, iterable, start, body, &mut enumerate_state, last)
+                }
+                lucid_syntax::Stmt::For {
+                    target,
+                    iterable: lucid_syntax::Expr::Call { func, args, .. },
+                    body,
+                    ..
+                } if matches!(func.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == "zip") =>
+                {
+                    let mut zip_state = EnumerateLoopState {
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    };
+                    lower_zip_loop(target, args, body, &mut zip_state, last)
                 }
                 lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Ident(name, _),
@@ -23113,6 +23076,26 @@ return total
         assert_eq!(
             Function::from_module(&module)
                 .expect("enumerate over constant bytes should expose byte values")
+                .execute(),
+            Ok(Some(132))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\nfor pair in zip([1, 2], [10, 20]):\n    value = value + pair[0] * pair[1]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("zip over constant integer lists should expose value records")
+                .execute(),
+            Ok(Some(50))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\nfor left, right in zip(range(2), b\"AB\"):\n    value = value + left + right\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("zip over constant ranges and bytes should support tuple targets")
                 .execute(),
             Ok(Some(132))
         );
