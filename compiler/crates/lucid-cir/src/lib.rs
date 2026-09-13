@@ -1607,12 +1607,13 @@ impl Function {
                             .ok_or(LowerError::UnsupportedExpression)?;
                         let literal_order = |position: usize| {
                             let child_id = *operand.children.get(position)?;
-                            let child = nodes.get(child_id as usize)?;
-                            match child.literal {
-                                Some(TypedLiteral::Int(value)) => Some(value),
-                                Some(TypedLiteral::Bool(value)) => Some(i64::from(value)),
-                                None => None,
-                            }
+                            typed_constant_order(
+                                child_id,
+                                operand_id,
+                                nodes,
+                                parameter_names,
+                                local_bindings,
+                            )
                         };
                         if operand.kind == "call" {
                             let Some(inner_shape) = typed_aggregate_shape(
@@ -1650,11 +1651,23 @@ impl Function {
                                 ("sorted", "list" | "record" | "set") => {
                                     let mut positions = inner_shape.member_positions.clone();
                                     positions.sort_by_key(|position| {
-                                        typed_shape_literal_order(&inner_shape, *position, nodes)
+                                        typed_shape_literal_order(
+                                            &inner_shape,
+                                            *position,
+                                            nodes,
+                                            parameter_names,
+                                            local_bindings,
+                                        )
                                     });
                                     if positions.iter().any(|position| {
-                                        typed_shape_literal_order(&inner_shape, *position, nodes)
-                                            .is_none()
+                                        typed_shape_literal_order(
+                                            &inner_shape,
+                                            *position,
+                                            nodes,
+                                            parameter_names,
+                                            local_bindings,
+                                        )
+                                        .is_none()
                                     }) {
                                         None
                                     } else {
@@ -1763,17 +1776,36 @@ impl Function {
                 shape: &TypedAggregateShape,
                 position: usize,
                 nodes: &[TypedExprNode],
+                parameter_names: &[String],
+                local_bindings: &[(String, u32)],
             ) -> Option<i64> {
                 if let Some(values) = &shape.literal_values {
                     return values.get(position).copied();
                 }
                 let aggregate = nodes.get(shape.source_id as usize)?;
                 let child_id = *aggregate.children.get(position)?;
-                let child = nodes.get(child_id as usize)?;
+                typed_constant_order(
+                    child_id,
+                    shape.source_id,
+                    nodes,
+                    parameter_names,
+                    local_bindings,
+                )
+            }
+            fn typed_constant_order(
+                id: u32,
+                current_id: u32,
+                nodes: &[TypedExprNode],
+                parameter_names: &[String],
+                local_bindings: &[(String, u32)],
+            ) -> Option<i64> {
+                let child = nodes.get(id as usize)?;
                 match child.literal {
                     Some(TypedLiteral::Int(value)) => Some(value),
                     Some(TypedLiteral::Bool(value)) => Some(i64::from(value)),
-                    None => None,
+                    None => {
+                        typed_constant_int(id, current_id, nodes, parameter_names, local_bindings)
+                    }
                 }
             }
             fn push_typed_shape_values(
@@ -2611,9 +2643,14 @@ impl Function {
                                         for (member_index, position) in
                                             shape.member_positions.iter().copied().enumerate()
                                         {
-                                            let order_value =
-                                                typed_shape_literal_order(&shape, position, nodes)
-                                                    .ok_or(LowerError::UnsupportedExpression)?;
+                                            let order_value = typed_shape_literal_order(
+                                                &shape,
+                                                position,
+                                                nodes,
+                                                parameter_names,
+                                                local_bindings,
+                                            )
+                                            .ok_or(LowerError::UnsupportedExpression)?;
                                             let replace = match (
                                                 callee.detail.as_deref(),
                                                 selected.map(|(_, value)| value),
@@ -27071,6 +27108,113 @@ return total
             Function::from_typed_function_body_with_locals(&nodes, 21, &[], &[("items".into(), 5)])
                 .expect("typed sorted should feed aggregate consumers");
         assert_eq!(function.execute(), Ok(Some(8)));
+    }
+
+    #[test]
+    fn lowers_typed_ordered_aggregates_with_constant_expression_members() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("sorted".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "record".into(),
+                detail: None,
+                children: vec![5, 3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "index".into(),
+                detail: None,
+                children: vec![8, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![9, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![12, 11],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 13, &[])
+            .expect("typed aggregate ordering should fold constant expression members");
+        assert_eq!(function.execute(), Ok(Some(5)));
     }
 
     #[test]
