@@ -9536,9 +9536,7 @@ impl TypeChecker {
                             "split" => args.len() <= 1,
                             "join" | "startswith" | "endswith" => args.len() == 1,
                             "replace" => args.len() == 2,
-                            "upper" | "lower" | "strip" | "trim" | "lstrip" | "rstrip" => {
-                                args.is_empty()
-                            }
+                            "upper" | "lower" | "strip" | "trim" => args.is_empty(),
                             "bin" | "oct" | "hex" => args.len() == 1,
                             _ => true,
                         };
@@ -9569,6 +9567,24 @@ impl TypeChecker {
                                     ),
                                     span: argument.value.span(),
                                 });
+                            }
+                        }
+                        if attr == "join" {
+                            if let Some(argument) = args.first().filter(|argument| {
+                                !argument.is_spread
+                                    && !argument.is_dict_spread
+                                    && !argument.is_gather_spread
+                            }) {
+                                let actual = self.type_of_expr(&argument.value)?;
+                                if !self.is_iterable_type(&actual) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "str.join() argument must be iterable, got {:?}",
+                                            actual
+                                        ),
+                                        span: argument.value.span(),
+                                    });
+                                }
                             }
                         }
                     }
@@ -11074,7 +11090,7 @@ impl TypeChecker {
                             }),
                         }),
                         "split" => Ok(Type::Function {
-                            params: Vec::new(),
+                            params: vec![Type::Str],
                             return_type: Box::new(Type::Class {
                                 name: "list".into(),
                                 type_args: vec![Type::Str],
@@ -11085,12 +11101,10 @@ impl TypeChecker {
                                 is_sealed: false,
                             }),
                         }),
-                        "upper" | "lower" | "strip" | "trim" | "lstrip" | "rstrip" => {
-                            Ok(Type::Function {
-                                params: Vec::new(),
-                                return_type: Box::new(Type::Str),
-                            })
-                        }
+                        "upper" | "lower" | "strip" | "trim" => Ok(Type::Function {
+                            params: Vec::new(),
+                            return_type: Box::new(Type::Str),
+                        }),
                         "join" => Ok(Type::Function {
                             params: vec![Type::TypeVar("Any".into())],
                             return_type: Box::new(Type::Str),
@@ -16543,6 +16557,9 @@ def reject(value: not int) -> none:
             ("help(1, 2)\n", "accepts at most 1"),
             ("fields()\n", "requires at least 1"),
             ("len(1)\n", "not sized"),
+            ("parts = \"a b\".split(1)\n", "str.split() argument has incompatible type"),
+            ("joined = \",\".join(1)\n", "str.join() argument must be iterable"),
+            ("trimmed = \" x\".lstrip()\n", "has no attribute 'lstrip'"),
             ("items = {1: \"one\"}\nitems.pop(1, \"fallback\")\n", "invalid argument count"),
             (
                 "items: dict[str, int] = {\"a\": 1}\nvalue = items.get(1)\n",
@@ -16641,6 +16658,15 @@ def reject(value: not int) -> none:
             Some(Type::Class { name, type_args, .. })
                 if name == "dict" && type_args == &vec![Type::Str, Type::Int]
         ));
+        let mut string_checker = TypeChecker::new();
+        string_checker
+            .check_module(
+                &parse(
+                    "words: list[str] = \"a b\".split()\nparts: list[str] = \"a,b\".split(\",\")\njoined: str = \",\".join([1, 2])\ntrimmed: str = \" x \".strip()\n",
+                )
+                .unwrap(),
+            )
+            .unwrap();
         let mut collection_checker = TypeChecker::new();
         collection_checker
             .check_module(
