@@ -1749,7 +1749,7 @@ impl Function {
                     if callee.kind == "name"
                         && matches!(
                             callee.detail.as_deref(),
-                            Some("len" | "bool" | "all" | "any" | "sum")
+                            Some("len" | "bool" | "all" | "any" | "sum" | "min" | "max")
                         )
                     {
                         if node.children.len() == 3 && callee.detail.as_deref() != Some("sum") {
@@ -1851,7 +1851,7 @@ impl Function {
                                     value: length > 0,
                                 });
                             }
-                            Some("all" | "any" | "sum") => {
+                            Some("all" | "any" | "sum" | "min" | "max") => {
                                 if callee.detail.as_deref() == Some("sum") {
                                     if let Some(start) = start {
                                         result = start;
@@ -1881,6 +1881,52 @@ impl Function {
                                             result = combined;
                                         }
                                     }
+                                    lowered.insert(id, result);
+                                    return Ok(result);
+                                }
+                                let selected_member =
+                                    if matches!(callee.detail.as_deref(), Some("min" | "max")) {
+                                        if lowered_members.is_empty() {
+                                            return Err(LowerError::UnsupportedExpression);
+                                        }
+                                        let mut selected = None::<(usize, i64)>;
+                                        for (member_index, position) in
+                                            member_positions.iter().copied().enumerate()
+                                        {
+                                            let child = aggregate
+                                                .children
+                                                .get(position)
+                                                .copied()
+                                                .ok_or(LowerError::UnsupportedExpression)?;
+                                            let child = nodes
+                                                .get(child as usize)
+                                                .ok_or(LowerError::UnsupportedExpression)?;
+                                            let order_value = match child.literal {
+                                                Some(TypedLiteral::Int(value)) => value,
+                                                Some(TypedLiteral::Bool(value)) => i64::from(value),
+                                                None => {
+                                                    return Err(LowerError::UnsupportedExpression)
+                                                }
+                                            };
+                                            let replace = match (
+                                                callee.detail.as_deref(),
+                                                selected.map(|(_, value)| value),
+                                            ) {
+                                                (_, None) => true,
+                                                (Some("min"), Some(value)) => order_value < value,
+                                                (Some("max"), Some(value)) => order_value > value,
+                                                _ => unreachable!(),
+                                            };
+                                            if replace {
+                                                selected = Some((member_index, order_value));
+                                            }
+                                        }
+                                        selected.map(|(index, _)| lowered_members[index])
+                                    } else {
+                                        None
+                                    };
+                                if let Some(selected_member) = selected_member {
+                                    result = selected_member;
                                     lowered.insert(id, result);
                                     return Ok(result);
                                 }
@@ -26766,6 +26812,186 @@ return total
             function.execute_with_args(&[i64::MAX]),
             Err(ExecuteError::ArithmeticOverflow)
         );
+    }
+
+    #[test]
+    fn lowers_typed_min_max_of_constant_aggregates() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(12)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "list".into(),
+                detail: None,
+                children: vec![3, 2, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "set".into(),
+                detail: None,
+                children: vec![4, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "record".into(),
+                detail: None,
+                children: vec![2, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "name".into(),
+                detail: Some("items".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![4, 3, 2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![6, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![14, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![15, 13],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body_with_locals(&nodes, 16, &[], &[("items".into(), 9)])
+                .expect("typed min/max should lower constant aggregate literals");
+        assert_eq!(function.execute(), Ok(Some(52)));
+    }
+
+    #[test]
+    fn typed_min_max_evaluate_dict_values() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![1, 3, 2, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 5, &[])
+            .expect("typed min should evaluate dict values before selecting keys");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
     #[test]
