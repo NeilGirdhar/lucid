@@ -421,6 +421,43 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn test_type_not_binds_to_immediate_type_before_union() {
+        let module = parse("type Value = not int | str\n").unwrap();
+        let Stmt::TypeAlias {
+            value: TypeAliasValue::Direct(TypeExpr::Union { types, .. }),
+            ..
+        } = &module.statements[0]
+        else {
+            panic!("expected union type alias");
+        };
+        assert_eq!(types.len(), 2);
+        assert!(matches!(
+            &types[0],
+            TypeExpr::Named { name, args, .. }
+                if name == "__not__"
+                    && matches!(
+                        args.as_slice(),
+                        [TypeExpr::Named { name, .. }] if name == "int"
+                    )
+        ));
+        assert!(matches!(
+            &types[1],
+            TypeExpr::Named { name, .. } if name == "str"
+        ));
+
+        let module = parse("type Value = not (int | str)\n").unwrap();
+        let Stmt::TypeAlias {
+            value: TypeAliasValue::Direct(TypeExpr::Named { name, args, .. }),
+            ..
+        } = &module.statements[0]
+        else {
+            panic!("expected negated type alias");
+        };
+        assert_eq!(name, "__not__");
+        assert!(matches!(args.as_slice(), [TypeExpr::Union { types, .. }] if types.len() == 2));
+    }
+
+    #[test]
     fn test_parse_boolean_literal_type_annotations() {
         let module = parse("flag: true = true\n").unwrap();
         let Stmt::VarDef {

@@ -3211,6 +3211,7 @@ impl Parser {
             let mut fields: Vec<RecordFieldType> = Vec::new();
             let mut is_positional_only = false;
             let mut is_keyword_only = false;
+            let mut saw_comma = false;
 
             while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
                 if self.match_tok(&TokenKind::Slash) {
@@ -3218,12 +3219,12 @@ impl Parser {
                         field.is_positional_only = true;
                     }
                     is_positional_only = false;
-                    self.match_tok(&TokenKind::Comma);
+                    saw_comma |= self.match_tok(&TokenKind::Comma);
                     continue;
                 }
                 if self.match_tok(&TokenKind::Star) {
                     is_keyword_only = true;
-                    self.match_tok(&TokenKind::Comma);
+                    saw_comma |= self.match_tok(&TokenKind::Comma);
                     continue;
                 }
                 if self.match_tok(&TokenKind::Ellipsis) {
@@ -3234,7 +3235,7 @@ impl Parser {
                             last.is_variadic_positional = true;
                         }
                     }
-                    self.match_tok(&TokenKind::Comma);
+                    saw_comma |= self.match_tok(&TokenKind::Comma);
                     continue;
                 }
 
@@ -3263,12 +3264,24 @@ impl Parser {
                     is_variadic_keyword: false,
                 });
 
-                if !self.match_tok(&TokenKind::Comma) {
+                if self.match_tok(&TokenKind::Comma) {
+                    saw_comma = true;
+                } else {
                     break;
                 }
             }
 
             let end = self.expect(&TokenKind::RParen)?.span;
+            if fields.len() == 1
+                && !saw_comma
+                && fields[0].name.is_none()
+                && !fields[0].is_positional_only
+                && !fields[0].is_keyword_only
+                && !fields[0].is_variadic_positional
+                && !fields[0].is_variadic_keyword
+            {
+                return Ok(fields.remove(0).type_expr);
+            }
             return Ok(TypeExpr::Record {
                 fields,
                 is_open: false,

@@ -845,6 +845,9 @@ diverged:
   Two-token comparison operators such as `is not` and `not in` now give the
   resulting expression a span that covers the right operand as well, preserving
   the source map shape used by typed-HIR lowering.
+  Parenthesized single type expressions now group normally, so `not (int | str)`
+  negates the union while `not int | str` still negates only `int` before
+  unioning with `str`.
 * Boolean literals are now preserved as exact `LiteralBool` types, with the
   parser accepting `true` and `false` in type positions and widening them to
   `bool` when required.
