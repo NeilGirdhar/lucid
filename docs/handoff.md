@@ -838,6 +838,9 @@ diverged:
   Parser lookahead now also clamps over-advanced cursors to the inserted EOF
   token instead of relying on an internal `expect`, keeping hand-built token
   streams total for editor and fuzzing callers.
+  The expression parser gives logical `not` lower precedence than comparison
+  operators and higher precedence than `and`/`or`, so `not n > high` parses as
+  `not (n > high)` instead of `(not n) > high`.
 * Boolean literals are now preserved as exact `LiteralBool` types, with the
   parser accepting `true` and `false` in type positions and widening them to
   `bool` when required.

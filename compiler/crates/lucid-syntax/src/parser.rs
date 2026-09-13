@@ -1874,9 +1874,9 @@ impl Parser {
     }
 
     fn parse_logical_and(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_comparison()?;
+        let mut left = self.parse_logical_not()?;
         while self.match_tok(&TokenKind::And) {
-            let right = self.parse_comparison()?;
+            let right = self.parse_logical_not()?;
             let span = left.span().merge(right.span());
             left = Expr::Binary {
                 op: BinaryOp::And,
@@ -1886,6 +1886,20 @@ impl Parser {
             };
         }
         Ok(left)
+    }
+
+    fn parse_logical_not(&mut self) -> Result<Expr, ParseError> {
+        let start = self.peek().span;
+        if self.match_tok(&TokenKind::Not) {
+            let inner = self.parse_logical_not()?;
+            let span = start.merge(inner.span());
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                expr: Box::new(inner),
+                span,
+            });
+        }
+        self.parse_comparison()
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
@@ -2090,15 +2104,6 @@ impl Parser {
             let inner = self.parse_unary()?;
             let span = start.merge(inner.span());
             return Ok(Expr::Await {
-                expr: Box::new(inner),
-                span,
-            });
-        }
-        if self.match_tok(&TokenKind::Not) {
-            let inner = self.parse_unary()?;
-            let span = start.merge(inner.span());
-            return Ok(Expr::Unary {
-                op: UnaryOp::Not,
                 expr: Box::new(inner),
                 span,
             });

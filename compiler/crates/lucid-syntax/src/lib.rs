@@ -437,6 +437,44 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn test_not_binds_looser_than_comparison() {
+        let module = parse("value = not n > high or n <= low\n").unwrap();
+        let Stmt::Assignment { value, .. } = &module.statements[0] else {
+            panic!("expected assignment");
+        };
+        let Expr::Binary {
+            op: BinaryOp::Or,
+            left,
+            right,
+            ..
+        } = value
+        else {
+            panic!("expected top-level logical or");
+        };
+        assert!(matches!(
+            left.as_ref(),
+            Expr::Unary {
+                op: UnaryOp::Not,
+                expr,
+                ..
+            } if matches!(
+                expr.as_ref(),
+                Expr::Binary {
+                    op: BinaryOp::Gt,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            right.as_ref(),
+            Expr::Binary {
+                op: BinaryOp::LtEq,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn test_parse_dict_shape_type_as_record() {
         let module = parse("type Movie = {\"name\": str, \"year\": int}\n").unwrap();
         let Stmt::TypeAlias {
