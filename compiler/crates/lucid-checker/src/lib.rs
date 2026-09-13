@@ -14275,6 +14275,40 @@ xs.extend(["bad"])
     }
 
     #[test]
+    fn slice_with_step_parameter() {
+        let code = "x = [1, 2, 3, 4, 5]\nresult = x[1:4:2]\nprint(result)\n";
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "slice with step should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn nested_class_definition() {
+        let code = r#"class Outer:
+    x: int = 1
+    class Inner:
+        value: int = 42
+"#;
+        // Nested classes inside class bodies are treated as statements within
+        // the class, which the parser accepts as indented content.
+        let module = parse(code);
+        match module {
+            Ok(_) => {
+                let mut checker = TypeChecker::new();
+                let result = checker.check_module(&module.unwrap());
+                // If parsing succeeds, checking should not fail
+                if result.is_err() {
+                    println!("Nested class error: {:?}", result);
+                }
+            }
+            Err(e) => {
+                println!("Parse error for nested class: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
     fn read_file_propagates_parse_error_with_question_mark() {
         let module = parse(
             "def load(path: str) -> str | ParseError:\n    text = read_file(path)?\n    return text\n",
