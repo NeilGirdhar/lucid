@@ -1178,7 +1178,8 @@ diverged:
   statement conditionals with local bindings, so `base = seed + 1; if flag:
   return base; return base * 2` and the corresponding `elif` chain select the
   branch result instead of merging `base` and then always evaluating the
-  fallback return.
+  fallback return. Mixed ladders where one selected arm is a bare `return` and
+  another returns a value use the same direct-return CIR path.
 * Checker union/intersection normalization and callable-parameter metadata
   lookups now use recoverable fallbacks instead of internal panics when fed
   malformed intermediate state.

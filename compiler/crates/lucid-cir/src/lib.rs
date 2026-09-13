@@ -2029,6 +2029,443 @@ impl Function {
         Ok(function)
     }
 
+    /// Lower a typed guard ladder whose arms may return either a value or
+    /// no value. This is the mixed-return companion to
+    /// [`Self::from_typed_statement_if_elif_chain_direct`].
+    pub fn from_typed_statement_if_elif_mixed_return_chain(
+        nodes: &[TypedExprNode],
+        condition_root: u32,
+        then_root: Option<u32>,
+        elif_roots: &[(u32, Option<u32>)],
+        else_root: Option<u32>,
+        parameter_names: &[String],
+        local_bindings: &[(String, u32)],
+    ) -> Result<Self, LowerError> {
+        let mut seen = std::collections::HashSet::with_capacity(parameter_names.len());
+        if parameter_names.iter().any(|name| !seen.insert(name)) {
+            return Err(LowerError::UnsupportedExpression);
+        }
+        fn result_id(instruction: &Instruction) -> ValueId {
+            match instruction {
+                Instruction::Param { result, .. }
+                | Instruction::ConstInt { result, .. }
+                | Instruction::ConstBool { result, .. }
+                | Instruction::Add { result, .. }
+                | Instruction::Sub { result, .. }
+                | Instruction::Mul { result, .. }
+                | Instruction::Pow { result, .. }
+                | Instruction::Div { result, .. }
+                | Instruction::FloorDiv { result, .. }
+                | Instruction::Mod { result, .. }
+                | Instruction::BitAnd { result, .. }
+                | Instruction::BitOr { result, .. }
+                | Instruction::BitXor { result, .. }
+                | Instruction::Shl { result, .. }
+                | Instruction::Shr { result, .. }
+                | Instruction::CmpEq { result, .. }
+                | Instruction::CmpNe { result, .. }
+                | Instruction::CmpLe { result, .. }
+                | Instruction::CmpGt { result, .. }
+                | Instruction::CmpGe { result, .. }
+                | Instruction::CmpLt { result, .. }
+                | Instruction::Neg { result, .. }
+                | Instruction::BitNot { result, .. }
+                | Instruction::Not { result, .. }
+                | Instruction::And { result, .. }
+                | Instruction::Or { result, .. }
+                | Instruction::CheckNonZero { result, .. }
+                | Instruction::Phi { result, .. } => *result,
+            }
+        }
+        fn remap_instruction(instruction: &Instruction, offset: u32) -> Instruction {
+            let value = |value: ValueId| ValueId(value.0 + offset);
+            match instruction {
+                Instruction::Param { result, index } => Instruction::Param {
+                    result: value(*result),
+                    index: *index,
+                },
+                Instruction::ConstInt {
+                    result,
+                    value: literal,
+                } => Instruction::ConstInt {
+                    result: value(*result),
+                    value: *literal,
+                },
+                Instruction::ConstBool {
+                    result,
+                    value: literal,
+                } => Instruction::ConstBool {
+                    result: value(*result),
+                    value: *literal,
+                },
+                Instruction::Add {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Add {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Sub {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Sub {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Mul {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Mul {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Pow {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Pow {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Div {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Div {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::FloorDiv {
+                    result,
+                    left,
+                    right,
+                } => Instruction::FloorDiv {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Mod {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Mod {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::BitAnd {
+                    result,
+                    left,
+                    right,
+                } => Instruction::BitAnd {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::BitOr {
+                    result,
+                    left,
+                    right,
+                } => Instruction::BitOr {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::BitXor {
+                    result,
+                    left,
+                    right,
+                } => Instruction::BitXor {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Shl {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Shl {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Shr {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Shr {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::CmpEq {
+                    result,
+                    left,
+                    right,
+                } => Instruction::CmpEq {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::CmpNe {
+                    result,
+                    left,
+                    right,
+                } => Instruction::CmpNe {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::CmpLe {
+                    result,
+                    left,
+                    right,
+                } => Instruction::CmpLe {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::CmpGt {
+                    result,
+                    left,
+                    right,
+                } => Instruction::CmpGt {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::CmpGe {
+                    result,
+                    left,
+                    right,
+                } => Instruction::CmpGe {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::CmpLt {
+                    result,
+                    left,
+                    right,
+                } => Instruction::CmpLt {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Neg { result, operand } => Instruction::Neg {
+                    result: value(*result),
+                    operand: value(*operand),
+                },
+                Instruction::BitNot { result, operand } => Instruction::BitNot {
+                    result: value(*result),
+                    operand: value(*operand),
+                },
+                Instruction::Not { result, operand } => Instruction::Not {
+                    result: value(*result),
+                    operand: value(*operand),
+                },
+                Instruction::CheckNonZero { result, operand } => Instruction::CheckNonZero {
+                    result: value(*result),
+                    operand: value(*operand),
+                },
+                Instruction::And {
+                    result,
+                    left,
+                    right,
+                } => Instruction::And {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Or {
+                    result,
+                    left,
+                    right,
+                } => Instruction::Or {
+                    result: value(*result),
+                    left: value(*left),
+                    right: value(*right),
+                },
+                Instruction::Phi { .. } => instruction.clone(),
+            }
+        }
+        fn lower_condition(
+            nodes: &[TypedExprNode],
+            root: u32,
+            parameter_names: &[String],
+            local_bindings: &[(String, u32)],
+        ) -> Result<(Block, ValueId), LowerError> {
+            let function =
+                Function::from_typed_graph(nodes, &[root], parameter_names, local_bindings)?;
+            if function.blocks.len() != 1 {
+                return Err(LowerError::UnsupportedExpression);
+            }
+            let block = function
+                .blocks
+                .into_iter()
+                .next()
+                .ok_or(LowerError::UnsupportedExpression)?;
+            let Terminator::Return(Some(value)) = block.terminator else {
+                return Err(LowerError::UnsupportedExpression);
+            };
+            Ok((block, value))
+        }
+        fn lower_value(
+            nodes: &[TypedExprNode],
+            root: Option<u32>,
+            parameter_names: &[String],
+            local_bindings: &[(String, u32)],
+        ) -> Result<(Block, Option<ValueId>), LowerError> {
+            let Some(root) = root else {
+                return Ok((
+                    Block {
+                        id: BlockId(0),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    },
+                    None,
+                ));
+            };
+            let function =
+                Function::from_typed_graph(nodes, &[root], parameter_names, local_bindings)?;
+            if function.blocks.len() != 1 {
+                return Err(LowerError::UnsupportedExpression);
+            }
+            let block = function
+                .blocks
+                .into_iter()
+                .next()
+                .ok_or(LowerError::UnsupportedExpression)?;
+            let Terminator::Return(Some(value)) = block.terminator else {
+                return Err(LowerError::UnsupportedExpression);
+            };
+            Ok((block, Some(value)))
+        }
+        fn width(block: &Block, value: Option<ValueId>) -> u32 {
+            block
+                .instructions
+                .iter()
+                .map(result_id)
+                .chain(value)
+                .map(|value| value.0 + 1)
+                .max()
+                .unwrap_or(0)
+        }
+        fn remap_return(value: Option<ValueId>, offset: u32) -> Terminator {
+            Terminator::Return(value.map(|value| ValueId(value.0 + offset)))
+        }
+
+        let mut lowered_conditions = Vec::with_capacity(1 + elif_roots.len());
+        lowered_conditions.push(lower_condition(
+            nodes,
+            condition_root,
+            parameter_names,
+            local_bindings,
+        )?);
+        for (condition, _) in elif_roots {
+            lowered_conditions.push(lower_condition(
+                nodes,
+                *condition,
+                parameter_names,
+                local_bindings,
+            )?);
+        }
+        let mut lowered_values = Vec::with_capacity(2 + elif_roots.len());
+        lowered_values.push(lower_value(
+            nodes,
+            then_root,
+            parameter_names,
+            local_bindings,
+        )?);
+        for (_, value) in elif_roots {
+            lowered_values.push(lower_value(nodes, *value, parameter_names, local_bindings)?);
+        }
+        lowered_values.push(lower_value(
+            nodes,
+            else_root,
+            parameter_names,
+            local_bindings,
+        )?);
+
+        let mut next_value = 0;
+        let mut condition_offsets = Vec::with_capacity(lowered_conditions.len());
+        for (block, value) in &lowered_conditions {
+            condition_offsets.push(next_value);
+            next_value += width(block, Some(*value));
+        }
+        let mut value_offsets = Vec::with_capacity(lowered_values.len());
+        for (block, value) in &lowered_values {
+            value_offsets.push(next_value);
+            next_value += width(block, *value);
+        }
+
+        let condition_count = lowered_conditions.len();
+        let else_block_id = BlockId((condition_count * 2) as u32);
+        let mut blocks = Vec::new();
+        for index in 0..condition_count {
+            let condition_block_id = BlockId((index * 2) as u32);
+            let then_block_id = BlockId((index * 2 + 1) as u32);
+            let false_block_id = if index + 1 == condition_count {
+                else_block_id
+            } else {
+                BlockId((index * 2 + 2) as u32)
+            };
+            let (condition_block, condition_value) = &lowered_conditions[index];
+            let condition_offset = condition_offsets[index];
+            blocks.push(Block {
+                id: condition_block_id,
+                instructions: condition_block
+                    .instructions
+                    .iter()
+                    .map(|instruction| remap_instruction(instruction, condition_offset))
+                    .collect(),
+                terminator: Terminator::Branch {
+                    condition: ValueId(condition_value.0 + condition_offset),
+                    then_block: then_block_id,
+                    else_block: false_block_id,
+                },
+            });
+            let (then_block, then_value) = &lowered_values[index];
+            let then_offset = value_offsets[index];
+            blocks.push(Block {
+                id: then_block_id,
+                instructions: then_block
+                    .instructions
+                    .iter()
+                    .map(|instruction| remap_instruction(instruction, then_offset))
+                    .collect(),
+                terminator: remap_return(*then_value, then_offset),
+            });
+        }
+        let (else_block, else_value) = &lowered_values[condition_count];
+        let else_offset = value_offsets[condition_count];
+        blocks.push(Block {
+            id: else_block_id,
+            instructions: else_block
+                .instructions
+                .iter()
+                .map(|instruction| remap_instruction(instruction, else_offset))
+                .collect(),
+            terminator: remap_return(*else_value, else_offset),
+        });
+        let function = Self {
+            entry: BlockId(0),
+            blocks,
+        };
+        function
+            .verify()
+            .map_err(|_| LowerError::UnsupportedExpression)?;
+        Ok(function)
+    }
+
     fn from_typed_dynamic_if(
         nodes: &[TypedExprNode],
         condition_root: u32,

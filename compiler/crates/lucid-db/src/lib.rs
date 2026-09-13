@@ -6692,9 +6692,9 @@ pub fn lower_function_body(
                             && elif_branches.iter().all(|(elif_condition, branch)| {
                                 static_truth(elif_condition).is_none()
                                     && has_identifier(elif_condition)
-                                    && single_value_return(branch).is_some()
+                                    && single_return_expr(branch).is_some()
                             })
-                            && let Some(then_value) = single_value_return(then_branch)
+                            && let Some(then_return) = single_return_expr(then_branch)
                         {
                             if function.is_async {
                                 return Err(Arc::from(
@@ -6732,16 +6732,21 @@ pub fn lower_function_body(
                                     })
                                 })
                                 .collect::<Result<Vec<_>, _>>()?;
-                            if let (Some(condition_id), Some(then_id), Some(fallback_id)) = (
-                                find_id(condition.span()),
-                                find_id(then_value.span()),
-                                find_id(fallback_value.span()),
-                            ) {
+                            if let (Some(condition_id), Some(fallback_id)) =
+                                (find_id(condition.span()), find_id(fallback_value.span()))
+                            {
+                                let then_id = then_return
+                                    .map(|value| {
+                                        find_id(value.span()).ok_or_else(|| {
+                                            Arc::<str>::from("function has no lowerable expression")
+                                        })
+                                    })
+                                    .transpose()?;
                                 let elif_ids = elif_branches
                                     .iter()
                                     .map(|(elif_condition, branch)| {
-                                        let elif_value =
-                                            single_value_return(branch).ok_or_else(|| {
+                                        let elif_return =
+                                            single_return_expr(branch).ok_or_else(|| {
                                                 Arc::<str>::from(
                                                     "function has no lowerable expression",
                                                 )
@@ -6752,21 +6757,24 @@ pub fn lower_function_body(
                                                     "function has no lowerable expression",
                                                 )
                                             })?;
-                                        let value_id =
-                                            find_id(elif_value.span()).ok_or_else(|| {
-                                                Arc::<str>::from(
-                                                    "function has no lowerable expression",
-                                                )
-                                            })?;
+                                        let value_id = elif_return
+                                            .map(|value| {
+                                                find_id(value.span()).ok_or_else(|| {
+                                                    Arc::<str>::from(
+                                                        "function has no lowerable expression",
+                                                    )
+                                                })
+                                            })
+                                            .transpose()?;
                                         Ok((condition_id, value_id))
                                     })
                                     .collect::<Result<Vec<_>, Arc<str>>>()?;
-                                return lucid_cir::Function::from_typed_statement_if_elif_chain_direct(
+                                return lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
                                     &nodes,
                                     condition_id,
                                     then_id,
                                     &elif_ids,
-                                    fallback_id,
+                                    Some(fallback_id),
                                     &function.parameter_names,
                                     &local_bindings,
                                 )
@@ -11017,6 +11025,17 @@ mod tests {
             .as_ref()
             .expect("setup before guard elif return should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "setup-mixed-guard-elif-return.lucid",
+            "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return\n    elif second:\n        return base * 2\n    return base * 3\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before mixed guard elif return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 0]), Ok(None));
         assert_eq!(function.execute_with_args(&[10, 0, 1]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
 
