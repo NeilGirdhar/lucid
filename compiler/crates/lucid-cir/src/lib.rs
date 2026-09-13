@@ -8673,13 +8673,13 @@ impl Function {
                     ) && args.len() == 1 =>
                 {
                     let value = match &args[0].value {
-                        lucid_syntax::Expr::Literal {
-                            value: lucid_syntax::LiteralValue::Str(value),
-                            ..
-                        } => value
-                            .trim()
-                            .parse::<i64>()
-                            .map_err(|_| LowerError::UnsupportedExpression)?,
+                        expr if constant_string(expr, aggregate_bindings).is_some() => {
+                            constant_string(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .trim()
+                                .parse::<i64>()
+                                .map_err(|_| LowerError::UnsupportedExpression)?
+                        }
                         _ => {
                             let value = lower(
                                 &args[0].value,
@@ -8688,8 +8688,14 @@ impl Function {
                                 instructions,
                                 next,
                             )?;
-                            constant_int(value, instructions)
-                                .ok_or(LowerError::UnsupportedExpression)?
+                            if let Some(value) = constant_int(value, instructions) {
+                                value
+                            } else {
+                                i64::from(
+                                    constant_value_truth(value, instructions)
+                                        .ok_or(LowerError::UnsupportedExpression)?,
+                                )
+                            }
                         }
                     };
                     let id = result(next);
@@ -20545,6 +20551,10 @@ return total
             ("return int(true)\n", 1),
             ("return int(false)\n", 0),
             ("return int(\"42\")\n", 42),
+            ("text = \"42\"\nreturn int(text)\n", 42),
+            ("text = \"42x\"\nreturn int(text[0])\n", 4),
+            ("return int(1 < 2)\n", 1),
+            ("return int(1 > 2)\n", 0),
             ("return bool(0)\n", 0),
             ("return bool(1)\n", 1),
             ("return bool(abs(-1))\n", 1),
