@@ -8556,8 +8556,12 @@ impl Function {
                             .collect()
                     }
                 }
+                lucid_syntax::Expr::Record { .. } => {
+                    constant_string_record(expr, aggregate_bindings)
+                }
                 lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
-                    AggregateBinding::StringList(values) => Some(values.clone()),
+                    AggregateBinding::StringList(values)
+                    | AggregateBinding::StringRecord(values) => Some(values.clone()),
                     _ => None,
                 },
                 lucid_syntax::Expr::Attribute { value, attr, .. } if attr == "chars" => {
@@ -8852,8 +8856,13 @@ impl Function {
                     .iter()
                     .map(|element| constant_float(element, aggregate_bindings))
                     .collect(),
+                lucid_syntax::Expr::Record { .. } => {
+                    constant_float_record(expr, aggregate_bindings)
+                }
                 lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
-                    AggregateBinding::FloatList(values) => Some(values.clone()),
+                    AggregateBinding::FloatList(values) | AggregateBinding::FloatRecord(values) => {
+                        Some(values.clone())
+                    }
                     _ => None,
                 },
                 _ => None,
@@ -9133,8 +9142,12 @@ impl Function {
                     .iter()
                     .map(|element| constant_singleton(element, aggregate_bindings))
                     .collect(),
+                lucid_syntax::Expr::Record { .. } => {
+                    constant_singleton_record(expr, aggregate_bindings)
+                }
                 lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
-                    AggregateBinding::SingletonList(values) => Some(values.clone()),
+                    AggregateBinding::SingletonList(values)
+                    | AggregateBinding::SingletonRecord(values) => Some(values.clone()),
                     _ => None,
                 },
                 _ => None,
@@ -12497,6 +12510,13 @@ impl Function {
                         if let Some(values) = constant_string_list(iterable, aggregate_bindings) {
                             return Ok(Some(AggregateBinding::StringList(values)));
                         }
+                        if let Some(values) = constant_float_list(iterable, aggregate_bindings) {
+                            return Ok(Some(AggregateBinding::FloatList(values)));
+                        }
+                        if let Some(values) = constant_singleton_list(iterable, aggregate_bindings)
+                        {
+                            return Ok(Some(AggregateBinding::SingletonList(values)));
+                        }
                         if let Some(values) = const_range_values(iterable) {
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
@@ -12611,6 +12631,13 @@ impl Function {
                         let iterable = &args[0].value;
                         if let Some(values) = constant_string_list(iterable, aggregate_bindings) {
                             return Ok(Some(AggregateBinding::StringSet(values)));
+                        }
+                        if let Some(values) = constant_float_list(iterable, aggregate_bindings) {
+                            return Ok(Some(AggregateBinding::FloatSet(values)));
+                        }
+                        if let Some(values) = constant_singleton_list(iterable, aggregate_bindings)
+                        {
+                            return Ok(Some(AggregateBinding::SingletonSet(values)));
                         }
                         if let Some(values) = const_range_values(iterable) {
                             let mut elements = Vec::with_capacity(values.len());
@@ -24207,6 +24234,15 @@ return total
             ("return (\"a\", \"b\") == (\"a\", \"b\")\n", 1),
             ("return (\"a\", \"b\") != (\"a\", \"c\")\n", 1),
             ("return (\"a\", \"b\")[1] == \"b\"\n", 1),
+            ("return \"b\" in (\"a\", \"b\")\n", 1),
+            ("values = (\"a\", \"b\")\nreturn \"z\" not in values\n", 1),
+            ("values = list((\"a\", \"b\"))\nreturn values[1] == \"b\"\n", 1),
+            ("values = set((\"a\", \"b\"))\nreturn \"b\" in values\n", 1),
+            ("values = sorted((\"b\", \"a\"))\nreturn values[0] == \"a\"\n", 1),
+            (
+                "values = reversed((\"a\", \"b\"))\nreturn values[0] == \"b\"\n",
+                1,
+            ),
             ("return len({\"a\": \"b\"})\n", 1),
             ("return {\"a\": \"b\"} == {\"a\": \"b\"}\n", 1),
             ("return {\"a\": \"b\"} != {\"a\": \"c\"}\n", 1),
@@ -24361,6 +24397,15 @@ return total
             ("values = {1.5, 2.5}\nreturn 2.5 in values\n", 1),
             ("return (1.5, 2.5) == (1.5, 2.5)\n", 1),
             ("values = (1.5, 2.5)\nreturn values[0] == 1.5\n", 1),
+            ("return 2.5 in (1.5, 2.5)\n", 1),
+            ("values = (1.5, 2.5)\nreturn 3.5 not in values\n", 1),
+            ("values = list((1.5, 2.5))\nreturn values[1] == 2.5\n", 1),
+            ("values = set((1.5, 2.5))\nreturn 2.5 in values\n", 1),
+            ("values = sorted((2.5, 1.5))\nreturn values[0] == 1.5\n", 1),
+            (
+                "values = reversed((1.5, 2.5))\nreturn values[0] == 2.5\n",
+                1,
+            ),
             ("values = {1.5: 2.5}\nreturn len(values)\n", 1),
             ("values = {1.5: 2.5}\nreturn 1.5 in values\n", 1),
             ("values = {1.5: 2.5}\nreturn values[1.5] == 2.5\n", 1),
@@ -24418,6 +24463,10 @@ return total
             ("values = [None]\nreturn None in values\n", 1),
             ("values = (None,)\nreturn values[0] is None\n", 1),
             ("return (None,) == (None,)\n", 1),
+            ("return None in (None, ...)\n", 1),
+            ("values = (None, ...)\nreturn ... in values\n", 1),
+            ("values = list((None, ...))\nreturn values[0] is None\n", 1),
+            ("values = set((None, ...))\nreturn ... in values\n", 1),
             ("values = {None}\nreturn len(values)\n", 1),
             ("return {None} == {None}\n", 1),
             ("values = {None}\nreturn None in values\n", 1),
