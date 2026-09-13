@@ -1,6 +1,7 @@
 use lucid_syntax::ast::{Module, Stmt};
 use std::collections::HashSet;
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -278,8 +279,24 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
                 canonical.display()
             )
         })?;
-        let module = lucid_syntax::parse(&source)
-            .map_err(|e| format!("Syntax Error in '{}': {e}", canonical.display()))?;
+        let mut database = lucid_db::CompilerDatabase::default();
+        let file = database.add_file(canonical.display().to_string(), source);
+        let diagnostics = lucid_db::file_diagnostics(&database, file);
+        if diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
+        {
+            return Err(render_database_diagnostics(
+                &database,
+                file,
+                &canonical.display().to_string(),
+                diagnostics,
+            ));
+        }
+        let module = lucid_db::parse_ast(&database, file)
+            .as_ref()
+            .map(|module| module.as_ref().clone())
+            .map_err(|error| format!("Syntax Error in '{}': {error}", canonical.display()))?;
         let mut statements = Vec::new();
         for statement in &module.statements {
             if let Stmt::FromImport {
@@ -339,8 +356,22 @@ fn emit_database_diagnostics(
     label: &str,
     diagnostics: &[lucid_db::Diagnostic],
 ) {
+    eprint!(
+        "{}",
+        render_database_diagnostics(database, file, label, diagnostics)
+    );
+}
+
+fn render_database_diagnostics(
+    database: &lucid_db::CompilerDatabase,
+    file: lucid_db::SourceFile,
+    label: &str,
+    diagnostics: &[lucid_db::Diagnostic],
+) -> String {
+    let mut rendered = String::new();
     for diagnostic in diagnostics {
-        eprintln!(
+        let _ = writeln!(
+            rendered,
             "{}:{}:{}: {}: {}",
             label,
             diagnostic.span.line,
@@ -352,7 +383,7 @@ fn emit_database_diagnostics(
         if line.is_empty() {
             continue;
         }
-        eprintln!("  {}", line);
+        let _ = writeln!(rendered, "  {}", line);
         let column = diagnostic.span.column.max(1);
         let (end_line, end_column) =
             *lucid_db::source_position(database, file, diagnostic.span.end as u32);
@@ -362,13 +393,15 @@ fn emit_database_diagnostics(
         } else {
             1
         };
-        eprintln!(
+        let _ = writeln!(
+            rendered,
             "  {}{}",
             diagnostic_underline_prefix(line.as_ref(), column),
             "^".repeat(underline_len)
         );
         for related in diagnostic.related.iter() {
-            eprintln!(
+            let _ = writeln!(
+                rendered,
                 "  = {}:{}:{}: {}",
                 related.file.path(database),
                 related.span.line,
@@ -380,7 +413,7 @@ fn emit_database_diagnostics(
             if related_line.is_empty() {
                 continue;
             }
-            eprintln!("    {}", related_line);
+            let _ = writeln!(rendered, "    {}", related_line);
             let related_column = related.span.column.max(1);
             let (related_end_line, related_end_column) =
                 *lucid_db::source_position(database, related.file, related.span.end as u32);
@@ -393,16 +426,18 @@ fn emit_database_diagnostics(
             } else {
                 1
             };
-            eprintln!(
+            let _ = writeln!(
+                rendered,
                 "    {}{}",
                 diagnostic_underline_prefix(related_line.as_ref(), related_column),
                 "-".repeat(related_underline_len)
             );
         }
         if let Some(fix) = &diagnostic.fix {
-            eprintln!("  help: {}", fix.message);
+            let _ = writeln!(rendered, "  help: {}", fix.message);
         }
     }
+    rendered
 }
 
 fn diagnostic_underline_prefix(line: &str, column: usize) -> String {

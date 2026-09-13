@@ -406,6 +406,42 @@ fn emit_c_rejects_source_that_fails_type_checking() {
 }
 
 #[test]
+fn emit_c_renders_imported_module_type_diagnostics() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_emit_c_import_invalid_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\n").expect("entry module should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child module should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "emit-c",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("child.lucid"),
+        "diagnostic should point at the imported module: {stderr}"
+    );
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "diagnostic should render imported source line: {stderr}"
+    );
+    assert!(
+        stderr.contains("^^^^^"),
+        "diagnostic should underline imported source span: {stderr}"
+    );
+}
+
+#[test]
 fn emit_cir_renders_source_line_for_type_errors() {
     let path = std::env::temp_dir().join(format!(
         "lucid_emit_cir_invalid_{}.lucid",
