@@ -4826,6 +4826,7 @@ impl TypeChecker {
     /// with the same types the checker used.
     pub fn iterable_element_type(&self, iterable: &Type) -> Type {
         match iterable {
+            Type::Iterator(inner) => (**inner).clone(),
             Type::View { inner, .. } => self.iterable_element_type(inner),
             Type::Class {
                 name, type_args, ..
@@ -4920,15 +4921,7 @@ impl TypeChecker {
                 }
             }
         }
-        Some(Type::Class {
-            name: "list".into(),
-            type_args: vec![self.iterable_element_type(iterable)],
-            parent: None,
-            traits: Vec::new(),
-            interfaces: Vec::new(),
-            fields: HashMap::new(),
-            is_sealed: false,
-        })
+        Some(Type::Iterator(Box::new(self.iterable_element_type(iterable))))
     }
 
     fn is_iterable_type(&self, iterable: &Type) -> bool {
@@ -4938,6 +4931,9 @@ impl TypeChecker {
         };
         if matches!(base, Type::Str) || matches!(base, Type::Class { name, .. } if name == "str") {
             return false;
+        }
+        if matches!(base, Type::Iterator(_)) {
+            return true;
         }
         if matches!(base, Type::TypeVar(name) if name == "Any") {
             return true;
@@ -11165,24 +11161,16 @@ impl TypeChecker {
                                     }
                                     "iter" => self.iterator_result_type(&argument_type),
                                     "enumerate" if self.is_iterable_type(&argument_type) => {
-                                        Some(Type::Class {
-                                            name: "list".into(),
-                                            type_args: vec![Type::Record {
-                                                fields: vec![
-                                                    (None, Type::Int),
-                                                    (
-                                                        None,
-                                                        self.iterable_element_type(&argument_type),
-                                                    ),
-                                                ],
-                                                is_open: false,
-                                            }],
-                                            parent: None,
-                                            traits: Vec::new(),
-                                            interfaces: Vec::new(),
-                                            fields: HashMap::new(),
-                                            is_sealed: false,
-                                        })
+                                        Some(Type::Iterator(Box::new(Type::Record {
+                                            fields: vec![
+                                                (None, Type::Int),
+                                                (
+                                                    None,
+                                                    self.iterable_element_type(&argument_type),
+                                                ),
+                                            ],
+                                            is_open: false,
+                                        })))
                                     }
                                     "zip" => {
                                         let mut fields = Vec::new();
@@ -11201,18 +11189,10 @@ impl TypeChecker {
                                                 self.iterable_element_type(&argument_type),
                                             ));
                                         }
-                                        Some(Type::Class {
-                                            name: "list".into(),
-                                            type_args: vec![Type::Record {
-                                                fields,
-                                                is_open: false,
-                                            }],
-                                            parent: None,
-                                            traits: Vec::new(),
-                                            interfaces: Vec::new(),
-                                            fields: HashMap::new(),
-                                            is_sealed: false,
-                                        })
+                                        Some(Type::Iterator(Box::new(Type::Record {
+                                            fields,
+                                            is_open: false,
+                                        })))
                                     }
                                     "map" => {
                                         let iterable_argument = args.get(1).filter(|arg| {
@@ -11244,26 +11224,10 @@ impl TypeChecker {
                                             }
                                             _ => return None,
                                         };
-                                        Some(Type::Class {
-                                            name: "list".into(),
-                                            type_args: vec![element_type],
-                                            parent: None,
-                                            traits: Vec::new(),
-                                            interfaces: Vec::new(),
-                                            fields: HashMap::new(),
-                                            is_sealed: false,
-                                        })
+                                        Some(Type::Iterator(Box::new(element_type)))
                                     }
                                     "reversed" if self.is_iterable_type(&argument_type) => {
-                                        Some(Type::Class {
-                                            name: "list".into(),
-                                            type_args: vec![self.iterable_element_type(&argument_type)],
-                                            parent: None,
-                                            traits: Vec::new(),
-                                            interfaces: Vec::new(),
-                                            fields: HashMap::new(),
-                                            is_sealed: false,
-                                        })
+                                        Some(Type::Iterator(Box::new(self.iterable_element_type(&argument_type))))
                                     }
                                     "sorted" if !args.is_empty() && {
                                         let first_arg = args.iter().find(|arg| {
@@ -17674,7 +17638,7 @@ def reject(value: not int) -> none:
         checker
             .check_module(
                 &parse(
-                    "def double(x: int) -> int:\n    return x * 2\nvalues = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\niter_values = iter(range(5))\nenumerated = enumerate(range(3), 5)\nzipped = zip(range(3), sorted(range(3)))\nmapped = map(double, range(3))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\niter_sum = sum(iter_values)\nmapped_sum = sum(mapped)\niter_value: int = iter_values[0]\nenum_index: int = enumerated[0][0]\nenum_value: int = enumerated[0][1]\nzip_left: int = zipped[0][0]\nzip_right: int = zipped[0][1]\nmapped_value: int = mapped[0]\n",
+                    "def double(x: int) -> int:\n    return x * 2\nvalues = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nsorted_values = sorted(range(5))\nreversed_values = reversed(range(5))\niter_values = iter(range(5))\nenumerated = enumerate(range(3), 5)\nzipped = zip(range(3), sorted(range(3)))\nmapped = map(double, range(3))\nrange_sum = sum(range_values)\nsorted_sum = sum(sorted_values)\nreversed_sum = sum(reversed_values)\niter_sum = sum(iter_values)\nmapped_sum = sum(mapped)\n",
                 )
                 .unwrap(),
             )
@@ -17715,33 +17679,21 @@ def reject(value: not int) -> none:
         ));
         assert!(matches!(
             checker.env.variables.get("iter_values").map(|(ty, _)| ty),
-            Some(Type::Class { name, type_args, .. })
-                if name == "list" && type_args == &vec![Type::Int]
+            Some(Type::Iterator(inner)) if **inner == Type::Int
         ));
         assert!(matches!(
             checker.env.variables.get("enumerated").map(|(ty, _)| ty),
-            Some(Type::Class { name, type_args, .. })
-                if name == "list"
-                    && matches!(
-                        type_args.as_slice(),
-                        [Type::Record { fields, is_open: false }]
-                            if fields == &vec![(None, Type::Int), (None, Type::Int)]
-                    )
+            Some(Type::Iterator(inner)) if matches!(**inner, Type::Record { ref fields, is_open: false }
+                if fields.as_slice() == [(None, Type::Int), (None, Type::Int)].as_slice())
         ));
         assert!(matches!(
             checker.env.variables.get("zipped").map(|(ty, _)| ty),
-            Some(Type::Class { name, type_args, .. })
-                if name == "list"
-                    && matches!(
-                        type_args.as_slice(),
-                        [Type::Record { fields, is_open: false }]
-                            if fields == &vec![(None, Type::Int), (None, Type::Int)]
-                    )
+            Some(Type::Iterator(inner)) if matches!(**inner, Type::Record { ref fields, is_open: false }
+                if fields.as_slice() == [(None, Type::Int), (None, Type::Int)].as_slice())
         ));
         assert!(matches!(
             checker.env.variables.get("mapped").map(|(ty, _)| ty),
-            Some(Type::Class { name, type_args, .. })
-                if name == "list" && type_args == &vec![Type::Int]
+            Some(Type::Iterator(inner)) if **inner == Type::Int
         ));
         assert!(matches!(
             checker.env.variables.get("sorted_sum").map(|(ty, _)| ty),
