@@ -191,15 +191,8 @@ fn print_help() {
     println!("    version               Show version information");
 }
 
-/// Load the entry module and its local source imports in dependency order for
-/// the native backend. Built-in modules (currently `math` and `sys`) are
-/// handled directly by code generation and do not have source files.
-fn is_builtin_module(module: &str) -> bool {
-    matches!(module, "math" | "sys" | "iteration")
-}
-
 fn resolve_local_import_path(base_file: &Path, module: &str) -> Option<PathBuf> {
-    if is_builtin_module(module) {
+    if lucid_db::is_builtin_module(module) {
         return None;
     }
     let mut parent = base_file.parent()?.to_path_buf();
@@ -341,7 +334,7 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
             if let Some(module_name) = imported {
                 if let Some(import_path) = resolve_import(&canonical, module_name) {
                     statements.extend(visit(&import_path, visited, active)?);
-                } else if !matches!(module_name.as_str(), "math" | "sys" | "iteration") {
+                } else if !lucid_db::is_builtin_module(module_name) {
                     return Err(format!(
                         "Import Error: cannot resolve local module '{}' imported by '{}'",
                         module_name,

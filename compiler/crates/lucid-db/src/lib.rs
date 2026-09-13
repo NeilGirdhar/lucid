@@ -529,7 +529,9 @@ pub fn imported_bindings<'db>(
     Arc::from(bindings)
 }
 
-fn is_builtin_module(module: &str) -> bool {
+/// Return whether `module` is provided by the compiler/runtime rather than a
+/// project source file.
+pub fn is_builtin_module(module: &str) -> bool {
     matches!(module, "math" | "sys" | "iteration")
 }
 
@@ -14311,6 +14313,23 @@ mod tests {
                 .iter()
                 .any(|error| error.starts_with("E0300:"))
         );
+    }
+
+    #[test]
+    fn project_diagnostics_ignore_builtin_imports() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "main.lucid",
+            "import math\nimport sys\nimport iteration\nimport missing\n",
+        );
+        let project = Project::new(&db, vec![file]);
+        let diagnostics = project_diagnostics(&db, project);
+        let unresolved = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "E0300")
+            .collect::<Vec<_>>();
+        assert_eq!(unresolved.len(), 1);
+        assert!(unresolved[0].message.contains("missing"));
     }
 
     #[test]
