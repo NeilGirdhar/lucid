@@ -14890,7 +14890,7 @@ impl Function {
                     lower_zip_loop(target, args, body, &mut zip_state, last)
                 }
                 lucid_syntax::Stmt::For {
-                    target: lucid_syntax::Pattern::Ident(name, _),
+                    target,
                     iterable: lucid_syntax::Expr::Ident { name: iterable, .. },
                     body,
                     ..
@@ -14918,7 +14918,15 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for value in values {
-                        bind_aggregate_loop_value(name, value, bindings, aggregate_bindings);
+                        let AggregateLoopValue::Aggregate(aggregate) = value else {
+                            return Err(LowerError::UnsupportedExpression);
+                        };
+                        bind_aggregate_record_target(
+                            target,
+                            aggregate,
+                            bindings,
+                            aggregate_bindings,
+                        )?;
                         visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
@@ -25569,6 +25577,13 @@ return total
 
         let module = lucid_syntax::parse(
             "total = 0\npairs = {\"a\": 40, \"bc\": 42}\nitems = list(pairs.items())\nfor item in items:\n    total = total + len(item[0]) + item[1]\nreturn total\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(85)));
+
+        let module = lucid_syntax::parse(
+            "total = 0\npairs = {\"a\": 40, \"bc\": 42}\nitems = list(pairs.items())\nfor key, value in items:\n    total = total + len(key) + value\nreturn total\n",
         )
         .unwrap();
         let function = Function::from_module_linear(&module).unwrap();
