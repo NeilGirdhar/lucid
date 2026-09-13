@@ -8413,6 +8413,55 @@ impl Function {
                     instructions.push(Instruction::ConstInt { result: id, value });
                     Ok(id)
                 }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "abs"
+                    ) && args.len() == 1 =>
+                {
+                    let value = lower(
+                        &args[0].value,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    )?;
+                    let value = constant_int(value, instructions)
+                        .and_then(i64::checked_abs)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let id = result(next);
+                    instructions.push(Instruction::ConstInt { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "min" || name == "max"
+                    ) && !args.is_empty() =>
+                {
+                    let mut values = Vec::with_capacity(args.len());
+                    for arg in args {
+                        let value =
+                            lower(&arg.value, bindings, aggregate_bindings, instructions, next)?;
+                        values.push(
+                            constant_int(value, instructions)
+                                .ok_or(LowerError::UnsupportedExpression)?,
+                        );
+                    }
+                    let is_min = matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "min"
+                    );
+                    let value = if is_min {
+                        values.into_iter().min()
+                    } else {
+                        values.into_iter().max()
+                    }
+                    .ok_or(LowerError::UnsupportedExpression)?;
+                    let id = result(next);
+                    instructions.push(Instruction::ConstInt { result: id, value });
+                    Ok(id)
+                }
                 lucid_syntax::Expr::Index { value, index, .. } => {
                     let index_value =
                         lower(index, bindings, aggregate_bindings, instructions, next)?;
@@ -19522,6 +19571,20 @@ return total
             ("values = {1: 10, 2: 20}\nreturn len(values)\n", 2),
             ("return len({1: 10, 2: 20})\n", 2),
             ("return len(\"abc\")\n", 3),
+        ] {
+            let module = lucid_syntax::parse(source).unwrap();
+            let function = Function::from_module_linear(&module).unwrap();
+            assert_eq!(function.execute(), Ok(Some(expected)), "{source}");
+        }
+    }
+
+    #[test]
+    fn linear_module_lowering_lowers_constant_integer_builtins() {
+        for (source, expected) in [
+            ("return abs(-42)\n", 42),
+            ("return min(40, 42, 41)\n", 40),
+            ("return max(40, 42, 41)\n", 42),
+            ("base = 40\nreturn max(abs(-base), min(42, base + 1))\n", 41),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();
