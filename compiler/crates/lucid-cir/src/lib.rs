@@ -1493,6 +1493,11 @@ impl Function {
                                     member_positions,
                                 })
                             }
+                            "set" if kind == "set" => Some(TypedAggregateShape {
+                                kind,
+                                source_id: operand_id,
+                                member_positions: (0..operand.children.len()).collect(),
+                            }),
                             "set" if kind == "sorted" => {
                                 let mut positions = (0..operand.children.len()).collect::<Vec<_>>();
                                 positions.sort_by_key(|position| literal_order(*position));
@@ -26185,6 +26190,107 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 18, &[])
             .expect("typed empty list/set constructors should lower");
+        assert_eq!(function.execute(), Ok(Some(4)));
+    }
+
+    #[test]
+    fn lowers_typed_set_constructor_from_set() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("set".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("len".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "set".into(),
+                detail: None,
+                children: vec![2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "name".into(),
+                detail: Some("items".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![3, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "set".into(),
+                detail: None,
+                children: vec![3, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![6, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![7, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![11, 10],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body_with_locals(&nodes, 12, &[], &[("items".into(), 4)])
+                .expect("typed set constructor from set should lower");
         assert_eq!(function.execute(), Ok(Some(4)));
     }
 
