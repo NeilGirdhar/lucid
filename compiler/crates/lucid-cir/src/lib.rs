@@ -352,6 +352,10 @@ pub fn is_const_empty_iterable(expr: &lucid_syntax::Expr) -> bool {
             value: lucid_syntax::LiteralValue::Str(value),
             ..
         } => value.is_empty(),
+        lucid_syntax::Expr::Literal {
+            value: lucid_syntax::LiteralValue::Bytes(value),
+            ..
+        } => value.is_empty(),
         lucid_syntax::Expr::Call { .. } => {
             const_range_values(expr).is_some_and(|values| values.is_empty())
         }
@@ -12560,6 +12564,34 @@ impl Function {
                     Ok(())
                 }
                 lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Ident(name, _),
+                    iterable:
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bytes(values),
+                            ..
+                        },
+                    body,
+                    ..
+                } => {
+                    if values.is_empty() {
+                        return Ok(());
+                    }
+                    if contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for element in values {
+                        let value = ValueId(*next);
+                        *next += 1;
+                        instructions.push(Instruction::ConstInt {
+                            result: value,
+                            value: i64::from(*element),
+                        });
+                        bindings.insert(name.clone(), value);
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Wildcard(_),
                     iterable:
                         lucid_syntax::Expr::List { elements, .. }
@@ -12596,6 +12628,27 @@ impl Function {
                             return Err(LowerError::UnsupportedExpression);
                         }
                         let _ = lower(field, bindings, aggregate_bindings, instructions, next)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Wildcard(_),
+                    iterable:
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bytes(values),
+                            ..
+                        },
+                    body,
+                    ..
+                } => {
+                    if values.is_empty() {
+                        return Ok(());
+                    }
+                    if contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for _ in values {
                         visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
@@ -12649,6 +12702,39 @@ impl Function {
                         }
                         let _ = lower(field, bindings, aggregate_bindings, instructions, next)?;
                         if literal_int(field) == Some(*expected) {
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
+                        }
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target:
+                        lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(expected), _),
+                    iterable:
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bytes(values),
+                            ..
+                        },
+                    body,
+                    ..
+                } => {
+                    let expected = u8::try_from(*expected).ok();
+                    let has_match = expected.is_some_and(|expected| values.contains(&expected));
+                    if has_match && contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    if let Some(expected) = expected {
+                        for element in values {
+                            if *element != expected {
+                                continue;
+                            }
                             visit_all(
                                 body,
                                 bindings,
@@ -21801,6 +21887,13 @@ return total
                 .execute(),
             Ok(Some(9))
         );
+        let module = lucid_syntax::parse("for item in b\"\":\n    return 1\nvalue = 10\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("empty bytes loops should ignore unreachable returns")
+                .execute(),
+            Ok(Some(10))
+        );
         let module = lucid_syntax::parse(
             "value = 8\nfor item in []:\n    value = 1\nif_broken:\n    value = 2\n",
         )
@@ -21871,6 +21964,15 @@ return total
                 .execute(),
             Ok(Some(6))
         );
+        let module =
+            lucid_syntax::parse("value = 0\nfor item in b\"abc\":\n    value = value + item\n")
+                .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("constant bytes loops should expose integer byte values")
+                .execute(),
+            Ok(Some(294))
+        );
         let module = lucid_syntax::parse("for item in ():\n    return 1\nvalue = 7\n").unwrap();
         assert_eq!(
             Function::from_module(&module)
@@ -21920,6 +22022,14 @@ return total
             Ok(Some(3))
         );
         let module =
+            lucid_syntax::parse("value = 0\nfor _ in b\"abc\":\n    value = value + 1\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("wildcard bytes loops should discard the binding")
+                .execute(),
+            Ok(Some(3))
+        );
+        let module =
             lucid_syntax::parse("value = 0\nfor 2 in [1, 2, 3, 2]:\n    value = value + 1\n")
                 .unwrap();
         assert_eq!(
@@ -21944,6 +22054,23 @@ return total
                 .expect("literal tuple loop patterns should filter elements")
                 .execute(),
             Ok(Some(2))
+        );
+        let module =
+            lucid_syntax::parse("value = 0\nfor 98 in b\"abcba\":\n    value = value + 1\n")
+                .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("literal bytes loop patterns should filter byte values")
+                .execute(),
+            Ok(Some(2))
+        );
+        let module =
+            lucid_syntax::parse("for 300 in b\"abc\":\n    return 1\nvalue = 14\n").unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("out-of-range bytes loop patterns should not match")
+                .execute(),
+            Ok(Some(14))
         );
         let module = lucid_syntax::parse(
             "value = 0\nfor true in [false, true, true]:\n    value = value + 1\n",
