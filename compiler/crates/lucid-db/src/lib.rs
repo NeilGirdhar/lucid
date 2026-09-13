@@ -1623,12 +1623,12 @@ fn collect_typed_body<'db>(
                 for handler in handlers {
                     let mut handler_checker = checker.clone();
                     if let Some(name) = &handler.name {
+                        let handler_type = checker
+                            .resolve_type_expr(&handler.exception_type)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
                         handler_checker.env.variables.insert(
                             name.clone(),
-                            (
-                                lucid_checker::Type::TypeVar("Any".into()),
-                                lucid_syntax::MutabilityView::Mutable,
-                            ),
+                            (handler_type, lucid_syntax::MutabilityView::Mutable),
                         );
                     }
                     collect_scoped(&handler_checker, &handler.body, nodes)?;
@@ -9861,7 +9861,7 @@ mod tests {
 
         let file = db.add_file(
             "try-local-hir.lucid",
-            "def choose(value: int):\n    try:\n        selected = value + 1\n        return selected\n    except str as error:\n        fallback = 0\n        return fallback\n",
+            "def choose(value: int):\n    try:\n        selected = value + 1\n        return selected\n    except str as error:\n        observed = error\n        fallback = 0\n        return fallback\n",
         );
         let typed = typed_module(&db, file)
             .as_ref()
@@ -9874,6 +9874,10 @@ mod tests {
         assert!(
             body.iter()
                 .any(|node| node.detail.as_deref() == Some("fallback"))
+        );
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("error") && node.type_name == "str")
         );
     }
 
