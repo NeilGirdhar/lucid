@@ -1280,7 +1280,7 @@ fn run_cir_lowers_constant_string_predicates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    return \"a\" < \"b\" and \"u\" in \"lucid\" and \"z\" not in \"lucid\"\n",
+        "def answer():\n    text = \"lucid\"\n    needle = \"u\"\n    missing = \"z\"\n    return len(text) == 5 and bool(text) and needle in text and missing not in text\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
