@@ -4985,6 +4985,34 @@ impl TypeChecker {
         )
     }
 
+    fn branch_exits(stmts: &[Stmt]) -> bool {
+        // Check if a branch definitely exits via return/break/continue
+        // This is a simple check - just look for explicit exits
+        // More complex control flow analysis would be needed for complete accuracy
+        for stmt in stmts {
+            match stmt {
+                Stmt::Return { .. } | Stmt::Break(_) | Stmt::Continue(_) => return true,
+                Stmt::If {
+                    then_branch,
+                    elif_branches,
+                    else_branch,
+                    ..
+                } => {
+                    // If all branches exit, the whole if exits
+                    let then_exits = Self::branch_exits(then_branch);
+                    let elif_all_exit = elif_branches.iter().all(|(_, b)| Self::branch_exits(b));
+                    let else_exits = else_branch.as_ref().map_or(false, |eb| Self::branch_exits(eb));
+
+                    if then_exits && elif_all_exit && else_exits {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn extract_type_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
         // Extract type narrowing from conditions like "x is None", "x is not None"
         // Note: Currently only handles simple variable names, not complex expressions.
@@ -6970,6 +6998,9 @@ impl TypeChecker {
                     self.check_statement(s)?;
                 }
 
+                // Check if then_branch has an exit (return/break/continue)
+                let then_branch_exits = Self::branch_exits(&then_branch);
+
                 // Restore and apply else narrowing
                 self.env.variables = saved_vars.clone();
                 if let Some((var_name, new_type)) = &narrow_else_to_type {
@@ -6994,14 +7025,31 @@ impl TypeChecker {
                         self.check_statement(s)?;
                     }
                 }
+
+                let else_branch_exits = else_branch.as_ref().map_or(false, |eb| Self::branch_exits(eb));
+
                 if let Some(ref eb) = else_branch {
                     for s in eb {
                         self.check_statement(s)?;
                     }
                 }
 
-                // Restore original environment
-                self.env.variables = saved_vars;
+                // If then_branch exits and else doesn't (or there's no else), narrow type after if
+                if then_branch_exits && !else_branch_exits {
+                    // Apply the else narrowing to the environment after the if
+                    // This handles patterns like: if x is None: return ... ; use_x_not_none()
+                    if let Some((var_name, new_type)) = &narrow_else_to_type {
+                        if let Some((_, mutability)) = saved_vars.get(var_name) {
+                            self.env.variables.insert(
+                                var_name.clone(),
+                                (new_type.clone(), mutability.clone()),
+                            );
+                        }
+                    }
+                } else {
+                    // Restore original environment if we're not applying post-if narrowing
+                    self.env.variables = saved_vars;
+                }
                 Ok(())
             }
             Stmt::For {
@@ -19274,6 +19322,25 @@ else:
         assert!(
             result.is_ok(),
             "type narrowing should work in union types: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn type_narrowing_persists_after_if_with_early_return() {
+        let code = r#"def process(x: int | None) -> int:
+    if x is None:
+        return 0
+
+    # x should be narrowed to int here, after the if statement
+    return x + 1
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "type narrowing should persist after if with early return: {:?}",
             result
         );
     }
