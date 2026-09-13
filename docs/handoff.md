@@ -6,15 +6,29 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13 (continuation session ongoing)
+## Resume snapshot: 2026-09-13 (second continuation session)
 
 Work is on branch `codex/lucid-implementation`. Latest checkpoint
-is at `d2a42e8 Close 3 more builtin type gaps: reversed, sorted, monotonic`.
+is at `49599d6 Remove empty placeholder loop for builtin functions`.
 
-**Gap Closure Work (2026-09-13 continuation — 9 gaps closed, 4 new today):**
-The session closed 9 concrete gaps implementing proper return types:
+**Gap Closure Work (2026-09-13 second continuation — 2 new structural improvements):**
+The session closed gaps in type validation for immutable/non-indexable types and
+cleaned up builtin function placeholder handling:
 
-**Closed Today (3 gaps):**
+**Closed Today (2 gaps + 1 cleanup):**
+1. **Immutable type index assignment validation** (4 new checks)
+   - Reject assignment to tuple indices (immutable)
+   - Reject assignment to string indices (immutable)
+   - Reject assignment to set indices (sets don't support indexing)
+   - Add validation for dict index assignment (key type and value type)
+   These gaps were only caught at runtime before.
+
+2. **Builtin function placeholder loop cleanup**
+   - Removed empty placeholder loop (all entries already in builtin_contracts)
+   - Removed duplicate "sorted" entry that returned list[Any]
+   - Cleaned up code and reduced maintenance burden
+
+**Previously Closed (3 gaps in first session continuation):**
 1. **reversed(iterable) → list[ElementType]** - Preserves element type
    - `reversed([1, 2, 3])` returns `list[int]`, not `Any`
    - Context-dependent typing via iterator_result_type()
