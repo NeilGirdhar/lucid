@@ -475,6 +475,24 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn test_two_token_comparison_spans_cover_right_operand() {
+        for source in [
+            "value = left is not right\n",
+            "value = item not in values\n",
+        ] {
+            let module = parse(source).unwrap();
+            let Stmt::Assignment { value, .. } = &module.statements[0] else {
+                panic!("expected assignment");
+            };
+            let Expr::Binary { right, span, .. } = value else {
+                panic!("expected binary comparison");
+            };
+            assert_eq!(span.start, 8);
+            assert_eq!(span.end, right.span().end);
+        }
+    }
+
+    #[test]
     fn test_parse_dict_shape_type_as_record() {
         let module = parse("type Movie = {\"name\": str, \"year\": int}\n").unwrap();
         let Stmt::TypeAlias {

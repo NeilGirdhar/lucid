@@ -1923,11 +1923,13 @@ impl Parser {
                 {
                     self.advance();
                     self.advance();
+                    let right = self.parse_bitwise_or()?;
+                    let span = left.span().merge(right.span());
                     return Ok(Expr::Binary {
                         op: BinaryOp::IsNot,
                         left: Box::new(left.clone()),
-                        right: Box::new(self.parse_bitwise_or()?),
-                        span: left.span(),
+                        right: Box::new(right),
+                        span,
                     });
                 }
                 Some(BinaryOp::Is)
@@ -1940,11 +1942,13 @@ impl Parser {
             {
                 self.advance();
                 self.advance();
+                let right = self.parse_bitwise_or()?;
+                let span = left.span().merge(right.span());
                 return Ok(Expr::Binary {
                     op: BinaryOp::NotIn,
                     left: Box::new(left.clone()),
-                    right: Box::new(self.parse_bitwise_or()?),
-                    span: left.span(),
+                    right: Box::new(right),
+                    span,
                 });
             }
             _ => None,

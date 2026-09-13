@@ -842,6 +842,9 @@ diverged:
   The expression parser gives logical `not` lower precedence than comparison
   operators and higher precedence than `and`/`or`, so `not n > high` parses as
   `not (n > high)` instead of `(not n) > high`.
+  Two-token comparison operators such as `is not` and `not in` now give the
+  resulting expression a span that covers the right operand as well, preserving
+  the source map shape used by typed-HIR lowering.
 * Boolean literals are now preserved as exact `LiteralBool` types, with the
   parser accepting `true` and `false` in type positions and widening them to
   `bool` when required.
