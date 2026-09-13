@@ -8230,7 +8230,7 @@ pub fn lower_function_body(
                                 })
                             })
                             .transpose()?;
-                        return lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
+                        return match lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
                                 &nodes,
                                 condition_id,
                                 then_id,
@@ -8238,9 +8238,21 @@ pub fn lower_function_body(
                                 else_id,
                                 &function.parameter_names,
                                 &local_bindings,
-                            )
-                            .map(Arc::new)
-                            .map_err(|_| Arc::from("unsupported setup guard return chain"));
+                            ) {
+                                Ok(function) => Ok(Arc::new(function)),
+                                Err(_) => {
+                                    let module = lucid_syntax::Module {
+                                        statements: source_function.body.clone(),
+                                        span: source_function.span,
+                                    };
+                                    lucid_cir::Function::from_module_linear_with_params(
+                                        &module,
+                                        &function.parameter_names,
+                                    )
+                                    .map(Arc::new)
+                                    .map_err(|_| Arc::from("unsupported setup guard return chain"))
+                                }
+                            };
                     }
                     return Err(Arc::from("function has no lowerable expression"));
                 }
@@ -8381,7 +8393,7 @@ pub fn lower_function_body(
                                     Ok((condition_id, value_id))
                                 })
                                 .collect::<Result<Vec<_>, Arc<str>>>()?;
-                            return lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
+                            return match lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
                                     &nodes,
                                     condition_id,
                                     then_id,
@@ -8389,9 +8401,23 @@ pub fn lower_function_body(
                                     Some(fallback_id),
                                     &function.parameter_names,
                                     &local_bindings,
-                                )
-                                .map(Arc::new)
-                                .map_err(|_| Arc::from("unsupported setup guard return chain"));
+                                ) {
+                                    Ok(function) => Ok(Arc::new(function)),
+                                    Err(_) => {
+                                        let module = lucid_syntax::Module {
+                                            statements: source_function.body.clone(),
+                                            span: source_function.span,
+                                        };
+                                        lucid_cir::Function::from_module_linear_with_params(
+                                            &module,
+                                            &function.parameter_names,
+                                        )
+                                        .map(Arc::new)
+                                        .map_err(|_| {
+                                            Arc::from("unsupported setup guard return chain")
+                                        })
+                                    }
+                                };
                         }
                         return Err(Arc::from("function has no lowerable expression"));
                     }
