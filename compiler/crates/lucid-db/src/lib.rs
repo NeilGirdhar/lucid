@@ -13354,6 +13354,15 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(4)));
 
         let file = db.add_file(
+            "range-conditional-elif-accumulate.lucid",
+            "def tiered_sum(limit: int, high: int, low: int):\n    total = 0\n    for i in range(limit):\n        if i > high:\n            total += i\n        elif i > low:\n            total += 1\n        else:\n            total -= i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "tiered_sum".into())
+            .as_ref()
+            .expect("range conditional elif accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 3, 1]), Ok(Some(5)));
+
+        let file = db.add_file(
             "counted-while-dead-if-broken.lucid",
             "def countdown(n: int):\n    while n > 0:\n        n -= 1\n    if_broken:\n        n = 100\n    return n\n",
         );

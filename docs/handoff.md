@@ -2135,6 +2135,9 @@ diverged:
   Phi selects either the updated accumulator or the unchanged carried value.
   The same path now accepts an `else` accumulator update, merging the then and
   else updated values before advancing the range induction variable.
+  A single `elif` accumulator update is supported as well; the loop CFG lowers
+  the first condition, the `elif` condition, all selected update blocks, and a
+  merge Phi before the induction step.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
