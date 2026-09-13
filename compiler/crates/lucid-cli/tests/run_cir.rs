@@ -1193,7 +1193,7 @@ fn run_cir_lowers_len_of_constant_aggregates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    values = [1, 2, 3]\n    unique = {4, 5, 6}\n    pairs = {1: 10, 2: 20}\n    copied = dict(pairs)\n    empty = dict()\n    tuple_values = (7, 8, 9)\n    data = b\"abc\"\n    return len(values) * 10 + len(unique) + len(pairs) + len(copied) + len(empty) + len([4, 5]) + len(tuple_values) + len(data)\n",
+        "def answer():\n    values = [1, 2, 3]\n    unique = {4, 5, 6}\n    pairs = {1: 10, 2: 20}\n    copied = dict(pairs)\n    empty = dict()\n    tuple_values = (7, 8, 9)\n    data = b\"abc\"\n    return len(values) * 10 + len(unique) + len(pairs) + len(copied) + len(empty) + len([4, 5]) + len(tuple_values) + len(data) + len(pairs.keys()) + len(pairs.values()) + len(pairs.items())\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
@@ -1211,7 +1211,7 @@ fn run_cir_lowers_len_of_constant_aggregates_in_typed_function_body() {
         "run-cir function aggregate len failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "45");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "51");
 }
 
 #[test]
@@ -1222,7 +1222,7 @@ fn run_cir_lowers_constant_integer_builtins_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    values = [1, 2]\n    flags = {false, 0, 2}\n    numbers = range(5)\n    empty = range(0)\n    positives = range(1, 4)\n    data = b\"ABC\"\n    no_bytes = b\"\"\n    byte_list = list(data)\n    byte_set = set(data)\n    sorted_bytes = sorted(b\"CBA\")\n    reversed_bytes = reversed(data)\n    record = (1,)\n    tuple_values = (3, 1, 2)\n    tuple_list = list(tuple_values)\n    tuple_set = set(tuple_values)\n    sorted_tuple = sorted(tuple_values)\n    reversed_tuple = reversed(tuple_values)\n    label = \"42\"\n    return all(values) and any(flags) and bool(range(3)) and not bool([]) and bool(data) and bool(record) and int(true) == 1 and int(\"42\") == 42 and int(label) == 42 and int(1 < 2) == 1 and 3 in numbers and 7 not in numbers and 66 in data and data[1] == 66 and 120 not in data and sum(numbers) == 10 and sum(data) == 198 and min(data) == 65 and max(data) == 67 and all(data) and any(data) and all(no_bytes) and not any(no_bytes) and byte_list[2] == 67 and 66 in byte_set and sorted_bytes[0] == 65 and reversed_bytes[0] == 67 and sum(tuple_values) == 6 and min(tuple_values) == 1 and max(tuple_values) == 3 and all(tuple_values) and tuple_list[1] == 1 and 2 in tuple_set and sorted_tuple[0] == 1 and reversed_tuple[0] == 2 and len(numbers) == 5 and not bool(empty) and all(positives) and not any(empty)\n",
+        "def answer():\n    values = [1, 2]\n    flags = {false, 0, 2}\n    numbers = range(5)\n    empty = range(0)\n    positives = range(1, 4)\n    data = b\"ABC\"\n    no_bytes = b\"\"\n    byte_list = list(data)\n    byte_set = set(data)\n    sorted_bytes = sorted(b\"CBA\")\n    reversed_bytes = reversed(data)\n    record = (1,)\n    tuple_values = (3, 1, 2)\n    tuple_list = list(tuple_values)\n    tuple_set = set(tuple_values)\n    sorted_tuple = sorted(tuple_values)\n    reversed_tuple = reversed(tuple_values)\n    pairs = {1: 10}\n    empty_dict = dict()\n    label = \"42\"\n    return all(values) and any(flags) and bool(range(3)) and not bool([]) and bool(data) and bool(record) and bool(pairs.keys()) and bool(pairs.values()) and bool(pairs.items()) and not bool(empty_dict.items()) and int(true) == 1 and int(\"42\") == 42 and int(label) == 42 and int(1 < 2) == 1 and 3 in numbers and 7 not in numbers and 66 in data and data[1] == 66 and 120 not in data and sum(numbers) == 10 and sum(data) == 198 and min(data) == 65 and max(data) == 67 and all(data) and any(data) and all(no_bytes) and not any(no_bytes) and byte_list[2] == 67 and 66 in byte_set and sorted_bytes[0] == 65 and reversed_bytes[0] == 67 and sum(tuple_values) == 6 and min(tuple_values) == 1 and max(tuple_values) == 3 and all(tuple_values) and tuple_list[1] == 1 and 2 in tuple_set and sorted_tuple[0] == 1 and reversed_tuple[0] == 2 and len(numbers) == 5 and not bool(empty) and all(positives) and not any(empty)\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))

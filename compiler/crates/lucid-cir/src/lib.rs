@@ -8541,6 +8541,51 @@ impl Function {
                 _ => None,
             }
         }
+        fn aggregate_dict_len(aggregate: &AggregateBinding) -> Option<usize> {
+            match aggregate {
+                AggregateBinding::Dict(entries) => Some(entries.len()),
+                AggregateBinding::StringDict(entries) => Some(entries.len()),
+                AggregateBinding::StringIntDict(entries) => Some(entries.len()),
+                AggregateBinding::StringFloatDict(entries) => Some(entries.len()),
+                AggregateBinding::StringSingletonDict(entries) => Some(entries.len()),
+                AggregateBinding::IntStringDict(entries) => Some(entries.len()),
+                AggregateBinding::IntSingletonDict(entries) => Some(entries.len()),
+                AggregateBinding::FloatDict(entries) => Some(entries.len()),
+                AggregateBinding::IntFloatDict(entries) => Some(entries.len()),
+                AggregateBinding::FloatIntDict(entries) => Some(entries.len()),
+                AggregateBinding::FloatStringDict(entries) => Some(entries.len()),
+                AggregateBinding::FloatSingletonDict(entries) => Some(entries.len()),
+                AggregateBinding::SingletonDict(entries) => Some(entries.len()),
+                AggregateBinding::SingletonStringDict(entries) => Some(entries.len()),
+                AggregateBinding::SingletonIntDict(entries) => Some(entries.len()),
+                AggregateBinding::SingletonFloatDict(entries) => Some(entries.len()),
+                _ => None,
+            }
+        }
+        fn constant_dict_view_len(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<usize> {
+            let lucid_syntax::Expr::Call { func, args, .. } = expr else {
+                return None;
+            };
+            if !args.is_empty() {
+                return None;
+            }
+            let lucid_syntax::Expr::Attribute { value, attr, .. } = func.as_ref() else {
+                return None;
+            };
+            if !matches!(attr.as_str(), "keys" | "values" | "items") {
+                return None;
+            }
+            match value.as_ref() {
+                lucid_syntax::Expr::Dict { entries, .. } => Some(entries.len()),
+                lucid_syntax::Expr::Ident { name, .. } => {
+                    aggregate_dict_len(aggregate_bindings.get(name)?)
+                }
+                _ => None,
+            }
+        }
         fn constant_string_list(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -9450,6 +9495,10 @@ impl Function {
                             }
                             fields.len()
                         }
+                        expr if constant_dict_view_len(expr, aggregate_bindings).is_some() => {
+                            constant_dict_view_len(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                        }
                         lucid_syntax::Expr::Call { .. } => const_range_values(&args[0].value)
                             .ok_or(LowerError::UnsupportedExpression)?
                             .len(),
@@ -9566,6 +9615,10 @@ impl Function {
                         lucid_syntax::Expr::Call { .. } => {
                             if let Some(values) = const_range_values(&args[0].value) {
                                 !values.is_empty()
+                            } else if let Some(len) =
+                                constant_dict_view_len(&args[0].value, aggregate_bindings)
+                            {
+                                len != 0
                             } else {
                                 let value = lower(
                                     &args[0].value,
@@ -24155,6 +24208,10 @@ return total
             ("return len({1: 10, 2: 20})\n", 2),
             ("values = dict()\nreturn len(values)\n", 0),
             ("values = dict({1: 10, 2: 20})\nreturn len(values)\n", 2),
+            ("return len({1: 10, 2: 20}.keys())\n", 2),
+            ("return len({1: 10, 2: 20}.values())\n", 2),
+            ("return len({1: 10, 2: 20}.items())\n", 2),
+            ("values = {1: 10, 2: 20}\nreturn len(values.items())\n", 2),
             ("values = (1, 2, 3)\nreturn len(values)\n", 3),
             ("return len((1, 2, 3))\n", 3),
             ("return len(\"abc\")\n", 3),
@@ -24240,6 +24297,10 @@ return total
             ("values = range(5)\nreturn 3 in values\n", 1),
             ("values = range(5)\nreturn 7 not in values\n", 1),
             ("values = range(0)\nreturn bool(values)\n", 0),
+            ("return bool({1: 10}.keys())\n", 1),
+            ("return bool({1: 10}.values())\n", 1),
+            ("return bool({1: 10}.items())\n", 1),
+            ("values = dict()\nreturn bool(values.items())\n", 0),
             ("values = range(1, 4)\nreturn all(values)\n", 1),
             ("values = range(0)\nreturn any(values)\n", 0),
             ("return 97 in b\"abc\"\n", 1),
