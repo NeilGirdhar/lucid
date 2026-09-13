@@ -12526,31 +12526,164 @@ impl Function {
             })
             .collect::<Vec<_>>();
         let mut next = parameter_names.len() as u32;
-        let condition_value = Self::lower_parameter_expr(
-            condition,
-            parameter_names,
-            &mut entry_instructions,
-            &mut next,
-        )?;
-        let mut blocks = vec![
-            Block {
-                id: BlockId(0),
-                instructions: entry_instructions,
-                terminator: Terminator::Branch {
-                    condition: condition_value,
-                    then_block: BlockId(1),
-                    else_block: BlockId(2),
-                },
-            },
-            Block {
-                id: BlockId(1),
-                instructions: Vec::new(),
-                terminator: Terminator::Return(None),
-            },
-        ];
-        let mut condition_block = 2_u32;
+        let logical_condition = match condition {
+            lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) => {
+                Some((op, left, right))
+            }
+            _ => None,
+        };
+        let (mut blocks, mut condition_block) = if let Some((op, left, right)) = logical_condition {
+            let left_value = Self::lower_parameter_expr(
+                left,
+                parameter_names,
+                &mut entry_instructions,
+                &mut next,
+            )?;
+            let mut right_instructions = Vec::new();
+            let right_value = Self::lower_parameter_expr(
+                right,
+                parameter_names,
+                &mut right_instructions,
+                &mut next,
+            )?;
+            let (left_then, left_else) = match op {
+                lucid_syntax::BinaryOp::Or => (BlockId(1), BlockId(2)),
+                lucid_syntax::BinaryOp::And => (BlockId(2), BlockId(3)),
+                _ => return Err(LowerError::UnsupportedExpression),
+            };
+            (
+                vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: entry_instructions,
+                        terminator: Terminator::Branch {
+                            condition: left_value,
+                            then_block: left_then,
+                            else_block: left_else,
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    },
+                    Block {
+                        id: BlockId(2),
+                        instructions: right_instructions,
+                        terminator: Terminator::Branch {
+                            condition: right_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(3),
+                        },
+                    },
+                ],
+                3_u32,
+            )
+        } else {
+            let condition_value = Self::lower_parameter_expr(
+                condition,
+                parameter_names,
+                &mut entry_instructions,
+                &mut next,
+            )?;
+            (
+                vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: entry_instructions,
+                        terminator: Terminator::Branch {
+                            condition: condition_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(2),
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    },
+                ],
+                2_u32,
+            )
+        };
         for (index, (elif_condition, elif_expr)) in elif_branches.iter().enumerate() {
             let then_block = condition_block + 1;
+            if let lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } = elif_condition
+            {
+                if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                    let right_block = condition_block + 2;
+                    let false_block = condition_block + 3;
+                    let mut condition_instructions = Vec::new();
+                    let left_value = Self::lower_parameter_expr(
+                        left,
+                        parameter_names,
+                        &mut condition_instructions,
+                        &mut next,
+                    )?;
+                    let mut right_instructions = Vec::new();
+                    let right_value = Self::lower_parameter_expr(
+                        right,
+                        parameter_names,
+                        &mut right_instructions,
+                        &mut next,
+                    )?;
+                    let mut then_instructions = Vec::new();
+                    let then_value = Self::lower_parameter_expr(
+                        elif_expr,
+                        parameter_names,
+                        &mut then_instructions,
+                        &mut next,
+                    )?;
+                    let (left_then, left_else) = match op {
+                        lucid_syntax::BinaryOp::Or => (BlockId(then_block), BlockId(right_block)),
+                        lucid_syntax::BinaryOp::And => (BlockId(right_block), BlockId(false_block)),
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    };
+                    blocks.push(Block {
+                        id: BlockId(condition_block),
+                        instructions: condition_instructions,
+                        terminator: Terminator::Branch {
+                            condition: left_value,
+                            then_block: left_then,
+                            else_block: left_else,
+                        },
+                    });
+                    blocks.push(Block {
+                        id: BlockId(then_block),
+                        instructions: then_instructions,
+                        terminator: Terminator::Return(Some(then_value)),
+                    });
+                    blocks.push(Block {
+                        id: BlockId(right_block),
+                        instructions: right_instructions,
+                        terminator: Terminator::Branch {
+                            condition: right_value,
+                            then_block: BlockId(then_block),
+                            else_block: BlockId(false_block),
+                        },
+                    });
+                    if index == elif_branches.len() - 1 {
+                        let mut else_instructions = Vec::new();
+                        let else_value = Self::lower_parameter_expr(
+                            else_expr,
+                            parameter_names,
+                            &mut else_instructions,
+                            &mut next,
+                        )?;
+                        blocks.push(Block {
+                            id: BlockId(false_block),
+                            instructions: else_instructions,
+                            terminator: Terminator::Return(Some(else_value)),
+                        });
+                    }
+                    condition_block = false_block;
+                    continue;
+                }
+            }
             let false_block = condition_block + 2;
             let mut condition_instructions = Vec::new();
             let condition_value = Self::lower_parameter_expr(
@@ -12626,31 +12759,157 @@ impl Function {
             })
             .collect::<Vec<_>>();
         let mut next = parameter_names.len() as u32;
-        let condition_value = Self::lower_parameter_expr(
-            condition,
-            parameter_names,
-            &mut entry_instructions,
-            &mut next,
-        )?;
-        let mut blocks = vec![
-            Block {
-                id: BlockId(0),
-                instructions: entry_instructions,
-                terminator: Terminator::Branch {
-                    condition: condition_value,
-                    then_block: BlockId(1),
-                    else_block: BlockId(2),
-                },
-            },
-            Block {
-                id: BlockId(1),
-                instructions: Vec::new(),
-                terminator: Terminator::Return(None),
-            },
-        ];
-        let mut condition_block = 2_u32;
+        let logical_condition = match condition {
+            lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) => {
+                Some((op, left, right))
+            }
+            _ => None,
+        };
+        let (mut blocks, mut condition_block) = if let Some((op, left, right)) = logical_condition {
+            let left_value = Self::lower_parameter_expr(
+                left,
+                parameter_names,
+                &mut entry_instructions,
+                &mut next,
+            )?;
+            let mut right_instructions = Vec::new();
+            let right_value = Self::lower_parameter_expr(
+                right,
+                parameter_names,
+                &mut right_instructions,
+                &mut next,
+            )?;
+            let (left_then, left_else) = match op {
+                lucid_syntax::BinaryOp::Or => (BlockId(1), BlockId(2)),
+                lucid_syntax::BinaryOp::And => (BlockId(2), BlockId(3)),
+                _ => return Err(LowerError::UnsupportedExpression),
+            };
+            (
+                vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: entry_instructions,
+                        terminator: Terminator::Branch {
+                            condition: left_value,
+                            then_block: left_then,
+                            else_block: left_else,
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    },
+                    Block {
+                        id: BlockId(2),
+                        instructions: right_instructions,
+                        terminator: Terminator::Branch {
+                            condition: right_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(3),
+                        },
+                    },
+                ],
+                3_u32,
+            )
+        } else {
+            let condition_value = Self::lower_parameter_expr(
+                condition,
+                parameter_names,
+                &mut entry_instructions,
+                &mut next,
+            )?;
+            (
+                vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: entry_instructions,
+                        terminator: Terminator::Branch {
+                            condition: condition_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(2),
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    },
+                ],
+                2_u32,
+            )
+        };
         for (index, (elif_condition, elif_expr)) in elif_branches.iter().enumerate() {
             let then_block = condition_block + 1;
+            if let lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } = elif_condition
+            {
+                if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                    let right_block = condition_block + 2;
+                    let false_block = condition_block + 3;
+                    let mut condition_instructions = Vec::new();
+                    let left_value = Self::lower_parameter_expr(
+                        left,
+                        parameter_names,
+                        &mut condition_instructions,
+                        &mut next,
+                    )?;
+                    let mut right_instructions = Vec::new();
+                    let right_value = Self::lower_parameter_expr(
+                        right,
+                        parameter_names,
+                        &mut right_instructions,
+                        &mut next,
+                    )?;
+                    let mut then_instructions = Vec::new();
+                    let then_value = Self::lower_parameter_expr(
+                        elif_expr,
+                        parameter_names,
+                        &mut then_instructions,
+                        &mut next,
+                    )?;
+                    let (left_then, left_else) = match op {
+                        lucid_syntax::BinaryOp::Or => (BlockId(then_block), BlockId(right_block)),
+                        lucid_syntax::BinaryOp::And => (BlockId(right_block), BlockId(false_block)),
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    };
+                    blocks.push(Block {
+                        id: BlockId(condition_block),
+                        instructions: condition_instructions,
+                        terminator: Terminator::Branch {
+                            condition: left_value,
+                            then_block: left_then,
+                            else_block: left_else,
+                        },
+                    });
+                    blocks.push(Block {
+                        id: BlockId(then_block),
+                        instructions: then_instructions,
+                        terminator: Terminator::Return(Some(then_value)),
+                    });
+                    blocks.push(Block {
+                        id: BlockId(right_block),
+                        instructions: right_instructions,
+                        terminator: Terminator::Branch {
+                            condition: right_value,
+                            then_block: BlockId(then_block),
+                            else_block: BlockId(false_block),
+                        },
+                    });
+                    if index == elif_branches.len() - 1 {
+                        blocks.push(Block {
+                            id: BlockId(false_block),
+                            instructions: Vec::new(),
+                            terminator: Terminator::Return(None),
+                        });
+                    }
+                    condition_block = false_block;
+                    continue;
+                }
+            }
             let false_block = condition_block + 2;
             let mut condition_instructions = Vec::new();
             let condition_value = Self::lower_parameter_expr(
@@ -12939,12 +13198,6 @@ impl Function {
             })
             .collect::<Vec<_>>();
         let mut next = parameter_names.len() as u32;
-        let condition_value = Self::lower_parameter_expr(
-            condition,
-            parameter_names,
-            &mut entry_instructions,
-            &mut next,
-        )?;
         let mut then_instructions = Vec::new();
         let then_value = Self::lower_parameter_expr(
             then_expr,
@@ -12952,25 +13205,157 @@ impl Function {
             &mut then_instructions,
             &mut next,
         )?;
-        let mut blocks = vec![
-            Block {
-                id: BlockId(0),
-                instructions: entry_instructions,
-                terminator: Terminator::Branch {
-                    condition: condition_value,
-                    then_block: BlockId(1),
-                    else_block: BlockId(2),
-                },
-            },
-            Block {
-                id: BlockId(1),
-                instructions: then_instructions,
-                terminator: Terminator::Return(Some(then_value)),
-            },
-        ];
-        let mut condition_block = 2_u32;
+        let logical_condition = match condition {
+            lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) => {
+                Some((op, left, right))
+            }
+            _ => None,
+        };
+        let (mut blocks, mut condition_block) = if let Some((op, left, right)) = logical_condition {
+            let left_value = Self::lower_parameter_expr(
+                left,
+                parameter_names,
+                &mut entry_instructions,
+                &mut next,
+            )?;
+            let mut right_instructions = Vec::new();
+            let right_value = Self::lower_parameter_expr(
+                right,
+                parameter_names,
+                &mut right_instructions,
+                &mut next,
+            )?;
+            let (left_then, left_else) = match op {
+                lucid_syntax::BinaryOp::Or => (BlockId(1), BlockId(2)),
+                lucid_syntax::BinaryOp::And => (BlockId(2), BlockId(3)),
+                _ => return Err(LowerError::UnsupportedExpression),
+            };
+            (
+                vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: entry_instructions,
+                        terminator: Terminator::Branch {
+                            condition: left_value,
+                            then_block: left_then,
+                            else_block: left_else,
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: then_instructions,
+                        terminator: Terminator::Return(Some(then_value)),
+                    },
+                    Block {
+                        id: BlockId(2),
+                        instructions: right_instructions,
+                        terminator: Terminator::Branch {
+                            condition: right_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(3),
+                        },
+                    },
+                ],
+                3_u32,
+            )
+        } else {
+            let condition_value = Self::lower_parameter_expr(
+                condition,
+                parameter_names,
+                &mut entry_instructions,
+                &mut next,
+            )?;
+            (
+                vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: entry_instructions,
+                        terminator: Terminator::Branch {
+                            condition: condition_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(2),
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: then_instructions,
+                        terminator: Terminator::Return(Some(then_value)),
+                    },
+                ],
+                2_u32,
+            )
+        };
         for (index, elif_condition) in elif_conditions.iter().enumerate() {
             let then_block = condition_block + 1;
+            if let lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } = elif_condition
+            {
+                if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                    let right_block = condition_block + 2;
+                    let false_block = condition_block + 3;
+                    let mut condition_instructions = Vec::new();
+                    let left_value = Self::lower_parameter_expr(
+                        left,
+                        parameter_names,
+                        &mut condition_instructions,
+                        &mut next,
+                    )?;
+                    let mut right_instructions = Vec::new();
+                    let right_value = Self::lower_parameter_expr(
+                        right,
+                        parameter_names,
+                        &mut right_instructions,
+                        &mut next,
+                    )?;
+                    let (left_then, left_else) = match op {
+                        lucid_syntax::BinaryOp::Or => (BlockId(then_block), BlockId(right_block)),
+                        lucid_syntax::BinaryOp::And => (BlockId(right_block), BlockId(false_block)),
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    };
+                    blocks.push(Block {
+                        id: BlockId(condition_block),
+                        instructions: condition_instructions,
+                        terminator: Terminator::Branch {
+                            condition: left_value,
+                            then_block: left_then,
+                            else_block: left_else,
+                        },
+                    });
+                    blocks.push(Block {
+                        id: BlockId(then_block),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    });
+                    blocks.push(Block {
+                        id: BlockId(right_block),
+                        instructions: right_instructions,
+                        terminator: Terminator::Branch {
+                            condition: right_value,
+                            then_block: BlockId(then_block),
+                            else_block: BlockId(false_block),
+                        },
+                    });
+                    if index == elif_conditions.len() - 1 {
+                        let mut else_instructions = Vec::new();
+                        let else_value = Self::lower_parameter_expr(
+                            else_expr,
+                            parameter_names,
+                            &mut else_instructions,
+                            &mut next,
+                        )?;
+                        blocks.push(Block {
+                            id: BlockId(false_block),
+                            instructions: else_instructions,
+                            terminator: Terminator::Return(Some(else_value)),
+                        });
+                    }
+                    condition_block = false_block;
+                    continue;
+                }
+            }
             let false_block = condition_block + 2;
             let mut condition_instructions = Vec::new();
             let condition_value = Self::lower_parameter_expr(
@@ -13039,12 +13424,6 @@ impl Function {
             })
             .collect::<Vec<_>>();
         let mut next = parameter_names.len() as u32;
-        let condition_value = Self::lower_parameter_expr(
-            condition,
-            parameter_names,
-            &mut entry_instructions,
-            &mut next,
-        )?;
         let mut then_instructions = Vec::new();
         let then_value = Self::lower_parameter_expr(
             then_expr,
@@ -13052,25 +13431,150 @@ impl Function {
             &mut then_instructions,
             &mut next,
         )?;
-        let mut blocks = vec![
-            Block {
-                id: BlockId(0),
-                instructions: entry_instructions,
-                terminator: Terminator::Branch {
-                    condition: condition_value,
-                    then_block: BlockId(1),
-                    else_block: BlockId(2),
-                },
-            },
-            Block {
-                id: BlockId(1),
-                instructions: then_instructions,
-                terminator: Terminator::Return(Some(then_value)),
-            },
-        ];
-        let mut condition_block = 2_u32;
+        let logical_condition = match condition {
+            lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) => {
+                Some((op, left, right))
+            }
+            _ => None,
+        };
+        let (mut blocks, mut condition_block) = if let Some((op, left, right)) = logical_condition {
+            let left_value = Self::lower_parameter_expr(
+                left,
+                parameter_names,
+                &mut entry_instructions,
+                &mut next,
+            )?;
+            let mut right_instructions = Vec::new();
+            let right_value = Self::lower_parameter_expr(
+                right,
+                parameter_names,
+                &mut right_instructions,
+                &mut next,
+            )?;
+            let (left_then, left_else) = match op {
+                lucid_syntax::BinaryOp::Or => (BlockId(1), BlockId(2)),
+                lucid_syntax::BinaryOp::And => (BlockId(2), BlockId(3)),
+                _ => return Err(LowerError::UnsupportedExpression),
+            };
+            (
+                vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: entry_instructions,
+                        terminator: Terminator::Branch {
+                            condition: left_value,
+                            then_block: left_then,
+                            else_block: left_else,
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: then_instructions,
+                        terminator: Terminator::Return(Some(then_value)),
+                    },
+                    Block {
+                        id: BlockId(2),
+                        instructions: right_instructions,
+                        terminator: Terminator::Branch {
+                            condition: right_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(3),
+                        },
+                    },
+                ],
+                3_u32,
+            )
+        } else {
+            let condition_value = Self::lower_parameter_expr(
+                condition,
+                parameter_names,
+                &mut entry_instructions,
+                &mut next,
+            )?;
+            (
+                vec![
+                    Block {
+                        id: BlockId(0),
+                        instructions: entry_instructions,
+                        terminator: Terminator::Branch {
+                            condition: condition_value,
+                            then_block: BlockId(1),
+                            else_block: BlockId(2),
+                        },
+                    },
+                    Block {
+                        id: BlockId(1),
+                        instructions: then_instructions,
+                        terminator: Terminator::Return(Some(then_value)),
+                    },
+                ],
+                2_u32,
+            )
+        };
         for (index, elif_condition) in elif_conditions.iter().enumerate() {
             let then_block = condition_block + 1;
+            if let lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } = elif_condition
+            {
+                if matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                    let right_block = condition_block + 2;
+                    let false_block = condition_block + 3;
+                    let mut condition_instructions = Vec::new();
+                    let left_value = Self::lower_parameter_expr(
+                        left,
+                        parameter_names,
+                        &mut condition_instructions,
+                        &mut next,
+                    )?;
+                    let mut right_instructions = Vec::new();
+                    let right_value = Self::lower_parameter_expr(
+                        right,
+                        parameter_names,
+                        &mut right_instructions,
+                        &mut next,
+                    )?;
+                    let (left_then, left_else) = match op {
+                        lucid_syntax::BinaryOp::Or => (BlockId(then_block), BlockId(right_block)),
+                        lucid_syntax::BinaryOp::And => (BlockId(right_block), BlockId(false_block)),
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    };
+                    blocks.push(Block {
+                        id: BlockId(condition_block),
+                        instructions: condition_instructions,
+                        terminator: Terminator::Branch {
+                            condition: left_value,
+                            then_block: left_then,
+                            else_block: left_else,
+                        },
+                    });
+                    blocks.push(Block {
+                        id: BlockId(then_block),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(None),
+                    });
+                    blocks.push(Block {
+                        id: BlockId(right_block),
+                        instructions: right_instructions,
+                        terminator: Terminator::Branch {
+                            condition: right_value,
+                            then_block: BlockId(then_block),
+                            else_block: BlockId(false_block),
+                        },
+                    });
+                    if index == elif_conditions.len() - 1 {
+                        blocks.push(Block {
+                            id: BlockId(false_block),
+                            instructions: Vec::new(),
+                            terminator: Terminator::Return(None),
+                        });
+                    }
+                    condition_block = false_block;
+                    continue;
+                }
+            }
             let false_block = condition_block + 2;
             let mut condition_instructions = Vec::new();
             let condition_value = Self::lower_parameter_expr(
@@ -18274,6 +18778,85 @@ return total
                 Ok(Some(expected))
             );
         }
+    }
+
+    #[test]
+    fn parameterized_mixed_ladders_short_circuit_logical_guards() {
+        fn return_expr(source: &str) -> lucid_syntax::Expr {
+            let module = lucid_syntax::parse(&format!("return {source}\n"))
+                .expect("expression fixture should parse");
+            let [lucid_syntax::Stmt::Return {
+                value: Some(expr), ..
+            }] = module.statements.as_slice()
+            else {
+                panic!("expected single return expression");
+            };
+            expr.clone()
+        }
+
+        let parameters = vec!["x".to_string(), "y".to_string()];
+        let initial_guard = return_expr("x != 0 and 10 // x > 1");
+        let elif_guard = return_expr("y != 0 and 10 // y > 1");
+        let one = return_expr("1");
+        let two = return_expr("2");
+        let three = return_expr("3");
+
+        let void_then_value_else = Function::from_parameterized_if_void_elif_chain_direct(
+            &initial_guard,
+            &[(&elif_guard, &two)],
+            &three,
+            &parameters,
+        )
+        .expect("void/value direct ladder should lower");
+        assert_eq!(void_then_value_else.execute_with_args(&[0, 0]), Ok(Some(3)));
+        assert_eq!(void_then_value_else.execute_with_args(&[0, 2]), Ok(Some(2)));
+
+        let void_then_value_optional = Function::from_parameterized_if_void_elif_optional_chain(
+            &initial_guard,
+            &[(&elif_guard, &two)],
+            &parameters,
+        )
+        .expect("void/value optional ladder should lower");
+        assert_eq!(
+            void_then_value_optional.execute_with_args(&[0, 0]),
+            Ok(None)
+        );
+        assert_eq!(
+            void_then_value_optional.execute_with_args(&[0, 2]),
+            Ok(Some(2))
+        );
+
+        let value_then_void_else = Function::from_parameterized_if_elif_voids_else_direct(
+            &initial_guard,
+            &one,
+            &[&elif_guard],
+            &three,
+            &parameters,
+        )
+        .expect("value/void direct ladder should lower");
+        assert_eq!(value_then_void_else.execute_with_args(&[0, 0]), Ok(Some(3)));
+        assert_eq!(value_then_void_else.execute_with_args(&[2, 0]), Ok(Some(1)));
+        assert_eq!(value_then_void_else.execute_with_args(&[0, 2]), Ok(None));
+
+        let value_then_void_optional = Function::from_parameterized_if_elif_voids_optional(
+            &initial_guard,
+            &one,
+            &[&elif_guard],
+            &parameters,
+        )
+        .expect("value/void optional ladder should lower");
+        assert_eq!(
+            value_then_void_optional.execute_with_args(&[0, 0]),
+            Ok(None)
+        );
+        assert_eq!(
+            value_then_void_optional.execute_with_args(&[2, 0]),
+            Ok(Some(1))
+        );
+        assert_eq!(
+            value_then_void_optional.execute_with_args(&[0, 2]),
+            Ok(None)
+        );
     }
 
     #[test]
