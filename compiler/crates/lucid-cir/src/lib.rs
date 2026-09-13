@@ -1534,7 +1534,9 @@ impl Function {
                     let callee = nodes
                         .get(node.children[0] as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
-                    if callee.kind == "name" && callee.detail.as_deref() == Some("len") {
+                    if callee.kind == "name"
+                        && matches!(callee.detail.as_deref(), Some("len" | "bool"))
+                    {
                         let aggregate_id = node.children[1];
                         let aggregate = nodes
                             .get(aggregate_id as usize)
@@ -1568,11 +1570,18 @@ impl Function {
                             )?;
                         }
                         result = provisional_result;
-                        instructions.push(Instruction::ConstInt {
-                            result,
-                            value: i64::try_from(length)
-                                .map_err(|_| LowerError::UnsupportedExpression)?,
-                        });
+                        if callee.detail.as_deref() == Some("len") {
+                            instructions.push(Instruction::ConstInt {
+                                result,
+                                value: i64::try_from(length)
+                                    .map_err(|_| LowerError::UnsupportedExpression)?,
+                            });
+                        } else {
+                            instructions.push(Instruction::ConstBool {
+                                result,
+                                value: length > 0,
+                            });
+                        }
                         lowered.insert(id, result);
                         return Ok(result);
                     }
@@ -25195,6 +25204,179 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 5, &[])
             .expect("typed len should preserve aggregate element evaluation");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_bool_of_constant_aggregates() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("bool".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "list".into(),
+                detail: None,
+                children: vec![1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "set".into(),
+                detail: None,
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![1, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "name".into(),
+                detail: Some("pairs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "record".into(),
+                detail: None,
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![3, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "unary".into(),
+                detail: Some("Not".into()),
+                children: vec![5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![11, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "unary".into(),
+                detail: Some("Not".into()),
+                children: vec![10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![13, 14],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body_with_locals(&nodes, 15, &[], &[("pairs".into(), 6)])
+                .expect("typed bool should lower constant aggregate literals");
+        assert_eq!(function.execute(), Ok(Some(4)));
+    }
+
+    #[test]
+    fn typed_bool_evaluates_aggregate_elements() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("bool".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "record".into(),
+                detail: None,
+                children: vec![3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 5, &[])
+            .expect("typed bool should preserve aggregate element evaluation");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
