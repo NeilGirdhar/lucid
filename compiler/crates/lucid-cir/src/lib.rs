@@ -9626,25 +9626,36 @@ impl Function {
         fn statement_static_truth(
             expr: &lucid_syntax::Expr,
             bindings: &HashMap<String, ValueId>,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
             instructions: &[Instruction],
         ) -> Option<bool> {
             match expr {
-                lucid_syntax::Expr::Ident { name, .. } => {
-                    constant_value_truth(*bindings.get(name)?, instructions)
-                }
+                lucid_syntax::Expr::Ident { name, .. } => match bindings.get(name) {
+                    Some(value) => constant_value_truth(*value, instructions),
+                    None => match aggregate_bindings.get(name)? {
+                        AggregateBinding::List(elements) => Some(!elements.is_empty()),
+                        AggregateBinding::Set(elements) => Some(!elements.is_empty()),
+                        AggregateBinding::Dict(entries) => Some(!entries.is_empty()),
+                        AggregateBinding::String(value) => Some(!value.is_empty()),
+                    },
+                },
                 lucid_syntax::Expr::Unary {
                     op: lucid_syntax::UnaryOp::Not,
                     expr,
                     ..
-                } => statement_static_truth(expr, bindings, instructions).map(|value| !value),
+                } => statement_static_truth(expr, bindings, aggregate_bindings, instructions)
+                    .map(|value| !value),
                 lucid_syntax::Expr::Binary {
                     op: lucid_syntax::BinaryOp::And,
                     left,
                     right,
                     ..
-                } => match statement_static_truth(left, bindings, instructions) {
+                } => match statement_static_truth(left, bindings, aggregate_bindings, instructions)
+                {
                     Some(false) => Some(false),
-                    Some(true) => statement_static_truth(right, bindings, instructions),
+                    Some(true) => {
+                        statement_static_truth(right, bindings, aggregate_bindings, instructions)
+                    }
                     None => None,
                 },
                 lucid_syntax::Expr::Binary {
@@ -9652,11 +9663,54 @@ impl Function {
                     left,
                     right,
                     ..
-                } => match statement_static_truth(left, bindings, instructions) {
+                } => match statement_static_truth(left, bindings, aggregate_bindings, instructions)
+                {
                     Some(true) => Some(true),
-                    Some(false) => statement_static_truth(right, bindings, instructions),
+                    Some(false) => {
+                        statement_static_truth(right, bindings, aggregate_bindings, instructions)
+                    }
                     None => None,
                 },
+                lucid_syntax::Expr::Binary {
+                    left,
+                    op: op @ (lucid_syntax::BinaryOp::In | lucid_syntax::BinaryOp::NotIn),
+                    right,
+                    ..
+                } => {
+                    let needle = constant_string(left, aggregate_bindings)?;
+                    let haystack = constant_string(right, aggregate_bindings)?;
+                    let contains = haystack.contains(needle);
+                    match op {
+                        lucid_syntax::BinaryOp::In => Some(contains),
+                        lucid_syntax::BinaryOp::NotIn => Some(!contains),
+                        _ => unreachable!(),
+                    }
+                }
+                lucid_syntax::Expr::Binary {
+                    left, op, right, ..
+                } if matches!(
+                    op,
+                    lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::Lt
+                        | lucid_syntax::BinaryOp::LtEq
+                        | lucid_syntax::BinaryOp::Gt
+                        | lucid_syntax::BinaryOp::GtEq
+                ) && constant_string(left, aggregate_bindings).is_some()
+                    && constant_string(right, aggregate_bindings).is_some() =>
+                {
+                    let left = constant_string(left, aggregate_bindings)?;
+                    let right = constant_string(right, aggregate_bindings)?;
+                    match op {
+                        lucid_syntax::BinaryOp::Eq => Some(left == right),
+                        lucid_syntax::BinaryOp::NotEq => Some(left != right),
+                        lucid_syntax::BinaryOp::Lt => Some(left < right),
+                        lucid_syntax::BinaryOp::LtEq => Some(left <= right),
+                        lucid_syntax::BinaryOp::Gt => Some(left > right),
+                        lucid_syntax::BinaryOp::GtEq => Some(left >= right),
+                        _ => unreachable!(),
+                    }
+                }
                 _ => constant_truth(expr),
             }
         }
@@ -9900,7 +9954,12 @@ impl Function {
                         );
                     }
                     for (condition, branch) in elif_branches {
-                        match statement_static_truth(condition, bindings, instructions) {
+                        match statement_static_truth(
+                            condition,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                        ) {
                             Some(true) => {
                                 return visit_all(
                                     branch,
@@ -9940,8 +9999,9 @@ impl Function {
                     else_branch,
                     ..
                 } => {
-                    let truth = !statement_static_truth(expr, bindings, instructions)
-                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let truth =
+                        !statement_static_truth(expr, bindings, aggregate_bindings, instructions)
+                            .ok_or(LowerError::UnsupportedExpression)?;
                     if truth {
                         return visit_all(
                             then_branch,
@@ -9953,7 +10013,12 @@ impl Function {
                         );
                     }
                     for (condition, branch) in elif_branches {
-                        match statement_static_truth(condition, bindings, instructions) {
+                        match statement_static_truth(
+                            condition,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                        ) {
                             Some(true) => {
                                 return visit_all(
                                     branch,
@@ -9991,7 +10056,12 @@ impl Function {
                     elif_branches,
                     else_branch,
                     ..
-                } => match statement_static_truth(condition, bindings, instructions) {
+                } => match statement_static_truth(
+                    condition,
+                    bindings,
+                    aggregate_bindings,
+                    instructions,
+                ) {
                     Some(true) => visit_all(
                         then_branch,
                         bindings,
@@ -10002,7 +10072,12 @@ impl Function {
                     ),
                     Some(false) => {
                         for (condition, branch) in elif_branches {
-                            match statement_static_truth(condition, bindings, instructions) {
+                            match statement_static_truth(
+                                condition,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                            ) {
                                 Some(true) => {
                                     return visit_all(
                                         branch,
@@ -10038,7 +10113,12 @@ impl Function {
                     elif_branches,
                     else_branch,
                     ..
-                } => match statement_static_truth(condition, bindings, instructions) {
+                } => match statement_static_truth(
+                    condition,
+                    bindings,
+                    aggregate_bindings,
+                    instructions,
+                ) {
                     Some(true) => visit_all(
                         then_branch,
                         bindings,
@@ -10049,7 +10129,12 @@ impl Function {
                     ),
                     Some(false) => {
                         for (condition, branch) in elif_branches {
-                            match statement_static_truth(condition, bindings, instructions) {
+                            match statement_static_truth(
+                                condition,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                            ) {
                                 Some(true) => {
                                     return visit_all(
                                         branch,
@@ -10086,8 +10171,13 @@ impl Function {
                     else_branch,
                     ..
                 } => {
-                    let truth = statement_static_truth(condition, bindings, instructions)
-                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let truth = statement_static_truth(
+                        condition,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                    )
+                    .ok_or(LowerError::UnsupportedExpression)?;
                     if truth {
                         return visit_all(
                             then_branch,
@@ -10099,7 +10189,12 @@ impl Function {
                         );
                     }
                     for (condition, branch) in elif_branches {
-                        match statement_static_truth(condition, bindings, instructions) {
+                        match statement_static_truth(
+                            condition,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                        ) {
                             Some(true) => {
                                 return visit_all(
                                     branch,
@@ -10132,7 +10227,9 @@ impl Function {
                     // removed before single-block lowering. Statically true
                     // or dynamic loops need back-edges and remain outside
                     // this linear subset.
-                    if statement_static_truth(condition, bindings, instructions) == Some(false) {
+                    if statement_static_truth(condition, bindings, aggregate_bindings, instructions)
+                        == Some(false)
+                    {
                         Ok(())
                     } else {
                         Err(LowerError::UnsupportedExpression)
@@ -10430,7 +10527,12 @@ impl Function {
                 | lucid_syntax::Stmt::Continue(_)
                 | lucid_syntax::Stmt::With { .. } => Err(LowerError::UnsupportedExpression),
                 lucid_syntax::Stmt::Assert { condition, .. } => {
-                    match statement_static_truth(condition, bindings, instructions) {
+                    match statement_static_truth(
+                        condition,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                    ) {
                         Some(true) => Ok(()),
                         _ => Err(LowerError::UnsupportedExpression),
                     }
@@ -10455,18 +10557,21 @@ impl Function {
         fn statement_static_noop(
             statement: &lucid_syntax::Stmt,
             bindings: &HashMap<String, ValueId>,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
             instructions: &[Instruction],
         ) -> bool {
             matches!(statement, lucid_syntax::Stmt::Pass(_))
                 || matches!(
                     statement,
                     lucid_syntax::Stmt::Assert { condition, .. }
-                        if statement_static_truth(condition, bindings, instructions) == Some(true)
+                        if statement_static_truth(condition, bindings, aggregate_bindings, instructions)
+                            == Some(true)
                 )
                 || matches!(
                     statement,
                     lucid_syntax::Stmt::While { condition, .. }
-                        if statement_static_truth(condition, bindings, instructions) == Some(false)
+                        if statement_static_truth(condition, bindings, aggregate_bindings, instructions)
+                            == Some(false)
                 )
                 || matches!(
                     statement,
@@ -10526,7 +10631,12 @@ impl Function {
             let mut then_last = fallthrough_value;
             let mut then_produced_value = false;
             for statement in then_branch {
-                if statement_static_noop(statement, state.bindings, state.instructions) {
+                if statement_static_noop(
+                    statement,
+                    state.bindings,
+                    state.aggregate_bindings,
+                    state.instructions,
+                ) {
                     continue;
                 }
                 if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
@@ -10551,7 +10661,12 @@ impl Function {
             let mut else_produced_value = false;
             if let Some(else_branch) = else_branch {
                 for statement in else_branch {
-                    if statement_static_noop(statement, state.bindings, state.instructions) {
+                    if statement_static_noop(
+                        statement,
+                        state.bindings,
+                        state.aggregate_bindings,
+                        state.instructions,
+                    ) {
                         continue;
                     }
                     if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
@@ -10678,7 +10793,12 @@ impl Function {
                 let mut branch_last = fallthrough_value;
                 let mut produced_value = false;
                 for statement in branch {
-                    if statement_static_noop(statement, base_bindings, base_instructions) {
+                    if statement_static_noop(
+                        statement,
+                        base_bindings,
+                        base_aggregate_bindings,
+                        base_instructions,
+                    ) {
                         continue;
                     }
                     if matches!(statement, lucid_syntax::Stmt::Return { value: None, .. })
@@ -10926,14 +11046,41 @@ impl Function {
             else {
                 continue;
             };
-            if constant_truth(condition).is_some() {
+            let prefix = &module.statements[..index];
+            let mut probe_bindings = bindings.clone();
+            let mut probe_aggregate_bindings = aggregate_bindings.clone();
+            let mut probe_instructions = instructions.clone();
+            let mut probe_next = next;
+            let mut probe_last = None;
+            for statement in prefix {
+                visit(
+                    statement,
+                    &mut probe_bindings,
+                    &mut probe_aggregate_bindings,
+                    &mut probe_instructions,
+                    &mut probe_next,
+                    &mut probe_last,
+                )?;
+            }
+            if statement_static_truth(
+                condition,
+                &probe_bindings,
+                &probe_aggregate_bindings,
+                &probe_instructions,
+            )
+            .is_some()
+            {
                 continue;
             }
-            let prefix = &module.statements[..index];
             let mut dynamic_elifs = Vec::new();
             let mut selected_static_else = else_branch.as_deref();
             for (elif_condition, elif_branch) in elif_branches {
-                match constant_truth(elif_condition) {
+                match statement_static_truth(
+                    elif_condition,
+                    &probe_bindings,
+                    &probe_aggregate_bindings,
+                    &probe_instructions,
+                ) {
                     Some(false) => continue,
                     Some(true) => {
                         selected_static_else = Some(elif_branch.as_slice());
@@ -10960,21 +11107,6 @@ impl Function {
                     },
                 );
             }
-            let mut probe_bindings = bindings.clone();
-            let mut probe_aggregate_bindings = aggregate_bindings.clone();
-            let mut probe_instructions = instructions.clone();
-            let mut probe_next = next;
-            let mut probe_last = None;
-            for statement in prefix {
-                visit(
-                    statement,
-                    &mut probe_bindings,
-                    &mut probe_aggregate_bindings,
-                    &mut probe_instructions,
-                    &mut probe_next,
-                    &mut probe_last,
-                )?;
-            }
             let selected_else = if elif_branches.is_empty() {
                 Some(else_branch.as_deref())
             } else {
@@ -10984,6 +11116,7 @@ impl Function {
                     match statement_static_truth(
                         elif_condition,
                         &probe_bindings,
+                        &probe_aggregate_bindings,
                         &probe_instructions,
                     ) {
                         Some(true) => {
@@ -11055,6 +11188,7 @@ impl Function {
                     match statement_static_truth(
                         elif_condition,
                         &probe_bindings,
+                        &probe_aggregate_bindings,
                         &probe_instructions,
                     ) {
                         Some(false) => continue,
@@ -11092,6 +11226,7 @@ impl Function {
                         match statement_static_truth(
                             elif_condition,
                             &probe_bindings,
+                            &probe_aggregate_bindings,
                             &probe_instructions,
                         ) {
                             Some(true) => {
@@ -20038,6 +20173,14 @@ return total
             (
                 "text = \"lucid\"\nreturn len(text) if bool(text) else 1 // 0\n",
                 5,
+            ),
+            (
+                "text = \"lucid\"\nif \"u\" in text:\n    return 1\nelse:\n    return 0\n",
+                1,
+            ),
+            (
+                "text = \"lucid\"\nif \"z\" in text:\n    return 0\nelse:\n    return 1\n",
+                1,
             ),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
