@@ -9285,6 +9285,34 @@ mod tests {
     }
 
     #[test]
+    fn typed_module_preserves_two_token_comparison_detail_and_span() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "comparisons.lucid",
+            "left: int = 1\nright: int = 2\nitems = [1, 2]\nidentity_check = left is not right\nmembership_check = left not in items\n",
+        );
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        let identity = typed
+            .expressions
+            .iter()
+            .find(|node| node.kind == "binary" && node.detail.as_deref() == Some("IsNot"))
+            .expect("typed HIR should preserve the is-not operator");
+        assert_eq!(
+            span_text(&db, file, identity.span).as_ref(),
+            "left is not right"
+        );
+        let membership = typed
+            .expressions
+            .iter()
+            .find(|node| node.kind == "binary" && node.detail.as_deref() == Some("NotIn"))
+            .expect("typed HIR should preserve the not-in operator");
+        assert_eq!(
+            span_text(&db, file, membership.span).as_ref(),
+            "left not in items"
+        );
+    }
+
+    #[test]
     fn typed_module_exposes_interned_function_signature() {
         let mut db = CompilerDatabase::default();
         let file = db.add_file(

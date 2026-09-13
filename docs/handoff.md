@@ -2317,6 +2317,9 @@ gaps are architectural rather than isolated syntax features:
    offset, and span extraction agree.
    Malformed reversed spans now safely produce an empty slice rather than
    panicking.
+   Typed-HIR coverage also verifies that two-token comparison operators keep
+   their operator detail and full expression span across the parser/HIR
+   boundary.
 2. Module loading, project manifests, visibility, symbol identity, and
    initialization ordering now have deterministic database/configuration
    foundations; the execution and packaging workflows are not yet fully
