@@ -5967,89 +5967,162 @@ impl Function {
             parameter_names: &[String],
             next_value: &mut u32,
         ) -> Option<(Vec<Instruction>, ValueId)> {
-            let lucid_syntax::Expr::Binary {
-                op, left, right, ..
-            } = expr
-            else {
-                return None;
-            };
-            let left_value = if matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
-            {
-                ValueId(3)
-            } else {
-                let value = ValueId(*next_value);
-                *next_value = next_value.checked_add(1)?;
-                value
-            };
-            let right_value = if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
-            {
-                ValueId(3)
-            } else {
-                let value = ValueId(*next_value);
-                *next_value = next_value.checked_add(1)?;
-                value
-            };
-            let condition_value = ValueId(*next_value);
-            *next_value = next_value.checked_add(1)?;
-            let mut instructions = Vec::new();
-            if left_value != ValueId(3) {
-                instructions.extend(operand(
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bool(value),
+                    ..
+                } => {
+                    let condition_value = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1)?;
+                    Some((
+                        vec![Instruction::ConstBool {
+                            result: condition_value,
+                            value: *value,
+                        }],
+                        condition_value,
+                    ))
+                }
+                lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Not,
+                    expr,
+                    ..
+                } => {
+                    let (mut instructions, operand_value) = loop_condition(
+                        expr,
+                        index_name,
+                        bound_aliases,
+                        parameter_names,
+                        next_value,
+                    )?;
+                    let condition_value = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1)?;
+                    instructions.push(Instruction::Not {
+                        result: condition_value,
+                        operand: operand_value,
+                    });
+                    Some((instructions, condition_value))
+                }
+                lucid_syntax::Expr::Binary {
+                    op: logical_op @ (lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or),
                     left,
-                    left_value,
-                    bound_aliases,
-                    parameter_names,
-                    0,
-                    next_value,
-                )?);
-            }
-            if right_value != ValueId(3) {
-                instructions.extend(operand(
                     right,
-                    right_value,
-                    bound_aliases,
-                    parameter_names,
-                    0,
-                    next_value,
-                )?);
+                    ..
+                } => {
+                    let (mut instructions, left_value) = loop_condition(
+                        left,
+                        index_name,
+                        bound_aliases,
+                        parameter_names,
+                        next_value,
+                    )?;
+                    let (right_instructions, right_value) = loop_condition(
+                        right,
+                        index_name,
+                        bound_aliases,
+                        parameter_names,
+                        next_value,
+                    )?;
+                    instructions.extend(right_instructions);
+                    let condition_value = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1)?;
+                    instructions.push(match logical_op {
+                        lucid_syntax::BinaryOp::And => Instruction::And {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::Or => Instruction::Or {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        _ => return None,
+                    });
+                    Some((instructions, condition_value))
+                }
+                lucid_syntax::Expr::Binary {
+                    op, left, right, ..
+                } => {
+                    let left_value = if matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
+                    {
+                        ValueId(3)
+                    } else {
+                        let value = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        value
+                    };
+                    let right_value = if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == index_name)
+                    {
+                        ValueId(3)
+                    } else {
+                        let value = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        value
+                    };
+                    let condition_value = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1)?;
+                    let mut instructions = Vec::new();
+                    if left_value != ValueId(3) {
+                        instructions.extend(operand(
+                            left,
+                            left_value,
+                            bound_aliases,
+                            parameter_names,
+                            0,
+                            next_value,
+                        )?);
+                    }
+                    if right_value != ValueId(3) {
+                        instructions.extend(operand(
+                            right,
+                            right_value,
+                            bound_aliases,
+                            parameter_names,
+                            0,
+                            next_value,
+                        )?);
+                    }
+                    instructions.push(match op {
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        _ => return None,
+                    });
+                    Some((instructions, condition_value))
+                }
+                _ => None,
             }
-            instructions.push(match op {
-                lucid_syntax::BinaryOp::Eq
-                | lucid_syntax::BinaryOp::Identity
-                | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
-                    result: condition_value,
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::NotEq
-                | lucid_syntax::BinaryOp::NotIdentity
-                | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
-                    result: condition_value,
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
-                    result: condition_value,
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
-                    result: condition_value,
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
-                    result: condition_value,
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
-                    result: condition_value,
-                    left: left_value,
-                    right: right_value,
-                },
-                _ => return None,
-            });
-            Some((instructions, condition_value))
         }
         #[derive(Clone)]
         enum RangeAccumulatorOperand {
@@ -13874,6 +13947,22 @@ return total
         )
         .expect("range conditional elif accumulation should lower");
         assert_eq!(function.execute_with_args(&[5, 3, 1]), Ok(Some(5)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(limit):
+    if i > low and i < high:
+        total += i
+return total
+"#,
+        )
+        .expect("range boolean-guard accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["limit".into(), "low".into(), "high".into()],
+        )
+        .expect("range boolean-guard accumulation should lower");
+        assert_eq!(function.execute_with_args(&[6, 1, 5]), Ok(Some(9)));
 
         let module = lucid_syntax::parse(
             r#"seeded = seed

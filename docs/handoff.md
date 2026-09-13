@@ -2138,6 +2138,8 @@ diverged:
   A single `elif` accumulator update is supported as well; the loop CFG lowers
   the first condition, the `elif` condition, all selected update blocks, and a
   merge Phi before the induction step.
+  Guard conditions in this counted range path now lower boolean `and`, `or`,
+  and `not` expressions recursively on top of the existing comparison lowering.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
