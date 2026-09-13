@@ -1382,6 +1382,77 @@ impl Function {
                     }
                 }
             } else {
+                if node.kind == "binary"
+                    && matches!(node.detail.as_deref(), Some("In" | "NotIn"))
+                    && node.children.len() == 2
+                {
+                    let aggregate = nodes
+                        .get(node.children[1] as usize)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let members = match aggregate.kind.as_str() {
+                        "list" | "set" => aggregate.children.clone(),
+                        "dict" => aggregate.children.iter().copied().step_by(2).collect(),
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    };
+                    if members.is_empty() {
+                        instructions.push(Instruction::ConstBool {
+                            result,
+                            value: node.detail.as_deref() == Some("NotIn"),
+                        });
+                        lowered.insert(id, result);
+                        return Ok(result);
+                    }
+                    let left = lower(
+                        node.children[0],
+                        nodes,
+                        lowered,
+                        instructions,
+                        next,
+                        parameter_names,
+                        local_bindings,
+                    )?;
+                    let mut comparisons = Vec::with_capacity(members.len());
+                    for member in members {
+                        let right = lower(
+                            member,
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let comparison = ValueId(*next);
+                        *next += 1;
+                        instructions.push(Instruction::CmpEq {
+                            result: comparison,
+                            left,
+                            right,
+                        });
+                        comparisons.push(comparison);
+                    }
+                    let mut contains = comparisons[0];
+                    for comparison in comparisons.into_iter().skip(1) {
+                        let combined = ValueId(*next);
+                        *next += 1;
+                        instructions.push(Instruction::Or {
+                            result: combined,
+                            left: contains,
+                            right: comparison,
+                        });
+                        contains = combined;
+                    }
+                    result = contains;
+                    if node.detail.as_deref() == Some("NotIn") {
+                        result = provisional_result;
+                        instructions.push(Instruction::Not {
+                            result,
+                            operand: contains,
+                        });
+                    }
+                    lowered.insert(id, result);
+                    return Ok(result);
+                }
                 let values = node
                     .children
                     .iter()
@@ -24404,6 +24475,187 @@ return total
         assert_eq!(function.blocks.len(), 4);
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+    }
+
+    #[test]
+    fn lowers_typed_membership_in_constant_aggregates() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "list".into(),
+                detail: None,
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![0, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "binary".into(),
+                detail: Some("NotIn".into()),
+                children: vec![0, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &["value".into()])
+            .expect("typed list membership should lower");
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(0)));
+        let function = Function::from_typed_function_body(&nodes, 5, &["value".into()])
+            .expect("typed list negative membership should lower");
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(1)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("flag".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(false)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(true)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "set".into(),
+                detail: None,
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![0, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &["flag".into()])
+            .expect("typed set membership should lower");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(0)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("key".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![1, 2, 3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![0, 5],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 6, &["key".into()])
+            .expect("typed dict membership should lower against keys");
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[10]), Ok(Some(0)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "list".into(),
+                detail: None,
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("NotIn".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 2, &["value".into()])
+            .expect("typed empty-list negative membership should lower");
+        assert_eq!(function.execute_with_args(&[42]), Ok(Some(1)));
     }
 
     #[test]

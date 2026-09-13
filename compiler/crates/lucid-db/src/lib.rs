@@ -10073,6 +10073,35 @@ mod tests {
     }
 
     #[test]
+    fn database_lowers_typed_membership_in_constant_aggregates() {
+        let mut db = CompilerDatabase::default();
+        for (source, present, missing) in [
+            (
+                "def answer(value: int):\n    return value in [1, 2, 3]\n",
+                2,
+                4,
+            ),
+            (
+                "def answer(value: int):\n    return value not in {1, 2, 3}\n",
+                4,
+                2,
+            ),
+            (
+                "def answer(value: int):\n    return value in {1: 10, 2: 20}\n",
+                2,
+                10,
+            ),
+        ] {
+            let file = db.add_file("typed-membership.lucid", source);
+            let function = lower_function_body(&db, file, "answer".into())
+                .as_ref()
+                .expect("typed aggregate membership should lower");
+            assert_eq!(function.execute_with_args(&[present]), Ok(Some(1)));
+            assert_eq!(function.execute_with_args(&[missing]), Ok(Some(0)));
+        }
+    }
+
+    #[test]
     fn database_lowers_primitive_function_body_from_typed_hir() {
         let mut db = CompilerDatabase::default();
         let file = db.add_file("main.lucid", "def answer():\n    return 6 * 7\n");
