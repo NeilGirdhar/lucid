@@ -2444,7 +2444,7 @@ impl TypeChecker {
                 1,
                 Some(2),
                 vec![any.clone(), any.clone()],
-                any.clone(),
+                Type::TypeVar("SumType".into()),
             ),
             (
                 "sorted",
@@ -10818,6 +10818,19 @@ impl TypeChecker {
                                         // pow(int, int) -> int, pow(float, float) -> float, etc.
                                         Some(argument_type)
                                     }
+                                    "sum" => {
+                                        // sum(iterable, start) returns the type of start
+                                        // sum(iterable) infers from element type
+                                        if let Some(start_arg) = args.get(1).filter(|arg| {
+                                            !arg.is_spread && !arg.is_dict_spread && !arg.is_gather_spread
+                                        }) {
+                                            self.type_of_expr(&start_arg.value).ok()
+                                        } else if self.is_iterable_type(&argument_type) {
+                                            Some(self.iterable_element_type(&argument_type))
+                                        } else {
+                                            None
+                                        }
+                                    }
                                     "fields" => {
                                         // fields(obj: instance) returns list[(name: str, value: object, doc: str | none, metadata: dict[str, object])]
                                         // fields(cls: class) returns list[(name: str, doc: str | none, metadata: dict[str, object])]
@@ -10895,14 +10908,6 @@ impl TypeChecker {
                                             }),
                                         }
                                     }
-                                    "sum" => match argument_type {
-                                        Type::Class { type_args, .. } => type_args.first().map(|ty| match ty {
-                                            Type::Float => Type::Float,
-                                            _ => Type::Int,
-                                        }),
-                                        Type::Shape(_) => Some(Type::Int),
-                                        _ => None,
-                                    },
                                     "min" | "max" if args.len() == 1 => {
                                         Some(self.iterable_element_type(&argument_type))
                                     }
@@ -18519,6 +18524,36 @@ result: int = pow(x, y)
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_err(), "pow(float, int) returns float, not int");
+    }
+
+    #[test]
+    fn sum_with_start_returns_start_type() {
+        let code = r#"numbers: list[int] = [1, 2, 3]
+total = sum(numbers, 0)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "sum with start should type-check: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn sum_without_start_infers_element_type() {
+        let code = r#"numbers: list[float] = [1.0, 2.0, 3.0]
+total = sum(numbers)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "sum without start should infer element type: {:?}",
+            result
+        );
     }
 
     #[test]
