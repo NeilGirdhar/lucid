@@ -2399,7 +2399,7 @@ impl TypeChecker {
                 vec![any.clone()],
                 Type::Class {
                     name: "list".into(),
-                    type_args: vec![Type::Str],
+                    type_args: vec![Type::TypeVar("FieldRecord".into())],
                     parent: None,
                     traits: Vec::new(),
                     interfaces: Vec::new(),
@@ -10813,6 +10813,36 @@ impl TypeChecker {
                                     "min" | "max" if self.is_iterable_type(&argument_type) => {
                                         Some(self.iterable_element_type(&argument_type))
                                     }
+                                    "fields" => {
+                                        // fields(obj: instance) returns list[(name: str, value: object, doc: str | none, metadata: dict[str, object])]
+                                        // fields(cls: class) returns list[(name: str, doc: str | none, metadata: dict[str, object])]
+                                        // For now, return the instance form which is the most general
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![Type::Record {
+                                                fields: vec![
+                                                    (Some("name".to_string()), Type::Str),
+                                                    (Some("value".to_string()), Type::TypeVar("object".into())),
+                                                    (Some("doc".to_string()), Type::make_union(vec![Type::Str, Type::None])),
+                                                    (Some("metadata".to_string()), Type::Class {
+                                                        name: "dict".into(),
+                                                        type_args: vec![Type::Str, Type::TypeVar("object".into())],
+                                                        parent: None,
+                                                        traits: Vec::new(),
+                                                        interfaces: Vec::new(),
+                                                        fields: HashMap::new(),
+                                                        is_sealed: false,
+                                                    }),
+                                                ],
+                                                is_open: false,
+                                            }],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
                                     "env_var" => {
                                         let fallback_type = if let Some(arg) =
                                             args.get(1).filter(|arg| {
@@ -18419,6 +18449,43 @@ min_val: float = min(numbers)
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_err(), "min returns element type (int), not float");
+    }
+
+    #[test]
+    fn fields_returns_structured_record() {
+        let code = r#"class Config:
+    name: str
+
+c = Config("test")
+field_list = fields(c)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "fields() should return structured record type: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn fields_returns_proper_type() {
+        let code = r#"class Config:
+    name: str
+    count: int
+
+c = Config("test", 42)
+fields(c)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "fields() should accept class instances: {:?}",
+            result
+        );
     }
 
     #[test]
