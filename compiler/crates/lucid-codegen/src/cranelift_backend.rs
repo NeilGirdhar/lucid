@@ -1931,6 +1931,48 @@ fn compile_integer_function_impl(
                     }
                     builder.ins().ineg(value)
                 }
+                Instruction::Abs { operand, .. } => {
+                    let value = load(&mut builder, &values, *operand)?;
+                    let minimum = builder.ins().iconst(types::I64, i64::MIN);
+                    let overflow = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::Equal,
+                        value,
+                        minimum,
+                    );
+                    if result_abi {
+                        let code = builder.ins().iconst(
+                            types::I32,
+                            lucid_abi::NativeErrorCode::ArithmeticOverflow.as_raw() as i64,
+                        );
+                        let zero = builder.ins().iconst(types::I32, 0);
+                        let current_error = builder.ins().select(overflow, code, zero);
+                        block_error = Some(match block_error {
+                            Some(previous) => {
+                                let previous_failed = builder.ins().icmp(
+                                    cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+                                    previous,
+                                    zero,
+                                );
+                                builder
+                                    .ins()
+                                    .select(previous_failed, previous, current_error)
+                            }
+                            None => current_error,
+                        });
+                    } else {
+                        builder
+                            .ins()
+                            .trapnz(overflow, cranelift_codegen::ir::TrapCode::INTEGER_OVERFLOW);
+                    }
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let negative = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
+                        value,
+                        zero,
+                    );
+                    let negated = builder.ins().ineg(value);
+                    builder.ins().select(negative, negated, value)
+                }
                 Instruction::BitNot { operand, .. } => unary!(bnot, operand),
                 Instruction::CmpEq { left, right, .. } => {
                     compare!(cranelift_codegen::ir::condcodes::IntCC::Equal, left, right)
@@ -2020,6 +2062,9 @@ fn compile_integer_function_impl(
                 Instruction::Neg { operand, .. } => constant_values
                     .get(operand)
                     .and_then(|value| value.checked_neg()),
+                Instruction::Abs { operand, .. } => constant_values
+                    .get(operand)
+                    .and_then(|value| value.checked_abs()),
                 Instruction::Pow { left, right, .. } => constant_values
                     .get(left)
                     .zip(constant_values.get(right))
@@ -2190,6 +2235,7 @@ fn instruction_result(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::Or { result, .. }
         | Instruction::Not { result, .. }
         | Instruction::Neg { result, .. }
+        | Instruction::Abs { result, .. }
         | Instruction::BitNot { result, .. }
         | Instruction::CmpEq { result, .. }
         | Instruction::CmpNe { result, .. }
@@ -4390,6 +4436,41 @@ return total
         .expect("overflowing division should use the recoverable ABI");
         assert_eq!(
             unsafe { overflow.call_result() }.error,
+            crate::native_abi::NativeErrorCode::ArithmeticOverflow
+        );
+    }
+
+    #[test]
+    fn result_abi_returns_value_and_recoverable_abs_error() {
+        let function = Function {
+            entry: lucid_cir::BlockId(0),
+            blocks: vec![lucid_cir::Block {
+                id: lucid_cir::BlockId(0),
+                instructions: vec![
+                    Instruction::Param {
+                        result: ValueId(0),
+                        index: 0,
+                    },
+                    Instruction::Abs {
+                        result: ValueId(1),
+                        operand: ValueId(0),
+                    },
+                ],
+                terminator: Terminator::Return(Some(ValueId(1))),
+            }],
+        };
+        let compiled =
+            compile_integer_result_function(&function).expect("abs should use the result ABI");
+        assert_eq!(
+            unsafe { compiled.call_result_with_args(&[-42]) },
+            crate::native_abi::NativeResult::ok(42)
+        );
+        assert_eq!(
+            unsafe { compiled.call_result_with_args(&[42]) },
+            crate::native_abi::NativeResult::ok(42)
+        );
+        assert_eq!(
+            unsafe { compiled.call_result_with_args(&[i64::MIN]) }.error,
             crate::native_abi::NativeErrorCode::ArithmeticOverflow
         );
     }

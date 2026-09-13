@@ -118,6 +118,10 @@ pub enum Instruction {
         result: ValueId,
         operand: ValueId,
     },
+    Abs {
+        result: ValueId,
+        operand: ValueId,
+    },
     BitNot {
         result: ValueId,
         operand: ValueId,
@@ -386,6 +390,7 @@ impl Function {
                         | Instruction::Mul { .. }
                         | Instruction::Pow { .. }
                         | Instruction::Neg { .. }
+                        | Instruction::Abs { .. }
                         | Instruction::Shl { .. }
                         | Instruction::Shr { .. }
                         | Instruction::Div { .. }
@@ -832,6 +837,21 @@ impl Function {
                     );
                 }
                 if node.id == roots[0] && node.kind == "binary" && node.children.len() == 2 {
+                    let abs_children = node
+                        .children
+                        .iter()
+                        .filter(|child| {
+                            let Some(call) = nodes.get(**child as usize) else {
+                                return false;
+                            };
+                            if call.kind != "call" || call.children.len() != 2 {
+                                return false;
+                            }
+                            nodes.get(call.children[0] as usize).is_some_and(|callee| {
+                                callee.kind == "name" && callee.detail.as_deref() == Some("abs")
+                            })
+                        })
+                        .count();
                     let abs_child = node.children.iter().enumerate().find_map(|(index, child)| {
                         let call = nodes.get(*child as usize)?;
                         if call.kind != "call" || call.children.len() != 2 {
@@ -841,7 +861,10 @@ impl Function {
                         (callee.kind == "name" && callee.detail.as_deref() == Some("abs"))
                             .then_some((index, *child, call.children[1]))
                     });
-                    if let Some((abs_index, _abs_id, operand_id)) = abs_child {
+                    if abs_children == 1 {
+                        let Some((abs_index, _abs_id, operand_id)) = abs_child else {
+                            return Err(LowerError::UnsupportedExpression);
+                        };
                         let other_index = 1 - abs_index;
                         let other_id = node.children[other_index];
                         let mut expanded = nodes.to_vec();
@@ -1185,6 +1208,10 @@ impl Function {
                                 result: value(*result),
                                 operand: value(*operand),
                             },
+                            Instruction::Abs { result, operand } => Instruction::Abs {
+                                result: value(*result),
+                                operand: value(*operand),
+                            },
                             Instruction::BitNot { result, operand } => Instruction::BitNot {
                                 result: value(*result),
                                 operand: value(*operand),
@@ -1250,6 +1277,7 @@ impl Function {
                             | Instruction::CmpGe { result, .. }
                             | Instruction::CmpLt { result, .. }
                             | Instruction::Neg { result, .. }
+                            | Instruction::Abs { result, .. }
                             | Instruction::BitNot { result, .. }
                             | Instruction::Not { result, .. }
                             | Instruction::And { result, .. }
@@ -3160,15 +3188,6 @@ impl Function {
                         && callee.detail.as_deref() == Some("abs")
                         && node.children.len() == 2
                     {
-                        let operand_id = node.children[1];
-                        let operand_value = typed_constant_order(
-                            operand_id,
-                            id,
-                            nodes,
-                            parameter_names,
-                            local_bindings,
-                        )
-                        .ok_or(LowerError::UnsupportedExpression)?;
                         let operand = lower(
                             node.children[1],
                             nodes,
@@ -3178,12 +3197,8 @@ impl Function {
                             parameter_names,
                             local_bindings,
                         )?;
-                        if operand_value < 0 {
-                            result = provisional_result;
-                            instructions.push(Instruction::Neg { result, operand });
-                        } else {
-                            result = operand;
-                        }
+                        result = provisional_result;
+                        instructions.push(Instruction::Abs { result, operand });
                         lowered.insert(id, result);
                         return Ok(result);
                     }
@@ -3753,6 +3768,7 @@ impl Function {
                 | Instruction::CmpGe { result, .. }
                 | Instruction::CmpLt { result, .. }
                 | Instruction::Neg { result, .. }
+                | Instruction::Abs { result, .. }
                 | Instruction::BitNot { result, .. }
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
@@ -3945,6 +3961,10 @@ impl Function {
                     right: value(*right),
                 },
                 Instruction::Neg { result, operand } => Instruction::Neg {
+                    result: value(*result),
+                    operand: value(*operand),
+                },
+                Instruction::Abs { result, operand } => Instruction::Abs {
                     result: value(*result),
                     operand: value(*operand),
                 },
@@ -4187,6 +4207,7 @@ impl Function {
                 | Instruction::CmpGe { result, .. }
                 | Instruction::CmpLt { result, .. }
                 | Instruction::Neg { result, .. }
+                | Instruction::Abs { result, .. }
                 | Instruction::BitNot { result, .. }
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
@@ -4379,6 +4400,10 @@ impl Function {
                     right: value(*right),
                 },
                 Instruction::Neg { result, operand } => Instruction::Neg {
+                    result: value(*result),
+                    operand: value(*operand),
+                },
+                Instruction::Abs { result, operand } => Instruction::Abs {
                     result: value(*result),
                     operand: value(*operand),
                 },
@@ -4884,6 +4909,10 @@ impl Function {
                     result: value(*result),
                     operand: value(*operand),
                 },
+                Instruction::Abs { result, operand } => Instruction::Abs {
+                    result: value(*result),
+                    operand: value(*operand),
+                },
                 Instruction::BitNot { result, operand } => Instruction::BitNot {
                     result: value(*result),
                     operand: value(*operand),
@@ -4947,6 +4976,7 @@ impl Function {
                 | Instruction::CmpGe { result, .. }
                 | Instruction::CmpLt { result, .. }
                 | Instruction::Neg { result, .. }
+                | Instruction::Abs { result, .. }
                 | Instruction::BitNot { result, .. }
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
@@ -5699,6 +5729,10 @@ impl Function {
                     right: s(*right),
                 },
                 Instruction::Neg { result, operand } => Instruction::Neg {
+                    result: s(*result),
+                    operand: s(*operand),
+                },
+                Instruction::Abs { result, operand } => Instruction::Abs {
                     result: s(*result),
                     operand: s(*operand),
                 },
@@ -14100,6 +14134,7 @@ impl Function {
                 | Instruction::CmpGe { result, .. }
                 | Instruction::CmpLt { result, .. }
                 | Instruction::Neg { result, .. }
+                | Instruction::Abs { result, .. }
                 | Instruction::BitNot { result, .. }
                 | Instruction::Not { result, .. }
                 | Instruction::And { result, .. }
@@ -22761,10 +22796,11 @@ impl Function {
                     | Instruction::CmpGt { result, .. }
                     | Instruction::CmpGe { result, .. }
                     | Instruction::CmpLt { result, .. }
-                    | Instruction::Neg { result, .. } => result,
-                    Instruction::BitNot { result, .. } => result,
-                    Instruction::Not { result, .. } => result,
-                    Instruction::And { result, .. }
+                    | Instruction::Neg { result, .. }
+                    | Instruction::Abs { result, .. }
+                    | Instruction::BitNot { result, .. }
+                    | Instruction::Not { result, .. }
+                    | Instruction::And { result, .. }
                     | Instruction::Or { result, .. }
                     | Instruction::CheckNonZero { result, .. }
                     | Instruction::Phi { result, .. } => result,
@@ -22922,6 +22958,7 @@ impl Function {
                         require_operand(block.id, index, *right)?;
                     }
                     Instruction::Neg { operand, .. }
+                    | Instruction::Abs { operand, .. }
                     | Instruction::BitNot { operand, .. }
                     | Instruction::Not { operand, .. }
                     | Instruction::CheckNonZero { operand, .. } => {
@@ -23224,6 +23261,12 @@ impl Function {
                     Instruction::Neg { result, operand } => {
                         let value = values[operand]
                             .checked_neg()
+                            .ok_or(ExecuteError::ArithmeticOverflow)?;
+                        values.insert(*result, value);
+                    }
+                    Instruction::Abs { result, operand } => {
+                        let value = values[operand]
+                            .checked_abs()
                             .ok_or(ExecuteError::ArithmeticOverflow)?;
                         values.insert(*result, value);
                     }
@@ -31064,6 +31107,69 @@ return total
         assert_eq!(function.execute_with_args(&[-10]), Ok(Some(0)));
         assert_eq!(function.execute_with_args(&[9]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[10]), Ok(Some(0)));
+    }
+
+    #[test]
+    fn lowers_multiple_nested_dynamic_abs_calls() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("abs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("left".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("right".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![2, 4],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body(&nodes, 5, &["left".into(), "right".into()])
+                .expect("multiple nested dynamic abs calls should lower as ordinary CIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[-10, 3]), Ok(Some(13)));
+        assert_eq!(function.execute_with_args(&[-10, -3]), Ok(Some(13)));
+        assert_eq!(function.execute_with_args(&[10, 3]), Ok(Some(13)));
+        assert_eq!(
+            function.execute_with_args(&[i64::MIN, 3]),
+            Err(ExecuteError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            function.execute_with_args(&[3, i64::MIN]),
+            Err(ExecuteError::ArithmeticOverflow)
+        );
     }
 
     #[test]
