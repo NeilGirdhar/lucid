@@ -766,7 +766,13 @@ fn collect_typed_body<'db>(
             } => {
                 collect_typed_exprs(db, checker, value, nodes)?;
             }
-            Stmt::Assignment { target, value, .. } | Stmt::AugAssign { target, value, .. } => {
+            Stmt::Assignment { target, value, .. } => {
+                if !matches!(target, lucid_syntax::Expr::Ident { .. }) {
+                    collect_typed_exprs(db, checker, target, nodes)?;
+                }
+                collect_typed_exprs(db, checker, value, nodes)?;
+            }
+            Stmt::AugAssign { target, value, .. } => {
                 collect_typed_exprs(db, checker, target, nodes)?;
                 collect_typed_exprs(db, checker, value, nodes)?;
             }
@@ -9598,6 +9604,32 @@ mod tests {
                 .iter()
                 .any(|node| node.detail.as_deref() == Some("value")
                     && node.type_name.contains("class(Child;"))
+        );
+    }
+
+    #[test]
+    fn typed_module_does_not_collect_plain_assignment_target_as_read() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "assignment-target-read.lucid",
+            "def answer():\n    value = 41\n    value = value + 1\n    return value\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid assignment body should collect typed HIR");
+        let function = typed
+            .functions
+            .iter()
+            .find(|function| function.symbol.name(&db) == "answer")
+            .expect("answer should be in typed module");
+        let value_reads = function
+            .body_expressions
+            .iter()
+            .filter(|node| node.detail.as_deref() == Some("value"))
+            .count();
+        assert_eq!(
+            value_reads, 2,
+            "only the augmented RHS and return should read the local binding"
         );
     }
 
