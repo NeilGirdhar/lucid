@@ -8695,7 +8695,10 @@ impl TypeChecker {
                                 && lt == rt)
                             || (matches!(op, BinaryOp::Mul)
                                 && matches!(&lt, Type::Class { name, .. } if matches!(name.as_str(), "list" | "Bytes"))
-                                && rt.is_subtype_of(&Type::Int, &self.env));
+                                && rt.is_subtype_of(&Type::Int, &self.env))
+                            || (matches!(op, BinaryOp::Sub)
+                                && matches!(&lt, Type::Class { name, .. } if name == "set")
+                                && matches!(&rt, Type::Class { name, .. } if name == "set"));
                         let returns_right_operand = matches!(op, BinaryOp::Mul)
                             && lt.is_subtype_of(&Type::Int, &self.env)
                             && matches!(&rt, Type::Class { name, .. } if matches!(name.as_str(), "list" | "Bytes"));
@@ -9036,11 +9039,11 @@ impl TypeChecker {
                     | BinaryOp::Shr => {
                         if lt == Type::Int && rt == Type::Int {
                             Ok(Type::Int)
-                        } else if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr)
+                        } else if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
                             && matches!(&lt, Type::Class { name, .. } if name == "set")
                             && matches!(&rt, Type::Class { name, .. } if name == "set")
                         {
-                            // set & set (intersection) and set | set (union)
+                            // set & set (intersection), set | set (union), set ^ set (symmetric difference)
                             Ok(lt)
                         } else {
                             Err(TypeError {
@@ -18831,5 +18834,37 @@ c = a & b
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_err(), "set & int should be rejected");
+    }
+
+    #[test]
+    fn set_difference_preserves_type() {
+        let code = r#"a: set[int] = {1, 2, 3}
+b: set[int] = {2, 3, 4}
+c = a - b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "set - set should work (difference): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn set_symmetric_difference_preserves_type() {
+        let code = r#"a: set[int] = {1, 2, 3}
+b: set[int] = {2, 3, 4}
+c = a ^ b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "set ^ set should work (symmetric difference): {:?}",
+            result
+        );
     }
 }
