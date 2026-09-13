@@ -1386,6 +1386,8 @@ impl Function {
             fn typed_range_values(
                 node: &TypedExprNode,
                 nodes: &[TypedExprNode],
+                parameter_names: &[String],
+                local_bindings: &[(String, u32)],
             ) -> Result<Option<Vec<i64>>, LowerError> {
                 if node.kind != "call" || !(2..=4).contains(&node.children.len()) {
                     return Ok(None);
@@ -1401,8 +1403,14 @@ impl Function {
                     .iter()
                     .skip(1)
                     .map(|child| {
+                        let mut arg_id = *child;
+                        let arg = nodes
+                            .get(arg_id as usize)
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                        arg_id = local_binding_id(arg, node.id, parameter_names, local_bindings)
+                            .unwrap_or(arg_id);
                         nodes
-                            .get(*child as usize)
+                            .get(arg_id as usize)
                             .and_then(typed_node_int_literal)
                             .ok_or(LowerError::UnsupportedExpression)
                     })
@@ -1447,7 +1455,9 @@ impl Function {
                 let node = nodes
                     .get(source_id as usize)
                     .ok_or(LowerError::UnsupportedExpression)?;
-                if let Some(values) = typed_range_values(node, nodes)? {
+                if let Some(values) =
+                    typed_range_values(node, nodes, parameter_names, local_bindings)?
+                {
                     return Ok(Some(TypedAggregateShape {
                         kind: "list",
                         source_id,
@@ -27150,6 +27160,83 @@ return total
         let function = Function::from_typed_function_body(&nodes, 20, &[])
             .expect("typed range should feed aggregate consumers");
         assert_eq!(function.execute(), Ok(Some(12)));
+    }
+
+    #[test]
+    fn lowers_typed_range_with_local_constant_arguments() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("range".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(5)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(-2)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "name".into(),
+                detail: Some("start".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "name".into(),
+                detail: Some("stop".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 5, 6, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 7],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body_with_locals(
+            &nodes,
+            8,
+            &[],
+            &[("start".into(), 2), ("stop".into(), 3)],
+        )
+        .expect("typed range should resolve local constant arguments");
+        assert_eq!(function.execute(), Ok(Some(8)));
     }
 
     #[test]
