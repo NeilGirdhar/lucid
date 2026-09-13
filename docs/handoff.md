@@ -1658,8 +1658,8 @@ diverged:
   Duplicate import-binding diagnostics do the same, so both plain imports and
   `from ... import ... as ...` collisions identify the earlier binding.
   Private-export diagnostics now populate the fix channel with a rename-or-
-  remove-export suggestion, and the CLI renders fix suggestions as `help:`
-  lines.
+  remove-export suggestion, edit span, and replacement text; the CLI renders
+  fix suggestions as `help:` lines.
 * Lexical parse diagnostics now recover their source range from the lossless
   CST instead of reporting a zero-length placeholder span.
 * Project diagnostics now consume those structured file diagnostics, including

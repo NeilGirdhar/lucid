@@ -400,7 +400,7 @@ fn emit_database_diagnostics(
             );
         }
         if let Some(fix) = &diagnostic.fix {
-            eprintln!("  help: {fix}");
+            eprintln!("  help: {}", fix.message);
         }
     }
 }

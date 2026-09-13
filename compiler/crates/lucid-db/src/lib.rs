@@ -178,6 +178,13 @@ pub struct RelatedDiagnostic {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct DiagnosticFix {
+    pub message: String,
+    pub span: lucid_syntax::Span,
+    pub replacement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct Diagnostic {
     pub file: SourceFile,
     pub severity: Severity,
@@ -185,28 +192,37 @@ pub struct Diagnostic {
     pub message: String,
     pub span: lucid_syntax::Span,
     pub related: Arc<[RelatedDiagnostic]>,
-    pub fix: Option<String>,
+    pub fix: Option<DiagnosticFix>,
 }
 
-fn private_export_fix(name: &str) -> Option<String> {
+fn private_export_fix(name: &str, span: lucid_syntax::Span) -> Option<DiagnosticFix> {
     if !name.starts_with('_') {
         return None;
     }
     let public = name.trim_start_matches('_');
     if public.is_empty() {
-        Some("remove the export marker".to_string())
+        Some(DiagnosticFix {
+            message: "remove the export marker".to_string(),
+            span,
+            replacement: String::new(),
+        })
     } else {
-        Some(format!(
-            "rename '{name}' to '{public}' or remove the export marker"
-        ))
+        Some(DiagnosticFix {
+            message: format!("rename '{name}' to '{public}' or remove the export marker"),
+            span,
+            replacement: public.to_string(),
+        })
     }
 }
 
-fn private_export_fix_from_message(message: &str) -> Option<String> {
+fn private_export_fix_from_message(
+    message: &str,
+    span: lucid_syntax::Span,
+) -> Option<DiagnosticFix> {
     let name = message
         .strip_prefix("cannot export private name '")?
         .strip_suffix('\'')?;
-    private_export_fix(name)
+    private_export_fix(name, span)
 }
 
 #[salsa::tracked]
@@ -7509,7 +7525,7 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
     };
     let mut checker = lucid_checker::TypeChecker::new();
     if let Err(error) = checker.check_module(module) {
-        let fix = private_export_fix_from_message(&error.message);
+        let fix = private_export_fix_from_message(&error.message, error.span);
         diagnostics.push(Diagnostic {
             file,
             severity: Severity::Error,
@@ -7623,7 +7639,7 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                         message: format!("cannot export private name '{name}'"),
                         span: statement_span(statement),
                         related: Arc::from([]),
-                        fix: private_export_fix(name),
+                        fix: private_export_fix(name, statement_span(statement)),
                     });
                 }
             }
@@ -12062,19 +12078,28 @@ mod tests {
             .expect("private export diagnostic");
         assert!(diagnostic.message.contains("_private"));
         assert!(diagnostic.span.end > diagnostic.span.start);
+        let fix = diagnostic.fix.as_ref().expect("private export fix");
         assert_eq!(
-            diagnostic.fix.as_deref(),
-            Some("rename '_private' to 'private' or remove the export marker")
+            fix.message,
+            "rename '_private' to 'private' or remove the export marker"
         );
+        assert_eq!(fix.replacement, "private");
+        assert!(fix.span.end > fix.span.start);
         let file_diagnostics = file_diagnostics(&db, file);
         let file_diagnostic = file_diagnostics
             .iter()
             .find(|diagnostic| diagnostic.code == "E0200")
             .expect("checker private export diagnostic");
+        let file_fix = file_diagnostic
+            .fix
+            .as_ref()
+            .expect("checker private export fix");
         assert_eq!(
-            file_diagnostic.fix.as_deref(),
-            Some("rename '_private' to 'private' or remove the export marker")
+            file_fix.message,
+            "rename '_private' to 'private' or remove the export marker"
         );
+        assert_eq!(file_fix.replacement, "private");
+        assert_eq!(span_text(&db, file, file_fix.span).as_ref(), "_private");
     }
 
     #[test]
