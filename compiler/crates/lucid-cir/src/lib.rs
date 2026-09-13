@@ -2919,7 +2919,17 @@ impl Function {
                             local_bindings,
                         )
                         .ok_or(LowerError::UnsupportedExpression)?;
-                        if exponent < 0 || modulus_constant <= 0 {
+                        // The CIR subset keeps integer operations in i64. The
+                        // modular exponentiation algorithm multiplies two
+                        // already-reduced residues, so it is safe only while
+                        // `modulus * modulus` cannot overflow. Larger moduli
+                        // remain on the runtime/native path until CIR has a
+                        // widening multiply or a dedicated modular-pow op.
+                        const MAX_SAFE_MODULUS: i64 = 3_037_000_499;
+                        if exponent < 0
+                            || modulus_constant <= 0
+                            || modulus_constant > MAX_SAFE_MODULUS
+                        {
                             return Err(LowerError::UnsupportedExpression);
                         }
                         let base = lower(
@@ -31060,6 +31070,48 @@ return total
             .expect("typed three-argument pow should lower for static exponent and modulus");
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(27)));
         assert_eq!(function.execute_with_args(&[-2]), Ok(Some(26)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("pow".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("base".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(3_037_000_500)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 2, 3],
+                literal: None,
+            },
+        ];
+        assert_eq!(
+            Function::from_typed_function_body(&nodes, 4, &["base".into()]),
+            Err(LowerError::UnsupportedExpression)
+        );
     }
 
     #[test]
