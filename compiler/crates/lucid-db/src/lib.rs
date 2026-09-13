@@ -10196,13 +10196,13 @@ mod tests {
 
         let file = db.add_file(
             "constructor-aggregate-alias.lucid",
-            "def constructor_total():\n    values = list(range(5))\n    return len(values)\n",
+            "def constructor_total():\n    values = list(range(5))\n    return len(values) + sum(values)\n",
         );
         let function = lower_function_body(&db, file, "constructor_total".into())
             .as_ref()
             .expect("constructor aggregate aliases should lower through typed HIR");
         assert_eq!(function.blocks.len(), 1);
-        assert_eq!(function.execute(), Ok(Some(5)));
+        assert_eq!(function.execute(), Ok(Some(15)));
 
         let file = db.add_file(
             "dict-view-aggregate-alias.lucid",

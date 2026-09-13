@@ -9831,21 +9831,31 @@ impl TypeChecker {
                                 })?;
                                 let argument_type = self.type_of_expr(&argument.value).ok()?;
                                 match name {
-                                    "list" if matches!(&argument_type, Type::Shape(_)) => {
-                                        Some(Type::Class { name: "list".into(), type_args: vec![Type::Int], parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
+                                    "list" if self.is_iterable_type(&argument_type) => {
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![
+                                                self.iterable_element_type(&argument_type),
+                                            ],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
                                     }
-                                    "list" if matches!(&argument_type, Type::Class { type_args, .. } if type_args.len() == 1) => {
-                                        if let Type::Class { type_args, .. } = argument_type {
-                                            Some(Type::Class { name: "list".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
-                                        } else { None }
-                                    }
-                                    "set" if matches!(&argument_type, Type::Shape(_)) => {
-                                        Some(Type::Class { name: "set".into(), type_args: vec![Type::Int], parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
-                                    }
-                                    "set" if matches!(&argument_type, Type::Class { type_args, .. } if type_args.len() == 1) => {
-                                        if let Type::Class { type_args, .. } = argument_type {
-                                            Some(Type::Class { name: "set".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
-                                        } else { None }
+                                    "set" if self.is_iterable_type(&argument_type) => {
+                                        Some(Type::Class {
+                                            name: "set".into(),
+                                            type_args: vec![
+                                                self.iterable_element_type(&argument_type),
+                                            ],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
                                     }
                                     "dict" if matches!(&argument_type, Type::Class { name, type_args, .. } if name == "dict" && type_args.len() == 2) => {
                                         if let Type::Class { type_args, .. } = argument_type {
@@ -15749,7 +15759,12 @@ def reject(value: not int) -> none:
         ));
         let mut checker = TypeChecker::new();
         checker
-            .check_module(&parse("values = list([1])\nunique = set({1})\n").unwrap())
+            .check_module(
+                &parse(
+                    "values = list([1])\nunique = set({1})\nrange_values = list(range(5))\nrange_unique = set(range(5))\nrange_sum = sum(range_values)\n",
+                )
+                .unwrap(),
+            )
             .unwrap();
         assert!(matches!(
             checker.env.variables.get("values").map(|(ty, _)| ty),
@@ -15760,6 +15775,20 @@ def reject(value: not int) -> none:
             checker.env.variables.get("unique").map(|(ty, _)| ty),
             Some(Type::Class { name, type_args, .. })
                 if name == "set" && type_args == &vec![Type::Int]
+        ));
+        assert!(matches!(
+            checker.env.variables.get("range_values").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "list" && type_args == &vec![Type::Int]
+        ));
+        assert!(matches!(
+            checker.env.variables.get("range_unique").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "set" && type_args == &vec![Type::Int]
+        ));
+        assert!(matches!(
+            checker.env.variables.get("range_sum").map(|(ty, _)| ty),
+            Some(Type::Int)
         ));
         let mut checker = TypeChecker::new();
         checker
