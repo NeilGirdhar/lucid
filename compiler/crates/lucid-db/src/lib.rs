@@ -9053,7 +9053,16 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
         }
     };
     for file in order.iter().copied() {
-        diagnostics.extend(file_diagnostics(db, file).iter().cloned());
+        let file_diagnostics = file_diagnostics(db, file);
+        let private_import_error_spans = file_diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "E0200"
+                    && diagnostic.message.contains("cannot import private name")
+            })
+            .map(|diagnostic| diagnostic.span)
+            .collect::<std::collections::HashSet<_>>();
+        diagnostics.extend(file_diagnostics.iter().cloned());
         for import in imports(db, file).iter() {
             if is_builtin_module(import) {
                 continue;
@@ -9185,12 +9194,16 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                     .iter()
                     .any(|decl| decl.exported && decl.symbol.name(db).as_str() == name);
                 if !exported {
+                    let span = statement_span(statement);
+                    if name.starts_with('_') && private_import_error_spans.contains(&span) {
+                        continue;
+                    }
                     diagnostics.push(Diagnostic {
                         file,
                         severity: Severity::Error,
                         code: "E0302".into(),
                         message: format!("cannot import '{name}' from module '{module_name}'"),
-                        span: statement_span(statement),
+                        span,
                         related: Arc::from([]),
                         fix: None,
                     });
@@ -14087,7 +14100,7 @@ mod tests {
         let mut db = CompilerDatabase::default();
         let main = db.add_file(
             "main.lucid",
-            "from support import value as answer, _private\n",
+            "from support import value as answer, _private, missing\n",
         );
         let support = db.add_file(
             "support.lucid",

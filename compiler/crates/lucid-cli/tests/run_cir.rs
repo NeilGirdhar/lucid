@@ -760,6 +760,34 @@ fn check_reports_imported_module_type_errors() {
 }
 
 #[test]
+fn check_does_not_duplicate_private_from_import_diagnostics() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_check_private_from_import_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "from child import _hidden\n").expect("main should be writable");
+    fs::write(&child, "_hidden = 1\n").expect("child should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        !stderr.contains("E0302"),
+        "private import should not also emit missing-name diagnostic: {stderr}"
+    );
+}
+
+#[test]
 fn check_preserves_tabs_in_diagnostic_underlines() {
     let path = std::env::temp_dir().join(format!(
         "lucid_check_tab_diagnostic_{}.lucid",
