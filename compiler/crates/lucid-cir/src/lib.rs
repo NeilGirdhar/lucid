@@ -685,11 +685,68 @@ impl Function {
                         local_bindings,
                     );
                 }
-                if node.kind == "call" && node.children.len() == 3 {
+                if node.kind == "call" && node.children.len() >= 3 {
                     if let Some(callee) = nodes.get(node.children[0] as usize) {
                         if callee.kind == "name"
                             && matches!(callee.detail.as_deref(), Some("min" | "max"))
                         {
+                            if node.children.len() > 3 {
+                                let mut expanded = nodes.to_vec();
+                                let operands = &node.children[1..];
+                                let comparison_detail = if callee.detail.as_deref() == Some("min") {
+                                    "Lt"
+                                } else {
+                                    "Gt"
+                                };
+                                let mut branches = Vec::with_capacity(operands.len() - 1);
+                                for (index, operand) in operands
+                                    .iter()
+                                    .copied()
+                                    .enumerate()
+                                    .take(operands.len() - 1)
+                                {
+                                    let mut condition = None;
+                                    for other in operands.iter().copied().skip(index + 1) {
+                                        let comparison_id = u32::try_from(expanded.len())
+                                            .map_err(|_| LowerError::UnsupportedExpression)?;
+                                        expanded.push(TypedExprNode {
+                                            id: comparison_id,
+                                            kind: "binary".into(),
+                                            detail: Some(comparison_detail.into()),
+                                            children: vec![operand, other],
+                                            literal: None,
+                                        });
+                                        condition = Some(if let Some(left) = condition {
+                                            let combined_id = u32::try_from(expanded.len())
+                                                .map_err(|_| LowerError::UnsupportedExpression)?;
+                                            expanded.push(TypedExprNode {
+                                                id: combined_id,
+                                                kind: "binary".into(),
+                                                detail: Some("BitAnd".into()),
+                                                children: vec![left, comparison_id],
+                                                literal: None,
+                                            });
+                                            combined_id
+                                        } else {
+                                            comparison_id
+                                        });
+                                    }
+                                    branches.push((
+                                        condition.ok_or(LowerError::UnsupportedExpression)?,
+                                        operand,
+                                    ));
+                                }
+                                let (condition_root, then_root) = branches[0];
+                                return Self::from_typed_statement_if_elif_chain_direct(
+                                    &expanded,
+                                    condition_root,
+                                    then_root,
+                                    &branches[1..],
+                                    *operands.last().ok_or(LowerError::UnsupportedExpression)?,
+                                    parameter_names,
+                                    local_bindings,
+                                );
+                            }
                             let comparison_detail = if callee.detail.as_deref() == Some("min") {
                                 "Lt"
                             } else {
@@ -31805,6 +31862,103 @@ return total
         assert_eq!(function.blocks.len(), 4);
         assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(33)));
+    }
+
+    #[test]
+    fn lowers_typed_variadic_min_max_to_nested_selective_cfg() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("first".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("second".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("third".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 2, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(
+            &nodes,
+            4,
+            &["first".into(), "second".into(), "third".into()],
+        )
+        .expect("typed variadic min should lower through nested conditional CFGs");
+        assert_eq!(function.execute_with_args(&[11, 22, 33]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[33, 11, 22]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[33, 22, 11]), Ok(Some(11)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("first".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("second".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("third".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 2, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(
+            &nodes,
+            4,
+            &["first".into(), "second".into(), "third".into()],
+        )
+        .expect("typed variadic max should lower through nested conditional CFGs");
+        assert_eq!(function.execute_with_args(&[11, 22, 33]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[33, 11, 22]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[33, 22, 11]), Ok(Some(33)));
     }
 
     #[test]
