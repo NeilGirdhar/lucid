@@ -2511,7 +2511,9 @@ impl TypeChecker {
             env.function_arity.insert(name.into(), (required, maximum));
         }
 
-        Self { env }
+        Self {
+            env
+        }
     }
 
     pub fn check_module(&mut self, module: &Module) -> Result<(), TypeError> {
