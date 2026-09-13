@@ -8525,6 +8525,22 @@ impl Function {
                 _ => None,
             }
         }
+        fn constant_bytes(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<u8>> {
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bytes(value),
+                    ..
+                } => Some(value.clone()),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::Bytes(value) => Some(value.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
         fn constant_string_list(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -9714,6 +9730,85 @@ impl Function {
                     if matches!(
                         func.as_ref(),
                         lucid_syntax::Expr::Ident { name, .. } if name == "min" || name == "max"
+                    ) && args.len() == 1 =>
+                {
+                    let mut values = Vec::new();
+                    let mut add_value =
+                        |value: ValueId, instructions: &[Instruction]| -> Result<(), LowerError> {
+                            values.push(
+                                constant_int(value, instructions)
+                                    .ok_or(LowerError::UnsupportedExpression)?,
+                            );
+                            Ok(())
+                        };
+                    match &args[0].value {
+                        lucid_syntax::Expr::List { elements, .. }
+                        | lucid_syntax::Expr::Set { elements, .. } => {
+                            for element in elements {
+                                let value = lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                                add_value(value, instructions)?;
+                            }
+                        }
+                        lucid_syntax::Expr::Call { .. } => {
+                            values.extend(
+                                const_range_values(&args[0].value)
+                                    .ok_or(LowerError::UnsupportedExpression)?,
+                            );
+                        }
+                        expr if constant_bytes(expr, aggregate_bindings).is_some() => {
+                            values.extend(
+                                constant_bytes(expr, aggregate_bindings)
+                                    .ok_or(LowerError::UnsupportedExpression)?
+                                    .into_iter()
+                                    .map(i64::from),
+                            );
+                        }
+                        lucid_syntax::Expr::Ident { name, .. } => {
+                            match aggregate_bindings
+                                .get(name)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                            {
+                                AggregateBinding::List(elements)
+                                | AggregateBinding::Set(elements) => {
+                                    for value in elements {
+                                        add_value(*value, instructions)?;
+                                    }
+                                }
+                                AggregateBinding::Range(range_values) => {
+                                    values.extend(range_values.iter().copied());
+                                }
+                                AggregateBinding::Bytes(bytes) => {
+                                    values.extend(bytes.iter().map(|value| i64::from(*value)));
+                                }
+                                _ => return Err(LowerError::UnsupportedExpression),
+                            }
+                        }
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    }
+                    let is_min = matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "min"
+                    );
+                    let value = if is_min {
+                        values.into_iter().min()
+                    } else {
+                        values.into_iter().max()
+                    }
+                    .ok_or(LowerError::UnsupportedExpression)?;
+                    let id = result(next);
+                    instructions.push(Instruction::ConstInt { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "min" || name == "max"
                     ) && !args.is_empty() =>
                 {
                     let mut values = Vec::with_capacity(args.len());
@@ -9787,6 +9882,15 @@ impl Function {
                             {
                                 total = total
                                     .checked_add(value)
+                                    .ok_or(LowerError::UnsupportedExpression)?;
+                            }
+                        }
+                        expr if constant_bytes(expr, aggregate_bindings).is_some() => {
+                            for value in constant_bytes(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                            {
+                                total = total
+                                    .checked_add(i64::from(value))
                                     .ok_or(LowerError::UnsupportedExpression)?;
                             }
                         }
@@ -9864,8 +9968,12 @@ impl Function {
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
-                                AggregateBinding::Bytes(_) => {
-                                    return Err(LowerError::UnsupportedExpression);
+                                AggregateBinding::Bytes(values) => {
+                                    for value in values {
+                                        total = total
+                                            .checked_add(i64::from(*value))
+                                            .ok_or(LowerError::UnsupportedExpression)?;
+                                    }
                                 }
                                 AggregateBinding::Range(values) => {
                                     for value in values {
@@ -12173,6 +12281,20 @@ impl Function {
                             values.sort_by(f64::total_cmp);
                             return Ok(Some(AggregateBinding::FloatList(values)));
                         }
+                        if let Some(mut values) = constant_bytes(iterable, aggregate_bindings) {
+                            values.sort_unstable();
+                            let mut elements = Vec::with_capacity(values.len());
+                            for value in values {
+                                let id = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::ConstInt {
+                                    result: id,
+                                    value: i64::from(value),
+                                });
+                                elements.push(id);
+                            }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
                         let int_values = match iterable {
                             lucid_syntax::Expr::List { elements, .. }
                             | lucid_syntax::Expr::Set { elements, .. } => elements
@@ -12215,6 +12337,20 @@ impl Function {
                             values.reverse();
                             return Ok(Some(AggregateBinding::FloatList(values)));
                         }
+                        if let Some(mut values) = constant_bytes(iterable, aggregate_bindings) {
+                            values.reverse();
+                            let mut elements = Vec::with_capacity(values.len());
+                            for value in values {
+                                let id = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::ConstInt {
+                                    result: id,
+                                    value: i64::from(value),
+                                });
+                                elements.push(id);
+                            }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
                         let int_values = match iterable {
                             lucid_syntax::Expr::List { elements, .. } => elements
                                 .iter()
@@ -12255,6 +12391,19 @@ impl Function {
                                 let id = ValueId(*next);
                                 *next += 1;
                                 instructions.push(Instruction::ConstInt { result: id, value });
+                                elements.push(id);
+                            }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
+                        if let Some(values) = constant_bytes(iterable, aggregate_bindings) {
+                            let mut elements = Vec::with_capacity(values.len());
+                            for value in values {
+                                let id = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::ConstInt {
+                                    result: id,
+                                    value: i64::from(value),
+                                });
                                 elements.push(id);
                             }
                             return Ok(Some(AggregateBinding::List(elements)));
@@ -12334,6 +12483,19 @@ impl Function {
                                 let id = ValueId(*next);
                                 *next += 1;
                                 instructions.push(Instruction::ConstInt { result: id, value });
+                                elements.push(id);
+                            }
+                            return Ok(Some(AggregateBinding::Set(elements)));
+                        }
+                        if let Some(values) = constant_bytes(iterable, aggregate_bindings) {
+                            let mut elements = Vec::with_capacity(values.len());
+                            for value in values {
+                                let id = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::ConstInt {
+                                    result: id,
+                                    value: i64::from(value),
+                                });
                                 elements.push(id);
                             }
                             return Ok(Some(AggregateBinding::Set(elements)));
@@ -23714,6 +23876,21 @@ return total
             ("data = b\"abc\"\nreturn bool(data)\n", 1),
             ("data = b\"abc\"\nreturn 98 in data\n", 1),
             ("data = b\"abc\"\nreturn 120 not in data\n", 1),
+            ("values = list(b\"ABC\")\nreturn values[0] + values[1] + values[2]\n", 198),
+            ("data = b\"ABC\"\nvalues = list(data)\nreturn values[1]\n", 66),
+            ("values = set(b\"ABC\")\nreturn 66 in values\n", 1),
+            (
+                "values = sorted(b\"CBA\")\nreturn values[0] * 10000 + values[1] * 100 + values[2]\n",
+                656667,
+            ),
+            (
+                "data = b\"ABC\"\nvalues = reversed(data)\nreturn values[0] * 10000 + values[1] * 100 + values[2]\n",
+                676665,
+            ),
+            ("return sum(b\"ABC\")\n", 198),
+            ("data = b\"ABC\"\nreturn sum(data, 1)\n", 199),
+            ("return min(b\"CBA\")\n", 65),
+            ("data = b\"ABC\"\nreturn max(data)\n", 67),
             ("return all([true, 1, 2])\n", 1),
             ("return any([false, 0, 2])\n", 1),
             ("return all([])\n", 1),
