@@ -1631,6 +1631,24 @@ impl Function {
                 }
                 Ok(Some(values))
             }
+            fn typed_positions_are_pairs(
+                source_id: u32,
+                member_positions: &[usize],
+                nodes: &[TypedExprNode],
+            ) -> bool {
+                nodes.get(source_id as usize).is_some_and(|source| {
+                    member_positions.iter().all(|position| {
+                        source
+                            .children
+                            .get(*position)
+                            .and_then(|child| nodes.get(*child as usize))
+                            .is_some_and(|pair| {
+                                matches!(pair.kind.as_str(), "list" | "record")
+                                    && pair.children.len() == 2
+                            })
+                    })
+                })
+            }
             fn typed_aggregate_shape(
                 id: u32,
                 nodes: &[TypedExprNode],
@@ -1749,6 +1767,22 @@ impl Function {
                             else {
                                 return Ok(None);
                             };
+                            if kind == "dict"
+                                && matches!(inner_shape.kind, "list" | "record" | "set")
+                                && inner_shape.literal_values.is_none()
+                                && typed_positions_are_pairs(
+                                    inner_shape.source_id,
+                                    &inner_shape.member_positions,
+                                    nodes,
+                                )
+                            {
+                                return Ok(Some(TypedAggregateShape {
+                                    kind: "dict",
+                                    source_id: inner_shape.source_id,
+                                    member_positions: inner_shape.member_positions,
+                                    literal_values: None,
+                                }));
+                            }
                             return Ok(match (kind, inner_shape.kind) {
                                 ("list", "list" | "record") => Some(TypedAggregateShape {
                                     kind: "list",
@@ -1865,12 +1899,11 @@ impl Function {
                             }
                             "list" | "record" | "set"
                                 if kind == "dict"
-                                    && operand.children.iter().all(|child| {
-                                        nodes.get(*child as usize).is_some_and(|pair| {
-                                            matches!(pair.kind.as_str(), "list" | "record")
-                                                && pair.children.len() == 2
-                                        })
-                                    }) =>
+                                    && typed_positions_are_pairs(
+                                        operand_id,
+                                        &(0..operand.children.len()).collect::<Vec<_>>(),
+                                        nodes,
+                                    ) =>
                             {
                                 Some(TypedAggregateShape {
                                     kind: "dict",
@@ -29012,106 +29045,141 @@ return total
             },
             TypedExprNode {
                 id: 2,
-                kind: "literal".into(),
-                detail: None,
+                kind: "name".into(),
+                detail: Some("reversed".into()),
                 children: vec![],
-                literal: Some(TypedLiteral::Int(1)),
+                literal: None,
             },
             TypedExprNode {
                 id: 3,
                 kind: "literal".into(),
                 detail: None,
                 children: vec![],
-                literal: Some(TypedLiteral::Int(10)),
+                literal: Some(TypedLiteral::Int(1)),
             },
             TypedExprNode {
                 id: 4,
                 kind: "literal".into(),
                 detail: None,
                 children: vec![],
-                literal: Some(TypedLiteral::Int(2)),
+                literal: Some(TypedLiteral::Int(10)),
             },
             TypedExprNode {
                 id: 5,
                 kind: "literal".into(),
                 detail: None,
                 children: vec![],
-                literal: Some(TypedLiteral::Int(20)),
+                literal: Some(TypedLiteral::Int(2)),
             },
             TypedExprNode {
                 id: 6,
-                kind: "list".into(),
+                kind: "literal".into(),
                 detail: None,
-                children: vec![2, 3],
-                literal: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
             },
             TypedExprNode {
                 id: 7,
-                kind: "record".into(),
+                kind: "list".into(),
                 detail: None,
-                children: vec![4, 5],
+                children: vec![3, 4],
                 literal: None,
             },
             TypedExprNode {
                 id: 8,
-                kind: "list".into(),
+                kind: "record".into(),
                 detail: None,
-                children: vec![6, 7],
+                children: vec![5, 6],
                 literal: None,
             },
             TypedExprNode {
                 id: 9,
-                kind: "call".into(),
+                kind: "list".into(),
                 detail: None,
-                children: vec![0, 8],
+                children: vec![7, 8],
                 literal: None,
             },
             TypedExprNode {
                 id: 10,
-                kind: "index".into(),
+                kind: "call".into(),
                 detail: None,
-                children: vec![9, 4],
+                children: vec![0, 9],
                 literal: None,
             },
             TypedExprNode {
                 id: 11,
-                kind: "dict".into(),
+                kind: "index".into(),
                 detail: None,
-                children: vec![4, 5, 2, 3],
+                children: vec![10, 5],
                 literal: None,
             },
             TypedExprNode {
                 id: 12,
-                kind: "binary".into(),
-                detail: Some("Eq".into()),
-                children: vec![9, 11],
+                kind: "dict".into(),
+                detail: None,
+                children: vec![5, 6, 3, 4],
                 literal: None,
             },
             TypedExprNode {
                 id: 13,
-                kind: "call".into(),
-                detail: None,
-                children: vec![1, 9],
-                literal: None,
-            },
-            TypedExprNode {
-                id: 14,
                 kind: "binary".into(),
-                detail: Some("Add".into()),
+                detail: Some("Eq".into()),
                 children: vec![10, 12],
                 literal: None,
             },
             TypedExprNode {
+                id: 14,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 10],
+                literal: None,
+            },
+            TypedExprNode {
                 id: 15,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 15],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "index".into(),
+                detail: None,
+                children: vec![16, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
                 kind: "binary".into(),
                 detail: Some("Add".into()),
-                children: vec![14, 13],
+                children: vec![11, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 19,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![18, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 20,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![19, 17],
                 literal: None,
             },
         ];
-        let function = Function::from_typed_function_body(&nodes, 15, &[])
+        let function = Function::from_typed_function_body(&nodes, 20, &[])
             .expect("typed dict constructor should flatten iterable pairs");
-        assert_eq!(function.execute(), Ok(Some(23)));
+        assert_eq!(function.execute(), Ok(Some(33)));
     }
 
     #[test]
