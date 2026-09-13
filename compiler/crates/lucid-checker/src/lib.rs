@@ -5014,10 +5014,11 @@ impl TypeChecker {
     }
 
     fn extract_type_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
-        // Extract type narrowing from conditions like "x is None", "x is not None"
-        // Note: Currently only handles simple variable names, not complex expressions.
-        // Attribute narrowing (e.g., "node.left is None") would require tracking
-        // narrowing constraints through type_of_expr, which is more complex.
+        // Extract type narrowing from conditions like:
+        // - "x is None" / "x is not None" / "not (x is None)"
+        // - "x" (truthiness check: narrows union types containing None)
+
+        // Handle binary operations (is/is not)
         if let Expr::Binary {
             op: op_type,
             left,
@@ -5124,6 +5125,7 @@ impl TypeChecker {
                 }
             }
         }
+
         (None, None)
     }
 
