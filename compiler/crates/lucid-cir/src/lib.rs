@@ -1703,6 +1703,37 @@ impl Function {
                         let callee = nodes
                             .get(node.children[0] as usize)
                             .ok_or(LowerError::UnsupportedExpression)?;
+                        if callee.kind == "attribute"
+                            && matches!(callee.detail.as_deref(), Some("keys" | "values"))
+                            && callee.children.len() == 1
+                        {
+                            let Some(dict_shape) = typed_aggregate_shape(
+                                callee.children[0],
+                                nodes,
+                                parameter_names,
+                                local_bindings,
+                            )?
+                            else {
+                                return Ok(None);
+                            };
+                            let source = nodes
+                                .get(dict_shape.source_id as usize)
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            if dict_shape.kind == "dict" && source.kind == "dict" {
+                                let offset =
+                                    usize::from(callee.detail.as_deref() == Some("values"));
+                                return Ok(Some(TypedAggregateShape {
+                                    kind: "list",
+                                    source_id: dict_shape.source_id,
+                                    member_positions: dict_shape
+                                        .member_positions
+                                        .into_iter()
+                                        .map(|position| position + offset)
+                                        .collect(),
+                                    literal_values: None,
+                                }));
+                            }
+                        }
                         match callee.detail.as_deref() {
                             Some("list") => Some(TypedAggregateShape {
                                 kind: "list",
@@ -29420,6 +29451,246 @@ return total
         let function = Function::from_typed_function_body(&nodes, 23, &[])
             .expect("typed dict iterable constructors should expose keys");
         assert_eq!(function.execute(), Ok(Some(7)));
+    }
+
+    #[test]
+    fn lowers_typed_dict_view_aggregate_consumers() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("len".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("sorted".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("reversed".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("list".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "name".into(),
+                detail: Some("set".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![6, 7, 8, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "attribute".into(),
+                detail: Some("keys".into()),
+                children: vec![10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "call".into(),
+                detail: None,
+                children: vec![11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "attribute".into(),
+                detail: Some("values".into()),
+                children: vec![10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "call".into(),
+                detail: None,
+                children: vec![13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![8, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 19,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 20,
+                kind: "index".into(),
+                detail: None,
+                children: vec![18, 19],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 21,
+                kind: "call".into(),
+                detail: None,
+                children: vec![3, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 22,
+                kind: "index".into(),
+                detail: None,
+                children: vec![21, 19],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 23,
+                kind: "call".into(),
+                detail: None,
+                children: vec![4, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 24,
+                kind: "index".into(),
+                detail: None,
+                children: vec![23, 19],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 25,
+                kind: "call".into(),
+                detail: None,
+                children: vec![5, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 26,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![7, 25],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 27,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![15, 16],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 28,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![27, 17],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 29,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![28, 20],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 30,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![29, 22],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 31,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![30, 24],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 32,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![31, 26],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 32, &[])
+            .expect("typed dict view aggregate consumers should lower");
+        assert_eq!(function.execute(), Ok(Some(47)));
     }
 
     #[test]
