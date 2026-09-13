@@ -10734,6 +10734,20 @@ mod tests {
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
 
         let file = db.add_file(
+            "multi-match-discarded-division-prefix.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case 2:\n            value % 0\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("literal match should preserve selected discarded division prefix");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(
+            function.execute_with_args(&[2]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
             "multi-match-assert-hir.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            assert(true)\n            return 11\n        case 2:\n            assert(true)\n            return 22\n        case _:\n            assert(true)\n            fallback = 33\n            return fallback\n",
         );
