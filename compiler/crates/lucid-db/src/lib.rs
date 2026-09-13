@@ -542,6 +542,280 @@ fn collect_typed_exprs<'db>(
     nodes: &mut Vec<TypedExpr<'db>>,
 ) -> Result<u32, Arc<str>> {
     use lucid_syntax::Expr;
+    fn hir_iterable_element_type(
+        checker: &lucid_checker::TypeChecker,
+        iterable: &lucid_checker::Type,
+    ) -> lucid_checker::Type {
+        match iterable {
+            lucid_checker::Type::View { inner, .. } => hir_iterable_element_type(checker, inner),
+            lucid_checker::Type::Class {
+                name, type_args, ..
+            } if matches!(
+                name.as_str(),
+                "list" | "set" | "frozenset" | "dict" | "frozendict"
+            ) =>
+            {
+                type_args
+                    .first()
+                    .cloned()
+                    .unwrap_or(lucid_checker::Type::TypeVar("Any".into()))
+            }
+            lucid_checker::Type::Class { name, .. } if name == "range" => lucid_checker::Type::Int,
+            lucid_checker::Type::Class { name, .. }
+                if matches!(name.as_str(), "Bytes" | "ByteArray" | "MemoryView") =>
+            {
+                lucid_checker::Type::Int
+            }
+            lucid_checker::Type::Shape(_) => lucid_checker::Type::Int,
+            lucid_checker::Type::Record { fields, .. } => lucid_checker::Type::make_union(
+                fields
+                    .iter()
+                    .map(|(_, field_type)| field_type.clone())
+                    .collect(),
+            ),
+            lucid_checker::Type::Trait {
+                name, type_args, ..
+            }
+            | lucid_checker::Type::Interface {
+                name, type_args, ..
+            } if matches!(
+                name.as_str(),
+                "Iterable" | "Iterator" | "Collection" | "Sequence" | "Set"
+            ) =>
+            {
+                type_args
+                    .first()
+                    .cloned()
+                    .unwrap_or(lucid_checker::Type::TypeVar("Any".into()))
+            }
+            lucid_checker::Type::Class { name, .. } => checker
+                .env
+                .class_methods
+                .get(&(name.clone(), "next".into()))
+                .and_then(|method| match method {
+                    lucid_checker::Type::Function { return_type, .. } => {
+                        Some(return_type.as_ref().clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or(lucid_checker::Type::TypeVar("Any".into())),
+            _ => lucid_checker::Type::TypeVar("Any".into()),
+        }
+    }
+    fn bind_hir_pattern_type(
+        checker: &mut lucid_checker::TypeChecker,
+        pattern: &lucid_syntax::Pattern,
+        subject_type: &lucid_checker::Type,
+    ) {
+        match pattern {
+            lucid_syntax::Pattern::Ident(name, _) if pattern_identifier_binds(name) => {
+                checker.env.variables.insert(
+                    name.clone(),
+                    (subject_type.clone(), lucid_syntax::MutabilityView::Mutable),
+                );
+                checker.env.exact_variables.remove(name);
+            }
+            lucid_syntax::Pattern::Tuple(items, _) => {
+                let element_types = match subject_type {
+                    lucid_checker::Type::Record { fields, .. } => {
+                        fields.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>()
+                    }
+                    lucid_checker::Type::Class {
+                        name, type_args, ..
+                    } if name == "list" => {
+                        let element = type_args
+                            .first()
+                            .cloned()
+                            .unwrap_or(lucid_checker::Type::TypeVar("Any".into()));
+                        vec![element; items.len()]
+                    }
+                    _ => Vec::new(),
+                };
+                for (index, item) in items.iter().enumerate() {
+                    bind_hir_pattern_type(
+                        checker,
+                        item,
+                        element_types
+                            .get(index)
+                            .unwrap_or(&lucid_checker::Type::TypeVar("Any".into())),
+                    );
+                }
+            }
+            lucid_syntax::Pattern::Star(nested, _) => {
+                let list_type = lucid_checker::Type::Class {
+                    name: "list".into(),
+                    type_args: vec![subject_type.clone()],
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                };
+                bind_hir_pattern_type(checker, nested, &list_type);
+            }
+            lucid_syntax::Pattern::RecordDestructure(fields, _) => {
+                for (field_name, nested) in fields {
+                    let field_type = field_name
+                        .as_ref()
+                        .and_then(|name| match subject_type {
+                            lucid_checker::Type::Class { fields, .. } => fields.get(name),
+                            lucid_checker::Type::Record { fields, .. } => fields
+                                .iter()
+                                .find(|(field, _)| field.as_ref() == Some(name))
+                                .map(|(_, ty)| ty),
+                            _ => None,
+                        })
+                        .cloned()
+                        .unwrap_or(lucid_checker::Type::TypeVar("Any".into()));
+                    bind_hir_pattern_type(checker, nested, &field_type);
+                }
+            }
+            lucid_syntax::Pattern::ClassDestructure {
+                class_name, fields, ..
+            } => {
+                let declared = checker
+                    .env
+                    .classes
+                    .get(class_name)
+                    .and_then(|ty| match ty {
+                        lucid_checker::Type::Class { fields, .. } => Some(fields),
+                        _ => None,
+                    })
+                    .cloned();
+                let order = checker.env.class_field_order.get(class_name).cloned();
+                for (index, (field_name, nested)) in fields.iter().enumerate() {
+                    let field_type = field_name
+                        .as_ref()
+                        .and_then(|name| declared.as_ref().and_then(|fields| fields.get(name)))
+                        .or_else(|| {
+                            order
+                                .as_ref()
+                                .and_then(|order| order.get(index))
+                                .and_then(|name| {
+                                    declared.as_ref().and_then(|fields| fields.get(name))
+                                })
+                        })
+                        .cloned()
+                        .unwrap_or(lucid_checker::Type::TypeVar("Any".into()));
+                    bind_hir_pattern_type(checker, nested, &field_type);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn push_typed_expr_node<'db>(
+        db: &'db dyn Db,
+        checker: &lucid_checker::TypeChecker,
+        expr: &lucid_syntax::Expr,
+        kind: &str,
+        children: Vec<u32>,
+        nodes: &mut Vec<TypedExpr<'db>>,
+    ) -> Result<u32, Arc<str>> {
+        let detail = match expr {
+            Expr::Ident { name, .. } => Some(name.clone()),
+            Expr::Binary { op, .. } => Some(format!("{op:?}")),
+            Expr::Unary { op, .. } => Some(format!("{op:?}")),
+            Expr::Attribute { attr, .. } => Some(attr.clone()),
+            _ => None,
+        };
+        let literal = match expr {
+            Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(lucid_cir::TypedLiteral::Int(*value)),
+            Expr::Literal {
+                value: lucid_syntax::LiteralValue::Bool(value),
+                ..
+            } => Some(lucid_cir::TypedLiteral::Bool(*value)),
+            _ => None,
+        };
+        let ty = checker
+            .type_of_expr(expr)
+            .map_err(|error| Arc::<str>::from(error.message))?
+            .canonical();
+        let id =
+            u32::try_from(nodes.len()).map_err(|_| Arc::<str>::from("too many expressions"))?;
+        let type_name = ty.canonical_string();
+        nodes.push(TypedExpr {
+            id,
+            type_id: TypeId::new(db, type_name.clone()),
+            type_name,
+            kind: kind.to_string(),
+            detail,
+            children: Arc::from(children),
+            literal,
+            span: expr.span(),
+        });
+        Ok(id)
+    }
+    match expr {
+        Expr::ListComp {
+            element,
+            target,
+            iter,
+            condition,
+            ..
+        } => {
+            let iter_id = collect_typed_exprs(db, checker, iter, nodes)?;
+            let iter_type = checker
+                .type_of_expr(iter)
+                .map_err(|error| Arc::<str>::from(error.message))?;
+            let mut sub = checker.clone();
+            let element_type = hir_iterable_element_type(checker, &iter_type);
+            bind_hir_pattern_type(&mut sub, target, &element_type);
+            let element_id = collect_typed_exprs(db, &sub, element, nodes)?;
+            let mut children = vec![element_id, iter_id];
+            if let Some(condition) = condition {
+                children.push(collect_typed_exprs(db, &sub, condition, nodes)?);
+            }
+            return push_typed_expr_node(db, checker, expr, "list-comprehension", children, nodes);
+        }
+        Expr::SetComp {
+            element,
+            target,
+            iter,
+            condition,
+            ..
+        } => {
+            let iter_id = collect_typed_exprs(db, checker, iter, nodes)?;
+            let iter_type = checker
+                .type_of_expr(iter)
+                .map_err(|error| Arc::<str>::from(error.message))?;
+            let mut sub = checker.clone();
+            let element_type = hir_iterable_element_type(checker, &iter_type);
+            bind_hir_pattern_type(&mut sub, target, &element_type);
+            let element_id = collect_typed_exprs(db, &sub, element, nodes)?;
+            let mut children = vec![element_id, iter_id];
+            if let Some(condition) = condition {
+                children.push(collect_typed_exprs(db, &sub, condition, nodes)?);
+            }
+            return push_typed_expr_node(db, checker, expr, "set-comprehension", children, nodes);
+        }
+        Expr::DictComp {
+            key,
+            value,
+            target,
+            iter,
+            condition,
+            ..
+        } => {
+            let iter_id = collect_typed_exprs(db, checker, iter, nodes)?;
+            let iter_type = checker
+                .type_of_expr(iter)
+                .map_err(|error| Arc::<str>::from(error.message))?;
+            let mut sub = checker.clone();
+            let element_type = hir_iterable_element_type(checker, &iter_type);
+            bind_hir_pattern_type(&mut sub, target, &element_type);
+            let key_id = collect_typed_exprs(db, &sub, key, nodes)?;
+            let value_id = collect_typed_exprs(db, &sub, value, nodes)?;
+            let mut children = vec![key_id, value_id, iter_id];
+            if let Some(condition) = condition {
+                children.push(collect_typed_exprs(db, &sub, condition, nodes)?);
+            }
+            return push_typed_expr_node(db, checker, expr, "dict-comprehension", children, nodes);
+        }
+        _ => {}
+    }
     let (kind, children): (&str, Vec<&Expr>) = match expr {
         Expr::Literal { .. } => ("literal", Vec::new()),
         Expr::Ident { .. } => ("name", Vec::new()),
@@ -633,41 +907,7 @@ fn collect_typed_exprs<'db>(
         .into_iter()
         .map(|child| collect_typed_exprs(db, checker, child, nodes))
         .collect::<Result<Vec<_>, _>>()?;
-    let detail = match expr {
-        Expr::Ident { name, .. } => Some(name.clone()),
-        Expr::Binary { op, .. } => Some(format!("{op:?}")),
-        Expr::Unary { op, .. } => Some(format!("{op:?}")),
-        Expr::Attribute { attr, .. } => Some(attr.clone()),
-        _ => None,
-    };
-    let literal = match expr {
-        Expr::Literal {
-            value: lucid_syntax::LiteralValue::Int(value),
-            ..
-        } => Some(lucid_cir::TypedLiteral::Int(*value)),
-        Expr::Literal {
-            value: lucid_syntax::LiteralValue::Bool(value),
-            ..
-        } => Some(lucid_cir::TypedLiteral::Bool(*value)),
-        _ => None,
-    };
-    let ty = checker
-        .type_of_expr(expr)
-        .map_err(|error| Arc::<str>::from(error.message))?
-        .canonical();
-    let id = u32::try_from(nodes.len()).map_err(|_| Arc::<str>::from("too many expressions"))?;
-    let type_name = ty.canonical_string();
-    nodes.push(TypedExpr {
-        id,
-        type_id: TypeId::new(db, type_name.clone()),
-        type_name,
-        kind: kind.to_string(),
-        detail,
-        children: Arc::from(child_ids),
-        literal,
-        span: expr.span(),
-    });
-    Ok(id)
+    push_typed_expr_node(db, checker, expr, kind, child_ids, nodes)
 }
 
 /// Collect every expression-bearing statement in a function body. Keeping
@@ -9648,6 +9888,37 @@ mod tests {
         assert_eq!(body_root.type_name, "int");
         assert_eq!(body_root.children.as_ref(), &[1, 2]);
         assert_eq!(function.body_expressions[1].detail.as_deref(), Some("left"));
+    }
+
+    #[test]
+    fn typed_module_scopes_comprehension_targets_in_function_body() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "function-comprehension.lucid",
+            "def answer():\n    source_items = {1: 10, 2: 20}\n    comp = {key: value + 1 for key, value in source_items.items() if key == 2}\n    return comp[2]\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("comprehension targets should be scoped while collecting typed HIR");
+        let function = &typed.functions[0];
+        assert!(function.body_expressions.iter().any(|node| {
+            node.kind == "dict-comprehension"
+                && node.type_name
+                    == "class(dict;args=[int,int];parent=;traits=;interfaces=;fields=[];sealed=false)"
+                && node.children.len() == 4
+        }));
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("key") && node.type_name == "int")
+        );
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("value") && node.type_name == "int")
+        );
     }
 
     #[test]
