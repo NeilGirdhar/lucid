@@ -8828,6 +8828,24 @@ impl Function {
                         _ => Err(LowerError::UnsupportedExpression),
                     }
                 }
+                lucid_syntax::Expr::IfExpr {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    let condition =
+                        lower(condition, bindings, aggregate_bindings, instructions, next)?;
+                    let condition = constant_value_truth(condition, instructions)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    lower(
+                        if condition { then_branch } else { else_branch },
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    )
+                }
                 lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Int(value),
                     ..
@@ -20013,6 +20031,13 @@ return total
             (
                 "needle = \"z\"\ntext = \"lucid\"\nreturn needle not in text\n",
                 1,
+            ),
+            ("text = \"lucid\"\nreturn 1 if \"u\" in text else 0\n", 1),
+            ("text = \"lucid\"\nreturn 0 if \"z\" in text else 1\n", 1),
+            ("text = \"\"\nreturn 0 if bool(text) else 1\n", 1),
+            (
+                "text = \"lucid\"\nreturn len(text) if bool(text) else 1 // 0\n",
+                5,
             ),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
