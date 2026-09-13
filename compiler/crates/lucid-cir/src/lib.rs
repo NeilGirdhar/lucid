@@ -11974,6 +11974,213 @@ impl Function {
             };
             Ok(Some(elements))
         }
+        enum AggregateLoopValue {
+            Value(ValueId),
+            Aggregate(AggregateBinding),
+        }
+        fn singleton_aggregate(value: SingletonBinding) -> AggregateBinding {
+            match value {
+                SingletonBinding::None => AggregateBinding::None,
+                SingletonBinding::Ellipsis => AggregateBinding::Ellipsis,
+            }
+        }
+        fn aggregate_dict_view_loop_values(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+            instructions: &mut Vec<Instruction>,
+            next: &mut u32,
+        ) -> Option<Vec<AggregateLoopValue>> {
+            let (value, attr) = dict_view_parts(expr)?;
+            let lucid_syntax::Expr::Ident { name, .. } = value else {
+                return None;
+            };
+            let aggregate = aggregate_bindings.get(name)?;
+            let values = match (attr, aggregate) {
+                ("keys", AggregateBinding::Dict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Value(*key))
+                    .collect(),
+                ("values", AggregateBinding::Dict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| AggregateLoopValue::Value(*value))
+                    .collect(),
+                ("keys", AggregateBinding::StringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::String(key.clone()))
+                    })
+                    .collect(),
+                ("values", AggregateBinding::StringDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::String(value.clone()))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::StringIntDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::String(key.clone()))
+                    })
+                    .collect(),
+                ("values", AggregateBinding::StringIntDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Value(push_const_int(*value, instructions, next))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::StringFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::String(key.clone()))
+                    })
+                    .collect(),
+                ("values", AggregateBinding::StringFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::Float(*value))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::StringSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::String(key.clone()))
+                    })
+                    .collect(),
+                ("values", AggregateBinding::StringSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| AggregateLoopValue::Aggregate(singleton_aggregate(*value)))
+                    .collect(),
+                ("keys", AggregateBinding::IntStringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| {
+                        AggregateLoopValue::Value(push_const_int(*key, instructions, next))
+                    })
+                    .collect(),
+                ("values", AggregateBinding::IntStringDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::String(value.clone()))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::IntFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| {
+                        AggregateLoopValue::Value(push_const_int(*key, instructions, next))
+                    })
+                    .collect(),
+                ("values", AggregateBinding::IntFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::Float(*value))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::IntSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| {
+                        AggregateLoopValue::Value(push_const_int(*key, instructions, next))
+                    })
+                    .collect(),
+                ("values", AggregateBinding::IntSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| AggregateLoopValue::Aggregate(singleton_aggregate(*value)))
+                    .collect(),
+                ("keys", AggregateBinding::FloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Aggregate(AggregateBinding::Float(*key)))
+                    .collect(),
+                ("values", AggregateBinding::FloatDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::Float(*value))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::FloatIntDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Aggregate(AggregateBinding::Float(*key)))
+                    .collect(),
+                ("values", AggregateBinding::FloatIntDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Value(push_const_int(*value, instructions, next))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::FloatStringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Aggregate(AggregateBinding::Float(*key)))
+                    .collect(),
+                ("values", AggregateBinding::FloatStringDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::String(value.clone()))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::FloatSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Aggregate(AggregateBinding::Float(*key)))
+                    .collect(),
+                ("values", AggregateBinding::FloatSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| AggregateLoopValue::Aggregate(singleton_aggregate(*value)))
+                    .collect(),
+                ("keys", AggregateBinding::SingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Aggregate(singleton_aggregate(*key)))
+                    .collect(),
+                ("values", AggregateBinding::SingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| AggregateLoopValue::Aggregate(singleton_aggregate(*value)))
+                    .collect(),
+                ("keys", AggregateBinding::SingletonStringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Aggregate(singleton_aggregate(*key)))
+                    .collect(),
+                ("values", AggregateBinding::SingletonStringDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::String(value.clone()))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::SingletonIntDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Aggregate(singleton_aggregate(*key)))
+                    .collect(),
+                ("values", AggregateBinding::SingletonIntDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Value(push_const_int(*value, instructions, next))
+                    })
+                    .collect(),
+                ("keys", AggregateBinding::SingletonFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| AggregateLoopValue::Aggregate(singleton_aggregate(*key)))
+                    .collect(),
+                ("values", AggregateBinding::SingletonFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::Float(*value))
+                    })
+                    .collect(),
+                _ => return None,
+            };
+            Some(values)
+        }
+        fn bind_aggregate_loop_value(
+            name: &str,
+            value: AggregateLoopValue,
+            bindings: &mut HashMap<String, ValueId>,
+            aggregate_bindings: &mut HashMap<String, AggregateBinding>,
+        ) {
+            match value {
+                AggregateLoopValue::Value(value) => {
+                    bindings.insert(name.to_string(), value);
+                    aggregate_bindings.remove(name);
+                }
+                AggregateLoopValue::Aggregate(aggregate) => {
+                    bindings.remove(name);
+                    aggregate_bindings.insert(name.to_string(), aggregate);
+                }
+            }
+        }
         fn constant_value_truth(value: ValueId, instructions: &[Instruction]) -> Option<bool> {
             let instruction = instructions
                 .iter()
@@ -14426,7 +14633,7 @@ impl Function {
                 }
                 lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Ident(name, _),
-                    iterable: lucid_syntax::Expr::Call { func, args, .. },
+                    iterable: iterable @ lucid_syntax::Expr::Call { func, args, .. },
                     body,
                     ..
                 } if args.is_empty()
@@ -14439,6 +14646,31 @@ impl Function {
                     let lucid_syntax::Expr::Attribute { value, attr, .. } = func.as_ref() else {
                         unreachable!();
                     };
+                    if let Some(values) = aggregate_dict_view_loop_values(
+                        iterable,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    ) {
+                        if values.is_empty() {
+                            return Ok(());
+                        }
+                        if contains_return(body) {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        for value in values {
+                            bind_aggregate_loop_value(name, value, bindings, aggregate_bindings);
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
+                        }
+                        return Ok(());
+                    }
                     let lucid_syntax::Expr::Dict { entries, .. } = value.as_ref() else {
                         return Err(LowerError::UnsupportedExpression);
                     };
@@ -14517,7 +14749,7 @@ impl Function {
                 }
                 lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Wildcard(_),
-                    iterable: lucid_syntax::Expr::Call { func, args, .. },
+                    iterable: iterable @ lucid_syntax::Expr::Call { func, args, .. },
                     body,
                     ..
                 } if args.is_empty()
@@ -14530,6 +14762,30 @@ impl Function {
                     let lucid_syntax::Expr::Attribute { value, .. } = func.as_ref() else {
                         unreachable!();
                     };
+                    if let Some(values) = aggregate_dict_view_loop_values(
+                        iterable,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    ) {
+                        if values.is_empty() {
+                            return Ok(());
+                        }
+                        if contains_return(body) {
+                            return Err(LowerError::UnsupportedExpression);
+                        }
+                        for _ in values {
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
+                        }
+                        return Ok(());
+                    }
                     let lucid_syntax::Expr::Dict { entries, .. } = value.as_ref() else {
                         return Err(LowerError::UnsupportedExpression);
                     };
@@ -23765,12 +24021,32 @@ return total
             Ok(Some(3))
         );
         let module = lucid_syntax::parse(
+            "value = 0\npairs = {1: 10, 2: 20}\nfor item in pairs.keys():\n    value = value + item\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound dictionary key views should iterate keys")
+                .execute(),
+            Ok(Some(3))
+        );
+        let module = lucid_syntax::parse(
             "value = 0\nfor item in {1: 10, 2: 20}.values():\n    value = value + item\n",
         )
         .unwrap();
         assert_eq!(
             Function::from_module(&module)
                 .expect("constant dictionary value views should iterate values")
+                .execute(),
+            Ok(Some(30))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\npairs = {1: 10, 2: 20}\nfor item in pairs.values():\n    value = value + item\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound dictionary value views should iterate values")
                 .execute(),
             Ok(Some(30))
         );
@@ -23791,6 +24067,16 @@ return total
         assert_eq!(
             Function::from_module(&module)
                 .expect("constant dictionary string value views should bind aggregates")
+                .execute(),
+            Ok(Some(3))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\npairs = {1: \"a\", 2: \"bc\"}\nfor item in pairs.values():\n    value = value + len(item)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound dictionary string value views should bind aggregates")
                 .execute(),
             Ok(Some(3))
         );
