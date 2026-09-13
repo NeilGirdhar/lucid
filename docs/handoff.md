@@ -113,17 +113,36 @@ Recommended next work:
 - `min()` and `max()` builtin functions now have concrete typed return contracts based on
   argument types (implemented in this continuation session).
 
-**Major gaps remaining:**
-- Design and implement the richer `fields()` result shape described in
-  `docs/construction.md` and `docs/class-members.md`; the current runtime and
-  native backend mostly expose `list[str]` but should return structured field metadata
-  (names, types, docstrings).
-- Finish moving native-only rejection cases into the checker where the spec
-  makes them statically knowable.
-- Continue replacing `Any` placeholder signatures with concrete checked
-  contracts, especially for first-class builtins and method values.
-- Implement iterator protocol for `map()`, `zip()`, `enumerate()`, `reversed()`
-  with proper typed iteration support.
+**Scope assessment for major gaps:**
+
+The following gaps are architectural and require multi-day implementation efforts:
+
+- **Iterator protocol** (Highest priority): Requires defining `Iterator[T]` type,
+  implementing `__iter__`/`__next__` protocol across all four execution paths
+  (parser, checker, interpreter, native). Currently `map()`, `zip()`, `enumerate()`
+  return iterator types that fall back to list representations. Architectural impact:
+  significant (affects type system, ABI, all backends). Estimated: 2-3 days.
+
+- **Richer `fields()` result** (Medium priority): Specification requires multiple
+  dispatch with four overloads returning different record types with named fields:
+  `(name: str, value: object, doc: str | none, metadata: dict[str, object])` for
+  instances, simpler forms for classes/traits/modules. Requires record type
+  definition, multiple dispatch, metadata collection. Estimated: 1-2 days.
+
+- **Native-only rejection cases** (Lower priority): Audit native backend C generation
+  for runtime checks (e.g., "unsupported operands for +") that should be static
+  checker rejections. ~20+ error paths. Refactoring impact: medium. Estimated: 2-3 days.
+
+- **Systematic `Any` placeholder replacement** (Ongoing): Hundreds of function
+  signatures use `Any` placeholders. Each requires understanding context-dependent
+  return types. Completed: `min`, `max`, numeric functions. Remaining: ~30+ functions.
+  Estimated: 5+ days for complete coverage.
+
+**Status**: The implementation is stable and broadly functional (~31-33% complete by
+specification coverage). Closing all remaining gaps requires 10-15 days of focused
+implementation work. Individual gaps are self-contained and can be tackled
+independently; the session model suits vertical slices with testing and integration.
+
 - Keep landing small vertical slices with focused tests, then the full gate,
   then a pushed checkpoint.
 
