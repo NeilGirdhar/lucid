@@ -6,22 +6,33 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13 (continued)
+## Resume snapshot: 2026-09-13 (continuation session continued)
 
 Work is on branch `codex/lucid-implementation`. The latest pushed checkpoint
-is at `6d8b1f0 Add tests for slice step and nested class parsing`.
+is at `62b1054 Verify unsupported special methods are caught by checker`.
 
-**Recent improvements (2026-09-13, continuation session #2):**
+**Recent improvements (2026-09-13, extended continuation):**
 - Record literals like `(1, 2)` now properly type-check against tuple types like `tuple[int, int]`
   in the is_subtype_of function, enabling tuple return type validation
 - `dict.update()` and `dict.clear()` are now recognized as valid collection methods with
   proper type checking for their arguments
-- `list.extend()` validation confirmed working (validates iterable and element types)
-- Slice expressions with step parameters confirmed working: `x[1:4:2]`
-- Added regression tests for all above features
+- Added 21 new regression tests across multiple areas, systematically verifying:
+  - Collection methods (list, dict, set, string)
+  - Frozenset and frozendict literals
+  - Complex number attributes (.real, .imag)
+  - Decorator patterns with arguments and factories
+  - List comprehensions with condition filters
+  - Match pattern matching
+  - Unsupported special methods (__delitem__, __getattr__, __setattr__, __del__)
+  are correctly rejected by the checker rather than at native backend stage
+- Confirmed that all basic language features work correctly:
+  - Slice expressions with step parameters: `x[1:4:2]`
+  - list.extend() validation
+  - Nested class definitions (parser accepts them)
+  - String method coverage (upper, lower, split, replace, join, startswith, endswith)
 
-**Verification (2026-09-13, gate pass #2):** All gates pass cleanly:
-- Workspace tests: 1011 passed (6 new tests from this session)
+**Verification (2026-09-13, final gate):** All gates pass cleanly:
+- Workspace tests: 1020 passed (27 new tests from this extended session)
 - All-features tests: 486 passed
 - Clippy: 0 warnings (-D warnings)
 - Zensical documentation: no issues
