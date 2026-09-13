@@ -9996,10 +9996,22 @@ impl Function {
                             }
                         }
                         lucid_syntax::Expr::Call { .. } => {
-                            values.extend(
-                                const_range_values(&args[0].value)
-                                    .ok_or(LowerError::UnsupportedExpression)?,
-                            );
+                            if let Some(elements) = lower_int_dict_view_elements(
+                                &args[0].value,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )? {
+                                for value in elements {
+                                    add_value(value, instructions)?;
+                                }
+                            } else {
+                                values.extend(
+                                    const_range_values(&args[0].value)
+                                        .ok_or(LowerError::UnsupportedExpression)?,
+                                );
+                            }
                         }
                         expr if constant_bytes(expr, aggregate_bindings).is_some() => {
                             values.extend(
@@ -10132,12 +10144,24 @@ impl Function {
                             }
                         }
                         lucid_syntax::Expr::Call { .. } => {
-                            for value in const_range_values(&args[0].value)
-                                .ok_or(LowerError::UnsupportedExpression)?
-                            {
-                                total = total
-                                    .checked_add(value)
-                                    .ok_or(LowerError::UnsupportedExpression)?;
+                            if let Some(elements) = lower_int_dict_view_elements(
+                                &args[0].value,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )? {
+                                for value in elements {
+                                    add_value(value, instructions)?;
+                                }
+                            } else {
+                                for value in const_range_values(&args[0].value)
+                                    .ok_or(LowerError::UnsupportedExpression)?
+                                {
+                                    total = total
+                                        .checked_add(value)
+                                        .ok_or(LowerError::UnsupportedExpression)?;
+                                }
                             }
                         }
                         expr if constant_bytes(expr, aggregate_bindings).is_some() => {
@@ -10312,6 +10336,28 @@ impl Function {
                                 result_value &= values.iter().all(|value| *value != 0);
                             } else {
                                 result_value |= values.iter().any(|value| *value != 0);
+                            }
+                        }
+                        lucid_syntax::Expr::Call { .. } => {
+                            if let Some(elements) = lower_int_dict_view_elements(
+                                &args[0].value,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )? {
+                                for value in elements {
+                                    fold_value(value, instructions)?;
+                                }
+                            } else if let Some(values) = const_range_values(&args[0].value) {
+                                seen_any |= !values.is_empty();
+                                if is_all {
+                                    result_value &= values.iter().all(|value| *value != 0);
+                                } else {
+                                    result_value |= values.iter().any(|value| *value != 0);
+                                }
+                            } else {
+                                return Err(LowerError::UnsupportedExpression);
                             }
                         }
                         lucid_syntax::Expr::Ident { name, .. } => {
@@ -24943,6 +24989,12 @@ return total
             ("values = range(5)\nreturn 3 in values\n", 1),
             ("values = range(5)\nreturn 7 not in values\n", 1),
             ("values = range(0)\nreturn bool(values)\n", 0),
+            ("pairs = {1: 10, 2: 20}\nreturn sum(pairs.values())\n", 30),
+            ("pairs = {2: 20, 1: 10}\nreturn min(pairs.keys())\n", 1),
+            ("pairs = {1: 10, 2: 20}\nreturn max(pairs.values())\n", 20),
+            ("pairs = {1: 10, 2: 20}\nreturn all(pairs.keys())\n", 1),
+            ("pairs = {1: 0, 2: 20}\nreturn any(pairs.values())\n", 1),
+            ("pairs = {\"a\": 10, \"b\": 20}\nreturn sum(pairs.values())\n", 30),
             ("return bool({1: 10}.keys())\n", 1),
             ("return bool({1: 10}.values())\n", 1),
             ("return bool({1: 10}.items())\n", 1),
