@@ -1535,7 +1535,10 @@ impl Function {
                         .get(node.children[0] as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
                     if callee.kind == "name"
-                        && matches!(callee.detail.as_deref(), Some("len" | "bool"))
+                        && matches!(
+                            callee.detail.as_deref(),
+                            Some("len" | "bool" | "all" | "any")
+                        )
                     {
                         let aggregate_id = node.children[1];
                         let aggregate = nodes
@@ -1551,15 +1554,20 @@ impl Function {
                         let aggregate = nodes
                             .get(aggregate_id as usize)
                             .ok_or(LowerError::UnsupportedExpression)?;
-                        let length = match aggregate.kind.as_str() {
-                            "list" | "set" | "record" => aggregate.children.len(),
-                            "dict" if aggregate.children.len() % 2 == 0 => {
-                                aggregate.children.len() / 2
-                            }
+                        let (length, member_positions) = match aggregate.kind.as_str() {
+                            "list" | "set" | "record" => (
+                                aggregate.children.len(),
+                                (0..aggregate.children.len()).collect::<Vec<_>>(),
+                            ),
+                            "dict" if aggregate.children.len() % 2 == 0 => (
+                                aggregate.children.len() / 2,
+                                (0..aggregate.children.len()).step_by(2).collect::<Vec<_>>(),
+                            ),
                             _ => return Err(LowerError::UnsupportedExpression),
                         };
-                        for child in &aggregate.children {
-                            lower(
+                        let mut lowered_members = Vec::with_capacity(member_positions.len());
+                        for (position, child) in aggregate.children.iter().enumerate() {
+                            let lowered_child = lower(
                                 *child,
                                 nodes,
                                 lowered,
@@ -1568,19 +1576,56 @@ impl Function {
                                 parameter_names,
                                 local_bindings,
                             )?;
+                            if member_positions.contains(&position) {
+                                lowered_members.push(lowered_child);
+                            }
                         }
                         result = provisional_result;
-                        if callee.detail.as_deref() == Some("len") {
-                            instructions.push(Instruction::ConstInt {
-                                result,
-                                value: i64::try_from(length)
-                                    .map_err(|_| LowerError::UnsupportedExpression)?,
-                            });
-                        } else {
-                            instructions.push(Instruction::ConstBool {
-                                result,
-                                value: length > 0,
-                            });
+                        match callee.detail.as_deref() {
+                            Some("len") => {
+                                instructions.push(Instruction::ConstInt {
+                                    result,
+                                    value: i64::try_from(length)
+                                        .map_err(|_| LowerError::UnsupportedExpression)?,
+                                });
+                            }
+                            Some("bool") => {
+                                instructions.push(Instruction::ConstBool {
+                                    result,
+                                    value: length > 0,
+                                });
+                            }
+                            Some("all" | "any") => {
+                                let identity = callee.detail.as_deref() == Some("all");
+                                if lowered_members.is_empty() {
+                                    instructions.push(Instruction::ConstBool {
+                                        result,
+                                        value: identity,
+                                    });
+                                } else {
+                                    result = lowered_members[0];
+                                    let use_and = callee.detail.as_deref() == Some("all");
+                                    for member in lowered_members.into_iter().skip(1) {
+                                        let combined = ValueId(*next);
+                                        *next += 1;
+                                        if use_and {
+                                            instructions.push(Instruction::And {
+                                                result: combined,
+                                                left: result,
+                                                right: member,
+                                            });
+                                        } else {
+                                            instructions.push(Instruction::Or {
+                                                result: combined,
+                                                left: result,
+                                                right: member,
+                                            });
+                                        }
+                                        result = combined;
+                                    }
+                                }
+                            }
+                            _ => return Err(LowerError::UnsupportedExpression),
                         }
                         lowered.insert(id, result);
                         return Ok(result);
@@ -25377,6 +25422,204 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 5, &[])
             .expect("typed bool should preserve aggregate element evaluation");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_all_any_of_constant_aggregates() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("all".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("any".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "list".into(),
+                detail: None,
+                children: vec![2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "set".into(),
+                detail: None,
+                children: vec![4, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "record".into(),
+                detail: None,
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![2, 4, 3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "name".into(),
+                detail: Some("pairs".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![6, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![15, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![16, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![17, 14],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body_with_locals(
+            &nodes,
+            18,
+            &[],
+            &[("pairs".into(), 12)],
+        )
+        .expect("typed all/any should lower constant aggregate literals");
+        assert_eq!(function.execute(), Ok(Some(4)));
+    }
+
+    #[test]
+    fn typed_all_any_evaluate_dict_values() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("all".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![1, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 5, &[])
+            .expect("typed all should evaluate dict values before reducing keys");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
