@@ -10037,6 +10037,16 @@ impl Function {
                                 fold_value(value, instructions)?;
                             }
                         }
+                        expr if constant_bytes(expr, aggregate_bindings).is_some() => {
+                            let values = constant_bytes(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            seen_any |= !values.is_empty();
+                            if is_all {
+                                result_value &= values.iter().all(|value| *value != 0);
+                            } else {
+                                result_value |= values.iter().any(|value| *value != 0);
+                            }
+                        }
                         lucid_syntax::Expr::Ident { name, .. } => {
                             match aggregate_bindings
                                 .get(name)
@@ -10111,8 +10121,13 @@ impl Function {
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
-                                AggregateBinding::Bytes(_) => {
-                                    return Err(LowerError::UnsupportedExpression);
+                                AggregateBinding::Bytes(values) => {
+                                    seen_any |= !values.is_empty();
+                                    if is_all {
+                                        result_value &= values.iter().all(|value| *value != 0);
+                                    } else {
+                                        result_value |= values.iter().any(|value| *value != 0);
+                                    }
                                 }
                                 AggregateBinding::Range(values) => {
                                     seen_any |= !values.is_empty();
@@ -23891,6 +23906,10 @@ return total
             ("data = b\"ABC\"\nreturn sum(data, 1)\n", 199),
             ("return min(b\"CBA\")\n", 65),
             ("data = b\"ABC\"\nreturn max(data)\n", 67),
+            ("return all(b\"ABC\")\n", 1),
+            ("return all(b\"\")\n", 1),
+            ("return any(b\"B\")\n", 1),
+            ("data = b\"\"\nreturn any(data)\n", 0),
             ("return all([true, 1, 2])\n", 1),
             ("return any([false, 0, 2])\n", 1),
             ("return all([])\n", 1),
