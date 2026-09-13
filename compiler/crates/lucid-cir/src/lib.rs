@@ -8314,6 +8314,7 @@ impl Function {
         #[derive(Clone)]
         enum AggregateBinding {
             List(Vec<ValueId>),
+            Set(Vec<ValueId>),
             Dict(Vec<(ValueId, ValueId)>),
         }
         let mut instructions = Vec::new();
@@ -8367,6 +8368,18 @@ impl Function {
                             }
                             elements.len()
                         }
+                        lucid_syntax::Expr::Set { elements, .. } => {
+                            for element in elements {
+                                let _ = lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                            }
+                            elements.len()
+                        }
                         lucid_syntax::Expr::Dict { entries, .. } => {
                             for (key, value) in entries {
                                 let _ =
@@ -8389,6 +8402,7 @@ impl Function {
                             .ok_or(LowerError::UnsupportedExpression)?
                         {
                             AggregateBinding::List(elements) => elements.len(),
+                            AggregateBinding::Set(elements) => elements.len(),
                             AggregateBinding::Dict(entries) => entries.len(),
                         },
                         _ => return Err(LowerError::UnsupportedExpression),
@@ -8465,6 +8479,7 @@ impl Function {
                                         .copied()
                                         .ok_or(LowerError::UnsupportedExpression)
                                 }
+                                AggregateBinding::Set(_) => Err(LowerError::UnsupportedExpression),
                                 AggregateBinding::Dict(entries) => {
                                     select_mapping(entries, instructions)
                                         .ok_or(LowerError::UnsupportedExpression)
@@ -8586,6 +8601,11 @@ impl Function {
                                 .ok_or(LowerError::UnsupportedExpression)?
                             {
                                 AggregateBinding::List(elements) => {
+                                    for value in elements {
+                                        contains |= contains_value(*value, instructions)?;
+                                    }
+                                }
+                                AggregateBinding::Set(elements) => {
                                     for value in elements {
                                         contains |= contains_value(*value, instructions)?;
                                     }
@@ -9223,6 +9243,52 @@ impl Function {
                 _ => constant_truth(expr),
             }
         }
+        fn lower_aggregate_literal(
+            expr: &lucid_syntax::Expr,
+            bindings: &HashMap<String, ValueId>,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+            instructions: &mut Vec<Instruction>,
+            next: &mut u32,
+        ) -> Result<Option<AggregateBinding>, LowerError> {
+            match expr {
+                lucid_syntax::Expr::List { elements, .. } => {
+                    let mut values = Vec::with_capacity(elements.len());
+                    for element in elements {
+                        values.push(lower(
+                            element,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )?);
+                    }
+                    Ok(Some(AggregateBinding::List(values)))
+                }
+                lucid_syntax::Expr::Set { elements, .. } => {
+                    let mut values = Vec::with_capacity(elements.len());
+                    for element in elements {
+                        values.push(lower(
+                            element,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )?);
+                    }
+                    Ok(Some(AggregateBinding::Set(values)))
+                }
+                lucid_syntax::Expr::Dict { entries, .. } => {
+                    let mut values = Vec::with_capacity(entries.len());
+                    for (key, value) in entries {
+                        let key = lower(key, bindings, aggregate_bindings, instructions, next)?;
+                        let value = lower(value, bindings, aggregate_bindings, instructions, next)?;
+                        values.push((key, value));
+                    }
+                    Ok(Some(AggregateBinding::Dict(values)))
+                }
+                _ => Ok(None),
+            }
+        }
         fn visit(
             stmt: &lucid_syntax::Stmt,
             bindings: &mut HashMap<String, ValueId>,
@@ -9245,32 +9311,15 @@ impl Function {
                     value,
                     ..
                 } => {
-                    if let lucid_syntax::Expr::List { elements, .. } = value {
-                        let mut values = Vec::with_capacity(elements.len());
-                        for element in elements {
-                            values.push(lower(
-                                element,
-                                bindings,
-                                aggregate_bindings,
-                                instructions,
-                                next,
-                            )?);
-                        }
+                    if let Some(aggregate) = lower_aggregate_literal(
+                        value,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    )? {
                         bindings.remove(name);
-                        aggregate_bindings.insert(name.clone(), AggregateBinding::List(values));
-                        *last = None;
-                        return Ok(());
-                    }
-                    if let lucid_syntax::Expr::Dict { entries, .. } = value {
-                        let mut values = Vec::with_capacity(entries.len());
-                        for (key, value) in entries {
-                            let key = lower(key, bindings, aggregate_bindings, instructions, next)?;
-                            let value =
-                                lower(value, bindings, aggregate_bindings, instructions, next)?;
-                            values.push((key, value));
-                        }
-                        bindings.remove(name);
-                        aggregate_bindings.insert(name.clone(), AggregateBinding::Dict(values));
+                        aggregate_bindings.insert(name.clone(), aggregate);
                         *last = None;
                         return Ok(());
                     }
@@ -9388,32 +9437,15 @@ impl Function {
                     value: Some(value),
                     ..
                 } => {
-                    if let lucid_syntax::Expr::List { elements, .. } = value {
-                        let mut values = Vec::with_capacity(elements.len());
-                        for element in elements {
-                            values.push(lower(
-                                element,
-                                bindings,
-                                aggregate_bindings,
-                                instructions,
-                                next,
-                            )?);
-                        }
+                    if let Some(aggregate) = lower_aggregate_literal(
+                        value,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    )? {
                         bindings.remove(name);
-                        aggregate_bindings.insert(name.clone(), AggregateBinding::List(values));
-                        *last = None;
-                        return Ok(());
-                    }
-                    if let lucid_syntax::Expr::Dict { entries, .. } = value {
-                        let mut values = Vec::with_capacity(entries.len());
-                        for (key, value) in entries {
-                            let key = lower(key, bindings, aggregate_bindings, instructions, next)?;
-                            let value =
-                                lower(value, bindings, aggregate_bindings, instructions, next)?;
-                            values.push((key, value));
-                        }
-                        bindings.remove(name);
-                        aggregate_bindings.insert(name.clone(), AggregateBinding::Dict(values));
+                        aggregate_bindings.insert(name.clone(), aggregate);
                         *last = None;
                         return Ok(());
                     }
@@ -19485,6 +19517,8 @@ return total
         for (source, expected) in [
             ("values = [1, 2, 3]\nreturn len(values)\n", 3),
             ("return len([1, 2, 3])\n", 3),
+            ("values = {1, 2, 3}\nreturn len(values)\n", 3),
+            ("return len({1, 2, 3})\n", 3),
             ("values = {1: 10, 2: 20}\nreturn len(values)\n", 2),
             ("return len({1: 10, 2: 20})\n", 2),
             ("return len(\"abc\")\n", 3),
@@ -19501,6 +19535,8 @@ return total
             ("return 2 in [1, 2, 3]\n", 1),
             ("values = [1, 2, 3]\nreturn 4 not in values\n", 1),
             ("return 4 in [1, 2, 3]\n", 0),
+            ("return 2 in {1, 2, 3}\n", 1),
+            ("values = {1, 2, 3}\nreturn 4 not in values\n", 1),
             ("return 2 in {1: 10, 2: 20}\n", 1),
             ("values = {1: 10, 2: 20}\nreturn 3 not in values\n", 1),
             ("return 10 in {1: 10, 2: 20}\n", 0),
