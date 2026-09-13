@@ -826,6 +826,33 @@ fn check_reports_imported_module_type_errors() {
 }
 
 #[test]
+fn check_and_run_resolve_relative_local_imports() {
+    let root = std::env::temp_dir().join(format!("lucid_relative_imports_{}", std::process::id()));
+    let package = root.join("pkg");
+    fs::create_dir_all(&package).expect("temporary package directory should be writable");
+    let main = root.join("main.lucid");
+    fs::write(&main, "import pkg.a\nvalue = 1\n").expect("main should be writable");
+    fs::write(package.join("a.lucid"), "from .b import answer\n")
+        .expect("module should be writable");
+    fs::write(package.join("b.lucid"), "answer: int = 42\n").expect("module should be writable");
+    for command in ["check", "run"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args([
+                command,
+                main.to_str().expect("temporary path should be UTF-8"),
+            ])
+            .output()
+            .expect("lucid binary should execute");
+        assert!(
+            output.status.success(),
+            "{command} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn check_does_not_duplicate_private_from_import_diagnostics() {
     let root = std::env::temp_dir().join(format!(
         "lucid_check_private_from_import_{}",
