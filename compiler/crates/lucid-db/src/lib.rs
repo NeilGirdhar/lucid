@@ -12551,6 +12551,21 @@ mod tests {
         assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(-1)));
 
         let file = db.add_file(
+            "statement-match-initial-nested-dynamic-local-elif-branch-with-later-arm.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = 0\n            if value > 10:\n                result = value + 10\n            elif value > 0:\n                result = value\n            return result\n        case 2:\n            return 200\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect(
+                "initial match arm nested dynamic local elif branch with later arm should lower",
+            );
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
             "statement-nested-dynamic-local-elif-branch.lucid",
             "def choose(flag: bool, value: int):\n    if flag:\n        result = 0\n        if value > 10:\n            result = 100\n        elif value > 0:\n            result = value + 10\n        return result\n    else:\n        return -1\n",
         );
