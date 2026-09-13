@@ -8318,6 +8318,7 @@ impl Function {
             Set(Vec<ValueId>),
             Dict(Vec<(ValueId, ValueId)>),
             Record(Vec<ValueId>),
+            StringRecord(Vec<String>),
             String(String),
             Bytes(Vec<u8>),
             Range(Vec<i64>),
@@ -8393,7 +8394,12 @@ impl Function {
                             select_constant_index(value.chars().count(), constant_index(index)?)?;
                         value.chars().nth(selected).map(|ch| ch.to_string())
                     } else {
-                        let values = constant_string_list(value, aggregate_bindings)?;
+                        let values =
+                            if let Some(values) = constant_string_list(value, aggregate_bindings) {
+                                values
+                            } else {
+                                constant_string_record(value, aggregate_bindings)?
+                            };
                         let selected = select_constant_index(values.len(), constant_index(index)?)?;
                         values.get(selected).cloned()
                     }
@@ -8490,6 +8496,28 @@ impl Function {
                         Some(value.split_whitespace().map(str::to_string).collect())
                     }
                 }
+                _ => None,
+            }
+        }
+        fn constant_string_record(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<String>> {
+            match expr {
+                lucid_syntax::Expr::Record { fields, .. } => fields
+                    .iter()
+                    .map(|(name, field)| {
+                        if name.is_some() {
+                            None
+                        } else {
+                            constant_string(field, aggregate_bindings)
+                        }
+                    })
+                    .collect(),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::StringRecord(values) => Some(values.clone()),
+                    _ => None,
+                },
                 _ => None,
             }
         }
@@ -8679,7 +8707,7 @@ impl Function {
                             AggregateBinding::StringList(elements) => elements.len(),
                             AggregateBinding::Set(elements) => elements.len(),
                             AggregateBinding::Dict(entries) => entries.len(),
-                            AggregateBinding::Record(_) => {
+                            AggregateBinding::Record(_) | AggregateBinding::StringRecord(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::String(value) => value.chars().count(),
@@ -8796,6 +8824,9 @@ impl Function {
                             AggregateBinding::Set(elements) => !elements.is_empty(),
                             AggregateBinding::Dict(entries) => !entries.is_empty(),
                             AggregateBinding::Record(elements) => !elements.is_empty(),
+                            AggregateBinding::StringRecord(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
                             AggregateBinding::String(value) => !value.is_empty(),
                             AggregateBinding::Bytes(value) => !value.is_empty(),
                             AggregateBinding::Range(values) => !values.is_empty(),
@@ -8982,6 +9013,9 @@ impl Function {
                                 AggregateBinding::StringList(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::StringRecord(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::Record(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
@@ -9068,6 +9102,9 @@ impl Function {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::StringList(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::StringRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::Record(_) => {
@@ -9211,6 +9248,9 @@ impl Function {
                                 }
                                 AggregateBinding::Set(_) => Err(LowerError::UnsupportedExpression),
                                 AggregateBinding::StringList(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::StringRecord(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::Dict(entries) => {
@@ -9602,6 +9642,9 @@ impl Function {
                                     }
                                 }
                                 AggregateBinding::StringList(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::StringRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::Record(_) => {
@@ -10245,6 +10288,9 @@ impl Function {
                 (AggregateBinding::StringList(left), AggregateBinding::StringList(right)) => {
                     Some(left == right)
                 }
+                (AggregateBinding::StringRecord(left), AggregateBinding::StringRecord(right)) => {
+                    Some(left == right)
+                }
                 (AggregateBinding::Set(left), AggregateBinding::Set(right)) => {
                     let mut left = int_values(left)?;
                     let mut right = int_values(right)?;
@@ -10279,6 +10325,7 @@ impl Function {
                     | AggregateBinding::Set(_)
                     | AggregateBinding::Dict(_)
                     | AggregateBinding::Record(_)
+                    | AggregateBinding::StringRecord(_)
                     | AggregateBinding::String(_)
                     | AggregateBinding::Bytes(_)
                     | AggregateBinding::Range(_)
@@ -10290,6 +10337,7 @@ impl Function {
                     | AggregateBinding::Set(_)
                     | AggregateBinding::Dict(_)
                     | AggregateBinding::Record(_)
+                    | AggregateBinding::StringRecord(_)
                     | AggregateBinding::String(_)
                     | AggregateBinding::Bytes(_)
                     | AggregateBinding::Range(_)
@@ -10314,6 +10362,7 @@ impl Function {
                         AggregateBinding::Set(elements) => Some(!elements.is_empty()),
                         AggregateBinding::Dict(entries) => Some(!entries.is_empty()),
                         AggregateBinding::Record(elements) => Some(!elements.is_empty()),
+                        AggregateBinding::StringRecord(_) => None,
                         AggregateBinding::String(value) => Some(!value.is_empty()),
                         AggregateBinding::Bytes(value) => Some(!value.is_empty()),
                         AggregateBinding::Range(values) => Some(!values.is_empty()),
@@ -10469,6 +10518,9 @@ impl Function {
                     Ok(Some(AggregateBinding::Dict(values)))
                 }
                 lucid_syntax::Expr::Record { fields, .. } => {
+                    if let Some(values) = constant_string_record(expr, aggregate_bindings) {
+                        return Ok(Some(AggregateBinding::StringRecord(values)));
+                    }
                     let mut values = Vec::with_capacity(fields.len());
                     for (name, field) in fields {
                         if name.is_some() {
@@ -20990,6 +21042,9 @@ return total
             ("return \"a\" in [\"a\", \"b\"]\n", 1),
             ("return \"c\" not in [\"a\", \"b\"]\n", 1),
             ("return \"b\" in \"a,b\".split(\",\")\n", 1),
+            ("return (\"a\", \"b\") == (\"a\", \"b\")\n", 1),
+            ("return (\"a\", \"b\") != (\"a\", \"c\")\n", 1),
+            ("return (\"a\", \"b\")[1] == \"b\"\n", 1),
             ("return \"abc\"[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[-1] == \"c\"\n", 1),
@@ -21043,6 +21098,14 @@ return total
             ),
             (
                 "parts = [\"a\", \"b\"]\nneedle = \"b\"\nreturn needle in parts\n",
+                1,
+            ),
+            (
+                "parts = (\"a\", \"b\")\nreturn parts[1] == \"b\"\n",
+                1,
+            ),
+            (
+                "left = (\"a\", \"b\")\nright = (\"a\", \"b\")\nreturn left == right\n",
                 1,
             ),
             ("text = \"lucid\"\nreturn 1 if \"u\" in text else 0\n", 1),
