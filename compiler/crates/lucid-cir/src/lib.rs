@@ -12377,34 +12377,114 @@ impl Function {
                                 }
                             }
                         }
-                        if let Some(aggregate) = lower_aggregate_literal(
-                            source,
-                            bindings,
-                            aggregate_bindings,
-                            instructions,
-                            next,
-                        )? {
-                            match aggregate {
-                                AggregateBinding::Dict(_)
-                                | AggregateBinding::StringDict(_)
-                                | AggregateBinding::StringIntDict(_)
-                                | AggregateBinding::StringFloatDict(_)
-                                | AggregateBinding::StringSingletonDict(_)
-                                | AggregateBinding::IntStringDict(_)
-                                | AggregateBinding::IntSingletonDict(_)
-                                | AggregateBinding::FloatDict(_)
-                                | AggregateBinding::IntFloatDict(_)
-                                | AggregateBinding::FloatIntDict(_)
-                                | AggregateBinding::FloatStringDict(_)
-                                | AggregateBinding::FloatSingletonDict(_)
-                                | AggregateBinding::SingletonDict(_)
-                                | AggregateBinding::SingletonStringDict(_)
-                                | AggregateBinding::SingletonIntDict(_)
-                                | AggregateBinding::SingletonFloatDict(_) => {
-                                    return Ok(Some(aggregate));
+                        if matches!(source, lucid_syntax::Expr::Dict { .. }) {
+                            if let Some(aggregate) = lower_aggregate_literal(
+                                source,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )? {
+                                match aggregate {
+                                    AggregateBinding::Dict(_)
+                                    | AggregateBinding::StringDict(_)
+                                    | AggregateBinding::StringIntDict(_)
+                                    | AggregateBinding::StringFloatDict(_)
+                                    | AggregateBinding::StringSingletonDict(_)
+                                    | AggregateBinding::IntStringDict(_)
+                                    | AggregateBinding::IntSingletonDict(_)
+                                    | AggregateBinding::FloatDict(_)
+                                    | AggregateBinding::IntFloatDict(_)
+                                    | AggregateBinding::FloatIntDict(_)
+                                    | AggregateBinding::FloatStringDict(_)
+                                    | AggregateBinding::FloatSingletonDict(_)
+                                    | AggregateBinding::SingletonDict(_)
+                                    | AggregateBinding::SingletonStringDict(_)
+                                    | AggregateBinding::SingletonIntDict(_)
+                                    | AggregateBinding::SingletonFloatDict(_) => {
+                                        return Ok(Some(aggregate));
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
+                        }
+                        let entries = match source {
+                            lucid_syntax::Expr::List { elements, .. } => elements
+                                .iter()
+                                .map(|element| match element {
+                                    lucid_syntax::Expr::List { elements, .. }
+                                        if elements.len() == 2 =>
+                                    {
+                                        Some((elements[0].clone(), elements[1].clone()))
+                                    }
+                                    lucid_syntax::Expr::Record { fields, .. }
+                                        if fields.len() == 2
+                                            && fields.iter().all(|(name, _)| name.is_none()) =>
+                                    {
+                                        Some((fields[0].1.clone(), fields[1].1.clone()))
+                                    }
+                                    _ => None,
+                                })
+                                .collect::<Option<Vec<_>>>(),
+                            lucid_syntax::Expr::Record { fields, .. }
+                                if fields.iter().all(|(name, _)| name.is_none()) =>
+                            {
+                                fields
+                                    .iter()
+                                    .map(|(_, element)| match element {
+                                        lucid_syntax::Expr::List { elements, .. }
+                                            if elements.len() == 2 =>
+                                        {
+                                            Some((elements[0].clone(), elements[1].clone()))
+                                        }
+                                        lucid_syntax::Expr::Record { fields, .. }
+                                            if fields.len() == 2
+                                                && fields
+                                                    .iter()
+                                                    .all(|(name, _)| name.is_none()) =>
+                                        {
+                                            Some((fields[0].1.clone(), fields[1].1.clone()))
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect::<Option<Vec<_>>>()
+                            }
+                            lucid_syntax::Expr::Call {
+                                func: view_func,
+                                args: view_args,
+                                ..
+                            } if view_args.is_empty() => {
+                                if let lucid_syntax::Expr::Attribute { value, attr, .. } =
+                                    view_func.as_ref()
+                                {
+                                    if attr == "items" {
+                                        if let lucid_syntax::Expr::Dict { entries, .. } =
+                                            value.as_ref()
+                                        {
+                                            Some(entries.clone())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        if let Some(entries) = entries {
+                            return lower_aggregate_literal(
+                                &lucid_syntax::Expr::Dict {
+                                    entries,
+                                    span: source.span(),
+                                },
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            );
                         }
                     }
                     if matches!(
@@ -24023,6 +24103,22 @@ return total
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
 
+        let module =
+            lucid_syntax::parse("values = dict([[1, 40], [2, 42]])\nreturn values[2]\n").unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let module =
+            lucid_syntax::parse("values = dict(((1, 40), (2, 42)))\nreturn values[1]\n").unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(40)));
+
+        let module =
+            lucid_syntax::parse("values = dict({1: 40, 2: 42}.items())\nreturn values[2]\n")
+                .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
         let module = lucid_syntax::parse("return {1: 40, 2: 42}[1 + 1]\n").unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
@@ -24327,6 +24423,10 @@ return total
             ("return \"z\" not in {\"a\": \"b\"}\n", 1),
             ("return {\"a\": \"b\"}[\"a\"] == \"b\"\n", 1),
             ("values = dict({\"a\": \"b\"})\nreturn values[\"a\"] == \"b\"\n", 1),
+            (
+                "values = dict([[\"a\", \"b\"]])\nreturn values[\"a\"] == \"b\"\n",
+                1,
+            ),
             ("return len({\"a\": 1})\n", 1),
             ("return {\"a\": 1} == {\"a\": 1}\n", 1),
             ("return \"a\" in {\"a\": 1}\n", 1),
@@ -24488,6 +24588,10 @@ return total
             ("values = {1.5: 2.5}\nreturn 1.5 in values\n", 1),
             ("values = {1.5: 2.5}\nreturn values[1.5] == 2.5\n", 1),
             ("values = dict({1.5: 2.5})\nreturn values[1.5] == 2.5\n", 1),
+            (
+                "values = dict([[1.5, 2.5]])\nreturn values[1.5] == 2.5\n",
+                1,
+            ),
             ("values = {1: 1.5}\nreturn len(values)\n", 1),
             ("return {1: 1.5} == {1: 1.5}\n", 1),
             ("values = {1: 1.5}\nreturn 1 in values\n", 1),
@@ -24554,6 +24658,10 @@ return total
             ("values = {None: None}\nreturn values[None] is None\n", 1),
             (
                 "values = dict({None: ...})\nreturn values[None] is ...\n",
+                1,
+            ),
+            (
+                "values = dict([[None, ...]])\nreturn values[None] is ...\n",
                 1,
             ),
             ("values = {\"a\": None}\nreturn len(values)\n", 1),
