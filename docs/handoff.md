@@ -11,11 +11,11 @@ executable subset.
 Work is on branch `codex/lucid-implementation`. Latest checkpoint
 is at `49599d6 Remove empty placeholder loop for builtin functions`.
 
-**Gap Closure Work (2026-09-13 second continuation — 2 new structural improvements):**
-The session closed gaps in type validation for immutable/non-indexable types and
-cleaned up builtin function placeholder handling:
+**Gap Closure Work (2026-09-13 second continuation — 3 structural improvements):**
+The session closed gaps in type validation for immutable/non-indexable types,
+cleaned up builtin function handling, and improved literal type inference:
 
-**Closed Today (2 gaps + 1 cleanup):**
+**Closed Today (3 gaps + 1 cleanup + improvements):**
 1. **Immutable type index assignment validation** (4 new checks)
    - Reject assignment to tuple indices (immutable)
    - Reject assignment to string indices (immutable)
@@ -27,6 +27,12 @@ cleaned up builtin function placeholder handling:
    - Removed empty placeholder loop (all entries already in builtin_contracts)
    - Removed duplicate "sorted" entry that returned list[Any]
    - Cleaned up code and reduced maintenance burden
+
+3. **Literal type normalization in collections**
+   - Normalize LiteralBool/Int/Float/Str to base types in list/set literals
+   - Recursively normalize record fields to enable deduplication
+   - Fixes cases like [true, false] being inferred as list[Union([LiteralBool(true), LiteralBool(false)])]
+   - Now correctly infers list[bool]
 
 **Previously Closed (3 gaps in first session continuation):**
 1. **reversed(iterable) → list[ElementType]** - Preserves element type
