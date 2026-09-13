@@ -1502,12 +1502,15 @@ impl Function {
                     let right_aggregate = nodes
                         .get(aggregate_ids[1] as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
-                    let left_is_sequence =
-                        matches!(left_aggregate.kind.as_str(), "list" | "record");
-                    let right_is_sequence =
+                    let left_is_ordered = matches!(left_aggregate.kind.as_str(), "list" | "record");
+                    let right_is_ordered =
                         matches!(right_aggregate.kind.as_str(), "list" | "record");
-                    if left_is_sequence || right_is_sequence {
-                        if !left_is_sequence || !right_is_sequence {
+                    let left_is_set = left_aggregate.kind == "set";
+                    let right_is_set = right_aggregate.kind == "set";
+                    let left_is_aggregate = left_is_ordered || left_is_set;
+                    let right_is_aggregate = right_is_ordered || right_is_set;
+                    if left_is_aggregate || right_is_aggregate {
+                        if !left_is_aggregate || !right_is_aggregate {
                             return Err(LowerError::UnsupportedExpression);
                         }
                         let mut left_values = Vec::with_capacity(left_aggregate.children.len());
@@ -1559,15 +1562,43 @@ impl Function {
                             return Ok(result);
                         }
                         let mut comparisons = Vec::with_capacity(left_values.len());
-                        for (left, right) in left_values.into_iter().zip(right_values) {
-                            let comparison = ValueId(*next);
-                            *next += 1;
-                            instructions.push(Instruction::CmpEq {
-                                result: comparison,
-                                left,
-                                right,
-                            });
-                            comparisons.push(comparison);
+                        if left_is_set {
+                            for left in left_values {
+                                let mut member_comparisons = Vec::with_capacity(right_values.len());
+                                for right in &right_values {
+                                    let comparison = ValueId(*next);
+                                    *next += 1;
+                                    instructions.push(Instruction::CmpEq {
+                                        result: comparison,
+                                        left,
+                                        right: *right,
+                                    });
+                                    member_comparisons.push(comparison);
+                                }
+                                let mut contains = member_comparisons[0];
+                                for comparison in member_comparisons.into_iter().skip(1) {
+                                    let combined = ValueId(*next);
+                                    *next += 1;
+                                    instructions.push(Instruction::Or {
+                                        result: combined,
+                                        left: contains,
+                                        right: comparison,
+                                    });
+                                    contains = combined;
+                                }
+                                comparisons.push(contains);
+                            }
+                        } else {
+                            for (left, right) in left_values.into_iter().zip(right_values) {
+                                let comparison = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::CmpEq {
+                                    result: comparison,
+                                    left,
+                                    right,
+                                });
+                                comparisons.push(comparison);
+                            }
                         }
                         let mut equal = comparisons[0];
                         for comparison in comparisons.into_iter().skip(1) {
@@ -25653,6 +25684,165 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 5, &[])
             .expect("typed sequence equality should preserve side evaluation");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_set_aggregate_equality() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(3)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "set".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("left".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "set".into(),
+                detail: None,
+                children: vec![1, 0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "set".into(),
+                detail: None,
+                children: vec![0, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "binary".into(),
+                detail: Some("NotEq".into()),
+                children: vec![3, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "list".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![3, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "unary".into(),
+                detail: Some("Not".into()),
+                children: vec![10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![6, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![12, 11],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body_with_locals(&nodes, 13, &[], &[("left".into(), 3)])
+                .expect("typed set equality should lower");
+        assert_eq!(function.execute(), Ok(Some(3)));
+    }
+
+    #[test]
+    fn typed_set_equality_evaluates_both_sides() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "set".into(),
+                detail: None,
+                children: vec![0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![0, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "set".into(),
+                detail: None,
+                children: vec![0, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![1, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 5, &[])
+            .expect("typed set equality should preserve side evaluation");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
