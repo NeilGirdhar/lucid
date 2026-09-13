@@ -4914,6 +4914,150 @@ impl TypeChecker {
         }
     }
 
+    fn check_reflective_setattr(
+        &self,
+        target: &Expr,
+        attr: &str,
+        value: &Expr,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let target_type = self.type_of_expr(target)?;
+        let value_type = self.type_of_expr(value)?;
+        let base = match &target_type {
+            Type::View { mutability, inner } => {
+                if matches!(
+                    mutability,
+                    MutabilityView::ReadOnly | MutabilityView::Immutable
+                ) {
+                    return Err(TypeError {
+                        message: "cannot mutate through read-only or immutable view".into(),
+                        span,
+                    });
+                }
+                inner.as_ref()
+            }
+            other => other,
+        };
+
+        match base {
+            Type::Class {
+                name, type_args, ..
+            } => {
+                if let Some(field_type) = self.class_field_type(name, attr) {
+                    let field_type =
+                        self.instantiate_class_member_type(name, type_args, field_type);
+                    if !value_type.is_subtype_of(&field_type, &self.env) {
+                        return Err(TypeError {
+                            message: format!(
+                                "cannot assign type {:?} to field '{}' of type {:?}",
+                                value_type, attr, field_type
+                            ),
+                            span,
+                        });
+                    }
+                    return Ok(());
+                }
+                if let Some(field_type) = self.class_var_type(name, attr) {
+                    if !value_type.is_subtype_of(&field_type, &self.env) {
+                        return Err(TypeError {
+                            message: format!(
+                                "cannot assign type {:?} to field '{}' of type {:?}",
+                                value_type, attr, field_type
+                            ),
+                            span,
+                        });
+                    }
+                    return Ok(());
+                }
+                if let Some(Type::Function { params, .. }) = self.class_method_type(name, attr) {
+                    if let Some(parameter_type) = params.first() {
+                        if !value_type.is_subtype_of(parameter_type, &self.env) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "cannot assign type {:?} to setter '{}' expecting {:?}",
+                                    value_type, attr, parameter_type
+                                ),
+                                span,
+                            });
+                        }
+                    }
+                    return Ok(());
+                }
+                if self.env.classes.contains_key(name) {
+                    return Err(TypeError {
+                        message: format!("class '{name}' has no writable member '{attr}'"),
+                        span,
+                    });
+                }
+            }
+            Type::Interface { name, .. } => {
+                if let Some(Type::Function { params, .. }) = self.interface_method_type(name, attr)
+                {
+                    if let Some(parameter_type) = params.first() {
+                        if !value_type.is_subtype_of(parameter_type, &self.env) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "cannot assign type {:?} to setter '{}' expecting {:?}",
+                                    value_type, attr, parameter_type
+                                ),
+                                span,
+                            });
+                        }
+                    }
+                    return Ok(());
+                }
+                return Err(TypeError {
+                    message: format!(
+                        "no writable member '{attr}' is declared by the receiver type"
+                    ),
+                    span,
+                });
+            }
+            Type::Trait { name, .. } => {
+                if let Some(Type::Function { params, .. }) = self.trait_method_type(name, attr) {
+                    if let Some(parameter_type) = params.first() {
+                        if !value_type.is_subtype_of(parameter_type, &self.env) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "cannot assign type {:?} to setter '{}' expecting {:?}",
+                                    value_type, attr, parameter_type
+                                ),
+                                span,
+                            });
+                        }
+                    }
+                    return Ok(());
+                }
+                return Err(TypeError {
+                    message: format!(
+                        "no writable member '{attr}' is declared by the receiver type"
+                    ),
+                    span,
+                });
+            }
+            Type::Record { fields, .. } => {
+                if let Some((_, field_type)) = fields
+                    .iter()
+                    .find(|(name, _)| name.as_deref() == Some(attr))
+                {
+                    if !value_type.is_subtype_of(field_type, &self.env) {
+                        return Err(TypeError {
+                            message: format!(
+                                "cannot assign type {:?} to field '{}' of type {:?}",
+                                value_type, attr, field_type
+                            ),
+                            span,
+                        });
+                    }
+                }
+            }
+            Type::TypeVar(name) if matches!(name.as_str(), "Any" | "module" | "super") => {}
+            _ => {}
+        }
+
+        Ok(())
+    }
+
     pub fn check_statement(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         if let Stmt::Export(inner) = stmt {
             if let Some((name, span)) = Self::reserved_module_binding(inner) {
@@ -8553,6 +8697,28 @@ impl TypeChecker {
                                     span: argument.value.span(),
                                 });
                             }
+                        }
+                    }
+                    if name == "setattr" {
+                        if let (
+                            Some(target),
+                            Some(Arg {
+                                value:
+                                    Expr::Literal {
+                                        value: LiteralValue::Str(attr_name),
+                                        ..
+                                    },
+                                ..
+                            }),
+                            Some(next_value),
+                        ) = (args.first(), args.get(1), args.get(2))
+                        {
+                            self.check_reflective_setattr(
+                                &target.value,
+                                attr_name,
+                                &next_value.value,
+                                next_value.value.span(),
+                            )?;
                         }
                     }
                     if name == "round" && args.len() == 2 {
@@ -16010,6 +16176,14 @@ def reject(value: not int) -> none:
             ("getattr(1, 1)\n", "attribute name must be str"),
             ("setattr(1, \"x\")\n", "requires at least 3"),
             ("setattr(1, 1, 2)\n", "attribute name must be str"),
+            (
+                "class Point:\n    x: int\np = Point(1)\nsetattr(p, \"x\", \"bad\")\n",
+                "cannot assign type",
+            ),
+            (
+                "class Box:\n    value: int\n    setter value(self, next: int):\n        self.value = next\nb = Box(1)\nsetattr(b, \"value\", \"bad\")\n",
+                "cannot assign type",
+            ),
             ("hasattr(1, 1)\n", "attribute name must be str"),
             ("any()\n", "requires at least 1"),
             ("pow(1)\n", "requires at least 2"),
@@ -16247,7 +16421,16 @@ def reject(value: not int) -> none:
         checker
             .check_module(
                 &parse(
-                    "class Point:\n    x: int\n    y: str\np = Point(4, \"ok\")\nx: int = getattr(p, \"x\")\ny: str = getattr(p, \"y\")\nfallback: int = getattr(p, \"missing\", 42)\n",
+                    "class Point:\n    x: int\n    y: str\np = Point(4, \"ok\")\nx: int = getattr(p, \"x\")\ny: str = getattr(p, \"y\")\nfallback: int = getattr(p, \"missing\", 42)\nsetattr(p, \"x\", 5)\n",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(
+                &parse(
+                    "class Box:\n    value: int\n    setter value(self, next: int):\n        self.value = next\nb = Box(1)\nsetattr(b, \"value\", 2)\n",
                 )
                 .unwrap(),
             )
