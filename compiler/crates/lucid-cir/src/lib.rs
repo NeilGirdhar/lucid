@@ -1535,6 +1535,22 @@ impl Function {
                         .get(node.children[0] as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
                     if callee.kind == "name"
+                        && callee.detail.as_deref() == Some("int")
+                        && node.children.len() == 2
+                    {
+                        result = lower(
+                            node.children[1],
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        lowered.insert(id, result);
+                        return Ok(result);
+                    }
+                    if callee.kind == "name"
                         && matches!(
                             callee.detail.as_deref(),
                             Some("len" | "bool" | "all" | "any" | "sum")
@@ -1557,7 +1573,7 @@ impl Function {
                         let aggregate = nodes
                             .get(aggregate_id as usize)
                             .ok_or(LowerError::UnsupportedExpression)?;
-                        let (length, member_positions) = match aggregate.kind.as_str() {
+                        let aggregate_shape = match aggregate.kind.as_str() {
                             "list" | "set" | "record" => (
                                 aggregate.children.len(),
                                 (0..aggregate.children.len()).collect::<Vec<_>>(),
@@ -1566,8 +1582,36 @@ impl Function {
                                 aggregate.children.len() / 2,
                                 (0..aggregate.children.len()).step_by(2).collect::<Vec<_>>(),
                             ),
+                            _ if callee.detail.as_deref() == Some("bool")
+                                && node.children.len() == 2 =>
+                            {
+                                let operand = lower(
+                                    node.children[1],
+                                    nodes,
+                                    lowered,
+                                    instructions,
+                                    next,
+                                    parameter_names,
+                                    local_bindings,
+                                )?;
+                                let zero = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::ConstInt {
+                                    result: zero,
+                                    value: 0,
+                                });
+                                result = provisional_result;
+                                instructions.push(Instruction::CmpNe {
+                                    result,
+                                    left: operand,
+                                    right: zero,
+                                });
+                                lowered.insert(id, result);
+                                return Ok(result);
+                            }
                             _ => return Err(LowerError::UnsupportedExpression),
                         };
+                        let (length, member_positions) = aggregate_shape;
                         let mut lowered_members = Vec::with_capacity(member_positions.len());
                         for (position, child) in aggregate.children.iter().enumerate() {
                             let lowered_child = lower(
@@ -25471,6 +25515,142 @@ return total
         let function = Function::from_typed_function_body(&nodes, 5, &[])
             .expect("typed bool should preserve aggregate element evaluation");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_primitive_int_and_bool_conversions() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("int".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("bool".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(true)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "binary".into(),
+                detail: Some("Lt".into()),
+                children: vec![4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(42)),
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![3, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![14, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![15, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![16, 13],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 17, &["value".into()])
+            .expect("typed primitive int/bool conversions should lower");
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(4)));
     }
 
     #[test]
