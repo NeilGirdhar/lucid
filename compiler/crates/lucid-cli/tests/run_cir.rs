@@ -853,6 +853,91 @@ fn check_and_run_resolve_relative_local_imports() {
 }
 
 #[test]
+fn commands_report_unresolved_relative_imports_in_imported_modules() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_missing_relative_import_{}",
+        std::process::id()
+    ));
+    let package = root.join("pkg");
+    fs::create_dir_all(&package).expect("temporary package directory should be writable");
+    let main = root.join("main.lucid");
+    let output_bin = root.join("out");
+    fs::write(&main, "import pkg.a\nvalue = 1\n").expect("main should be writable");
+    fs::write(package.join("a.lucid"), "from .missing import answer\n")
+        .expect("module should be writable");
+    for args in [
+        vec![
+            "check".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "run".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "emit-cir".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "run-cir".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "run".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+            "--native".to_string(),
+        ],
+        vec![
+            "emit-c".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "build".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+            "-o".to_string(),
+            output_bin
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args(args.iter().map(String::as_str))
+            .output()
+            .expect("lucid binary should execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?} should fail");
+        assert!(
+            stderr.contains("E0300"),
+            "{args:?}: unexpected stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("pkg/a.lucid") || stderr.contains("pkg\\a.lucid"),
+            "{args:?}: diagnostic should point at imported module: {stderr}"
+        );
+        assert!(
+            stderr.contains("from .missing import answer"),
+            "{args:?}: diagnostic should render unresolved relative import: {stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn check_does_not_duplicate_private_from_import_diagnostics() {
     let root = std::env::temp_dir().join(format!(
         "lucid_check_private_from_import_{}",
