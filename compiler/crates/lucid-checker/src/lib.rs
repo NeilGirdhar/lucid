@@ -19255,4 +19255,24 @@ else:
             result
         );
     }
+
+    #[test]
+    fn type_narrowing_in_union_types() {
+        let code = r#"x: int | str | None = None
+
+if x is None:
+    print("x is None")
+else:
+    # x should be narrowed from int | str | None to int | str
+    y: int | str = x
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "type narrowing should work in union types: {:?}",
+            result
+        );
+    }
 }
