@@ -9,12 +9,17 @@ executable subset.
 ## Resume snapshot: 2026-09-13
 
 Work is on branch `codex/lucid-implementation`. The latest pushed checkpoint
-before this snapshot is `0ec4421 Validate function value calls`; later commits
-may include this handoff and the current checker slice.
+before this snapshot is `0ec4421 Validate function value calls`.
 
-**Verification (2026-09-13, re-verified):** All gates pass cleanly:
-- Workspace tests: 1008 passed
-- All-features tests: 485 passed
+**Recent improvements (2026-09-13, continuation session):**
+- Variadic positional parameters (*args) now properly type-check as `Arguments[T]`
+- Arguments is now recognized as iterable, enabling loops over variadic params
+- Regression test added for variadic parameter type checking
+- All three execution paths (checker, interpreter, native) support variadic params
+
+**Verification (2026-09-13, final gate):** All gates pass cleanly:
+- Workspace tests: 1009 passed (including new variadic parameter test)
+- All-features tests: 486 passed
 - Clippy: 0 warnings (-D warnings)
 - Zensical documentation: no issues
 - Specification examples: 257 validated (203 positive + 54 expected failures)
@@ -28,6 +33,8 @@ sharing one typed control-flow IR.
 
 Recent completed slices:
 
+- Variadic positional parameters (`*args: T`) now type-check as `Arguments[T]`
+  and are properly iterable, enabling full type checking across all backends.
 - Literal `getattr` and `setattr` now use declared member and setter types
   instead of falling back to `Any`.
 - Typed builtins now cover math, `env_var`, `iter`, `enumerate`, `zip`, `map`,
