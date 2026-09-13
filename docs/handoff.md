@@ -2081,6 +2081,9 @@ diverged:
   `else`, using the initialized local as the selected-arm fall-through result.
   It also accepts an inner `else` that assigns the returned local, using that
   assignment as the selected-arm fallback.
+  Nested local branches now also accept augmented assignment to the returned
+  local, such as `result += 10`, by expanding it against the known initialized
+  local value before lowering the explicit ladder.
   The initial-arm adapter now also preserves following outer `elif` branches
   that return directly, so a nested local branch in the first `if` arm no
   longer blocks later direct-return arms.

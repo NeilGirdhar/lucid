@@ -4137,10 +4137,11 @@ pub fn lower_function_body(
             || branch.iter().all(branch_noop_statement))
         .then_some(None)
     }
-    fn assignment_value_for_name<'a>(
-        statements: &'a [lucid_syntax::Stmt],
+    fn assignment_value_for_name(
+        statements: &[lucid_syntax::Stmt],
         expected_name: &str,
-    ) -> Option<&'a lucid_syntax::Expr> {
+        current_value: &lucid_syntax::Expr,
+    ) -> Option<lucid_syntax::Expr> {
         let mut meaningful = statements
             .iter()
             .filter(|statement| !branch_noop_statement(statement));
@@ -4158,7 +4159,18 @@ pub fn lower_function_body(
                 pattern: lucid_syntax::Pattern::Ident(name, _),
                 value: Some(value),
                 ..
-            } if name == expected_name => Some(value),
+            } if name == expected_name => Some(value.clone()),
+            lucid_syntax::Stmt::AugAssign {
+                target: target @ lucid_syntax::Expr::Ident { name, .. },
+                op,
+                value,
+                span,
+            } if name == expected_name => Some(lucid_syntax::Expr::Binary {
+                op: op.clone(),
+                left: Box::new(current_value.clone()),
+                right: Box::new(value.clone()),
+                span: *span,
+            }),
             _ => None,
         }
     }
@@ -4257,7 +4269,7 @@ pub fn lower_function_body(
         {
             let mut found_nested = false;
             let mut elif_conditions = Vec::new();
-            let mut elif_values = Vec::new();
+            let mut elif_values: Vec<lucid_syntax::Expr> = Vec::new();
             for (elif_condition, elif_branch) in elif_branches {
                 if static_truth(elif_condition).is_some()
                     || !has_identifier(elif_condition)
@@ -4267,7 +4279,7 @@ pub fn lower_function_body(
                 }
                 if let Some(value) = single_value_return(elif_branch) {
                     elif_conditions.push(elif_condition.clone());
-                    elif_values.push(value);
+                    elif_values.push(value.clone());
                     continue;
                 }
                 if found_nested {
@@ -4313,13 +4325,15 @@ pub fn lower_function_body(
                             && has_identifier(inner_elif_condition)
                             && !has_division(inner_elif_condition)
                     })
-                    && let Some(inner_then_value) = assignment_value_for_name(inner_then, name)
+                    && let Some(inner_then_value) =
+                        assignment_value_for_name(inner_then, name, initial_value)
                 {
                     found_nested = true;
                     elif_conditions.push(and_expr(elif_condition, inner_condition));
                     elif_values.push(inner_then_value);
                     for (inner_elif_condition, branch) in inner_elifs {
-                        let Some(value) = assignment_value_for_name(branch, name) else {
+                        let Some(value) = assignment_value_for_name(branch, name, initial_value)
+                        else {
                             return Err(Arc::from(error));
                         };
                         elif_conditions.push(and_expr(elif_condition, inner_elif_condition));
@@ -4327,12 +4341,14 @@ pub fn lower_function_body(
                     }
                     let inner_fallback = match inner_else.as_deref() {
                         Some(branch) => {
-                            let Some(value) = assignment_value_for_name(branch, name) else {
+                            let Some(value) =
+                                assignment_value_for_name(branch, name, initial_value)
+                            else {
                                 return Err(Arc::from(error));
                             };
                             value
                         }
-                        None => initial_value,
+                        None => initial_value.clone(),
                     };
                     elif_conditions.push(elif_condition.clone());
                     elif_values.push(inner_fallback);
@@ -4349,7 +4365,6 @@ pub fn lower_function_body(
                 let elif_pairs = elif_conditions
                     .iter()
                     .zip(elif_values.iter())
-                    .map(|(condition, value)| (condition, *value))
                     .collect::<Vec<_>>();
                 return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
                     condition,
@@ -4436,12 +4451,13 @@ pub fn lower_function_body(
                         && has_identifier(elif_condition)
                         && !has_division(elif_condition)
                 })
-                && let Some(inner_then_value) = assignment_value_for_name(inner_then, name)
+                && let Some(inner_then_value) =
+                    assignment_value_for_name(inner_then, name, initial_value)
             {
                 let Some(inner_elif_values) = inner_elifs
                     .iter()
                     .map(|(elif_condition, branch)| {
-                        assignment_value_for_name(branch, name)
+                        assignment_value_for_name(branch, name, initial_value)
                             .map(|value| (and_expr(condition, elif_condition), value))
                     })
                     .collect::<Option<Vec<_>>>()
@@ -4451,18 +4467,19 @@ pub fn lower_function_body(
                 let combined_condition = and_expr(condition, inner_condition);
                 let inner_fallback = match inner_else.as_deref() {
                     Some(branch) => {
-                        let Some(value) = assignment_value_for_name(branch, name) else {
+                        let Some(value) = assignment_value_for_name(branch, name, initial_value)
+                        else {
                             return Err(Arc::from(error));
                         };
                         value
                     }
-                    None => initial_value,
+                    None => initial_value.clone(),
                 };
                 let mut elif_values = inner_elif_values
                     .iter()
-                    .map(|(condition, value)| (condition, *value))
+                    .map(|(condition, value)| (condition, value))
                     .collect::<Vec<_>>();
-                elif_values.push((condition, inner_fallback));
+                elif_values.push((condition, &inner_fallback));
                 elif_values.extend(
                     outer_elif_values
                         .iter()
@@ -4475,7 +4492,7 @@ pub fn lower_function_body(
                 }
                 return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
                     &combined_condition,
-                    inner_then_value,
+                    &inner_then_value,
                     &elif_values,
                     else_value,
                     parameter_names,
@@ -4558,12 +4575,13 @@ pub fn lower_function_body(
                         && has_identifier(elif_condition)
                         && !has_division(elif_condition)
                 })
-                && let Some(inner_then_value) = assignment_value_for_name(inner_then, name)
+                && let Some(inner_then_value) =
+                    assignment_value_for_name(inner_then, name, initial_value)
             {
                 let Some(inner_elif_values) = inner_elifs
                     .iter()
                     .map(|(elif_condition, branch)| {
-                        assignment_value_for_name(branch, name)
+                        assignment_value_for_name(branch, name, initial_value)
                             .map(|value| (elif_condition.clone(), value))
                     })
                     .collect::<Option<Vec<_>>>()
@@ -4572,12 +4590,13 @@ pub fn lower_function_body(
                 };
                 let inner_fallback = match inner_else.as_deref() {
                     Some(branch) => {
-                        let Some(value) = assignment_value_for_name(branch, name) else {
+                        let Some(value) = assignment_value_for_name(branch, name, initial_value)
+                        else {
                             return Err(Arc::from(error));
                         };
                         value
                     }
-                    None => initial_value,
+                    None => initial_value.clone(),
                 };
                 let mut elif_conditions =
                     Vec::with_capacity(outer_elif_values.len() + inner_elifs.len() + 1);
@@ -4585,7 +4604,7 @@ pub fn lower_function_body(
                     Vec::with_capacity(outer_elif_values.len() + inner_elifs.len() + 1);
                 for (elif_condition, value) in outer_elif_values {
                     elif_conditions.push(elif_condition.clone());
-                    elif_values.push(value);
+                    elif_values.push(value.clone());
                 }
                 elif_conditions.push(inner_condition.clone());
                 elif_values.push(inner_then_value);
@@ -4601,13 +4620,12 @@ pub fn lower_function_body(
                 let elif_pairs = elif_conditions
                     .iter()
                     .zip(elif_values.iter())
-                    .map(|(condition, value)| (condition, *value))
                     .collect::<Vec<_>>();
                 return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
                     condition,
                     then_value,
                     &elif_pairs,
-                    inner_fallback,
+                    &inner_fallback,
                     parameter_names,
                 )
                 .map(Arc::new)
@@ -12800,6 +12818,28 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
         assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-augassign-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = value\n        if value > 0:\n            result += 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested dynamic local augmented assignment branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(-2)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-nested-dynamic-local-augassign-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = value\n            if value > 0:\n                result += 10\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match arm nested dynamic local augmented assignment branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(-2)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(-1)));
 
         let file = db.add_file(
             "statement-nested-dynamic-local-branch-with-outer-elif.lucid",
