@@ -2067,6 +2067,13 @@ diverged:
   That route now first normalizes statically selected nested branches, so an
   explicit return hidden under another `if true` can still reach the shared CFG
   lowerer while dead `else` returns do not make a setup-only branch value-like.
+* The typed-HIR function-body fast path now requires a statement-level
+  conditional root to use the top-level statement span.
+  This prevents a nested inner `if` node from replacing a dynamic outer `if`
+  when the function body has only one source statement.
+  The regression checks a dynamic outer guard whose selected arm contains a
+  statically selected inner branch, and verifies that the emitted CIR still
+  contains a branch terminator for the outer guard.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,

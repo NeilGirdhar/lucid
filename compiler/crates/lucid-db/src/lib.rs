@@ -3590,11 +3590,12 @@ pub fn lower_function_body(
     // path as constant expressions; the AST below remains only a temporary
     // adapter for statement forms that have not reached typed CIR yet.
     if !function.is_async
+        && let [lucid_syntax::Stmt::If { span, .. }] = source_function.body.as_slice()
         && let Some(root) = function
             .body_expressions
             .iter()
             .rev()
-            .find(|node| node.kind == "if" && source_function.body.len() == 1)
+            .find(|node| node.kind == "if" && node.span == *span)
     {
         let nodes = function
             .body_expressions
@@ -11727,6 +11728,23 @@ mod tests {
             .expect("statement conditional returns should lower through typed HIR");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "statement-dynamic-if-static-inner-if.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        if true:\n            return value + 1\n        else:\n            return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dynamic outer if should not be replaced by nested static inner if");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(0)));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator, lucid_cir::Terminator::Branch { .. })),
+            "outer dynamic guard must remain in CIR"
+        );
     }
 
     #[test]
