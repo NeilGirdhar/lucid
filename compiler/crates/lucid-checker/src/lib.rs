@@ -2434,6 +2434,13 @@ impl TypeChecker {
                 vec![any.clone(), any.clone(), any.clone()],
                 any.clone(),
             ),
+            ("sqrt", 1, Some(1), vec![any.clone()], Type::Float),
+            ("sin", 1, Some(1), vec![any.clone()], Type::Float),
+            ("cos", 1, Some(1), vec![any.clone()], Type::Float),
+            ("tan", 1, Some(1), vec![any.clone()], Type::Float),
+            ("floor", 1, Some(1), vec![any.clone()], Type::Int),
+            ("ceil", 1, Some(1), vec![any.clone()], Type::Int),
+            ("monotonic", 0, Some(0), Vec::new(), Type::Float),
         ];
         for (name, required, maximum, params, return_type) in builtin_contracts {
             env.function_arity.insert(name.into(), (required, maximum));
@@ -7958,6 +7965,26 @@ impl TypeChecker {
                 right,
                 span: _,
             } => {
+                if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                    let mut pending = vec![left.as_ref(), right.as_ref()];
+                    while let Some(expr) = pending.pop() {
+                        if let Expr::Binary {
+                            op: nested_op,
+                            left: nested_left,
+                            right: nested_right,
+                            ..
+                        } = expr
+                        {
+                            if nested_op == op {
+                                pending.push(nested_left.as_ref());
+                                pending.push(nested_right.as_ref());
+                                continue;
+                            }
+                        }
+                        self.type_of_expr(expr)?;
+                    }
+                    return Ok(Type::Bool);
+                }
                 let lt = match self.type_of_expr(left)? {
                     Type::LiteralInt(_) => Type::Int,
                     Type::LiteralStr(_) => Type::Str,
@@ -8641,6 +8668,30 @@ impl TypeChecker {
                                     message: format!(
                                         "three-argument pow() modulus must be int, got {:?}",
                                         modulus_type
+                                    ),
+                                    span: argument.value.span(),
+                                });
+                            }
+                        }
+                    }
+                    if matches!(
+                        name.as_str(),
+                        "sqrt" | "sin" | "cos" | "tan" | "floor" | "ceil"
+                    ) {
+                        if let Some(argument) = args.first() {
+                            let argument_type = self.type_of_expr(&argument.value)?;
+                            let numeric = matches!(
+                                argument_type,
+                                Type::Int
+                                    | Type::LiteralInt(_)
+                                    | Type::Float
+                                    | Type::LiteralFloat(_)
+                            ) || matches!(&argument_type, Type::TypeVar(name) if name == "Any");
+                            if !numeric {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "{}() argument must be numeric, got {:?}",
+                                        name, argument_type
                                     ),
                                     span: argument.value.span(),
                                 });
@@ -10081,6 +10132,8 @@ impl TypeChecker {
                                         Type::Float => Some(Type::Float),
                                         _ => None,
                                     },
+                                    "sqrt" | "sin" | "cos" | "tan" => Some(Type::Float),
+                                    "floor" | "ceil" => Some(Type::Int),
                                     "sum" => match argument_type {
                                         Type::Class { type_args, .. } => type_args.first().map(|ty| match ty {
                                             Type::Float => Type::Float,
@@ -15815,6 +15868,24 @@ def reject(value: not int) -> none:
     }
 
     #[test]
+    fn test_long_logical_chains_type_check_without_recursive_spine() {
+        let terms = (0..80)
+            .map(|index| format!("value{index}"))
+            .collect::<Vec<_>>();
+        let assignments = terms
+            .iter()
+            .map(|name| format!("    {name} = true\n"))
+            .collect::<String>();
+        let source = format!(
+            "def all_true() -> bool:\n{}    return {}\n",
+            assignments,
+            terms.join(" and ")
+        );
+        let mut checker = TypeChecker::new();
+        checker.check_module(&parse(&source).unwrap()).unwrap();
+    }
+
+    #[test]
     fn test_without_eq_requires_explicit_equality_member() {
         let mut checker = TypeChecker::new();
         let source = "class Token without Eq:\n    value: int\na = Token(1)\nb = Token(1)\nresult = a == b\n";
@@ -15867,6 +15938,9 @@ def reject(value: not int) -> none:
             ("sorted(1)\n", "argument must be iterable"),
             ("zip(1)\n", "arguments must be iterable"),
             ("abs()\n", "requires at least 1"),
+            ("sqrt(\"bad\")\n", "argument must be numeric"),
+            ("floor(\"bad\")\n", "argument must be numeric"),
+            ("monotonic(1)\n", "accepts at most 0"),
             ("round(1, 2, 3)\n", "accepts at most 2"),
             ("sum([\"bad\"])\n", "elements must be numeric"),
             ("sum([true])\n", "elements must be numeric"),
@@ -16072,6 +16146,15 @@ def reject(value: not int) -> none:
             checker.env.variables.get("mapped_sum").map(|(ty, _)| ty),
             Some(Type::Int)
         ));
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(
+                &parse(
+                    "root: float = sqrt(4)\nwave: float = sin(1.0) + cos(0) + tan(1)\nlow: int = floor(1.5)\nhigh: int = ceil(1.5)\ntick: float = monotonic()\n",
+                )
+                .unwrap(),
+            )
+            .unwrap();
         let mut checker = TypeChecker::new();
         checker
             .check_module(&parse("a = abs(-1)\nb = abs(-1.0)\nc = round(1.5)\nd = round(1.5, 1)\ne = sum([1.0])\n").unwrap())
