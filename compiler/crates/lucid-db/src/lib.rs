@@ -1107,34 +1107,10 @@ fn collect_typed_body<'db>(
                 }
 
                 fn typed_match_pure_expr(expr: &lucid_syntax::Expr) -> bool {
-                    match expr {
-                        lucid_syntax::Expr::Literal { .. } | lucid_syntax::Expr::Ident { .. } => {
-                            true
-                        }
-                        lucid_syntax::Expr::Unary { expr, .. } => typed_match_pure_expr(expr),
-                        lucid_syntax::Expr::Binary {
-                            op, left, right, ..
-                        } => {
-                            !matches!(
-                                op,
-                                lucid_syntax::BinaryOp::Div
-                                    | lucid_syntax::BinaryOp::FloorDiv
-                                    | lucid_syntax::BinaryOp::Mod
-                            ) && typed_match_pure_expr(left)
-                                && typed_match_pure_expr(right)
-                        }
-                        lucid_syntax::Expr::IfExpr {
-                            condition,
-                            then_branch,
-                            else_branch,
-                            ..
-                        } => {
-                            typed_match_pure_expr(condition)
-                                && typed_match_pure_expr(then_branch)
-                                && typed_match_pure_expr(else_branch)
-                        }
-                        _ => false,
-                    }
+                    matches!(
+                        expr,
+                        lucid_syntax::Expr::Literal { .. } | lucid_syntax::Expr::Ident { .. }
+                    )
                 }
                 fn typed_match_static_truth(expr: &lucid_syntax::Expr) -> Option<bool> {
                     match expr {
@@ -9631,7 +9607,7 @@ mod tests {
 
         let file = db.add_file(
             "match-noop-hir.lucid",
-            "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 3\n        case _:\n            value + 1\n            fallback = 4\n            return fallback\n",
+            "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 3\n        case _:\n            value\n            fallback = 4\n            return fallback\n",
         );
         let typed = typed_module(&db, file)
             .as_ref()
@@ -10719,11 +10695,29 @@ mod tests {
         );
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
-            .expect("multi-arm literal match with no-op setup should lower through CIR");
+            .expect("multi-arm literal match with arithmetic setup should lower through CIR");
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-trivial-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 11\n        case 2:\n            value\n            return 22\n        case _:\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with trivial no-op setup should lower through CIR");
         assert!(
             typed_module(&db, file)
                 .as_ref()
-                .expect("multi-arm no-op match should type check")
+                .expect("multi-arm trivial no-op match should type check")
                 .functions[0]
                 .body_expressions
                 .iter()
@@ -10746,6 +10740,20 @@ mod tests {
             Err(lucid_cir::ExecuteError::DivisionByZero)
         );
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-discarded-overflow-prefix.lucid",
+            "def choose(flag: int, value: int):\n    match flag:\n        case 1:\n            return 11\n        case 2:\n            value + 1\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("literal match should preserve selected discarded arithmetic prefix");
+        assert_eq!(function.execute_with_args(&[1, i64::MAX]), Ok(Some(11)));
+        assert_eq!(
+            function.execute_with_args(&[2, i64::MAX]),
+            Err(lucid_cir::ExecuteError::ArithmeticOverflow)
+        );
+        assert_eq!(function.execute_with_args(&[7, i64::MAX]), Ok(Some(33)));
 
         let file = db.add_file(
             "multi-match-assert-hir.lucid",

@@ -764,8 +764,8 @@ diverged:
   lowering. Selected match arms that preserve setup before void or fall-through
   completion use the same recognizer, while effectful discarded expressions still
   reject. Pure discarded expressions now count as no-op setup in those paths too,
-  except for division-family expressions, which lower as ordered prefixes so
-  recoverable division errors are not erased.
+  except for arithmetic expressions that can report recoverable errors, which
+  lower as ordered prefixes so division and overflow errors are not erased.
   Match value and void arm extraction can also unwrap statically selected
   conditionals without evaluating dead arms, including selected setup before
   void or fall-through completion.
