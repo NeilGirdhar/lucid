@@ -9502,6 +9502,28 @@ impl Function {
                     op: op @ (lucid_syntax::BinaryOp::In | lucid_syntax::BinaryOp::NotIn),
                     right,
                     ..
+                } if constant_string(left, aggregate_bindings).is_some()
+                    && constant_string_list(right, aggregate_bindings).is_some() =>
+                {
+                    let needle = constant_string(left, aggregate_bindings)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let haystack = constant_string_list(right, aggregate_bindings)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let contains = haystack.contains(&needle);
+                    let value = match op {
+                        lucid_syntax::BinaryOp::In => contains,
+                        lucid_syntax::BinaryOp::NotIn => !contains,
+                        _ => unreachable!(),
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Binary {
+                    left,
+                    op: op @ (lucid_syntax::BinaryOp::In | lucid_syntax::BinaryOp::NotIn),
+                    right,
+                    ..
                 } => {
                     let needle = lower(left, bindings, aggregate_bindings, instructions, next)?;
                     let needle = constant_int(needle, instructions)
@@ -20952,6 +20974,9 @@ return total
             ("return \"a,b\".split(\",\")[1] == \"b\"\n", 1),
             ("return \",\".join([\"a\", \"b\"]) == \"a,b\"\n", 1),
             ("return [\"a\", \"b\"] == [\"a\", \"b\"]\n", 1),
+            ("return \"a\" in [\"a\", \"b\"]\n", 1),
+            ("return \"c\" not in [\"a\", \"b\"]\n", 1),
+            ("return \"b\" in \"a,b\".split(\",\")\n", 1),
             ("return \"abc\"[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[-1] == \"c\"\n", 1),
@@ -20993,6 +21018,10 @@ return total
             ),
             (
                 "parts = \"a,b\".split(\",\")\nreturn parts[0] == \"a\" and parts[1] == \"b\"\n",
+                1,
+            ),
+            (
+                "parts = [\"a\", \"b\"]\nneedle = \"b\"\nreturn needle in parts\n",
                 1,
             ),
             ("text = \"lucid\"\nreturn 1 if \"u\" in text else 0\n", 1),
