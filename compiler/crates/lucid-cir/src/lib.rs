@@ -685,6 +685,44 @@ impl Function {
                         local_bindings,
                     );
                 }
+                if node.kind == "call" && node.children.len() == 3 {
+                    if let Some(callee) = nodes.get(node.children[0] as usize) {
+                        if callee.kind == "name"
+                            && matches!(callee.detail.as_deref(), Some("min" | "max"))
+                        {
+                            let comparison_detail = if callee.detail.as_deref() == Some("min") {
+                                "Lt"
+                            } else {
+                                "Gt"
+                            };
+                            let mut expanded = nodes.to_vec();
+                            let comparison_id = u32::try_from(expanded.len())
+                                .map_err(|_| LowerError::UnsupportedExpression)?;
+                            expanded.push(TypedExprNode {
+                                id: comparison_id,
+                                kind: "binary".into(),
+                                detail: Some(comparison_detail.into()),
+                                children: vec![node.children[1], node.children[2]],
+                                literal: None,
+                            });
+                            let if_id = u32::try_from(expanded.len())
+                                .map_err(|_| LowerError::UnsupportedExpression)?;
+                            expanded.push(TypedExprNode {
+                                id: if_id,
+                                kind: "if".into(),
+                                detail: None,
+                                children: vec![comparison_id, node.children[1], node.children[2]],
+                                literal: None,
+                            });
+                            return Self::from_typed_graph(
+                                &expanded,
+                                &[if_id],
+                                parameter_names,
+                                local_bindings,
+                            );
+                        }
+                    }
+                }
                 if node.kind == "call"
                     && node.children.len() == 2
                     && nodes.get(node.children[0] as usize).is_some_and(|callee| {
@@ -31426,6 +31464,83 @@ return total
         let function = Function::from_typed_function_body(&nodes, 5, &[])
             .expect("typed min should evaluate dict values before selecting keys");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_two_argument_min_max_to_selective_cfg() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("left".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("right".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 2],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body(&nodes, 3, &["left".into(), "right".into()])
+                .expect("typed two-argument min should lower through a conditional CFG");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(22)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("left".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("right".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 2],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body(&nodes, 3, &["left".into(), "right".into()])
+                .expect("typed two-argument max should lower through a conditional CFG");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(33)));
     }
 
     #[test]

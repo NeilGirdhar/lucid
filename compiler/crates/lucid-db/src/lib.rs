@@ -10150,6 +10150,28 @@ mod tests {
         );
 
         let file = db.add_file(
+            "dynamic-min.lucid",
+            "def lower(left: int, right: int):\n    return min(left, right)\n",
+        );
+        let function = lower_function_body(&db, file, "lower".into())
+            .as_ref()
+            .expect("dynamic min should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "dynamic-max.lucid",
+            "def higher(left: int, right: int):\n    return max(left, right)\n",
+        );
+        let function = lower_function_body(&db, file, "higher".into())
+            .as_ref()
+            .expect("dynamic max should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(33)));
+
+        let file = db.add_file(
             "match.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return 33\n",
         );
