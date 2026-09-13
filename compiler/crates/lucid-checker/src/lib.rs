@@ -18320,4 +18320,40 @@ print(classify(1))
         let result = checker.check_module(&module);
         assert!(result.is_ok(), "match patterns should work: {:?}", result);
     }
+
+    #[test]
+    fn unsupported_special_methods_are_rejected() {
+        // Verify that unsupported Python special methods are caught by the checker
+        let unsupported_methods = vec![
+            ("__delitem__", "__delitem__ is not supported"),
+            ("__getattr__", "__getattr__ is not supported"),
+            ("__setattr__", "__setattr__ is not supported"),
+            ("__del__", "__del__ is not supported"),
+        ];
+
+        for (method_name, expected_msg) in unsupported_methods {
+            let code = format!(
+                r#"class MyClass:
+    def {}(self):
+        pass
+"#,
+                method_name
+            );
+            let module = parse(&code).unwrap();
+            let mut checker = TypeChecker::new();
+            let result = checker.check_module(&module);
+            assert!(
+                result.is_err(),
+                "Method {} should be rejected by the checker",
+                method_name
+            );
+            let error = result.unwrap_err();
+            assert!(
+                error.message.contains(expected_msg),
+                "Error message should contain '{}', got: {}",
+                expected_msg,
+                error.message
+            );
+        }
+    }
 }
