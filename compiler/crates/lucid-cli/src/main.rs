@@ -698,6 +698,9 @@ fn run_cir_file(
                 arguments.len()
             );
             exit(1);
+        } else if parameter_count.is_none() {
+            eprintln!("run-cir: function '{name}' not found");
+            exit(1);
         }
     } else if !arguments.is_empty() {
         eprintln!("run-cir: --args requires --function NAME");

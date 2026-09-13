@@ -1097,6 +1097,32 @@ fn run_cir_can_select_a_typed_function_body() {
 }
 
 #[test]
+fn run_cir_rejects_missing_typed_function_name() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_missing_function_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "def answer():\n    return 42\n")
+        .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "missing",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("run-cir: function 'missing' not found"),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn run_cir_passes_integer_arguments_to_typed_function_body() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_args_{}.lucid",
