@@ -916,6 +916,94 @@ fn run_cir_preserves_logical_condition_effects_in_value_elif_chain() {
 }
 
 #[test]
+fn run_cir_preserves_logical_condition_effects_in_voids_value_fallback_chain() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_voids_value_fallback_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def initial_skip(x: int, y: int):\n    if x != 0 and 10 // x > 1:\n        return\n    elif y > 0:\n        return\n    return 3\n\ndef initial_error(x: int, y: int):\n    if x == 0 and 10 // x > 1:\n        return\n    elif y > 0:\n        return\n    return 3\n\ndef elif_skip(flag: int, x: int):\n    if flag > 0:\n        return\n    elif x != 0 and 10 // x > 1:\n        return\n    return 3\n\ndef elif_error(flag: int, x: int):\n    if flag > 0:\n        return\n    elif x == 0 and 10 // x > 1:\n        return\n    return 3\n",
+    )
+    .expect("temporary source should be writable");
+    let initial_skip = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "initial_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let initial_error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "initial_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let elif_skip = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "elif_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let elif_error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "elif_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        initial_skip.status.success(),
+        "false left operand in initial void/value if should short-circuit: {}",
+        String::from_utf8_lossy(&initial_skip.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&initial_skip.stdout).trim(), "3");
+    assert!(
+        !initial_error.status.success(),
+        "true left operand in initial void/value if must evaluate RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&initial_error.stderr).contains("division by zero"),
+        "expected initial division error, got {}",
+        String::from_utf8_lossy(&initial_error.stderr)
+    );
+    assert!(
+        elif_skip.status.success(),
+        "false left operand in void/value elif should short-circuit: {}",
+        String::from_utf8_lossy(&elif_skip.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&elif_skip.stdout).trim(), "3");
+    assert!(
+        !elif_error.status.success(),
+        "true left operand in void/value elif must evaluate RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&elif_error.stderr).contains("division by zero"),
+        "expected elif division error, got {}",
+        String::from_utf8_lossy(&elif_error.stderr)
+    );
+}
+
+#[test]
 fn run_cir_executes_dynamic_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_if_{}.lucid",
