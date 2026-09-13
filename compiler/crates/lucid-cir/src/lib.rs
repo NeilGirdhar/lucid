@@ -8313,6 +8313,7 @@ impl Function {
         use std::collections::HashMap;
         let mut instructions = Vec::new();
         let mut bindings = HashMap::<String, ValueId>::new();
+        let mut aggregate_bindings = HashMap::<String, Vec<ValueId>>::new();
         let mut next = 0u32;
         for (index, name) in parameter_names.iter().enumerate() {
             let result = ValueId(next);
@@ -8328,6 +8329,7 @@ impl Function {
         fn lower(
             expr: &lucid_syntax::Expr,
             bindings: &HashMap<String, ValueId>,
+            aggregate_bindings: &HashMap<String, Vec<ValueId>>,
             instructions: &mut Vec<Instruction>,
             next: &mut u32,
         ) -> Result<ValueId, LowerError> {
@@ -8341,6 +8343,51 @@ impl Function {
                     .get(name)
                     .copied()
                     .ok_or(LowerError::UnsupportedExpression),
+                lucid_syntax::Expr::Index { value, index, .. } => {
+                    let raw_index = literal_int(index).ok_or(LowerError::UnsupportedExpression)?;
+                    let select = |len: usize| {
+                        let len = i64::try_from(len).ok()?;
+                        let index = if raw_index < 0 {
+                            len.checked_add(raw_index)?
+                        } else {
+                            raw_index
+                        };
+                        let index = usize::try_from(index).ok()?;
+                        (index < usize::try_from(len).ok()?).then_some(index)
+                    };
+                    match value.as_ref() {
+                        lucid_syntax::Expr::List { elements, .. } => {
+                            let selected =
+                                select(elements.len()).ok_or(LowerError::UnsupportedExpression)?;
+                            let mut lowered_elements = Vec::with_capacity(elements.len());
+                            for element in elements {
+                                lowered_elements.push(lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?);
+                            }
+                            lowered_elements
+                                .get(selected)
+                                .copied()
+                                .ok_or(LowerError::UnsupportedExpression)
+                        }
+                        lucid_syntax::Expr::Ident { name, .. } => {
+                            let elements = aggregate_bindings
+                                .get(name)
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            let selected =
+                                select(elements.len()).ok_or(LowerError::UnsupportedExpression)?;
+                            elements
+                                .get(selected)
+                                .copied()
+                                .ok_or(LowerError::UnsupportedExpression)
+                        }
+                        _ => Err(LowerError::UnsupportedExpression),
+                    }
+                }
                 lucid_syntax::Expr::Literal {
                     value: lucid_syntax::LiteralValue::Int(value),
                     ..
@@ -8367,13 +8414,13 @@ impl Function {
                     op: lucid_syntax::UnaryOp::Pos,
                     expr,
                     ..
-                } => lower(expr, bindings, instructions, next),
+                } => lower(expr, bindings, aggregate_bindings, instructions, next),
                 lucid_syntax::Expr::Unary {
                     op: lucid_syntax::UnaryOp::Neg,
                     expr,
                     ..
                 } => {
-                    let operand = lower(expr, bindings, instructions, next)?;
+                    let operand = lower(expr, bindings, aggregate_bindings, instructions, next)?;
                     let id = result(next);
                     instructions.push(Instruction::Neg {
                         result: id,
@@ -8386,7 +8433,7 @@ impl Function {
                     expr,
                     ..
                 } => {
-                    let operand = lower(expr, bindings, instructions, next)?;
+                    let operand = lower(expr, bindings, aggregate_bindings, instructions, next)?;
                     let id = result(next);
                     instructions.push(Instruction::BitNot {
                         result: id,
@@ -8399,7 +8446,7 @@ impl Function {
                     expr,
                     ..
                 } => {
-                    let operand = lower(expr, bindings, instructions, next)?;
+                    let operand = lower(expr, bindings, aggregate_bindings, instructions, next)?;
                     let id = result(next);
                     instructions.push(Instruction::Not {
                         result: id,
@@ -8410,8 +8457,8 @@ impl Function {
                 lucid_syntax::Expr::Binary {
                     left, op, right, ..
                 } => {
-                    let left = lower(left, bindings, instructions, next)?;
-                    let right = lower(right, bindings, instructions, next)?;
+                    let left = lower(left, bindings, aggregate_bindings, instructions, next)?;
+                    let right = lower(right, bindings, aggregate_bindings, instructions, next)?;
                     let id = result(next);
                     let instruction = match op {
                         lucid_syntax::BinaryOp::Add => Instruction::Add {
@@ -8530,12 +8577,20 @@ impl Function {
         fn visit_all(
             statements: &[lucid_syntax::Stmt],
             bindings: &mut HashMap<String, ValueId>,
+            aggregate_bindings: &mut HashMap<String, Vec<ValueId>>,
             instructions: &mut Vec<Instruction>,
             next: &mut u32,
             last: &mut Option<ValueId>,
         ) -> Result<(), LowerError> {
             for statement in statements {
-                visit(statement, bindings, instructions, next, last)?;
+                visit(
+                    statement,
+                    bindings,
+                    aggregate_bindings,
+                    instructions,
+                    next,
+                    last,
+                )?;
             }
             Ok(())
         }
@@ -9017,21 +9072,44 @@ impl Function {
         fn visit(
             stmt: &lucid_syntax::Stmt,
             bindings: &mut HashMap<String, ValueId>,
+            aggregate_bindings: &mut HashMap<String, Vec<ValueId>>,
             instructions: &mut Vec<Instruction>,
             next: &mut u32,
             last: &mut Option<ValueId>,
         ) -> Result<(), LowerError> {
             match stmt {
-                lucid_syntax::Stmt::Export(inner) => {
-                    visit(inner, bindings, instructions, next, last)
-                }
+                lucid_syntax::Stmt::Export(inner) => visit(
+                    inner,
+                    bindings,
+                    aggregate_bindings,
+                    instructions,
+                    next,
+                    last,
+                ),
                 lucid_syntax::Stmt::Assignment {
                     target: lucid_syntax::Expr::Ident { name, .. },
                     value,
                     ..
                 } => {
-                    let id = lower(value, bindings, instructions, next)?;
+                    if let lucid_syntax::Expr::List { elements, .. } = value {
+                        let mut values = Vec::with_capacity(elements.len());
+                        for element in elements {
+                            values.push(lower(
+                                element,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )?);
+                        }
+                        bindings.remove(name);
+                        aggregate_bindings.insert(name.clone(), values);
+                        *last = None;
+                        return Ok(());
+                    }
+                    let id = lower(value, bindings, aggregate_bindings, instructions, next)?;
                     bindings.insert(name.clone(), id);
+                    aggregate_bindings.remove(name);
                     *last = Some(id);
                     Ok(())
                 }
@@ -9045,7 +9123,7 @@ impl Function {
                         .get(name)
                         .copied()
                         .ok_or(LowerError::UnsupportedExpression)?;
-                    let right = lower(value, bindings, instructions, next)?;
+                    let right = lower(value, bindings, aggregate_bindings, instructions, next)?;
                     let id = ValueId(*next);
                     *next += 1;
                     let instruction = match op {
@@ -9113,6 +9191,7 @@ impl Function {
                     };
                     instructions.push(instruction);
                     bindings.insert(name.clone(), id);
+                    aggregate_bindings.remove(name);
                     *last = Some(id);
                     Ok(())
                 }
@@ -9123,7 +9202,7 @@ impl Function {
                     // current single-block CIR subset. Lowering it here
                     // preserves the value instead of requiring callers to
                     // manufacture a throwaway assignment first.
-                    let id = lower(value, bindings, instructions, next)?;
+                    let id = lower(value, bindings, aggregate_bindings, instructions, next)?;
                     *last = Some(id);
                     Ok(())
                 }
@@ -9142,8 +9221,25 @@ impl Function {
                     value: Some(value),
                     ..
                 } => {
-                    let id = lower(value, bindings, instructions, next)?;
+                    if let lucid_syntax::Expr::List { elements, .. } = value {
+                        let mut values = Vec::with_capacity(elements.len());
+                        for element in elements {
+                            values.push(lower(
+                                element,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )?);
+                        }
+                        bindings.remove(name);
+                        aggregate_bindings.insert(name.clone(), values);
+                        *last = None;
+                        return Ok(());
+                    }
+                    let id = lower(value, bindings, aggregate_bindings, instructions, next)?;
                     bindings.insert(name.clone(), id);
+                    aggregate_bindings.remove(name);
                     *last = Some(id);
                     Ok(())
                 }
@@ -9161,19 +9257,40 @@ impl Function {
                     let truth = constant_value_truth(binding, instructions)
                         .ok_or(LowerError::UnsupportedExpression)?;
                     if truth {
-                        return visit_all(then_branch, bindings, instructions, next, last);
+                        return visit_all(
+                            then_branch,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                            last,
+                        );
                     }
                     for (condition, branch) in elif_branches {
                         match statement_static_truth(condition, bindings, instructions) {
                             Some(true) => {
-                                return visit_all(branch, bindings, instructions, next, last);
+                                return visit_all(
+                                    branch,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                    last,
+                                );
                             }
                             Some(false) => continue,
                             None => return Err(LowerError::UnsupportedExpression),
                         }
                     }
                     if let Some(branch) = else_branch {
-                        visit_all(branch, bindings, instructions, next, last)
+                        visit_all(
+                            branch,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                            last,
+                        )
                     } else {
                         Ok(())
                     }
@@ -9193,19 +9310,40 @@ impl Function {
                     let truth = !statement_static_truth(expr, bindings, instructions)
                         .ok_or(LowerError::UnsupportedExpression)?;
                     if truth {
-                        return visit_all(then_branch, bindings, instructions, next, last);
+                        return visit_all(
+                            then_branch,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                            last,
+                        );
                     }
                     for (condition, branch) in elif_branches {
                         match statement_static_truth(condition, bindings, instructions) {
                             Some(true) => {
-                                return visit_all(branch, bindings, instructions, next, last);
+                                return visit_all(
+                                    branch,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                    last,
+                                );
                             }
                             Some(false) => continue,
                             None => return Err(LowerError::UnsupportedExpression),
                         }
                     }
                     if let Some(branch) = else_branch {
-                        visit_all(branch, bindings, instructions, next, last)
+                        visit_all(
+                            branch,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                            last,
+                        )
                     } else {
                         Ok(())
                     }
@@ -9221,19 +9359,40 @@ impl Function {
                     else_branch,
                     ..
                 } => match statement_static_truth(condition, bindings, instructions) {
-                    Some(true) => visit_all(then_branch, bindings, instructions, next, last),
+                    Some(true) => visit_all(
+                        then_branch,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                        last,
+                    ),
                     Some(false) => {
                         for (condition, branch) in elif_branches {
                             match statement_static_truth(condition, bindings, instructions) {
                                 Some(true) => {
-                                    return visit_all(branch, bindings, instructions, next, last);
+                                    return visit_all(
+                                        branch,
+                                        bindings,
+                                        aggregate_bindings,
+                                        instructions,
+                                        next,
+                                        last,
+                                    );
                                 }
                                 Some(false) => continue,
                                 None => return Err(LowerError::UnsupportedExpression),
                             }
                         }
                         if let Some(branch) = else_branch {
-                            visit_all(branch, bindings, instructions, next, last)
+                            visit_all(
+                                branch,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )
                         } else {
                             Ok(())
                         }
@@ -9247,19 +9406,40 @@ impl Function {
                     else_branch,
                     ..
                 } => match statement_static_truth(condition, bindings, instructions) {
-                    Some(true) => visit_all(then_branch, bindings, instructions, next, last),
+                    Some(true) => visit_all(
+                        then_branch,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                        last,
+                    ),
                     Some(false) => {
                         for (condition, branch) in elif_branches {
                             match statement_static_truth(condition, bindings, instructions) {
                                 Some(true) => {
-                                    return visit_all(branch, bindings, instructions, next, last);
+                                    return visit_all(
+                                        branch,
+                                        bindings,
+                                        aggregate_bindings,
+                                        instructions,
+                                        next,
+                                        last,
+                                    );
                                 }
                                 Some(false) => continue,
                                 None => return Err(LowerError::UnsupportedExpression),
                             }
                         }
                         if let Some(branch) = else_branch {
-                            visit_all(branch, bindings, instructions, next, last)
+                            visit_all(
+                                branch,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )
                         } else {
                             Ok(())
                         }
@@ -9276,19 +9456,40 @@ impl Function {
                     let truth = statement_static_truth(condition, bindings, instructions)
                         .ok_or(LowerError::UnsupportedExpression)?;
                     if truth {
-                        return visit_all(then_branch, bindings, instructions, next, last);
+                        return visit_all(
+                            then_branch,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                            last,
+                        );
                     }
                     for (condition, branch) in elif_branches {
                         match statement_static_truth(condition, bindings, instructions) {
                             Some(true) => {
-                                return visit_all(branch, bindings, instructions, next, last);
+                                return visit_all(
+                                    branch,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                    last,
+                                );
                             }
                             Some(false) => continue,
                             None => return Err(LowerError::UnsupportedExpression),
                         }
                     }
                     if let Some(branch) = else_branch {
-                        visit_all(branch, bindings, instructions, next, last)
+                        visit_all(
+                            branch,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                            last,
+                        )
                     } else {
                         Ok(())
                     }
@@ -9319,9 +9520,10 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for element in elements {
-                        let value = lower(element, bindings, instructions, next)?;
+                        let value =
+                            lower(element, bindings, aggregate_bindings, instructions, next)?;
                         bindings.insert(name.clone(), value);
-                        visit_all(body, bindings, instructions, next, last)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
                 }
@@ -9340,8 +9542,8 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for element in elements {
-                        let _ = lower(element, bindings, instructions, next)?;
-                        visit_all(body, bindings, instructions, next, last)?;
+                        let _ = lower(element, bindings, aggregate_bindings, instructions, next)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
                 }
@@ -9361,9 +9563,16 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for element in elements {
-                        let _ = lower(element, bindings, instructions, next)?;
+                        let _ = lower(element, bindings, aggregate_bindings, instructions, next)?;
                         if literal_int(element) == Some(*expected) {
-                            visit_all(body, bindings, instructions, next, last)?;
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
                         }
                     }
                     Ok(())
@@ -9384,9 +9593,16 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for element in elements {
-                        let _ = lower(element, bindings, instructions, next)?;
+                        let _ = lower(element, bindings, aggregate_bindings, instructions, next)?;
                         if literal_bool(element) == Some(*expected) {
-                            visit_all(body, bindings, instructions, next, last)?;
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
                         }
                     }
                     Ok(())
@@ -9404,10 +9620,12 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for (element, dict_value) in entries {
-                        let key_value = lower(element, bindings, instructions, next)?;
-                        let _ = lower(dict_value, bindings, instructions, next)?;
+                        let key_value =
+                            lower(element, bindings, aggregate_bindings, instructions, next)?;
+                        let _ =
+                            lower(dict_value, bindings, aggregate_bindings, instructions, next)?;
                         bindings.insert(name.clone(), key_value);
-                        visit_all(body, bindings, instructions, next, last)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
                 }
@@ -9424,9 +9642,9 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for (element, value) in entries {
-                        let _ = lower(element, bindings, instructions, next)?;
-                        let _ = lower(value, bindings, instructions, next)?;
-                        visit_all(body, bindings, instructions, next, last)?;
+                        let _ = lower(element, bindings, aggregate_bindings, instructions, next)?;
+                        let _ = lower(value, bindings, aggregate_bindings, instructions, next)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
                 }
@@ -9444,9 +9662,16 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for (element, _) in entries {
-                        let _ = lower(element, bindings, instructions, next)?;
+                        let _ = lower(element, bindings, aggregate_bindings, instructions, next)?;
                         if literal_int(element) == Some(*expected) {
-                            visit_all(body, bindings, instructions, next, last)?;
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
                         }
                     }
                     Ok(())
@@ -9465,9 +9690,16 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for (element, _) in entries {
-                        let _ = lower(element, bindings, instructions, next)?;
+                        let _ = lower(element, bindings, aggregate_bindings, instructions, next)?;
                         if literal_bool(element) == Some(*expected) {
-                            visit_all(body, bindings, instructions, next, last)?;
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
                         }
                     }
                     Ok(())
@@ -9493,7 +9725,7 @@ impl Function {
                             value: element,
                         });
                         bindings.insert(name.clone(), value);
-                        visit_all(body, bindings, instructions, next, last)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
                 }
@@ -9511,7 +9743,7 @@ impl Function {
                         return Err(LowerError::UnsupportedExpression);
                     }
                     for _ in values {
-                        visit_all(body, bindings, instructions, next, last)?;
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
                     }
                     Ok(())
                 }
@@ -9529,7 +9761,14 @@ impl Function {
                     }
                     for element in values {
                         if element == *expected {
-                            visit_all(body, bindings, instructions, next, last)?;
+                            visit_all(
+                                body,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                                last,
+                            )?;
                         }
                     }
                     Ok(())
@@ -9542,7 +9781,7 @@ impl Function {
                     }
                 }
                 lucid_syntax::Stmt::Expr(expr) => {
-                    let _ = lower(expr, bindings, instructions, next)?;
+                    let _ = lower(expr, bindings, aggregate_bindings, instructions, next)?;
                     Ok(())
                 }
                 lucid_syntax::Stmt::Assignment { .. }
@@ -9604,6 +9843,7 @@ impl Function {
         }
         struct LinearLoweringState<'a> {
             bindings: &'a mut HashMap<String, ValueId>,
+            aggregate_bindings: &'a mut HashMap<String, Vec<ValueId>>,
             instructions: &'a mut Vec<Instruction>,
             next: &'a mut u32,
         }
@@ -9633,14 +9873,22 @@ impl Function {
                 visit(
                     statement,
                     state.bindings,
+                    state.aggregate_bindings,
                     state.instructions,
                     state.next,
                     &mut last,
                 )?;
             }
             let fallthrough_value = last;
-            let condition_value = lower(condition, state.bindings, state.instructions, state.next)?;
+            let condition_value = lower(
+                condition,
+                state.bindings,
+                state.aggregate_bindings,
+                state.instructions,
+                state.next,
+            )?;
             let mut then_bindings = state.bindings.clone();
+            let mut then_aggregate_bindings = state.aggregate_bindings.clone();
             let mut then_instructions = Vec::new();
             let mut then_last = fallthrough_value;
             let mut then_produced_value = false;
@@ -9656,6 +9904,7 @@ impl Function {
                 visit(
                     statement,
                     &mut then_bindings,
+                    &mut then_aggregate_bindings,
                     &mut then_instructions,
                     state.next,
                     &mut then_last,
@@ -9663,6 +9912,7 @@ impl Function {
                 then_produced_value |= then_last.is_some();
             }
             let mut else_bindings = state.bindings.clone();
+            let mut else_aggregate_bindings = state.aggregate_bindings.clone();
             let mut else_instructions = Vec::new();
             let mut else_last = fallthrough_value;
             let mut else_produced_value = false;
@@ -9679,6 +9929,7 @@ impl Function {
                     visit(
                         statement,
                         &mut else_bindings,
+                        &mut else_aggregate_bindings,
                         &mut else_instructions,
                         state.next,
                         &mut else_last,
@@ -9708,6 +9959,7 @@ impl Function {
                     })
                 });
                 let mut merge_bindings = state.bindings.clone();
+                let mut merge_aggregate_bindings = state.aggregate_bindings.clone();
                 let has_phi = merged_name.is_some();
                 let mut merge_instructions =
                     if let Some((merged_name, then_value, else_value)) = merged_name {
@@ -9729,6 +9981,7 @@ impl Function {
                 visit_all(
                     suffix,
                     &mut merge_bindings,
+                    &mut merge_aggregate_bindings,
                     &mut merge_instructions,
                     state.next,
                     &mut merge_last,
@@ -9781,11 +10034,13 @@ impl Function {
             fn lower_branch(
                 branch: &[lucid_syntax::Stmt],
                 base_bindings: &HashMap<String, ValueId>,
+                base_aggregate_bindings: &HashMap<String, Vec<ValueId>>,
                 base_instructions: &[Instruction],
                 fallthrough_value: Option<ValueId>,
                 next: &mut u32,
             ) -> Result<BranchLowering, LowerError> {
                 let mut branch_bindings = base_bindings.clone();
+                let mut branch_aggregate_bindings = base_aggregate_bindings.clone();
                 let mut branch_instructions = Vec::new();
                 let mut branch_last = fallthrough_value;
                 let mut produced_value = false;
@@ -9801,6 +10056,7 @@ impl Function {
                     visit(
                         statement,
                         &mut branch_bindings,
+                        &mut branch_aggregate_bindings,
                         &mut branch_instructions,
                         next,
                         &mut branch_last,
@@ -9819,6 +10075,7 @@ impl Function {
                 visit(
                     statement,
                     state.bindings,
+                    state.aggregate_bindings,
                     state.instructions,
                     state.next,
                     &mut last,
@@ -9828,14 +10085,17 @@ impl Function {
             let condition_value = lower(
                 ladder.condition,
                 state.bindings,
+                state.aggregate_bindings,
                 state.instructions,
                 state.next,
             )?;
             let base_bindings = state.bindings.clone();
+            let base_aggregate_bindings = state.aggregate_bindings.clone();
             let base_instructions = state.instructions.clone();
             let then_lowering = lower_branch(
                 ladder.then_branch,
                 &base_bindings,
+                &base_aggregate_bindings,
                 &base_instructions,
                 fallthrough_value,
                 state.next,
@@ -9846,12 +10106,14 @@ impl Function {
                 let condition_value = lower(
                     elif_condition,
                     &base_bindings,
+                    &base_aggregate_bindings,
                     &mut condition_instructions,
                     state.next,
                 )?;
                 let branch = lower_branch(
                     elif_branch,
                     &base_bindings,
+                    &base_aggregate_bindings,
                     &base_instructions,
                     fallthrough_value,
                     state.next,
@@ -9861,6 +10123,7 @@ impl Function {
             let else_lowering = lower_branch(
                 ladder.else_branch.unwrap_or(&[]),
                 &base_bindings,
+                &base_aggregate_bindings,
                 &base_instructions,
                 fallthrough_value,
                 state.next,
@@ -9916,6 +10179,7 @@ impl Function {
                     })
                 });
                 let mut merge_bindings = base_bindings;
+                let mut merge_aggregate_bindings = base_aggregate_bindings;
                 let (mut merge_instructions, mut merge_last) =
                     if let Some((merged_name, then_value, elif_values, else_value)) = merged_name {
                         let result = ValueId(*state.next);
@@ -9938,6 +10202,7 @@ impl Function {
                 visit_all(
                     ladder.suffix,
                     &mut merge_bindings,
+                    &mut merge_aggregate_bindings,
                     &mut merge_instructions,
                     state.next,
                     &mut merge_last,
@@ -10056,12 +10321,14 @@ impl Function {
                     },
                     &mut LinearLoweringState {
                         bindings: &mut bindings,
+                        aggregate_bindings: &mut aggregate_bindings,
                         instructions: &mut instructions,
                         next: &mut next,
                     },
                 );
             }
             let mut probe_bindings = bindings.clone();
+            let mut probe_aggregate_bindings = aggregate_bindings.clone();
             let mut probe_instructions = instructions.clone();
             let mut probe_next = next;
             let mut probe_last = None;
@@ -10069,6 +10336,7 @@ impl Function {
                 visit(
                     statement,
                     &mut probe_bindings,
+                    &mut probe_aggregate_bindings,
                     &mut probe_instructions,
                     &mut probe_next,
                     &mut probe_last,
@@ -10111,6 +10379,7 @@ impl Function {
                     &module.statements[index + 1..],
                     &mut LinearLoweringState {
                         bindings: &mut bindings,
+                        aggregate_bindings: &mut aggregate_bindings,
                         instructions: &mut instructions,
                         next: &mut next,
                     },
@@ -10132,6 +10401,7 @@ impl Function {
         {
             let prefix = &module.statements[..module.statements.len() - 1];
             let mut probe_bindings = bindings.clone();
+            let mut probe_aggregate_bindings = aggregate_bindings.clone();
             let mut probe_instructions = instructions.clone();
             let mut probe_next = next;
             let mut probe_last = None;
@@ -10139,6 +10409,7 @@ impl Function {
                 visit(
                     statement,
                     &mut probe_bindings,
+                    &mut probe_aggregate_bindings,
                     &mut probe_instructions,
                     &mut probe_next,
                     &mut probe_last,
@@ -10173,6 +10444,7 @@ impl Function {
                         },
                         &mut LinearLoweringState {
                             bindings: &mut bindings,
+                            aggregate_bindings: &mut aggregate_bindings,
                             instructions: &mut instructions,
                             next: &mut next,
                         },
@@ -10215,6 +10487,7 @@ impl Function {
                         &[],
                         &mut LinearLoweringState {
                             bindings: &mut bindings,
+                            aggregate_bindings: &mut aggregate_bindings,
                             instructions: &mut instructions,
                             next: &mut next,
                         },
@@ -10229,6 +10502,7 @@ impl Function {
                 visit(
                     statement,
                     &mut bindings,
+                    &mut aggregate_bindings,
                     &mut instructions,
                     &mut next,
                     &mut last,
@@ -10236,7 +10510,15 @@ impl Function {
             }
             let return_value = value
                 .as_ref()
-                .map(|expr| lower(expr, &bindings, &mut instructions, &mut next))
+                .map(|expr| {
+                    lower(
+                        expr,
+                        &bindings,
+                        &aggregate_bindings,
+                        &mut instructions,
+                        &mut next,
+                    )
+                })
                 .transpose()?;
             let function = Self {
                 entry: BlockId(0),
@@ -10269,6 +10551,7 @@ impl Function {
             visit(
                 statement,
                 &mut bindings,
+                &mut aggregate_bindings,
                 &mut instructions,
                 &mut next,
                 &mut last,
@@ -18979,6 +19262,24 @@ return total
         let module = lucid_syntax::parse("x = 6\nreturn x * 7\n").unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
+    }
+
+    #[test]
+    fn linear_module_lowering_indexes_constant_list_aggregates() {
+        let module = lucid_syntax::parse("values = [40, 41, 42]\nreturn values[2]\n").unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let module = lucid_syntax::parse("return [40, 41, 42][-1]\n").unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let module = lucid_syntax::parse(
+            "base = 40\nvalues = [base, base + 1, base + 2]\nreturn values[1]\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(41)));
     }
 
     #[test]

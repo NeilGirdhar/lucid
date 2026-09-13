@@ -1128,6 +1128,35 @@ fn run_cir_passes_integer_arguments_to_typed_function_body() {
 }
 
 #[test]
+fn run_cir_lowers_constant_list_indexing_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_list_index_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    values = [40, 41, 42]\n    return values[2]\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function list index failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
+#[test]
 fn run_cir_short_circuits_logical_condition_inside_typed_if() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_typed_if_short_circuit_{}.lucid",
