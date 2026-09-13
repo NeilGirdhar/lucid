@@ -2487,7 +2487,7 @@ impl TypeChecker {
                 2,
                 Some(3),
                 vec![any.clone(), any.clone(), any.clone()],
-                any.clone(),
+                Type::TypeVar("BaseType".into()),
             ),
             ("sqrt", 1, Some(1), vec![any.clone()], Type::Float),
             ("sin", 1, Some(1), vec![any.clone()], Type::Float),
@@ -10813,6 +10813,11 @@ impl TypeChecker {
                                     "min" | "max" if self.is_iterable_type(&argument_type) => {
                                         Some(self.iterable_element_type(&argument_type))
                                     }
+                                    "pow" => {
+                                        // pow(base, exp) returns the type of base
+                                        // pow(int, int) -> int, pow(float, float) -> float, etc.
+                                        Some(argument_type)
+                                    }
                                     "fields" => {
                                         // fields(obj: instance) returns list[(name: str, value: object, doc: str | none, metadata: dict[str, object])]
                                         // fields(cls: class) returns list[(name: str, doc: str | none, metadata: dict[str, object])]
@@ -18486,6 +18491,34 @@ fields(c)
             "fields() should accept class instances: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn pow_preserves_base_type() {
+        let code = r#"x: int = 2
+y: int = 3
+result = pow(x, y)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "pow() should preserve base type: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn pow_float_base_returns_float() {
+        let code = r#"x: float = 2.5
+y: int = 3
+result: int = pow(x, y)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_err(), "pow(float, int) returns float, not int");
     }
 
     #[test]
