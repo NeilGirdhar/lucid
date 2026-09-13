@@ -2133,6 +2133,8 @@ diverged:
   accumulator update in the loop body, such as `if i > cutoff: total += i`.
   CIR lowers this as a condition block, an update block, and a step block whose
   Phi selects either the updated accumulator or the unchanged carried value.
+  The same path now accepts an `else` accumulator update, merging the then and
+  else updated values before advancing the range induction variable.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
