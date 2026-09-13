@@ -14150,6 +14150,48 @@ return total
         assert_eq!(function.execute_with_args(&[6, 5]), Ok(Some(6)));
 
         let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(start, stop, step):
+    if i > cutoff:
+        total += i
+return total
+"#,
+        )
+        .expect("range dynamic-step guarded accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &[
+                "start".into(),
+                "stop".into(),
+                "step".into(),
+                "cutoff".into(),
+            ],
+        )
+        .expect("range dynamic-step guarded accumulation should lower");
+        assert_eq!(function.execute_with_args(&[1, 8, 2, 3]), Ok(Some(12)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(start, stop, -step):
+    if i < cutoff:
+        total += i
+return total
+"#,
+        )
+        .expect("range negative dynamic-step guarded accumulation fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &[
+                "start".into(),
+                "stop".into(),
+                "step".into(),
+                "cutoff".into(),
+            ],
+        )
+        .expect("range negative dynamic-step guarded accumulation should lower");
+        assert_eq!(function.execute_with_args(&[8, 1, 2, 5]), Ok(Some(6)));
+
+        let module = lucid_syntax::parse(
             r#"seeded = seed
 total = seeded
 for i in range(n):

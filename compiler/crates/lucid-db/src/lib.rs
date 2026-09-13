@@ -13381,6 +13381,24 @@ mod tests {
         assert_eq!(function.execute_with_args(&[6, 5]), Ok(Some(6)));
 
         let file = db.add_file(
+            "range-dynamic-step-guard-accumulate.lucid",
+            "def stepped_sum(start: int, stop: int, step: int, cutoff: int):\n    total = 0\n    for i in range(start, stop, step):\n        if i > cutoff:\n            total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "stepped_sum".into())
+            .as_ref()
+            .expect("range dynamic-step guarded accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 8, 2, 3]), Ok(Some(12)));
+
+        let file = db.add_file(
+            "range-negative-dynamic-step-guard-accumulate.lucid",
+            "def descending_sum(start: int, stop: int, step: int, cutoff: int):\n    total = 0\n    for i in range(start, stop, -step):\n        if i < cutoff:\n            total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "descending_sum".into())
+            .as_ref()
+            .expect("range negative dynamic-step guarded accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[8, 1, 2, 5]), Ok(Some(6)));
+
+        let file = db.add_file(
             "counted-while-dead-if-broken.lucid",
             "def countdown(n: int):\n    while n > 0:\n        n -= 1\n    if_broken:\n        n = 100\n    return n\n",
         );

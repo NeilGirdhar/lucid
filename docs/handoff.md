@@ -2142,6 +2142,8 @@ diverged:
   and `not` expressions recursively on top of the existing comparison lowering.
   Guard operands can also use arithmetic expressions involving the range
   induction variable, such as `i + 1 < high`.
+  Guarded accumulator updates are covered for dynamic range steps, including
+  descending ranges expressed with a negated dynamic step.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
