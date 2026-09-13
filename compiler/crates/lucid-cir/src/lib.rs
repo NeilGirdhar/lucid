@@ -6843,14 +6843,16 @@ impl Function {
                 }
             }
         }
-        if let [lucid_syntax::Stmt::Export(inner)] = module.statements.as_slice() {
-            if matches!(inner.as_ref(), lucid_syntax::Stmt::If { condition: lucid_syntax::Expr::Binary { op, .. }, .. } if !matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or))
-            {
-                let unwrapped = lucid_syntax::Module {
-                    statements: vec![inner.as_ref().clone()],
-                    span: module.span,
-                };
-                return Self::from_module_if(&unwrapped);
+        if parameter_names.is_empty() {
+            if let [lucid_syntax::Stmt::Export(inner)] = module.statements.as_slice() {
+                if matches!(inner.as_ref(), lucid_syntax::Stmt::If { condition: lucid_syntax::Expr::Binary { op, .. }, .. } if !matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or))
+                {
+                    let unwrapped = lucid_syntax::Module {
+                        statements: vec![inner.as_ref().clone()],
+                        span: module.span,
+                    };
+                    return Self::from_module_if(&unwrapped);
+                }
             }
         }
         use std::collections::HashMap;
@@ -8557,6 +8559,10 @@ impl Function {
             if index + 1 == module.statements.len() {
                 break;
             }
+            let statement = match statement {
+                lucid_syntax::Stmt::Export(inner) => inner.as_ref(),
+                statement => statement,
+            };
             let lucid_syntax::Stmt::If {
                 condition,
                 then_branch,
@@ -8657,13 +8663,17 @@ impl Function {
             }
         }
 
+        let last_statement = module.statements.last().map(|statement| match statement {
+            lucid_syntax::Stmt::Export(inner) => inner.as_ref(),
+            statement => statement,
+        });
         if let Some(lucid_syntax::Stmt::If {
             condition,
             then_branch,
             else_branch,
             elif_branches,
             ..
-        }) = module.statements.last()
+        }) = last_statement
         {
             let prefix = &module.statements[..module.statements.len() - 1];
             let mut probe_bindings = bindings.clone();
@@ -15933,6 +15943,15 @@ return total
         .unwrap();
         let function = Function::from_module_linear_with_params(&module, &["value".into()])
             .expect("final dynamic elif comparison ladder should merge branch result values");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+        let module = lucid_syntax::parse(
+            "export if value > 10:\n    high = 100\nelif value > 0:\n    positive = 1\nelse:\n    fallback = 0\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["value".into()])
+            .expect("exported final dynamic elif comparison ladder should lower");
         assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
