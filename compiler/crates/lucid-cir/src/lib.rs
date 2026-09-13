@@ -2357,21 +2357,8 @@ impl Function {
             root: u32,
             parameter_names: &[String],
             local_bindings: &[(String, u32)],
-        ) -> Result<(Block, ValueId), LowerError> {
-            let function =
-                Function::from_typed_graph(nodes, &[root], parameter_names, local_bindings)?;
-            if function.blocks.len() != 1 {
-                return Err(LowerError::UnsupportedExpression);
-            }
-            let block = function
-                .blocks
-                .into_iter()
-                .next()
-                .ok_or(LowerError::UnsupportedExpression)?;
-            let Terminator::Return(Some(value)) = block.terminator else {
-                return Err(LowerError::UnsupportedExpression);
-            };
-            Ok((block, value))
+        ) -> Result<Function, LowerError> {
+            Function::from_typed_graph(nodes, &[root], parameter_names, local_bindings)
         }
         fn lower_value(
             nodes: &[TypedExprNode],
@@ -2404,7 +2391,27 @@ impl Function {
             };
             Ok((block, Some(value)))
         }
-        fn width(block: &Block, value: Option<ValueId>) -> u32 {
+        fn function_width(function: &Function) -> u32 {
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| {
+                    let terminator_values = match &block.terminator {
+                        Terminator::Return(Some(value)) => vec![*value],
+                        Terminator::Branch { condition, .. } => vec![*condition],
+                        _ => Vec::new(),
+                    };
+                    block
+                        .instructions
+                        .iter()
+                        .map(result_id)
+                        .chain(terminator_values)
+                })
+                .map(|value| value.0 + 1)
+                .max()
+                .unwrap_or(0)
+        }
+        fn block_width(block: &Block, value: Option<ValueId>) -> u32 {
             block
                 .instructions
                 .iter()
@@ -2416,6 +2423,55 @@ impl Function {
         }
         fn remap_return(value: Option<ValueId>, offset: u32) -> Terminator {
             Terminator::Return(value.map(|value| ValueId(value.0 + offset)))
+        }
+        fn remap_condition_terminator(
+            terminator: &Terminator,
+            value_offset: u32,
+            block_offset: u32,
+            then_block: BlockId,
+            false_block: BlockId,
+        ) -> Result<Terminator, LowerError> {
+            let value = |value: ValueId| ValueId(value.0 + value_offset);
+            let block = |block: BlockId| BlockId(block.0 + block_offset);
+            match terminator {
+                Terminator::Return(Some(condition)) => Ok(Terminator::Branch {
+                    condition: value(*condition),
+                    then_block,
+                    else_block: false_block,
+                }),
+                Terminator::Return(None) => Err(LowerError::UnsupportedExpression),
+                Terminator::Jump(target) => Ok(Terminator::Jump(block(*target))),
+                Terminator::Branch {
+                    condition,
+                    then_block,
+                    else_block,
+                } => Ok(Terminator::Branch {
+                    condition: value(*condition),
+                    then_block: block(*then_block),
+                    else_block: block(*else_block),
+                }),
+            }
+        }
+        fn remap_condition_instruction(
+            instruction: &Instruction,
+            value_offset: u32,
+            block_offset: u32,
+        ) -> Instruction {
+            match instruction {
+                Instruction::Phi { result, incomings } => Instruction::Phi {
+                    result: ValueId(result.0 + value_offset),
+                    incomings: incomings
+                        .iter()
+                        .map(|(block, value)| {
+                            (
+                                BlockId(block.0 + block_offset),
+                                ValueId(value.0 + value_offset),
+                            )
+                        })
+                        .collect(),
+                },
+                _ => remap_instruction(instruction, value_offset),
+            }
         }
 
         let mut lowered_conditions = Vec::with_capacity(1 + elif_roots.len());
@@ -2452,42 +2508,62 @@ impl Function {
 
         let mut next_value = 0;
         let mut condition_offsets = Vec::with_capacity(lowered_conditions.len());
-        for (block, value) in &lowered_conditions {
+        for function in &lowered_conditions {
             condition_offsets.push(next_value);
-            next_value += width(block, Some(*value));
+            next_value += function_width(function);
         }
         let mut value_offsets = Vec::with_capacity(lowered_values.len());
         for (block, value) in &lowered_values {
             value_offsets.push(next_value);
-            next_value += width(block, *value);
+            next_value += block_width(block, *value);
         }
 
         let condition_count = lowered_conditions.len();
-        let else_block_id = BlockId((condition_count * 2) as u32);
+        let mut condition_block_offsets = Vec::with_capacity(condition_count);
+        let mut then_block_ids = Vec::with_capacity(condition_count);
+        let mut next_block = 0_u32;
+        for condition in &lowered_conditions {
+            condition_block_offsets.push(next_block);
+            next_block += u32::try_from(condition.blocks.len())
+                .map_err(|_| LowerError::UnsupportedExpression)?;
+            then_block_ids.push(BlockId(next_block));
+            next_block += 1;
+        }
+        let else_block_id = BlockId(next_block);
         let mut blocks = Vec::new();
         for index in 0..condition_count {
-            let condition_block_id = BlockId((index * 2) as u32);
-            let then_block_id = BlockId((index * 2 + 1) as u32);
+            let condition_block_offset = condition_block_offsets[index];
+            let then_block_id = then_block_ids[index];
             let false_block_id = if index + 1 == condition_count {
                 else_block_id
             } else {
-                BlockId((index * 2 + 2) as u32)
+                BlockId(condition_block_offsets[index + 1] + lowered_conditions[index + 1].entry.0)
             };
-            let (condition_block, condition_value) = &lowered_conditions[index];
+            let condition_function = &lowered_conditions[index];
             let condition_offset = condition_offsets[index];
-            blocks.push(Block {
-                id: condition_block_id,
-                instructions: condition_block
-                    .instructions
-                    .iter()
-                    .map(|instruction| remap_instruction(instruction, condition_offset))
-                    .collect(),
-                terminator: Terminator::Branch {
-                    condition: ValueId(condition_value.0 + condition_offset),
-                    then_block: then_block_id,
-                    else_block: false_block_id,
-                },
-            });
+            for condition_block in &condition_function.blocks {
+                blocks.push(Block {
+                    id: BlockId(condition_block.id.0 + condition_block_offset),
+                    instructions: condition_block
+                        .instructions
+                        .iter()
+                        .map(|instruction| {
+                            remap_condition_instruction(
+                                instruction,
+                                condition_offset,
+                                condition_block_offset,
+                            )
+                        })
+                        .collect(),
+                    terminator: remap_condition_terminator(
+                        &condition_block.terminator,
+                        condition_offset,
+                        condition_block_offset,
+                        then_block_id,
+                        false_block_id,
+                    )?,
+                });
+            }
             let (then_block, then_value) = &lowered_values[index];
             let then_offset = value_offsets[index];
             blocks.push(Block {

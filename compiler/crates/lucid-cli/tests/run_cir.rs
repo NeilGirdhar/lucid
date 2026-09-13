@@ -1004,6 +1004,71 @@ fn run_cir_preserves_logical_condition_effects_in_voids_value_fallback_chain() {
 }
 
 #[test]
+fn run_cir_preserves_logical_condition_effects_after_setup_binding() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_setup_guard_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def setup_skip(x: int):\n    z = x\n    if z != 0 and 10 // z > 1:\n        return 1\n    elif x > 0:\n        return 2\n    return 3\n",
+    )
+    .expect("temporary source should be writable");
+    let skip = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "setup_skip",
+            "--args",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "setup_skip",
+            "--args",
+            "2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "setup_skip",
+            "--args",
+            "-1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        skip.status.success(),
+        "false left operand after setup binding should short-circuit: {}",
+        String::from_utf8_lossy(&skip.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&skip.stdout).trim(), "3");
+    assert!(
+        selected.status.success(),
+        "true setup guard should select first branch: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "1");
+    assert!(
+        fallback.status.success(),
+        "false setup guard should fall through: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "3");
+}
+
+#[test]
 fn run_cir_executes_dynamic_parameter_conditional() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_if_{}.lucid",
