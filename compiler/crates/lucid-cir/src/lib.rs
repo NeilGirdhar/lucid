@@ -11120,6 +11120,16 @@ impl Function {
                         lucid_syntax::Expr::Call { func, args, .. } => {
                             if let Some(values) = const_range_values(right) {
                                 contains = values.contains(&needle);
+                            } else if let Some(elements) = lower_int_dict_view_elements(
+                                right,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )? {
+                                for value in elements {
+                                    contains |= contains_value(value, instructions)?;
+                                }
                             } else if matches!(
                                 func.as_ref(),
                                 lucid_syntax::Expr::Ident { name, .. }
@@ -11134,6 +11144,16 @@ impl Function {
                             {
                                 if let Some(values) = const_range_values(&args[0].value) {
                                     contains = values.contains(&needle);
+                                } else if let Some(elements) = lower_int_dict_view_elements(
+                                    &args[0].value,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )? {
+                                    for value in elements {
+                                        contains |= contains_value(value, instructions)?;
+                                    }
                                 } else if let lucid_syntax::Expr::Call {
                                     func: view_func,
                                     args: view_args,
@@ -11868,6 +11888,91 @@ impl Function {
                 }
                 _ => None,
             }
+        }
+        fn push_const_int(
+            value: i64,
+            instructions: &mut Vec<Instruction>,
+            next: &mut u32,
+        ) -> ValueId {
+            let id = ValueId(*next);
+            *next += 1;
+            instructions.push(Instruction::ConstInt { result: id, value });
+            id
+        }
+        fn lower_int_dict_view_elements(
+            expr: &lucid_syntax::Expr,
+            bindings: &HashMap<String, ValueId>,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+            instructions: &mut Vec<Instruction>,
+            next: &mut u32,
+        ) -> Result<Option<Vec<ValueId>>, LowerError> {
+            let Some((value, attr)) = dict_view_parts(expr) else {
+                return Ok(None);
+            };
+            if let lucid_syntax::Expr::Dict { entries, .. } = value {
+                let mut elements = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    let selected = match attr {
+                        "keys" => {
+                            let _ = lower(value, bindings, aggregate_bindings, instructions, next)?;
+                            key
+                        }
+                        "values" => {
+                            let _ = lower(key, bindings, aggregate_bindings, instructions, next)?;
+                            value
+                        }
+                        _ => unreachable!(),
+                    };
+                    elements.push(lower(
+                        selected,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    )?);
+                }
+                return Ok(Some(elements));
+            }
+            let lucid_syntax::Expr::Ident { name, .. } = value else {
+                return Ok(None);
+            };
+            let Some(aggregate) = aggregate_bindings.get(name) else {
+                return Ok(None);
+            };
+            let elements = match (attr, aggregate) {
+                ("keys", AggregateBinding::Dict(entries)) => {
+                    entries.iter().map(|(key, _)| *key).collect()
+                }
+                ("values", AggregateBinding::Dict(entries)) => {
+                    entries.iter().map(|(_, value)| *value).collect()
+                }
+                ("keys", AggregateBinding::IntStringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| push_const_int(*key, instructions, next))
+                    .collect(),
+                ("keys", AggregateBinding::IntFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| push_const_int(*key, instructions, next))
+                    .collect(),
+                ("keys", AggregateBinding::IntSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, _)| push_const_int(*key, instructions, next))
+                    .collect(),
+                ("values", AggregateBinding::StringIntDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| push_const_int(*value, instructions, next))
+                    .collect(),
+                ("values", AggregateBinding::FloatIntDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| push_const_int(*value, instructions, next))
+                    .collect(),
+                ("values", AggregateBinding::SingletonIntDict(entries)) => entries
+                    .iter()
+                    .map(|(_, value)| push_const_int(*value, instructions, next))
+                    .collect(),
+                _ => return Ok(None),
+            };
+            Ok(Some(elements))
         }
         fn constant_value_truth(value: ValueId, instructions: &[Instruction]) -> Option<bool> {
             let instruction = instructions
@@ -12775,13 +12880,7 @@ impl Function {
                             values.sort_unstable();
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
-                                let id = ValueId(*next);
-                                *next += 1;
-                                instructions.push(Instruction::ConstInt {
-                                    result: id,
-                                    value: i64::from(value),
-                                });
-                                elements.push(id);
+                                elements.push(push_const_int(i64::from(value), instructions, next));
                             }
                             return Ok(Some(AggregateBinding::List(elements)));
                         }
@@ -12816,11 +12915,27 @@ impl Function {
                             values.sort_unstable();
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
-                                let id = ValueId(*next);
-                                *next += 1;
-                                instructions.push(Instruction::ConstInt { result: id, value });
-                                elements.push(id);
+                                elements.push(push_const_int(value, instructions, next));
                             }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
+                        if let Some(elements) = lower_int_dict_view_elements(
+                            iterable,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )? {
+                            let mut values = elements
+                                .iter()
+                                .map(|value| constant_int(*value, instructions))
+                                .collect::<Option<Vec<_>>>()
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            values.sort_unstable();
+                            let elements = values
+                                .into_iter()
+                                .map(|value| push_const_int(value, instructions, next))
+                                .collect();
                             return Ok(Some(AggregateBinding::List(elements)));
                         }
                     }
@@ -12850,13 +12965,7 @@ impl Function {
                             values.reverse();
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
-                                let id = ValueId(*next);
-                                *next += 1;
-                                instructions.push(Instruction::ConstInt {
-                                    result: id,
-                                    value: i64::from(value),
-                                });
-                                elements.push(id);
+                                elements.push(push_const_int(i64::from(value), instructions, next));
                             }
                             return Ok(Some(AggregateBinding::List(elements)));
                         }
@@ -12890,11 +12999,27 @@ impl Function {
                             values.reverse();
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
-                                let id = ValueId(*next);
-                                *next += 1;
-                                instructions.push(Instruction::ConstInt { result: id, value });
-                                elements.push(id);
+                                elements.push(push_const_int(value, instructions, next));
                             }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
+                        if let Some(elements) = lower_int_dict_view_elements(
+                            iterable,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )? {
+                            let mut values = elements
+                                .iter()
+                                .map(|value| constant_int(*value, instructions))
+                                .collect::<Option<Vec<_>>>()
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            values.reverse();
+                            let elements = values
+                                .into_iter()
+                                .map(|value| push_const_int(value, instructions, next))
+                                .collect();
                             return Ok(Some(AggregateBinding::List(elements)));
                         }
                     }
@@ -12923,24 +13048,24 @@ impl Function {
                         if let Some(values) = const_range_values(iterable) {
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
-                                let id = ValueId(*next);
-                                *next += 1;
-                                instructions.push(Instruction::ConstInt { result: id, value });
-                                elements.push(id);
+                                elements.push(push_const_int(value, instructions, next));
                             }
                             return Ok(Some(AggregateBinding::List(elements)));
                         }
                         if let Some(values) = constant_bytes(iterable, aggregate_bindings) {
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
-                                let id = ValueId(*next);
-                                *next += 1;
-                                instructions.push(Instruction::ConstInt {
-                                    result: id,
-                                    value: i64::from(value),
-                                });
-                                elements.push(id);
+                                elements.push(push_const_int(i64::from(value), instructions, next));
                             }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
+                        if let Some(elements) = lower_int_dict_view_elements(
+                            iterable,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )? {
                             return Ok(Some(AggregateBinding::List(elements)));
                         }
                         if let lucid_syntax::Expr::Record { fields, .. } = iterable {
@@ -13045,24 +13170,24 @@ impl Function {
                         if let Some(values) = const_range_values(iterable) {
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
-                                let id = ValueId(*next);
-                                *next += 1;
-                                instructions.push(Instruction::ConstInt { result: id, value });
-                                elements.push(id);
+                                elements.push(push_const_int(value, instructions, next));
                             }
                             return Ok(Some(AggregateBinding::Set(elements)));
                         }
                         if let Some(values) = constant_bytes(iterable, aggregate_bindings) {
                             let mut elements = Vec::with_capacity(values.len());
                             for value in values {
-                                let id = ValueId(*next);
-                                *next += 1;
-                                instructions.push(Instruction::ConstInt {
-                                    result: id,
-                                    value: i64::from(value),
-                                });
-                                elements.push(id);
+                                elements.push(push_const_int(i64::from(value), instructions, next));
                             }
+                            return Ok(Some(AggregateBinding::Set(elements)));
+                        }
+                        if let Some(elements) = lower_int_dict_view_elements(
+                            iterable,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )? {
                             return Ok(Some(AggregateBinding::Set(elements)));
                         }
                         if let lucid_syntax::Expr::Record { fields, .. } = iterable {
@@ -24451,6 +24576,22 @@ return total
                 "values = list({1: 10, 2: 20}.values())\nreturn values[0] + values[1]\n",
                 30,
             ),
+            (
+                "pairs = {1: 10, 2: 20}\nvalues = list(pairs.keys())\nreturn values[0] + values[1]\n",
+                3,
+            ),
+            (
+                "pairs = {1: 10, 2: 20}\nvalues = list(pairs.values())\nreturn values[0] + values[1]\n",
+                30,
+            ),
+            (
+                "pairs = {\"a\": 10, \"b\": 20}\nvalues = list(pairs.values())\nreturn values[0] + values[1]\n",
+                30,
+            ),
+            (
+                "pairs = {1: \"a\", 2: \"b\"}\nvalues = list(pairs.keys())\nreturn values[0] + values[1]\n",
+                3,
+            ),
             ("values = set(range(3))\nreturn 2 in values\n", 1),
             ("return 2 in list(range(3))\n", 1),
             ("return 2 in set(range(3))\n", 1),
@@ -24465,6 +24606,18 @@ return total
             ("return 2 in {1: 10, 2: 20}.keys()\n", 1),
             ("return 20 in {1: 10, 2: 20}.values()\n", 1),
             ("return 20 in list({1: 10, 2: 20}.values())\n", 1),
+            ("pairs = {1: 10, 2: 20}\nreturn 2 in pairs.keys()\n", 1),
+            ("pairs = {1: 10, 2: 20}\nreturn 20 in pairs.values()\n", 1),
+            ("pairs = {1: 10, 2: 20}\nreturn 20 in list(pairs.values())\n", 1),
+            ("pairs = {1: 10, 2: 20}\nreturn 2 in set(pairs.keys())\n", 1),
+            (
+                "pairs = {2: 20, 1: 10}\nvalues = sorted(pairs.keys())\nreturn values[0] * 10 + values[1]\n",
+                12,
+            ),
+            (
+                "pairs = {1: 10, 2: 20}\nvalues = reversed(pairs.values())\nreturn values[0] + values[1]\n",
+                30,
+            ),
             (
                 "values = sorted([3, 1, 2])\nreturn values[0] * 100 + values[1] * 10 + values[2]\n",
                 123,

@@ -1244,6 +1244,35 @@ fn run_cir_lowers_constant_integer_builtins_in_typed_function_body() {
 }
 
 #[test]
+fn run_cir_lowers_bound_integer_dictionary_views_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_bound_integer_dict_views_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    pairs = {1: 10, 2: 20}\n    keys = list(pairs.keys())\n    values = set(pairs.values())\n    sorted_keys = sorted(pairs.keys())\n    return keys[0] + keys[1] == 3 and 20 in values and 2 in pairs.keys() and 20 in pairs.values() and sorted_keys[0] == 1\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function bound integer dictionary views failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
 fn run_cir_lowers_membership_of_constant_aggregates_in_typed_function_body() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_membership_aggregate_{}.lucid",
