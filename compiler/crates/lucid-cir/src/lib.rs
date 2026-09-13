@@ -1349,18 +1349,37 @@ impl Function {
             let provisional_result = ValueId(*next);
             *next += 1;
             let mut result = provisional_result;
+            fn local_binding_id(
+                node: &TypedExprNode,
+                current_id: u32,
+                parameter_names: &[String],
+                local_bindings: &[(String, u32)],
+            ) -> Option<u32> {
+                if node.kind != "name"
+                    || parameter_names
+                        .iter()
+                        .any(|name| node.detail.as_deref() == Some(name.as_str()))
+                {
+                    return None;
+                }
+                local_bindings
+                    .iter()
+                    .rev()
+                    .find(|(name, binding_id)| {
+                        node.detail.as_deref() == Some(name.as_str()) && *binding_id < current_id
+                    })
+                    .map(|(_, binding_id)| *binding_id)
+            }
             if node.kind == "name"
                 && !parameter_names
                     .iter()
                     .any(|name| node.detail.as_deref() == Some(name.as_str()))
             {
-                if let Some((_, binding_id)) =
-                    local_bindings.iter().rev().find(|(name, binding_id)| {
-                        node.detail.as_deref() == Some(name.as_str()) && *binding_id < id
-                    })
+                if let Some(binding_id) =
+                    local_binding_id(node, id, parameter_names, local_bindings)
                 {
                     result = lower(
-                        *binding_id,
+                        binding_id,
                         nodes,
                         lowered,
                         instructions,
@@ -1386,8 +1405,15 @@ impl Function {
                     && matches!(node.detail.as_deref(), Some("In" | "NotIn"))
                     && node.children.len() == 2
                 {
+                    let aggregate_id = node.children[1];
                     let aggregate = nodes
-                        .get(node.children[1] as usize)
+                        .get(aggregate_id as usize)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let aggregate_id =
+                        local_binding_id(aggregate, aggregate_id, parameter_names, local_bindings)
+                            .unwrap_or(aggregate_id);
+                    let aggregate = nodes
+                        .get(aggregate_id as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
                     let members = match aggregate.kind.as_str() {
                         "list" | "set" | "record" => aggregate.children.clone(),
@@ -1450,6 +1476,57 @@ impl Function {
                             operand: contains,
                         });
                     }
+                    lowered.insert(id, result);
+                    return Ok(result);
+                }
+                if node.kind == "index" && node.children.len() == 2 {
+                    let aggregate_id = node.children[0];
+                    let aggregate = nodes
+                        .get(aggregate_id as usize)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let aggregate_id =
+                        local_binding_id(aggregate, aggregate_id, parameter_names, local_bindings)
+                            .unwrap_or(aggregate_id);
+                    let aggregate = nodes
+                        .get(aggregate_id as usize)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    if !matches!(aggregate.kind.as_str(), "list" | "record") {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    let index_node = nodes
+                        .get(node.children[1] as usize)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let Some(TypedLiteral::Int(index)) = index_node.literal else {
+                        return Err(LowerError::UnsupportedExpression);
+                    };
+                    let len = i64::try_from(aggregate.children.len())
+                        .map_err(|_| LowerError::UnsupportedExpression)?;
+                    let index = if index < 0 { len + index } else { index };
+                    if !(0..len).contains(&index) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    let mut member_values = Vec::with_capacity(aggregate.children.len());
+                    for child in &aggregate.children {
+                        member_values.push(lower(
+                            *child,
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?);
+                    }
+                    lower(
+                        node.children[1],
+                        nodes,
+                        lowered,
+                        instructions,
+                        next,
+                        parameter_names,
+                        local_bindings,
+                    )?;
+                    result = member_values[index as usize];
                     lowered.insert(id, result);
                     return Ok(result);
                 }
@@ -24531,6 +24608,33 @@ return total
             .expect("typed list negative membership should lower");
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(0)));
         assert_eq!(function.execute_with_args(&[4]), Ok(Some(1)));
+        let nodes_with_bound_aggregate = {
+            let mut nodes = nodes.clone();
+            nodes.insert(
+                4,
+                TypedExprNode {
+                    id: 4,
+                    kind: "name".into(),
+                    detail: Some("values".into()),
+                    children: vec![],
+                    literal: None,
+                },
+            );
+            nodes[5].id = 5;
+            nodes[5].children = vec![0, 4];
+            nodes[6].id = 6;
+            nodes[6].children = vec![0, 4];
+            nodes
+        };
+        let function = Function::from_typed_function_body_with_locals(
+            &nodes_with_bound_aggregate,
+            5,
+            &["value".into()],
+            &[("values".into(), 3)],
+        )
+        .expect("typed membership should resolve local aggregate bindings");
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(0)));
 
         let nodes = vec![
             TypedExprNode {
@@ -24698,6 +24802,176 @@ return total
         let function = Function::from_typed_function_body(&nodes, 2, &["value".into()])
             .expect("typed empty-list negative membership should lower");
         assert_eq!(function.execute_with_args(&[42]), Ok(Some(1)));
+    }
+
+    #[test]
+    fn lowers_typed_indexing_in_constant_sequences() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(40)),
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(41)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(42)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "list".into(),
+                detail: None,
+                children: vec![0, 1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("values".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "index".into(),
+                detail: None,
+                children: vec![4, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(30)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "record".into(),
+                detail: None,
+                children: vec![7, 8, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(-2)),
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "index".into(),
+                detail: None,
+                children: vec![10, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![6, 12],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body_with_locals(
+            &nodes,
+            13,
+            &[],
+            &[("values".into(), 3)],
+        )
+        .expect("typed sequence indexing should lower");
+        assert_eq!(function.execute(), Ok(Some(62)));
+    }
+
+    #[test]
+    fn typed_indexing_evaluates_unselected_sequence_elements() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(42)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "list".into(),
+                detail: None,
+                children: vec![2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "index".into(),
+                detail: None,
+                children: vec![4, 5],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 6, &[])
+            .expect("typed sequence indexing should preserve element evaluation");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
     #[test]
