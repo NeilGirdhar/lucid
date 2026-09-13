@@ -1714,7 +1714,7 @@ impl TypeChecker {
         env.class_methods.insert(
             ("list".into(), "extend".into()),
             Type::Function {
-                params: vec![list_any.clone()],
+                params: vec![any.clone()],
                 return_type: Box::new(Type::None),
             },
         );
@@ -1729,7 +1729,7 @@ impl TypeChecker {
         }
         let dict_methods = env.class_members.entry("dict".into()).or_default();
         dict_methods.extend(
-            ["get", "keys", "values", "items", "clear", "pop"]
+            ["get", "keys", "values", "items", "clear", "pop", "contains"]
                 .into_iter()
                 .map(str::to_string),
         );
@@ -1744,6 +1744,7 @@ impl TypeChecker {
         for (method, arity) in [
             ("get", 2usize),
             ("pop", 1),
+            ("contains", 1),
             ("keys", 0),
             ("values", 0),
             ("items", 0),
@@ -1768,15 +1769,31 @@ impl TypeChecker {
         }
         let set_methods = env.class_members.entry("set".into()).or_default();
         set_methods.extend(
-            ["add", "remove", "discard", "clear", "pop"]
-                .into_iter()
-                .map(str::to_string),
+            [
+                "add",
+                "remove",
+                "discard",
+                "clear",
+                "pop",
+                "contains",
+                "isdisjoint",
+            ]
+            .into_iter()
+            .map(str::to_string),
         );
-        for method in ["add", "remove", "discard", "clear", "pop"] {
+        for (method, arity) in [
+            ("add", 1usize),
+            ("remove", 1),
+            ("discard", 1),
+            ("clear", 0),
+            ("pop", 0),
+            ("contains", 1),
+            ("isdisjoint", 1),
+        ] {
             env.class_methods.insert(
                 ("set".into(), method.into()),
                 Type::Function {
-                    params: vec![any.clone()],
+                    params: vec![any.clone(); arity],
                     return_type: Box::new(Type::TypeVar("Any".into())),
                 },
             );
@@ -4469,6 +4486,88 @@ impl TypeChecker {
         };
 
         match (name.as_str(), attr, type_args.as_slice()) {
+            ("list", "append" | "remove", [element_type]) => {
+                if let Some(argument) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !matches!(element_type, Type::Never)
+                        && !argument_type.is_subtype_of(element_type, &self.env)
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "list.{attr}() item has type {:?}, expected {:?}",
+                                argument_type, element_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                }
+                Ok(Some(Type::None))
+            }
+            ("list", "extend", [element_type]) => {
+                if let Some(argument) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !self.is_iterable_type(&argument_type) {
+                        return Err(TypeError {
+                            message: format!(
+                                "list.extend() argument must be iterable, got {:?}",
+                                argument_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                    let argument_element = self.iterable_element_type(&argument_type);
+                    if !matches!(element_type, Type::Never)
+                        && !argument_element.is_subtype_of(element_type, &self.env)
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "list.extend() element has type {:?}, expected {:?}",
+                                argument_element, element_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                }
+                Ok(Some(Type::None))
+            }
+            ("list", "insert", [element_type]) => {
+                if let Some(index) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let index_type = self.type_of_expr(&index.value)?;
+                    if !index_type.is_subtype_of(&Type::Int, &self.env) {
+                        return Err(TypeError {
+                            message: format!(
+                                "list.insert() index has type {:?}, expected int",
+                                index_type
+                            ),
+                            span: index.value.span(),
+                        });
+                    }
+                }
+                if let Some(item) = args.get(1).filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let item_type = self.type_of_expr(&item.value)?;
+                    if !matches!(element_type, Type::Never)
+                        && !item_type.is_subtype_of(element_type, &self.env)
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "list.insert() item has type {:?}, expected {:?}",
+                                item_type, element_type
+                            ),
+                            span: item.value.span(),
+                        });
+                    }
+                }
+                Ok(Some(Type::None))
+            }
+            ("list", "clear", [_]) => Ok(Some(Type::None)),
             ("list", "pop", [element_type]) => {
                 for argument in args.iter().take(2).filter(|argument| {
                     !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
@@ -4498,13 +4597,68 @@ impl TypeChecker {
                     Ok(Some(element_type.clone()))
                 }
             }
+            ("set", "add" | "remove" | "discard" | "contains", [element_type]) => {
+                if let Some(argument) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !matches!(element_type, Type::Never)
+                        && !argument_type.is_subtype_of(element_type, &self.env)
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "set.{attr}() item has type {:?}, expected {:?}",
+                                argument_type, element_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                }
+                if attr == "contains" {
+                    Ok(Some(Type::Bool))
+                } else {
+                    Ok(Some(Type::None))
+                }
+            }
+            ("set", "isdisjoint", [element_type]) => {
+                if let Some(argument) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !self.is_iterable_type(&argument_type) {
+                        return Err(TypeError {
+                            message: format!(
+                                "set.isdisjoint() argument must be iterable, got {:?}",
+                                argument_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                    let argument_element = self.iterable_element_type(&argument_type);
+                    if !matches!(element_type, Type::Never)
+                        && !argument_element.is_subtype_of(element_type, &self.env)
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "set.isdisjoint() element has type {:?}, expected {:?}",
+                                argument_element, element_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                }
+                Ok(Some(Type::Bool))
+            }
+            ("set", "clear", [_]) => Ok(Some(Type::None)),
             ("set", "pop", [element_type]) => Ok(Some(element_type.clone())),
             ("dict", "get", [key_type, value_type]) => {
                 if let Some(argument) = args.first().filter(|argument| {
                     !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
                 }) {
                     let argument_type = self.type_of_expr(&argument.value)?;
-                    if !argument_type.is_subtype_of(key_type, &self.env) {
+                    if !matches!(key_type, Type::Never)
+                        && !argument_type.is_subtype_of(key_type, &self.env)
+                    {
                         return Err(TypeError {
                             message: format!(
                                 "dict.get() key has type {:?}, expected {:?}",
@@ -4531,7 +4685,9 @@ impl TypeChecker {
                     !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
                 }) {
                     let argument_type = self.type_of_expr(&argument.value)?;
-                    if !argument_type.is_subtype_of(key_type, &self.env) {
+                    if !matches!(key_type, Type::Never)
+                        && !argument_type.is_subtype_of(key_type, &self.env)
+                    {
                         return Err(TypeError {
                             message: format!(
                                 "dict.pop() key has type {:?}, expected {:?}",
@@ -4543,6 +4699,26 @@ impl TypeChecker {
                 }
                 Ok(Some(value_type.clone()))
             }
+            ("dict", "contains", [key_type, _]) => {
+                if let Some(argument) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !matches!(key_type, Type::Never)
+                        && !argument_type.is_subtype_of(key_type, &self.env)
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "dict.contains() key has type {:?}, expected {:?}",
+                                argument_type, key_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                }
+                Ok(Some(Type::Bool))
+            }
+            ("dict", "clear", [_, _]) => Ok(Some(Type::None)),
             _ => Ok(None),
         }
     }
@@ -9407,11 +9583,14 @@ impl TypeChecker {
                         Type::Class { ref name, .. } if name == "dict" => match attr.as_str() {
                             "get" => Some((1, 2)),
                             "pop" => Some((1, 1)),
+                            "contains" => Some((1, 1)),
                             "keys" | "values" | "items" | "clear" => Some((0, 0)),
                             _ => None,
                         },
                         Type::Class { ref name, .. } if name == "set" => match attr.as_str() {
-                            "add" | "remove" | "discard" => Some((1, 1)),
+                            "add" | "remove" | "discard" | "contains" | "isdisjoint" => {
+                                Some((1, 1))
+                            }
                             "clear" | "pop" => Some((0, 0)),
                             _ => None,
                         },
@@ -16373,7 +16552,26 @@ def reject(value: not int) -> none:
                 "items: dict[str, int] = {\"a\": 1}\nvalue = items.pop(1)\n",
                 "dict.pop() key",
             ),
+            (
+                "items: dict[str, int] = {\"a\": 1}\npresent = items.contains(1)\n",
+                "dict.contains() key",
+            ),
             ("items = [1]\nvalue = items.pop(\"bad\")\n", "list.pop() index"),
+            ("items: list[int] = [1]\nitems.append(\"bad\")\n", "list.append() item"),
+            ("items: list[int] = [1]\nitems.extend([\"bad\"])\n", "list.extend() element"),
+            ("items: list[int] = [1]\nitems.extend(1)\n", "list.extend() argument must be iterable"),
+            ("items: list[int] = [1]\nitems.insert(\"bad\", 2)\n", "list.insert() index"),
+            ("items: list[int] = [1]\nitems.insert(0, \"bad\")\n", "list.insert() item"),
+            ("items: set[int] = {1}\nitems.add(\"bad\")\n", "set.add() item"),
+            ("items: set[int] = {1}\nitems.contains(\"bad\")\n", "set.contains() item"),
+            (
+                "items: set[int] = {1}\nempty = items.isdisjoint([\"bad\"])\n",
+                "set.isdisjoint() element",
+            ),
+            (
+                "items: set[int] = {1}\nempty = items.isdisjoint(1)\n",
+                "set.isdisjoint() argument must be iterable",
+            ),
             ("ord(\"ab\")\n", "is not a bare builtin"),
             ("chr(0x110000)\n", "is not a bare builtin"),
         ] {
@@ -16447,7 +16645,7 @@ def reject(value: not int) -> none:
         collection_checker
             .check_module(
                 &parse(
-                    "values: dict[str, int] = {\"a\": 1}\nmaybe: int | none = values.get(\"a\")\nfallback_text: str = \"fallback\"\nfallback: int | str = values.get(\"missing\", fallback_text)\npopped: int = values.pop(\"a\")\nxs: list[int] = [1, 2, 3]\nitem: int = xs.pop()\nitem_at: int = xs.pop(0)\nchunk: list[int] = xs.pop(0, 1)\nunique = set([1])\nset_item: int = unique.pop()\n",
+                    "values: dict[str, int] = {\"a\": 1}\nmaybe: int | none = values.get(\"a\")\nfallback_text: str = \"fallback\"\nfallback: int | str = values.get(\"missing\", fallback_text)\npopped: int = values.pop(\"a\")\npresent: bool = values.contains(\"a\")\nvalues.clear()\nxs: list[int] = [1, 2, 3]\nxs.append(4)\nxs.extend([5, 6])\nxs.insert(0, 0)\nxs.remove(6)\nitem: int = xs.pop()\nitem_at: int = xs.pop(0)\nchunk: list[int] = xs.pop(0, 1)\nxs.clear()\nunique = set([1])\nunique.add(2)\nunique.remove(1)\nunique.discard(3)\nhas_two: bool = unique.contains(2)\ndisjoint: bool = unique.isdisjoint([4])\nset_item: int = unique.pop()\nunique.clear()\n",
                 )
                 .unwrap(),
             )
