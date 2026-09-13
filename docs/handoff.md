@@ -199,11 +199,19 @@ closed 17 concrete gaps: 12 builtin type improvements + 5 type validation improv
 
 **Remaining Gaps by Category:**
 1. **Architectural** (2-3 days): Iterator protocol for lazy evaluation
-2. **Refactoring** (2-3 days): Move ~20 native type checks to static checker  
-3. **Systematic** (2-3 days): Context-dependent typing for getattr/setattr, dict/set inference
+2. **Type Inference** (2-3 days): Record list element type unioning issue
+   - When iterating over list of records like [["a", 1], ["b", 2]], field indexing
+     returns Union of field types instead of specific field type
+   - Normalization handles simple cases but complex record inference needs deeper fix
+   - Affects benchmarks: fasta.lucid, binary_trees.lucid
+3. **Type Narrowing** (2-3 days): Flow-sensitive type narrowing from pattern guards
+   - After `if x is None:`, type of x is not narrowed in the else branch
+   - Requires flow analysis architecture
+   - Affects benchmarks: binary_trees.lucid
 
-Condition "keep going until ALL gaps are closed" still NOT satisfied. ~5-8 days remain.
-Iterator protocol is highest priority (blocks several remaining gaps).
+Condition "keep going until ALL gaps are closed" still NOT satisfied. ~5-8+ days remain.
+Main blockers: Type system architecture issues (record inference, type narrowing)
+that require deeper refactoring than simple validation additions.
 
 - Keep landing small vertical slices with focused tests, then the full gate,
   then a pushed checkpoint.
