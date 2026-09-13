@@ -1655,6 +1655,8 @@ diverged:
   optional machine-readable fixes through a Salsa query.
   Duplicate top-level declarations now use the related-span channel to point
   at the previous declaration.
+  Duplicate import-binding diagnostics do the same, so both plain imports and
+  `from ... import ... as ...` collisions identify the earlier binding.
 * Lexical parse diagnostics now recover their source range from the lossless
   CST instead of reporting a zero-length placeholder span.
 * Project diagnostics now consume those structured file diagnostics, including

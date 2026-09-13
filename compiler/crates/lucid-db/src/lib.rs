@@ -7572,7 +7572,7 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
         let Ok(module) = parse_ast(db, file) else {
             continue;
         };
-        let mut imported_names = std::collections::BTreeSet::new();
+        let mut imported_names = std::collections::BTreeMap::<String, lucid_syntax::Span>::new();
         for statement in &module.statements {
             if let lucid_syntax::Stmt::Export(inner) = statement {
                 let private_name = match inner.as_ref() {
@@ -7614,16 +7614,23 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                         .trim_start_matches('.')
                         .to_string()
                 });
-                if !imported_names.insert(local_name.clone()) {
+                let current_span = statement_span(statement);
+                if let Some(previous_span) = imported_names.get(&local_name).copied() {
                     diagnostics.push(Diagnostic {
                         file,
                         severity: Severity::Error,
                         code: "E0305".into(),
                         message: format!("duplicate imported binding '{local_name}'"),
-                        span: statement_span(statement),
-                        related: Arc::from([]),
+                        span: current_span,
+                        related: Arc::from([RelatedDiagnostic {
+                            file,
+                            message: "previous import is here".into(),
+                            span: previous_span,
+                        }]),
                         fix: None,
                     });
+                } else {
+                    imported_names.insert(local_name.clone(), current_span);
                 }
                 continue;
             }
@@ -7641,16 +7648,23 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
             let declarations = resolved_declarations(db, *imported_file);
             for (name, alias) in names {
                 let local_name = alias.as_ref().unwrap_or(name);
-                if !imported_names.insert(local_name.clone()) {
+                let current_span = statement_span(statement);
+                if let Some(previous_span) = imported_names.get(local_name).copied() {
                     diagnostics.push(Diagnostic {
                         file,
                         severity: Severity::Error,
                         code: "E0305".into(),
                         message: format!("duplicate imported binding '{local_name}'"),
-                        span: statement_span(statement),
-                        related: Arc::from([]),
+                        span: current_span,
+                        related: Arc::from([RelatedDiagnostic {
+                            file,
+                            message: "previous import is here".into(),
+                            span: previous_span,
+                        }]),
                         fix: None,
                     });
+                } else {
+                    imported_names.insert(local_name.clone(), current_span);
                 }
                 let exported = declarations
                     .iter()
@@ -12038,9 +12052,17 @@ mod tests {
         let support = db.add_file("support.lucid", "value = 1\nother = 2\n");
         let project = Project::new(&db, vec![main, support]);
         let diagnostics = project_diagnostics(&db, project);
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "E0305" && diagnostic.message.contains("answer")
-        }));
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0305" && diagnostic.message.contains("answer"))
+            .expect("duplicate import binding diagnostic");
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].file, main);
+        assert_eq!(diagnostic.related[0].message, "previous import is here");
+        assert_eq!(
+            span_text(&db, main, diagnostic.related[0].span).as_ref(),
+            "from"
+        );
     }
 
     #[test]
@@ -12050,10 +12072,15 @@ mod tests {
         let one = db.add_file("one.lucid", "value = 1\n");
         let two = db.add_file("two.lucid", "value = 2\n");
         let project = Project::new(&db, vec![main, one, two]);
-        assert!(
-            project_diagnostics(&db, project)
-                .iter()
-                .any(|diagnostic| diagnostic.code == "E0305")
+        let diagnostics = project_diagnostics(&db, project);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0305")
+            .expect("duplicate plain import diagnostic");
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(
+            span_text(&db, main, diagnostic.related[0].span).as_ref(),
+            "import"
         );
     }
 }
