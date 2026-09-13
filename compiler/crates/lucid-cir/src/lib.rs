@@ -8335,6 +8335,8 @@ impl Function {
             StringSet(Vec<String>),
             FloatSet(Vec<f64>),
             SingletonSet(Vec<SingletonBinding>),
+            AggregateList(Vec<AggregateBinding>),
+            AggregateSet(Vec<AggregateBinding>),
             Dict(Vec<(ValueId, ValueId)>),
             StringDict(Vec<(String, String)>),
             StringIntDict(Vec<(String, i64)>),
@@ -8431,6 +8433,50 @@ impl Function {
             let selected = select_constant_index(elements.len(), constant_index(index)?)?;
             elements.get(selected)
         }
+        fn aggregate_at_index(
+            aggregate: &AggregateBinding,
+            raw_index: i64,
+        ) -> Option<AggregateBinding> {
+            match aggregate {
+                AggregateBinding::AggregateList(elements) => {
+                    let selected = select_constant_index(elements.len(), raw_index)?;
+                    elements.get(selected).cloned()
+                }
+                AggregateBinding::StringRecord(elements) => {
+                    let selected = select_constant_index(elements.len(), raw_index)?;
+                    Some(AggregateBinding::String(elements.get(selected)?.clone()))
+                }
+                AggregateBinding::FloatRecord(elements) => {
+                    let selected = select_constant_index(elements.len(), raw_index)?;
+                    Some(AggregateBinding::Float(*elements.get(selected)?))
+                }
+                AggregateBinding::SingletonRecord(elements) => {
+                    let selected = select_constant_index(elements.len(), raw_index)?;
+                    Some(singleton_aggregate(*elements.get(selected)?))
+                }
+                AggregateBinding::MixedRecord(elements) => {
+                    let selected = select_constant_index(elements.len(), raw_index)?;
+                    match elements.get(selected)? {
+                        AggregateElement::Aggregate(aggregate) => Some(aggregate.clone()),
+                        AggregateElement::Value(_) => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+        fn aggregate_expr_binding(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<AggregateBinding> {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => aggregate_bindings.get(name).cloned(),
+                lucid_syntax::Expr::Index { value, index, .. } => {
+                    let aggregate = aggregate_expr_binding(value, aggregate_bindings)?;
+                    aggregate_at_index(&aggregate, constant_index(index)?)
+                }
+                _ => None,
+            }
+        }
         fn constant_string(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -8445,8 +8491,13 @@ impl Function {
                     _ => None,
                 },
                 lucid_syntax::Expr::Index { value, index, .. } => {
-                    if let Some(AggregateElement::Aggregate(AggregateBinding::String(value))) =
-                        mixed_record_element(value, index, aggregate_bindings)
+                    if let Some(AggregateBinding::String(value)) =
+                        aggregate_expr_binding(expr, aggregate_bindings)
+                    {
+                        Some(value)
+                    } else if let Some(AggregateElement::Aggregate(AggregateBinding::String(
+                        value,
+                    ))) = mixed_record_element(value, index, aggregate_bindings)
                     {
                         Some(value.clone())
                     } else if let Some(value) = constant_string(value, aggregate_bindings) {
@@ -9036,8 +9087,13 @@ impl Function {
                     _ => None,
                 },
                 lucid_syntax::Expr::Index { value, index, .. } => {
-                    if let Some(AggregateElement::Aggregate(AggregateBinding::Float(value))) =
-                        mixed_record_element(value, index, aggregate_bindings)
+                    if let Some(AggregateBinding::Float(value)) =
+                        aggregate_expr_binding(expr, aggregate_bindings)
+                    {
+                        Some(value)
+                    } else if let Some(AggregateElement::Aggregate(AggregateBinding::Float(
+                        value,
+                    ))) = mixed_record_element(value, index, aggregate_bindings)
                     {
                         Some(*value)
                     } else if let Some(values) = constant_float_list(value, aggregate_bindings) {
@@ -9334,7 +9390,15 @@ impl Function {
                     _ => None,
                 },
                 lucid_syntax::Expr::Index { value, index, .. } => {
-                    if let Some(AggregateElement::Aggregate(
+                    if let Some(AggregateBinding::None | AggregateBinding::Ellipsis) =
+                        aggregate_expr_binding(expr, aggregate_bindings)
+                    {
+                        match aggregate_expr_binding(expr, aggregate_bindings)? {
+                            AggregateBinding::None => Some(SingletonBinding::None),
+                            AggregateBinding::Ellipsis => Some(SingletonBinding::Ellipsis),
+                            _ => None,
+                        }
+                    } else if let Some(AggregateElement::Aggregate(
                         AggregateBinding::None | AggregateBinding::Ellipsis,
                     )) = mixed_record_element(value, index, aggregate_bindings)
                     {
@@ -9735,6 +9799,8 @@ impl Function {
                             AggregateBinding::StringSet(elements) => elements.len(),
                             AggregateBinding::FloatSet(elements) => elements.len(),
                             AggregateBinding::SingletonSet(elements) => elements.len(),
+                            AggregateBinding::AggregateList(elements)
+                            | AggregateBinding::AggregateSet(elements) => elements.len(),
                             AggregateBinding::Dict(entries) => entries.len(),
                             AggregateBinding::StringDict(entries) => entries.len(),
                             AggregateBinding::StringIntDict(entries) => entries.len(),
@@ -9871,6 +9937,7 @@ impl Function {
                         {
                             AggregateBinding::List(elements) => !elements.is_empty(),
                             AggregateBinding::StringList(elements) => !elements.is_empty(),
+                            AggregateBinding::AggregateList(elements) => !elements.is_empty(),
                             AggregateBinding::FloatList(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
@@ -9878,6 +9945,7 @@ impl Function {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::Set(elements) => !elements.is_empty(),
+                            AggregateBinding::AggregateSet(elements) => !elements.is_empty(),
                             AggregateBinding::StringSet(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
@@ -10308,6 +10376,10 @@ impl Function {
                                 AggregateBinding::MixedRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::AggregateList(_)
+                                | AggregateBinding::AggregateSet(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
@@ -10498,6 +10570,10 @@ impl Function {
                                 AggregateBinding::MixedRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::AggregateList(_)
+                                | AggregateBinding::AggregateSet(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
@@ -10592,6 +10668,32 @@ impl Function {
                                     .then_some(*value)
                             })
                         };
+                    if let Some(aggregate) = aggregate_expr_binding(value, aggregate_bindings) {
+                        match aggregate {
+                            AggregateBinding::Record(elements) => {
+                                let selected = select_sequence(elements.len())
+                                    .ok_or(LowerError::UnsupportedExpression)?;
+                                return elements
+                                    .get(selected)
+                                    .copied()
+                                    .ok_or(LowerError::UnsupportedExpression);
+                            }
+                            AggregateBinding::MixedRecord(elements) => {
+                                let selected = select_sequence(elements.len())
+                                    .ok_or(LowerError::UnsupportedExpression)?;
+                                return match elements
+                                    .get(selected)
+                                    .ok_or(LowerError::UnsupportedExpression)?
+                                {
+                                    AggregateElement::Value(value) => Ok(*value),
+                                    AggregateElement::Aggregate(_) => {
+                                        Err(LowerError::UnsupportedExpression)
+                                    }
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
                     match value.as_ref() {
                         lucid_syntax::Expr::List { elements, .. } => {
                             let selected = select_sequence(elements.len())
@@ -10671,6 +10773,10 @@ impl Function {
                                         .get(selected)
                                         .copied()
                                         .ok_or(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::AggregateList(_)
+                                | AggregateBinding::AggregateSet(_) => {
+                                    Err(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::Set(_) => Err(LowerError::UnsupportedExpression),
                                 AggregateBinding::StringSet(_) => {
@@ -11447,6 +11553,10 @@ impl Function {
                                 AggregateBinding::MixedRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::AggregateList(_)
+                                | AggregateBinding::AggregateSet(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
@@ -12121,6 +12231,90 @@ impl Function {
         fn aggregate_record_element(aggregate: AggregateBinding) -> AggregateElement {
             AggregateElement::Aggregate(aggregate)
         }
+        fn aggregate_element_from_expr(
+            expr: &lucid_syntax::Expr,
+            bindings: &HashMap<String, ValueId>,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+            instructions: &mut Vec<Instruction>,
+            next: &mut u32,
+        ) -> Result<AggregateElement, LowerError> {
+            if let Some(aggregate) =
+                lower_aggregate_literal(expr, bindings, aggregate_bindings, instructions, next)?
+            {
+                Ok(AggregateElement::Aggregate(aggregate))
+            } else {
+                Ok(AggregateElement::Value(lower(
+                    expr,
+                    bindings,
+                    aggregate_bindings,
+                    instructions,
+                    next,
+                )?))
+            }
+        }
+        fn item_record_from_elements(
+            key: AggregateElement,
+            value: AggregateElement,
+        ) -> AggregateBinding {
+            match (key, value) {
+                (AggregateElement::Value(key), AggregateElement::Value(value)) => {
+                    AggregateBinding::Record(vec![key, value])
+                }
+                (key, value) => AggregateBinding::MixedRecord(vec![key, value]),
+            }
+        }
+        fn aggregate_loop_value_binding(value: AggregateLoopValue) -> Option<AggregateBinding> {
+            match value {
+                AggregateLoopValue::Aggregate(aggregate) => Some(aggregate),
+                AggregateLoopValue::Value(_) => None,
+            }
+        }
+        fn dict_item_records(
+            expr: &lucid_syntax::Expr,
+            bindings: &HashMap<String, ValueId>,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+            instructions: &mut Vec<Instruction>,
+            next: &mut u32,
+        ) -> Result<Option<Vec<AggregateBinding>>, LowerError> {
+            let Some((value, attr)) = dict_view_parts_with_items(expr) else {
+                return Ok(None);
+            };
+            if attr != "items" {
+                return Ok(None);
+            }
+            if let lucid_syntax::Expr::Dict { entries, .. } = value {
+                let mut records = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    let key = aggregate_element_from_expr(
+                        key,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    )?;
+                    let value = aggregate_element_from_expr(
+                        value,
+                        bindings,
+                        aggregate_bindings,
+                        instructions,
+                        next,
+                    )?;
+                    records.push(item_record_from_elements(key, value));
+                }
+                return Ok(Some(records));
+            }
+            let Some(values) =
+                aggregate_dict_view_loop_values(expr, aggregate_bindings, instructions, next)
+            else {
+                return Ok(None);
+            };
+            values
+                .into_iter()
+                .map(aggregate_loop_value_binding)
+                .collect::<Option<Vec<_>>>()
+                .map(Some)
+                .ok_or(LowerError::UnsupportedExpression)
+        }
         fn aggregate_dict_view_loop_values(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -12767,10 +12961,12 @@ impl Function {
                     | AggregateBinding::StringList(_)
                     | AggregateBinding::FloatList(_)
                     | AggregateBinding::SingletonList(_)
+                    | AggregateBinding::AggregateList(_)
                     | AggregateBinding::Set(_)
                     | AggregateBinding::StringSet(_)
                     | AggregateBinding::FloatSet(_)
                     | AggregateBinding::SingletonSet(_)
+                    | AggregateBinding::AggregateSet(_)
                     | AggregateBinding::Dict(_)
                     | AggregateBinding::StringDict(_)
                     | AggregateBinding::StringIntDict(_)
@@ -12802,10 +12998,12 @@ impl Function {
                     | AggregateBinding::StringList(_)
                     | AggregateBinding::FloatList(_)
                     | AggregateBinding::SingletonList(_)
+                    | AggregateBinding::AggregateList(_)
                     | AggregateBinding::Set(_)
                     | AggregateBinding::StringSet(_)
                     | AggregateBinding::FloatSet(_)
                     | AggregateBinding::SingletonSet(_)
+                    | AggregateBinding::AggregateSet(_)
                     | AggregateBinding::Dict(_)
                     | AggregateBinding::StringDict(_)
                     | AggregateBinding::StringIntDict(_)
@@ -12848,9 +13046,11 @@ impl Function {
                     None => match aggregate_bindings.get(name)? {
                         AggregateBinding::List(elements) => Some(!elements.is_empty()),
                         AggregateBinding::StringList(elements) => Some(!elements.is_empty()),
+                        AggregateBinding::AggregateList(elements) => Some(!elements.is_empty()),
                         AggregateBinding::FloatList(_) => None,
                         AggregateBinding::SingletonList(_) => None,
                         AggregateBinding::Set(elements) => Some(!elements.is_empty()),
+                        AggregateBinding::AggregateSet(elements) => Some(!elements.is_empty()),
                         AggregateBinding::StringSet(_) => None,
                         AggregateBinding::FloatSet(_) => None,
                         AggregateBinding::SingletonSet(_) => None,
@@ -13545,6 +13745,15 @@ impl Function {
                             }
                             return Ok(Some(AggregateBinding::List(elements)));
                         }
+                        if let Some(records) = dict_item_records(
+                            iterable,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )? {
+                            return Ok(Some(AggregateBinding::AggregateList(records)));
+                        }
                         if let Some(elements) = lower_int_dict_view_elements(
                             iterable,
                             bindings,
@@ -13666,6 +13875,15 @@ impl Function {
                                 elements.push(push_const_int(i64::from(value), instructions, next));
                             }
                             return Ok(Some(AggregateBinding::Set(elements)));
+                        }
+                        if let Some(records) = dict_item_records(
+                            iterable,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )? {
+                            return Ok(Some(AggregateBinding::AggregateSet(records)));
                         }
                         if let Some(elements) = lower_int_dict_view_elements(
                             iterable,
@@ -25118,6 +25336,27 @@ return total
         .unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
+
+        let module = lucid_syntax::parse(
+            "pairs = {1: 40, 2: 42}\nitems = list(pairs.items())\nreturn items[1][0] + items[1][1]\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(44)));
+
+        let module = lucid_syntax::parse(
+            "pairs = {\"a\": 40, \"bc\": 42}\nitems = list(pairs.items())\nreturn len(items[1][0]) + items[1][1]\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(44)));
+
+        let module = lucid_syntax::parse(
+            "pairs = {1: 40, 2: 42}\nitems = set(pairs.items())\nreturn len(items)\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(2)));
 
         let module = lucid_syntax::parse("return {1: 40, 2: 42}[1 + 1]\n").unwrap();
         let function = Function::from_module_linear(&module).unwrap();

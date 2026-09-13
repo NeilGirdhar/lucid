@@ -1454,7 +1454,7 @@ fn run_cir_materializes_constant_iterables_with_list_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    numbers = list(range(3))\n    chars = list(\"ab\".chars)\n    keys = list({1: 10, 2: 20}.keys())\n    values = list({1: 10, 2: 20}.values())\n    return numbers[2] + keys[0] + keys[1] + values[0] + values[1] if chars[1] == \"b\" else 0\n",
+        "def answer():\n    numbers = list(range(3))\n    chars = list(\"ab\".chars)\n    keys = list({1: 10, 2: 20}.keys())\n    values = list({1: 10, 2: 20}.values())\n    pairs = {1: 10, 2: 20}\n    items = list(pairs.items())\n    scores = {\"a\": 30, \"bc\": 40}\n    mixed = list(scores.items())\n    return numbers[2] + keys[0] + keys[1] + values[0] + values[1] + items[1][0] + items[1][1] + len(mixed[1][0]) + mixed[1][1] if chars[1] == \"b\" else 0\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
@@ -1472,7 +1472,7 @@ fn run_cir_materializes_constant_iterables_with_list_in_typed_function_body() {
         "run-cir function list materialization failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "35");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "99");
 }
 
 #[test]
@@ -1483,7 +1483,7 @@ fn run_cir_materializes_constant_iterables_with_set_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    numbers = set(range(3))\n    chars = set(\"ab\".chars)\n    keys = set({1: 10, 2: 20}.keys())\n    values = set({1: 10, 2: 20}.values())\n    texts = set({1: \"a\", 2: \"bc\"}.values())\n    missing = set({1: None}.values())\n    return 2 in numbers and \"b\" in chars and 2 in keys and 20 in values and \"bc\" in texts and None in missing\n",
+        "def answer():\n    numbers = set(range(3))\n    chars = set(\"ab\".chars)\n    keys = set({1: 10, 2: 20}.keys())\n    values = set({1: 10, 2: 20}.values())\n    texts = set({1: \"a\", 2: \"bc\"}.values())\n    missing = set({1: None}.values())\n    pairs = {1: 10, 2: 20}\n    items = set(pairs.items())\n    return 2 in numbers and \"b\" in chars and 2 in keys and 20 in values and \"bc\" in texts and None in missing and len(items) == 2\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
