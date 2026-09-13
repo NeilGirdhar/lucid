@@ -2074,6 +2074,12 @@ diverged:
   The regression checks a dynamic outer guard whose selected arm contains a
   statically selected inner branch, and verifies that the emitted CIR still
   contains a branch terminator for the outer guard.
+* A dynamic outer `if` whose selected arm initializes a local, conditionally
+  overwrites it in a nested dynamic `if`, and returns that local now lowers by
+  rewriting the shape into an explicit conditional ladder.
+  The adapter is limited to primitive, non-division guard conditions so it does
+  not introduce eager recoverable errors while nested CFG splicing is still
+  incomplete.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
