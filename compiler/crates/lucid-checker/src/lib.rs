@@ -2097,8 +2097,8 @@ impl TypeChecker {
             "env_var".to_string(),
             (
                 Type::Function {
-                    params: vec![Type::Str],
-                    return_type: Box::new(Type::Str),
+                    params: vec![Type::Str, Type::TypeVar("Any".into())],
+                    return_type: Box::new(Type::make_union(vec![Type::Str, Type::None])),
                 },
                 MutabilityView::ReadOnly,
             ),
@@ -8527,6 +8527,20 @@ impl TypeChecker {
                             self.type_of_expr(&argument.value)?;
                         }
                     }
+                    if name == "env_var" {
+                        if let Some(argument) = args.first() {
+                            let name_type = self.type_of_expr(&argument.value)?;
+                            if !name_type.is_subtype_of(&Type::Str, &self.env) {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "env_var() name must be str, got {:?}",
+                                        name_type
+                                    ),
+                                    span: argument.value.span(),
+                                });
+                            }
+                        }
+                    }
                     if name == "round" && args.len() == 2 {
                         let digits = self.type_of_expr(&args[1].value)?;
                         if !digits.is_subtype_of(&Type::Int, &self.env) {
@@ -10134,6 +10148,19 @@ impl TypeChecker {
                                     },
                                     "sqrt" | "sin" | "cos" | "tan" => Some(Type::Float),
                                     "floor" | "ceil" => Some(Type::Int),
+                                    "env_var" => {
+                                        let fallback_type = if let Some(arg) =
+                                            args.get(1).filter(|arg| {
+                                                !arg.is_spread
+                                                    && !arg.is_dict_spread
+                                                    && !arg.is_gather_spread
+                                            }) {
+                                            self.type_of_expr(&arg.value).ok()?
+                                        } else {
+                                            Type::None
+                                        };
+                                        Some(Type::make_union(vec![Type::Str, fallback_type]))
+                                    }
                                     "sum" => match argument_type {
                                         Type::Class { type_args, .. } => type_args.first().map(|ty| match ty {
                                             Type::Float => Type::Float,
@@ -15951,6 +15978,7 @@ def reject(value: not int) -> none:
             ("pow(2, 3, 1.0)\n", "modulus must be int"),
             ("read_file()\n", "requires at least 1"),
             ("write_file(\"x\")\n", "requires at least 2"),
+            ("env_var(1)\n", "name must be str"),
             ("range()\n", "requires at least 1"),
             ("time(1)\n", "accepts at most 0"),
             ("range(1, \"bad\")\n", "arguments must be int"),
@@ -16151,6 +16179,15 @@ def reject(value: not int) -> none:
             .check_module(
                 &parse(
                     "root: float = sqrt(4)\nwave: float = sin(1.0) + cos(0) + tan(1)\nlow: int = floor(1.5)\nhigh: int = ceil(1.5)\ntick: float = monotonic()\n",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut checker = TypeChecker::new();
+        checker
+            .check_module(
+                &parse(
+                    "optional: str | none = env_var(\"LUCID_MISSING\")\nwith_text: str = env_var(\"LUCID_MISSING\", \"fallback\")\nwith_code: str | int = env_var(\"LUCID_MISSING\", 404)\n",
                 )
                 .unwrap(),
             )
