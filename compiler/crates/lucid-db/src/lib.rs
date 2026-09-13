@@ -10137,6 +10137,19 @@ mod tests {
         assert_eq!(function.execute_with_args(&[42]), Ok(Some(42)));
 
         let file = db.add_file(
+            "dynamic-pow.lucid",
+            "def power(base: int, exponent: int):\n    return pow(base, exponent)\n",
+        );
+        let function = lower_function_body(&db, file, "power".into())
+            .as_ref()
+            .expect("dynamic pow should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[2, 10]), Ok(Some(1024)));
+        assert_eq!(
+            function.execute_with_args(&[2, -1]),
+            Err(lucid_cir::ExecuteError::NegativeExponent)
+        );
+
+        let file = db.add_file(
             "match.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return 33\n",
         );

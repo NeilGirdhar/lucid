@@ -2832,6 +2832,36 @@ impl Function {
                         return Ok(result);
                     }
                     if callee.kind == "name"
+                        && callee.detail.as_deref() == Some("pow")
+                        && node.children.len() == 3
+                    {
+                        let left = lower(
+                            node.children[1],
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let right = lower(
+                            node.children[2],
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        instructions.push(Instruction::Pow {
+                            result,
+                            left,
+                            right,
+                        });
+                        lowered.insert(id, result);
+                        return Ok(result);
+                    }
+                    if callee.kind == "name"
                         && callee.detail.as_deref() == Some("abs")
                         && node.children.len() == 2
                     {
@@ -30734,6 +30764,52 @@ return total
         let function = Function::from_typed_function_body(&nodes, 5, &[])
             .expect("typed round should preserve ndigits errors");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_two_argument_pow() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("pow".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("base".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("exponent".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 2],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body(&nodes, 3, &["base".into(), "exponent".into()])
+                .expect("typed two-argument pow should lower");
+        assert_eq!(function.execute_with_args(&[2, 10]), Ok(Some(1024)));
+        assert_eq!(
+            function.execute_with_args(&[2, -1]),
+            Err(ExecuteError::NegativeExponent)
+        );
+        assert_eq!(
+            function.execute_with_args(&[2, 63]),
+            Err(ExecuteError::ArithmeticOverflow)
+        );
     }
 
     #[test]
