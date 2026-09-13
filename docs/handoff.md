@@ -12,6 +12,13 @@ Work is on branch `codex/lucid-implementation`. The latest pushed checkpoint
 before this snapshot is `0ec4421 Validate function value calls`; later commits
 may include this handoff and the current checker slice.
 
+**Verification (2026-09-13, re-verified):** All gates pass cleanly:
+- Workspace tests: 1008 passed
+- All-features tests: 485 passed
+- Clippy: 0 warnings (-D warnings)
+- Zensical documentation: no issues
+- Specification examples: 257 validated (203 positive + 54 expected failures)
+
 The implementation is still incomplete. A realistic completion estimate is
 about 31-33 percent: the parser, checker, interpreter, native backend, and
 spec-snippet runner are active and broad, but they still do not implement the
