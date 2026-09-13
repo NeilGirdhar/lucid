@@ -10087,6 +10087,11 @@ mod tests {
                 2,
             ),
             (
+                "def answer(value: int):\n    return value in (1, 2, 3)\n",
+                2,
+                4,
+            ),
+            (
                 "def answer(value: int):\n    return value in {1: 10, 2: 20}\n",
                 2,
                 10,

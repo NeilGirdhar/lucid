@@ -1390,7 +1390,7 @@ impl Function {
                         .get(node.children[1] as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
                     let members = match aggregate.kind.as_str() {
-                        "list" | "set" => aggregate.children.clone(),
+                        "list" | "set" | "record" => aggregate.children.clone(),
                         "dict" => aggregate.children.iter().copied().step_by(2).collect(),
                         _ => return Err(LowerError::UnsupportedExpression),
                     };
@@ -24573,6 +24573,48 @@ return total
             .expect("typed set membership should lower");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(0)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "record".into(),
+                detail: None,
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![0, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &["value".into()])
+            .expect("typed record membership should lower");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
 
         let nodes = vec![
             TypedExprNode {
