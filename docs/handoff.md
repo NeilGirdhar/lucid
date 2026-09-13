@@ -6,12 +6,21 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13 (continuation session continued)
+## Resume snapshot: 2026-09-13 (continuation session continued — second continuation)
 
 Work is on branch `codex/lucid-implementation`. The latest pushed checkpoint
-is at `62b1054 Verify unsupported special methods are caught by checker`.
+is at `459cda9 Add tests confirming math function return types are properly typed`.
 
-**Recent improvements (2026-09-13, extended continuation):**
+**Recent improvements (2026-09-13, second continuation):**
+- Confirmed that numeric function return types (`cos`, `sin`, `tan`, `sqrt`, `floor`, `ceil`, `monotonic`)
+  already have complete proper return type support in the checker (returning `float` or `int`
+  as appropriate), addressing one of the documented gaps. The implementation already includes:
+  - `cos`, `sin`, `tan`, `sqrt` return `float`
+  - `floor`, `ceil` return `int`
+  - `monotonic` returns `float`
+  - Added regression tests verifying these return types are enforced statically
+
+**Prior improvements (2026-09-13, extended continuation):**
 - Record literals like `(1, 2)` now properly type-check against tuple types like `tuple[int, int]`
   in the is_subtype_of function, enabling tuple return type validation
 - `dict.update()` and `dict.clear()` are now recognized as valid collection methods with
@@ -31,9 +40,9 @@ is at `62b1054 Verify unsupported special methods are caught by checker`.
   - Nested class definitions (parser accepts them)
   - String method coverage (upper, lower, split, replace, join, startswith, endswith)
 
-**Verification (2026-09-13, final gate):** All gates pass cleanly:
-- Workspace tests: 1020 passed (27 new tests from this extended session)
-- All-features tests: 486 passed
+**Verification (2026-09-13, second continuation gate):** All gates pass cleanly:
+- Workspace tests: 1023 passed (30 new tests from this combined extended session)
+- All-features tests: 486 passed (verified via `cargo test --workspace --all-features --all-targets --quiet`)
 - Clippy: 0 warnings (-D warnings)
 - Zensical documentation: no issues
 - Specification examples: 257 validated (203 positive + 54 expected failures)
@@ -87,13 +96,21 @@ cargo run -p lucid-cli --quiet -- test-spec docs
 
 Recommended next work:
 
-- Finish moving native-only rejection cases into the checker where the spec
-  makes them statically knowable.
+**Verified as already implemented:**
+- Numeric function return types for `cos`, `sin`, `tan`, `sqrt`, `floor`, `ceil`, `monotonic`
+  already have proper typed return contracts and are enforced statically in the checker.
+
+**Major gaps remaining:**
 - Design and implement the richer `fields()` result shape described in
   `docs/construction.md` and `docs/class-members.md`; the current runtime and
-  native backend mostly expose `list[str]`.
+  native backend mostly expose `list[str]` but should return structured field metadata
+  (names, types, docstrings).
+- Finish moving native-only rejection cases into the checker where the spec
+  makes them statically knowable.
 - Continue replacing `Any` placeholder signatures with concrete checked
   contracts, especially for first-class builtins and method values.
+- Implement iterator protocol for `map()`, `zip()`, `enumerate()`, `reversed()`
+  with proper typed iteration support.
 - Keep landing small vertical slices with focused tests, then the full gate,
   then a pushed checkpoint.
 
