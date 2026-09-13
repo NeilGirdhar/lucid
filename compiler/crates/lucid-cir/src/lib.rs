@@ -1488,18 +1488,8 @@ impl Function {
                     let aggregate = nodes
                         .get(shape.source_id as usize)
                         .ok_or(LowerError::UnsupportedExpression)?;
-                    let members = shape
-                        .member_positions
-                        .iter()
-                        .map(|position| {
-                            aggregate
-                                .children
-                                .get(*position)
-                                .copied()
-                                .ok_or(LowerError::UnsupportedExpression)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    if members.is_empty() {
+                    let member_positions = shape.member_positions;
+                    if member_positions.is_empty() {
                         instructions.push(Instruction::ConstBool {
                             result,
                             value: node.detail.as_deref() == Some("NotIn"),
@@ -1516,17 +1506,23 @@ impl Function {
                         parameter_names,
                         local_bindings,
                     )?;
-                    let mut comparisons = Vec::with_capacity(members.len());
-                    for member in members {
-                        let right = lower(
-                            member,
+                    let mut lowered_children = Vec::with_capacity(aggregate.children.len());
+                    for child in &aggregate.children {
+                        lowered_children.push(lower(
+                            *child,
                             nodes,
                             lowered,
                             instructions,
                             next,
                             parameter_names,
                             local_bindings,
-                        )?;
+                        )?);
+                    }
+                    let mut comparisons = Vec::with_capacity(member_positions.len());
+                    for position in member_positions {
+                        let right = *lowered_children
+                            .get(position)
+                            .ok_or(LowerError::UnsupportedExpression)?;
                         let comparison = ValueId(*next);
                         *next += 1;
                         instructions.push(Instruction::CmpEq {
@@ -25561,6 +25557,47 @@ return total
             .expect("typed dict membership should lower against keys");
         assert_eq!(function.execute_with_args(&[2]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[10]), Ok(Some(0)));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![0, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![0, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &[])
+            .expect("typed dict membership should evaluate values");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
 
         let nodes = vec![
             TypedExprNode {
