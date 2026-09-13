@@ -3891,6 +3891,98 @@ pub fn lower_function_body(
                 .map_err(|_| Arc::from("unsupported nested match local elif branch"));
             }
         }
+        if static_truth(&match_condition).is_none()
+            && match_expr_has_identifier(&match_condition)
+            && !match_expr_has_division(&match_condition)
+            && let Some(literal_value) = match_arm_value(literal_arm)
+        {
+            let wildcard_condition = lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Not,
+                expr: Box::new(match_condition.clone()),
+                span: match_condition.span(),
+            };
+            let meaningful_wildcard = wildcard_arm
+                .body
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement))
+                .collect::<Vec<_>>();
+            if let [
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value: initial_value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(initial_value),
+                    ..
+                },
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+                lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: returned_name,
+                            ..
+                        }),
+                    ..
+                },
+            ] = meaningful_wildcard.as_slice()
+                && name == returned_name
+                && static_truth(inner_condition).is_none()
+                && match_expr_has_identifier(inner_condition)
+                && !match_expr_has_division(inner_condition)
+                && inner_elifs.iter().all(|(elif_condition, _)| {
+                    static_truth(elif_condition).is_none()
+                        && match_expr_has_identifier(elif_condition)
+                        && !match_expr_has_division(elif_condition)
+                })
+                && let Some(inner_then_value) = match_assignment_value_for_name(inner_then, name)
+            {
+                let Some(inner_elif_values) = inner_elifs
+                    .iter()
+                    .map(|(elif_condition, branch)| {
+                        match_assignment_value_for_name(branch, name).map(|value| {
+                            (match_and_expr(&wildcard_condition, elif_condition), value)
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Err(Arc::from("unsupported nested wildcard match local branch"));
+                };
+                let combined_condition = match_and_expr(&wildcard_condition, inner_condition);
+                let inner_fallback = match inner_else.as_deref() {
+                    Some(branch) => {
+                        let Some(value) = match_assignment_value_for_name(branch, name) else {
+                            return Err(Arc::from(
+                                "unsupported nested wildcard match local branch",
+                            ));
+                        };
+                        value
+                    }
+                    None => initial_value,
+                };
+                let mut elif_values = inner_elif_values
+                    .iter()
+                    .map(|(condition, value)| (condition, *value))
+                    .collect::<Vec<_>>();
+                elif_values.push((&wildcard_condition, inner_fallback));
+                return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    &combined_condition,
+                    inner_then_value,
+                    &elif_values,
+                    literal_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported nested wildcard match local branch"));
+            }
+        }
         let Some(then_value) = match_arm_value(literal_arm) else {
             return Err(Arc::from("unsupported match arm for function CIR lowering"));
         };
@@ -12338,6 +12430,18 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(-1)));
         assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-wildcard-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            return 100\n        case _:\n            result = 0\n            if value > 10:\n                result = value + 10\n            elif value > 0:\n                result = value\n            else:\n                result = -value\n            return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("wildcard match arm nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[2, -2]), Ok(Some(2)));
     }
 
     #[test]

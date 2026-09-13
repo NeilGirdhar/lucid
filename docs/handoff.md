@@ -2087,6 +2087,9 @@ diverged:
   Guarded literal arms use the full pattern-plus-guard condition for every
   nested local branch, so a pattern match with a false guard falls through to
   the wildcard arm instead of the literal arm's inner fallback.
+  The inverse two-arm shape is covered too: a literal arm with a direct return
+  and a wildcard arm containing the nested local branch now lowers by guarding
+  the wildcard ladder with `not` of the literal arm condition.
   A leading wildcard match arm with a live return now routes that selected arm
   through the linear CFG lowerer before considering later unreachable arms, so
   wildcard-first order is preserved even when the arm contains dynamic local
