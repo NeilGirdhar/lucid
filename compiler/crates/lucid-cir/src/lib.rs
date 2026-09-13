@@ -8404,58 +8404,85 @@ impl Function {
                 fallthrough_value,
                 state.next,
             )?;
-            let merged_name = then_lowering.value.and_then(|then_value| {
-                let else_value = else_lowering.value?;
-                then_lowering.bindings.iter().find_map(|(name, value)| {
-                    if *value != then_value
-                        || else_lowering.bindings.get(name).copied() != Some(else_value)
-                    {
-                        return None;
-                    }
-                    let mut elif_values = Vec::new();
-                    for (_, _, branch) in &lowered_elifs {
-                        let branch_value = branch.value?;
-                        if branch.bindings.get(name).copied() != Some(branch_value) {
-                            return None;
-                        }
-                        elif_values.push(branch_value);
-                    }
-                    Some((name.clone(), then_value, elif_values, else_value))
-                })
-            });
-            let mut merge_bindings = base_bindings;
             let fallback_block = BlockId(
                 2 + u32::try_from(ladder.elif_branches.len())
                     .map_err(|_| LowerError::UnsupportedExpression)?
                     * 2,
             );
             let merge_block = BlockId(fallback_block.0 + 1);
-            let (mut merge_instructions, mut merge_last) =
-                if let Some((merged_name, then_value, elif_values, else_value)) = merged_name {
-                    let result = ValueId(*state.next);
-                    *state.next += 1;
-                    merge_bindings.insert(merged_name, result);
-                    let mut incomings = vec![(BlockId(1), then_value)];
-                    for (index, branch_value) in elif_values.into_iter().enumerate() {
-                        let arm_block = BlockId(
-                            3 + u32::try_from(index)
-                                .map_err(|_| LowerError::UnsupportedExpression)?
-                                * 2,
-                        );
-                        incomings.push((arm_block, branch_value));
-                    }
-                    incomings.push((fallback_block, else_value));
-                    (vec![Instruction::Phi { result, incomings }], Some(result))
-                } else {
-                    (Vec::new(), fallthrough_value)
-                };
-            visit_all(
-                ladder.suffix,
-                &mut merge_bindings,
-                &mut merge_instructions,
-                state.next,
-                &mut merge_last,
-            )?;
+            let (merge_instructions, merge_last) = if ladder.suffix.is_empty() {
+                let then_value = then_lowering
+                    .value
+                    .ok_or(LowerError::NoLowerableAssignment)?;
+                let mut incomings = vec![(BlockId(1), then_value)];
+                for (index, (_, _, branch)) in lowered_elifs.iter().enumerate() {
+                    let arm_block = BlockId(
+                        3 + u32::try_from(index).map_err(|_| LowerError::UnsupportedExpression)?
+                            * 2,
+                    );
+                    incomings.push((
+                        arm_block,
+                        branch.value.ok_or(LowerError::NoLowerableAssignment)?,
+                    ));
+                }
+                incomings.push((
+                    fallback_block,
+                    else_lowering
+                        .value
+                        .ok_or(LowerError::NoLowerableAssignment)?,
+                ));
+                let result = ValueId(*state.next);
+                *state.next += 1;
+                (vec![Instruction::Phi { result, incomings }], Some(result))
+            } else {
+                let merged_name = then_lowering.value.and_then(|then_value| {
+                    let else_value = else_lowering.value?;
+                    then_lowering.bindings.iter().find_map(|(name, value)| {
+                        if *value != then_value
+                            || else_lowering.bindings.get(name).copied() != Some(else_value)
+                        {
+                            return None;
+                        }
+                        let mut elif_values = Vec::new();
+                        for (_, _, branch) in &lowered_elifs {
+                            let branch_value = branch.value?;
+                            if branch.bindings.get(name).copied() != Some(branch_value) {
+                                return None;
+                            }
+                            elif_values.push(branch_value);
+                        }
+                        Some((name.clone(), then_value, elif_values, else_value))
+                    })
+                });
+                let mut merge_bindings = base_bindings;
+                let (mut merge_instructions, mut merge_last) =
+                    if let Some((merged_name, then_value, elif_values, else_value)) = merged_name {
+                        let result = ValueId(*state.next);
+                        *state.next += 1;
+                        merge_bindings.insert(merged_name, result);
+                        let mut incomings = vec![(BlockId(1), then_value)];
+                        for (index, branch_value) in elif_values.into_iter().enumerate() {
+                            let arm_block = BlockId(
+                                3 + u32::try_from(index)
+                                    .map_err(|_| LowerError::UnsupportedExpression)?
+                                    * 2,
+                            );
+                            incomings.push((arm_block, branch_value));
+                        }
+                        incomings.push((fallback_block, else_value));
+                        (vec![Instruction::Phi { result, incomings }], Some(result))
+                    } else {
+                        (Vec::new(), fallthrough_value)
+                    };
+                visit_all(
+                    ladder.suffix,
+                    &mut merge_bindings,
+                    &mut merge_instructions,
+                    state.next,
+                    &mut merge_last,
+                )?;
+                (merge_instructions, merge_last)
+            };
             let first_elif_condition_block = BlockId(2);
             let mut blocks = vec![
                 Block {
@@ -8649,6 +8676,39 @@ impl Function {
                 )?;
             }
             if constant_truth(condition).is_none() {
+                let mut dynamic_elifs = Vec::new();
+                let mut selected_static_else = else_branch.as_deref();
+                for (elif_condition, elif_branch) in elif_branches {
+                    match statement_static_truth(
+                        elif_condition,
+                        &probe_bindings,
+                        &probe_instructions,
+                    ) {
+                        Some(false) => continue,
+                        Some(true) => {
+                            selected_static_else = Some(elif_branch.as_slice());
+                            break;
+                        }
+                        None => dynamic_elifs.push((elif_condition, elif_branch.as_slice())),
+                    }
+                }
+                if !dynamic_elifs.is_empty() {
+                    return lower_dynamic_if_elif_ladder(
+                        prefix,
+                        DynamicElifContinuation {
+                            condition,
+                            then_branch,
+                            elif_branches: dynamic_elifs,
+                            else_branch: selected_static_else,
+                            suffix: &[],
+                        },
+                        &mut LinearLoweringState {
+                            bindings: &mut bindings,
+                            instructions: &mut instructions,
+                            next: &mut next,
+                        },
+                    );
+                }
                 let selected_else = if elif_branches.is_empty() {
                     Some(else_branch.as_deref())
                 } else {
@@ -15853,6 +15913,26 @@ return total
         assert_eq!(function.execute_with_args(&[0, 1, 1]), Ok(Some(21)));
         assert_eq!(function.execute_with_args(&[0, 0, 1]), Ok(Some(31)));
         assert_eq!(function.execute_with_args(&[0, 0, 0]), Ok(Some(41)));
+        let module = lucid_syntax::parse(
+            "if first:\n    left = 10\nelif second:\n    middle = 20\nelse:\n    fallback = 40\n",
+        )
+        .unwrap();
+        let function =
+            Function::from_module_linear_with_params(&module, &["first".into(), "second".into()])
+                .expect("final dynamic elif ladder should merge branch result values");
+        assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(10)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(40)));
+        let module = lucid_syntax::parse(
+            "fallback = 40\nif first:\n    left = 10\nelif second:\n    middle = 20\n",
+        )
+        .unwrap();
+        let function =
+            Function::from_module_linear_with_params(&module, &["first".into(), "second".into()])
+                .expect("final no-else dynamic elif ladder should merge initialized fallback");
+        assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(10)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(40)));
         let module = lucid_syntax::parse(
             "if first:\n    left = 10\nelif second:\n    middle = 20\nelif third:\n    right = 30\nelse:\n    fallback = 40\nvalue = 99\n",
         )

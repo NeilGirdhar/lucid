@@ -6788,6 +6788,23 @@ pub fn lower_function_body(
                             }
                         }
                         StaticBranch::Unknown => {
+                            if function.is_async {
+                                return Err(Arc::from(
+                                    "async function bodies are not yet supported by CIR lowering",
+                                ));
+                            }
+                            let module = lucid_syntax::Module {
+                                statements: source_function.body.clone(),
+                                span: source_function.span,
+                            };
+                            if let Ok(function) =
+                                lucid_cir::Function::from_module_linear_with_params(
+                                    &module,
+                                    &function.parameter_names,
+                                )
+                            {
+                                return Ok(Arc::new(function));
+                            }
                             return Err(Arc::from(
                                 "constant function branch has no lowerable return",
                             ));
@@ -10414,6 +10431,17 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-final-dynamic-elif-assignments.lucid",
+            "def choose(first: bool, second: bool):\n    if first:\n        high = 100\n    elif second:\n        positive = 1\n    else:\n        fallback = 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("final dynamic elif assignment ladder should merge branch results");
+        assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(0)));
 
         let file = db.add_file(
             "parameterized-mixed-static-false-dynamic-elif.lucid",
