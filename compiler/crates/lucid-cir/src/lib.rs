@@ -1747,6 +1747,22 @@ impl Function {
                         return Ok(result);
                     }
                     if callee.kind == "name"
+                        && callee.detail.as_deref() == Some("round")
+                        && node.children.len() == 2
+                    {
+                        result = lower(
+                            node.children[1],
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        lowered.insert(id, result);
+                        return Ok(result);
+                    }
+                    if callee.kind == "name"
                         && callee.detail.as_deref() == Some("abs")
                         && node.children.len() == 2
                     {
@@ -26524,6 +26540,113 @@ return total
         let function = Function::from_typed_function_body(&nodes, 2, &[])
             .expect("typed abs should preserve integer overflow");
         assert_eq!(function.execute(), Err(ExecuteError::ArithmeticOverflow));
+    }
+
+    #[test]
+    fn lowers_typed_round_of_integer_primitives() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("round".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(12)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("local".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![2, 5],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body_with_locals(
+            &nodes,
+            6,
+            &["value".into()],
+            &[("local".into(), 3)],
+        )
+        .expect("typed round should lower integer primitive operands");
+        assert_eq!(function.execute_with_args(&[30]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn typed_round_preserves_operand_errors() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("round".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &[])
+            .expect("typed round should preserve operand errors");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
     #[test]
