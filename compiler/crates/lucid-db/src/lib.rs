@@ -4964,7 +4964,7 @@ pub fn lower_function_body(
         lucid_syntax::Stmt::If {
             condition,
             elif_branches,
-            else_branch: Some(else_branch),
+            else_branch,
             ..
         },
         lucid_syntax::Stmt::Return {
@@ -5049,15 +5049,17 @@ pub fn lower_function_body(
             _ => None,
         };
         if let Some((initial_name, initial_value)) = initial_binding {
-            let else_is_pass = pass_only(else_branch);
-            let else_value = match assigned_value(else_branch) {
-                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
-                    Some(value)
-                }
-                None if else_is_pass => None,
-                _ => None,
+            let else_value = match else_branch.as_deref() {
+                Some(else_branch) => match assigned_value(else_branch) {
+                    Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                        Some(Some(value))
+                    }
+                    None if pass_only(else_branch) => Some(None),
+                    _ => None,
+                },
+                None => Some(None),
             };
-            if (else_value.is_some() || else_is_pass)
+            if let Some(else_value) = else_value
                 && let Some(elif_values) = elif_branches
                     .iter()
                     .map(|(condition, branch)| match assigned_value(branch) {
@@ -10423,6 +10425,22 @@ mod tests {
         assert_eq!(function.execute_with_args(&[10, -5, 2]), Ok(Some(-90)));
         assert_eq!(
             function.execute_with_args(&[10, 5, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "parameterized-initialized-local-dead-leading-no-else-elif-division.lucid",
+            "def choose(seed: int, value: int, scale: int):\n    result = seed // scale\n    if false:\n        result = seed + 100\n    elif value > 0:\n        result = seed + 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect(
+                "initialized local dead leading no-else elif division should lower through CIR",
+            );
+        assert_eq!(function.execute_with_args(&[10, 5, 2]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, -5, 2]), Ok(Some(5)));
+        assert_eq!(
+            function.execute_with_args(&[10, -5, 0]),
             Err(lucid_cir::ExecuteError::DivisionByZero)
         );
 
