@@ -3503,6 +3503,19 @@ pub fn lower_function_body(
         if let Some(first_arm) = arms.first()
             && matches!(first_arm.pattern, lucid_syntax::Pattern::Wildcard(_))
         {
+            let selected_statements = normalize_static_match_statements(&first_arm.body);
+            if match_contains_explicit_return(&selected_statements) {
+                let selected_module = lucid_syntax::Module {
+                    statements: selected_statements,
+                    span: source_function.span,
+                };
+                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                    &selected_module,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(lowered));
+                }
+            }
             if let Some(value) = match_arm_value(first_arm) {
                 let nodes = function
                     .body_expressions
@@ -9154,6 +9167,16 @@ mod tests {
             .expect("leading wildcard local match should preserve arm order");
         assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
         assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "leading-wildcard-dynamic-local-match.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case _:\n            result = 0\n            if value > 0:\n                result = value + 10\n            return result\n        case 1:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("leading wildcard dynamic local match should route selected arm through CIR");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[7, -2]), Ok(Some(0)));
 
         let file = db.add_file(
             "match-noop-local-return.lucid",

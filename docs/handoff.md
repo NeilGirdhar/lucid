@@ -2084,6 +2084,10 @@ diverged:
   The two-arm literal/wildcard `match` lowering now recognizes the same nested
   local pattern inside the literal arm and lowers it through the same explicit
   ladder strategy.
+  A leading wildcard match arm with a live return now routes that selected arm
+  through the linear CFG lowerer before considering later unreachable arms, so
+  wildcard-first order is preserved even when the arm contains dynamic local
+  control flow.
   The adapter is limited to primitive, non-division guard conditions so it does
   not introduce eager recoverable errors while nested CFG splicing is still
   incomplete.
