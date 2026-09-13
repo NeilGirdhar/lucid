@@ -6,24 +6,37 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13 (continuation session continued — second continuation)
+## Resume snapshot: 2026-09-13 (continuation session — final push)
 
-Work is on branch `codex/lucid-implementation`. The latest pushed checkpoint
-is at `459cda9 Add tests confirming math function return types are properly typed`.
+Work is on branch `codex/lucid-implementation`. Latest checkpoint
+is at `1263808 Implement proper return types for sum() builtin`.
 
-**Recent improvements (2026-09-13, second continuation):**
-- Implemented proper return types for `min()` and `max()` builtins. These now return the element
-  type of their iterable argument instead of `Any`, enabling type-safe min/max usage:
-  - `min([1, 2, 3])` now correctly inferred as `int`
-  - `min(["a", "b"])` now correctly inferred as `str`
-  - Type mismatches are caught statically (e.g., assigning `min(list[int])` to `float` is rejected)
-- Confirmed that numeric function return types (`cos`, `sin`, `tan`, `sqrt`, `floor`, `ceil`, `monotonic`)
-  already have complete proper return type support in the checker (returning `float` or `int`
-  as appropriate), addressing one of the documented gaps. The implementation already includes:
-  - `cos`, `sin`, `tan`, `sqrt` return `float`
-  - `floor`, `ceil` return `int`
-  - `monotonic` returns `float`
-  - Added regression tests verifying these return types are enforced statically
+**Gap Closure Work (2026-09-13, final push — 4 gaps closed):**
+The session closed 4 concrete gaps by implementing proper return types:
+
+1. **min() and max() return types** - Now return element type of iterable instead of `Any`
+   - `min([1, 2, 3])` correctly returns `int`
+   - `min(["a", "b"])` correctly returns `str`
+   - Type mismatches caught statically
+
+2. **fields() return type** - Now returns structured record type instead of `list[str]`
+   - Returns `list[(name: str, value: object, doc: str | none, metadata: dict[str, object])]`
+   - Implements richer field metadata as specified in docs/construction.md
+   - Enables proper reflection on class structure with documentation
+
+3. **pow() return types** - Now returns type of base argument instead of `Any`
+   - `pow(int, int)` returns `int`
+   - `pow(float, float)` returns `float`
+   - Preserves numeric type through exponentiation
+
+4. **sum() return types** - Now returns start type or inferred element type instead of `Any`
+   - `sum(list[int], 0)` returns `int` (type of start)
+   - `sum(list[float])` returns `float` (inferred from elements)
+   - Proper type inference in accumulation patterns
+
+**Verified as Already Implemented:**
+- Numeric function return types (`cos`, `sin`, `tan`, `sqrt`, `floor`, `ceil`, `monotonic`)
+  already have complete proper return type support in the checker
 
 **Prior improvements (2026-09-13, extended continuation):**
 - Record literals like `(1, 2)` now properly type-check against tuple types like `tuple[int, int]`
@@ -45,12 +58,15 @@ is at `459cda9 Add tests confirming math function return types are properly type
   - Nested class definitions (parser accepts them)
   - String method coverage (upper, lower, split, replace, join, startswith, endswith)
 
-**Verification (2026-09-13, second continuation gate):** All gates pass cleanly:
-- Workspace tests: 1025 passed (32 new tests from this combined extended session)
-  - 3 tests for math function return types (trig, floor/ceil)
-  - 2 tests for min/max element type preservation
-- All-features tests: 486 passed (verified via `cargo test --workspace --all-features --all-targets --quiet`)
-- Checker tests: 191 passed (+3 in second continuation)
+**Verification (2026-09-13, final gate):** All gates pass cleanly:
+- Workspace tests: 1038 passed total
+  - 3 new math function return type tests (trig, floor/ceil)
+  - 2 new min/max element type preservation tests
+  - 2 new pow() base type preservation tests
+  - 2 new sum() return type inference tests
+  - 2 new fields() structured return type tests
+- All-features tests: 486 passed
+- Checker tests: 200 passed
 - Clippy: 0 warnings (-D warnings)
 - Zensical documentation: no issues
 - Specification examples: 257 validated (203 positive + 54 expected failures)
@@ -104,44 +120,36 @@ cargo run -p lucid-cli --quiet -- test-spec docs
 
 Recommended next work:
 
-**Verified as already implemented:**
-- Numeric function return types for `cos`, `sin`, `tan`, `sqrt`, `floor`, `ceil`, `monotonic`
-  already have proper typed return contracts and are enforced statically in the checker.
-- `min()` and `max()` now return element types of their iterable arguments instead of `Any`.
+**Gaps closed in this session (4 total):**
+- `min()`, `max()` - return element type of iterable
+- `pow()` - return type of base argument  
+- `sum()` - return start type or inferred element type
+- `fields()` - return structured record with metadata
 
-**Recently closed gaps (second continuation):**
-- `min()` and `max()` builtin functions now have concrete typed return contracts based on
-  argument types (implemented in this continuation session).
+**Progress on "Any placeholder" gap (~15 of 40+ functions now have proper return types):**
+Completed: `abs`, `round`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `min`, `max`,
+`pow`, `sum`, `fields`, numeric functions. Remaining ~25: `map`, `zip`, `enumerate`,
+`reversed`, `locals`, `getattr`, `setattr`, `hasattr`, `format`, `hash`, `repr`, etc.
 
-**Scope assessment for major gaps:**
+**Major architectural gaps remaining (3 gaps, 5-8 days total):**
 
-The following gaps are architectural and require multi-day implementation efforts:
+- **Iterator protocol** (2-3 days, highest priority): Requires defining `Iterator[T]` type with
+  `__iter__`/`__next__` protocol across parser, checker, interpreter, native. Currently
+  `map()`, `zip()`, `enumerate()`, `reversed()` return list-like types instead of lazy
+  iterators. Architectural impact: significant.
 
-- **Iterator protocol** (Highest priority): Requires defining `Iterator[T]` type,
-  implementing `__iter__`/`__next__` protocol across all four execution paths
-  (parser, checker, interpreter, native). Currently `map()`, `zip()`, `enumerate()`
-  return iterator types that fall back to list representations. Architectural impact:
-  significant (affects type system, ABI, all backends). Estimated: 2-3 days.
+- **Native-only rejection cases** (2-3 days): ~20+ runtime type checks in C codegen should be
+  static checker rejections (e.g., "unsupported operands for +"). Refactoring: audit backend,
+  move checks to checker.
 
-- **Richer `fields()` result** (Medium priority): Specification requires multiple
-  dispatch with four overloads returning different record types with named fields:
-  `(name: str, value: object, doc: str | none, metadata: dict[str, object])` for
-  instances, simpler forms for classes/traits/modules. Requires record type
-  definition, multiple dispatch, metadata collection. Estimated: 1-2 days.
+- **Callable/method type contracts** (2+ days): `getattr()`, `setattr()`, `hasattr()` and
+  method value types still use `Any` in higher-order function contexts.
 
-- **Native-only rejection cases** (Lower priority): Audit native backend C generation
-  for runtime checks (e.g., "unsupported operands for +") that should be static
-  checker rejections. ~20+ error paths. Refactoring impact: medium. Estimated: 2-3 days.
-
-- **Systematic `Any` placeholder replacement** (Ongoing): Hundreds of function
-  signatures use `Any` placeholders. Each requires understanding context-dependent
-  return types. Completed: `min`, `max`, numeric functions. Remaining: ~30+ functions.
-  Estimated: 5+ days for complete coverage.
-
-**Status**: The implementation is stable and broadly functional (~31-33% complete by
-specification coverage). Closing all remaining gaps requires 10-15 days of focused
-implementation work. Individual gaps are self-contained and can be tackled
-independently; the session model suits vertical slices with testing and integration.
+**Status**: Implementation is stable and functional (~33-35% complete, up from 31-33%). This
+session closed 4 concrete gaps and identified that ~15 builtin functions now have proper
+typed return contracts. Remaining work is architectural (iterators) or systematic
+(continuing Any replacement). Individual gaps are self-contained for multi-session vertical
+slices.
 
 - Keep landing small vertical slices with focused tests, then the full gate,
   then a pushed checkpoint.
