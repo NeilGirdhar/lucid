@@ -9755,6 +9755,16 @@ impl Function {
                                 add_value(value, instructions)?;
                             }
                         }
+                        lucid_syntax::Expr::Record { fields, .. } => {
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                let value =
+                                    lower(field, bindings, aggregate_bindings, instructions, next)?;
+                                add_value(value, instructions)?;
+                            }
+                        }
                         lucid_syntax::Expr::Call { .. } => {
                             values.extend(
                                 const_range_values(&args[0].value)
@@ -9776,6 +9786,11 @@ impl Function {
                             {
                                 AggregateBinding::List(elements)
                                 | AggregateBinding::Set(elements) => {
+                                    for value in elements {
+                                        add_value(*value, instructions)?;
+                                    }
+                                }
+                                AggregateBinding::Record(elements) => {
                                     for value in elements {
                                         add_value(*value, instructions)?;
                                     }
@@ -9876,6 +9891,16 @@ impl Function {
                                 add_value(value, instructions)?;
                             }
                         }
+                        lucid_syntax::Expr::Record { fields, .. } => {
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                let value =
+                                    lower(field, bindings, aggregate_bindings, instructions, next)?;
+                                add_value(value, instructions)?;
+                            }
+                        }
                         lucid_syntax::Expr::Call { .. } => {
                             for value in const_range_values(&args[0].value)
                                 .ok_or(LowerError::UnsupportedExpression)?
@@ -9901,6 +9926,11 @@ impl Function {
                             {
                                 AggregateBinding::List(elements)
                                 | AggregateBinding::Set(elements) => {
+                                    for value in elements {
+                                        add_value(*value, instructions)?;
+                                    }
+                                }
+                                AggregateBinding::Record(elements) => {
                                     for value in elements {
                                         add_value(*value, instructions)?;
                                     }
@@ -9960,9 +9990,6 @@ impl Function {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::SingletonRecord(_) => {
-                                    return Err(LowerError::UnsupportedExpression);
-                                }
-                                AggregateBinding::Record(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::String(_) => {
@@ -10037,6 +10064,16 @@ impl Function {
                                 fold_value(value, instructions)?;
                             }
                         }
+                        lucid_syntax::Expr::Record { fields, .. } => {
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                let value =
+                                    lower(field, bindings, aggregate_bindings, instructions, next)?;
+                                fold_value(value, instructions)?;
+                            }
+                        }
                         expr if constant_bytes(expr, aggregate_bindings).is_some() => {
                             let values = constant_bytes(expr, aggregate_bindings)
                                 .ok_or(LowerError::UnsupportedExpression)?;
@@ -10054,6 +10091,11 @@ impl Function {
                             {
                                 AggregateBinding::List(elements)
                                 | AggregateBinding::Set(elements) => {
+                                    for value in elements {
+                                        fold_value(*value, instructions)?;
+                                    }
+                                }
+                                AggregateBinding::Record(elements) => {
                                     for value in elements {
                                         fold_value(*value, instructions)?;
                                     }
@@ -10113,9 +10155,6 @@ impl Function {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::SingletonRecord(_) => {
-                                    return Err(LowerError::UnsupportedExpression);
-                                }
-                                AggregateBinding::Record(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::String(_) => {
@@ -12316,6 +12355,25 @@ impl Function {
                                 .iter()
                                 .map(constant_index)
                                 .collect::<Option<Vec<_>>>(),
+                            lucid_syntax::Expr::Record { fields, .. } => fields
+                                .iter()
+                                .map(|(name, field)| {
+                                    if name.is_some() {
+                                        None
+                                    } else {
+                                        constant_index(field)
+                                    }
+                                })
+                                .collect::<Option<Vec<_>>>(),
+                            lucid_syntax::Expr::Ident { name, .. } => {
+                                match aggregate_bindings.get(name) {
+                                    Some(AggregateBinding::Record(elements)) => elements
+                                        .iter()
+                                        .map(|value| constant_int(*value, instructions))
+                                        .collect::<Option<Vec<_>>>(),
+                                    _ => const_range_values(iterable),
+                                }
+                            }
                             _ => const_range_values(iterable),
                         };
                         if let Some(mut values) = int_values {
@@ -12371,6 +12429,25 @@ impl Function {
                                 .iter()
                                 .map(constant_index)
                                 .collect::<Option<Vec<_>>>(),
+                            lucid_syntax::Expr::Record { fields, .. } => fields
+                                .iter()
+                                .map(|(name, field)| {
+                                    if name.is_some() {
+                                        None
+                                    } else {
+                                        constant_index(field)
+                                    }
+                                })
+                                .collect::<Option<Vec<_>>>(),
+                            lucid_syntax::Expr::Ident { name, .. } => {
+                                match aggregate_bindings.get(name) {
+                                    Some(AggregateBinding::Record(elements)) => elements
+                                        .iter()
+                                        .map(|value| constant_int(*value, instructions))
+                                        .collect::<Option<Vec<_>>>(),
+                                    _ => const_range_values(iterable),
+                                }
+                            }
                             _ => const_range_values(iterable),
                         };
                         if let Some(mut values) = int_values {
@@ -12422,6 +12499,29 @@ impl Function {
                                 elements.push(id);
                             }
                             return Ok(Some(AggregateBinding::List(elements)));
+                        }
+                        if let lucid_syntax::Expr::Record { fields, .. } = iterable {
+                            let mut elements = Vec::with_capacity(fields.len());
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                elements.push(lower(
+                                    field,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?);
+                            }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
+                        if let lucid_syntax::Expr::Ident { name, .. } = iterable {
+                            if let Some(AggregateBinding::Record(elements)) =
+                                aggregate_bindings.get(name)
+                            {
+                                return Ok(Some(AggregateBinding::List(elements.clone())));
+                            }
                         }
                         if let lucid_syntax::Expr::Call {
                             func: view_func,
@@ -12514,6 +12614,29 @@ impl Function {
                                 elements.push(id);
                             }
                             return Ok(Some(AggregateBinding::Set(elements)));
+                        }
+                        if let lucid_syntax::Expr::Record { fields, .. } = iterable {
+                            let mut elements = Vec::with_capacity(fields.len());
+                            for (name, field) in fields {
+                                if name.is_some() {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                elements.push(lower(
+                                    field,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?);
+                            }
+                            return Ok(Some(AggregateBinding::Set(elements)));
+                        }
+                        if let lucid_syntax::Expr::Ident { name, .. } = iterable {
+                            if let Some(AggregateBinding::Record(elements)) =
+                                aggregate_bindings.get(name)
+                            {
+                                return Ok(Some(AggregateBinding::Set(elements.clone())));
+                            }
                         }
                         if let lucid_syntax::Expr::Call {
                             func: view_func,
@@ -23830,6 +23953,9 @@ return total
             ("return sum([10, 20, 12])\n", 42),
             ("values = [10, 20, 12]\nreturn sum(values, 1)\n", 43),
             ("values = list(range(3))\nreturn values[2]\n", 2),
+            ("values = list((1, 2, 3))\nreturn values[2]\n", 3),
+            ("items = (1, 2, 3)\nvalues = list(items)\nreturn values[1]\n", 2),
+            ("values = set((1, 2, 3))\nreturn 2 in values\n", 1),
             (
                 "values = list({1: 10, 2: 20}.keys())\nreturn values[0] + values[1]\n",
                 3,
@@ -23865,6 +23991,10 @@ return total
                 12,
             ),
             (
+                "values = sorted((3, 1, 2))\nreturn values[0] * 100 + values[1] * 10 + values[2]\n",
+                123,
+            ),
+            (
                 "values = reversed([1, 2, 3])\nreturn values[0] * 100 + values[1] * 10 + values[2]\n",
                 321,
             ),
@@ -23872,7 +24002,13 @@ return total
                 "values = reversed(range(3))\nreturn values[0] * 100 + values[1] * 10 + values[2]\n",
                 210,
             ),
+            (
+                "items = (1, 2, 3)\nvalues = reversed(items)\nreturn values[0] * 100 + values[1] * 10 + values[2]\n",
+                321,
+            ),
             ("values = {10, 20, 12}\nreturn sum(values)\n", 42),
+            ("return sum((10, 20, 12))\n", 42),
+            ("items = (10, 20, 12)\nreturn sum(items)\n", 42),
             ("return len(range(5))\n", 5),
             ("return sum(range(5))\n", 10),
             ("return sum(range(1, 8, 2))\n", 16),
@@ -23906,10 +24042,14 @@ return total
             ("data = b\"ABC\"\nreturn sum(data, 1)\n", 199),
             ("return min(b\"CBA\")\n", 65),
             ("data = b\"ABC\"\nreturn max(data)\n", 67),
+            ("return min((3, 1, 2))\n", 1),
+            ("items = (3, 1, 2)\nreturn max(items)\n", 3),
             ("return all(b\"ABC\")\n", 1),
             ("return all(b\"\")\n", 1),
             ("return any(b\"B\")\n", 1),
             ("data = b\"\"\nreturn any(data)\n", 0),
+            ("return all((1, 2, 3))\n", 1),
+            ("items = (0, 0)\nreturn any(items)\n", 0),
             ("return all([true, 1, 2])\n", 1),
             ("return any([false, 0, 2])\n", 1),
             ("return all([])\n", 1),

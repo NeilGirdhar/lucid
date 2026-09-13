@@ -4509,7 +4509,7 @@ impl TypeChecker {
             Type::View { inner, .. } => inner.as_ref(),
             other => other,
         };
-        if matches!(base, Type::Shape(_)) {
+        if matches!(base, Type::Shape(_) | Type::Record { .. }) {
             return true;
         }
         if matches!(base, Type::Str) || matches!(base, Type::Class { name, .. } if name == "str") {
@@ -15651,7 +15651,7 @@ def reject(value: not int) -> none:
         let mut checker = TypeChecker::new();
         checker
             .check_module(
-                &parse("result = sorted([1])\nmapping = dict()\ncopy = dict({\"a\": 1})\nitems = set()\nsmall = min([1.0])\nlarge = max(1, 2)\n").unwrap(),
+                &parse("result = sorted([1])\nbackward = reversed((1, 2))\nmapping = dict()\ncopy = dict({\"a\": 1})\nitems = set()\nsmall = min([1.0])\nlarge = max(1, 2)\n").unwrap(),
             )
             .unwrap();
         assert!(matches!(
