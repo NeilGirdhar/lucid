@@ -1377,9 +1377,84 @@ impl Function {
                 member_positions: Vec<usize>,
                 literal_values: Option<Vec<i64>>,
             }
-            fn typed_node_int_literal(node: &TypedExprNode) -> Option<i64> {
-                match node.literal {
-                    Some(TypedLiteral::Int(value)) => Some(value),
+            fn typed_constant_int(
+                id: u32,
+                current_id: u32,
+                nodes: &[TypedExprNode],
+                parameter_names: &[String],
+                local_bindings: &[(String, u32)],
+            ) -> Option<i64> {
+                let node = nodes.get(id as usize)?;
+                let id = local_binding_id(node, current_id, parameter_names, local_bindings)
+                    .unwrap_or(id);
+                let node = nodes.get(id as usize)?;
+                if let Some(TypedLiteral::Int(value)) = node.literal {
+                    return Some(value);
+                }
+                match node.kind.as_str() {
+                    "unary" if node.children.len() == 1 => {
+                        let value = typed_constant_int(
+                            node.children[0],
+                            current_id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        match node.detail.as_deref()? {
+                            "Pos" => Some(value),
+                            "Neg" => value.checked_neg(),
+                            "Invert" => Some(!value),
+                            _ => None,
+                        }
+                    }
+                    "binary" if node.children.len() == 2 => {
+                        let left = typed_constant_int(
+                            node.children[0],
+                            current_id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let right = typed_constant_int(
+                            node.children[1],
+                            current_id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        match node.detail.as_deref()? {
+                            "Add" => left.checked_add(right),
+                            "Sub" => left.checked_sub(right),
+                            "Mul" => left.checked_mul(right),
+                            "Pow" => u32::try_from(right)
+                                .ok()
+                                .and_then(|exponent| left.checked_pow(exponent)),
+                            "Div" => left.checked_div(right),
+                            "FloorDiv" => {
+                                let quotient = left.checked_div(right)?;
+                                let remainder = left.checked_rem(right)?;
+                                if remainder != 0 && (left < 0) != (right < 0) {
+                                    quotient.checked_sub(1)
+                                } else {
+                                    Some(quotient)
+                                }
+                            }
+                            "Mod" => {
+                                let remainder = left.checked_rem(right)?;
+                                if remainder != 0 && (left < 0) != (right < 0) {
+                                    remainder.checked_add(right)
+                                } else {
+                                    Some(remainder)
+                                }
+                            }
+                            "BitAnd" => Some(left & right),
+                            "BitOr" => Some(left | right),
+                            "BitXor" => Some(left ^ right),
+                            "Shl" => left.checked_shl(u32::try_from(right).ok()?),
+                            "Shr" => left.checked_shr(u32::try_from(right).ok()?),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 }
             }
@@ -1403,15 +1478,7 @@ impl Function {
                     .iter()
                     .skip(1)
                     .map(|child| {
-                        let mut arg_id = *child;
-                        let arg = nodes
-                            .get(arg_id as usize)
-                            .ok_or(LowerError::UnsupportedExpression)?;
-                        arg_id = local_binding_id(arg, node.id, parameter_names, local_bindings)
-                            .unwrap_or(arg_id);
-                        nodes
-                            .get(arg_id as usize)
-                            .and_then(typed_node_int_literal)
+                        typed_constant_int(*child, node.id, nodes, parameter_names, local_bindings)
                             .ok_or(LowerError::UnsupportedExpression)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -27184,58 +27251,93 @@ return total
                 kind: "literal".into(),
                 detail: None,
                 children: vec![],
-                literal: Some(TypedLiteral::Int(5)),
+                literal: Some(TypedLiteral::Int(4)),
             },
             TypedExprNode {
                 id: 3,
                 kind: "literal".into(),
                 detail: None,
                 children: vec![],
-                literal: Some(TypedLiteral::Int(1)),
+                literal: Some(TypedLiteral::Int(2)),
             },
             TypedExprNode {
                 id: 4,
                 kind: "literal".into(),
                 detail: None,
                 children: vec![],
-                literal: Some(TypedLiteral::Int(-2)),
+                literal: Some(TypedLiteral::Int(2)),
             },
             TypedExprNode {
                 id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 6,
                 kind: "name".into(),
                 detail: Some("start".into()),
                 children: vec![],
                 literal: None,
             },
             TypedExprNode {
-                id: 6,
+                id: 7,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![6, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
                 kind: "name".into(),
                 detail: Some("stop".into()),
                 children: vec![],
                 literal: None,
             },
             TypedExprNode {
-                id: 7,
-                kind: "call".into(),
-                detail: None,
-                children: vec![0, 5, 6, 4],
+                id: 9,
+                kind: "binary".into(),
+                detail: Some("Sub".into()),
+                children: vec![8, 5],
                 literal: None,
             },
             TypedExprNode {
-                id: 8,
+                id: 10,
+                kind: "name".into(),
+                detail: Some("step".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "unary".into(),
+                detail: Some("Neg".into()),
+                children: vec![10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
                 kind: "call".into(),
                 detail: None,
-                children: vec![1, 7],
+                children: vec![0, 7, 9, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 12],
                 literal: None,
             },
         ];
         let function = Function::from_typed_function_body_with_locals(
             &nodes,
-            8,
+            13,
             &[],
-            &[("start".into(), 2), ("stop".into(), 3)],
+            &[("start".into(), 2), ("stop".into(), 3), ("step".into(), 4)],
         )
-        .expect("typed range should resolve local constant arguments");
+        .expect("typed range should resolve local constant expressions");
         assert_eq!(function.execute(), Ok(Some(8)));
     }
 
