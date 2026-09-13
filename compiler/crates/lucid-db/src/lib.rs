@@ -6651,6 +6651,111 @@ pub fn lower_function_body(
                     last,
                     lucid_syntax::Stmt::Return { .. } | lucid_syntax::Stmt::Pass(_)
                 ) {
+                    if let lucid_syntax::Stmt::If {
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch: Some(else_branch),
+                        ..
+                    } = last
+                        && static_truth(condition).is_none()
+                        && has_identifier(condition)
+                        && elif_branches.iter().all(|(elif_condition, branch)| {
+                            static_truth(elif_condition).is_none()
+                                && has_identifier(elif_condition)
+                                && single_return_expr(branch).is_some()
+                        })
+                        && let Some(then_return) = single_return_expr(then_branch)
+                        && let Some(else_return) = single_return_expr(else_branch)
+                    {
+                        if function.is_async {
+                            return Err(Arc::from(
+                                "async function bodies are not yet supported by CIR lowering",
+                            ));
+                        }
+                        let mut local_specs = Vec::new();
+                        for statement in &statements[..statements.len() - 1] {
+                            collect_pre_return_binding(statement, &mut local_specs)?;
+                        }
+                        let nodes = function
+                            .body_expressions
+                            .iter()
+                            .map(|node| lucid_cir::TypedExprNode {
+                                id: node.id,
+                                kind: node.kind.clone(),
+                                detail: node.detail.clone(),
+                                children: node.children.to_vec(),
+                                literal: node.literal,
+                            })
+                            .collect::<Vec<_>>();
+                        let find_id = |span: lucid_syntax::Span| {
+                            function
+                                .body_expressions
+                                .iter()
+                                .rev()
+                                .find(|node| node.span == span)
+                                .map(|node| node.id)
+                        };
+                        let local_bindings = local_specs
+                            .into_iter()
+                            .map(|(name, span)| {
+                                find_id(span).map(|id| (name, id)).ok_or_else(|| {
+                                    Arc::<str>::from("local binding has no typed expression")
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if let Some(condition_id) = find_id(condition.span()) {
+                            let then_id = then_return
+                                .map(|value| {
+                                    find_id(value.span()).ok_or_else(|| {
+                                        Arc::<str>::from("function has no lowerable expression")
+                                    })
+                                })
+                                .transpose()?;
+                            let elif_ids = elif_branches
+                                .iter()
+                                .map(|(elif_condition, branch)| {
+                                    let elif_return =
+                                        single_return_expr(branch).ok_or_else(|| {
+                                            Arc::<str>::from("function has no lowerable expression")
+                                        })?;
+                                    let condition_id =
+                                        find_id(elif_condition.span()).ok_or_else(|| {
+                                            Arc::<str>::from("function has no lowerable expression")
+                                        })?;
+                                    let value_id = elif_return
+                                        .map(|value| {
+                                            find_id(value.span()).ok_or_else(|| {
+                                                Arc::<str>::from(
+                                                    "function has no lowerable expression",
+                                                )
+                                            })
+                                        })
+                                        .transpose()?;
+                                    Ok((condition_id, value_id))
+                                })
+                                .collect::<Result<Vec<_>, Arc<str>>>()?;
+                            let else_id = else_return
+                                .map(|value| {
+                                    find_id(value.span()).ok_or_else(|| {
+                                        Arc::<str>::from("function has no lowerable expression")
+                                    })
+                                })
+                                .transpose()?;
+                            return lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
+                                &nodes,
+                                condition_id,
+                                then_id,
+                                &elif_ids,
+                                else_id,
+                                &function.parameter_names,
+                                &local_bindings,
+                            )
+                            .map(Arc::new)
+                            .map_err(|_| Arc::from("unsupported setup guard return chain"));
+                        }
+                        return Err(Arc::from("function has no lowerable expression"));
+                    }
                     if function.is_async {
                         return Err(Arc::from(
                             "async function bodies are not yet supported by CIR lowering",
@@ -11024,6 +11129,17 @@ mod tests {
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
             .expect("setup before guard elif return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "setup-guard-elif-else-return.lucid",
+            "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return base\n    elif second:\n        return base * 2\n    else:\n        return base * 3\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before guard elif else return should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 1, 0]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[10, 0, 1]), Ok(Some(22)));
         assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
