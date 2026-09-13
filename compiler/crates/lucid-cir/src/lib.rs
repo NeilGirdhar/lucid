@@ -8392,6 +8392,24 @@ impl Function {
                         select_constant_index(value.chars().count(), constant_index(index)?)?;
                     value.chars().nth(selected).map(|ch| ch.to_string())
                 }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Attribute { attr, .. }
+                            if attr == "lower" || attr == "upper" || attr == "strip"
+                    ) && args.is_empty() =>
+                {
+                    let lucid_syntax::Expr::Attribute { value, attr, .. } = func.as_ref() else {
+                        unreachable!();
+                    };
+                    let value = constant_string(value, aggregate_bindings)?;
+                    match attr.as_str() {
+                        "lower" => Some(value.to_lowercase()),
+                        "upper" => Some(value.to_uppercase()),
+                        "strip" => Some(value.trim().to_string()),
+                        _ => unreachable!(),
+                    }
+                }
                 _ => None,
             }
         }
@@ -8515,6 +8533,12 @@ impl Function {
                     ) && args.len() == 1 =>
                 {
                     let length = match &args[0].value {
+                        expr if constant_string(expr, aggregate_bindings).is_some() => {
+                            constant_string(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .chars()
+                                .count()
+                        }
                         lucid_syntax::Expr::List { elements, .. } => {
                             for element in elements {
                                 let _ = lower(
@@ -20811,6 +20835,10 @@ return total
             ("return \"lucid\".endswith(\"id\")\n", 1),
             ("return \"lucid\".startswith(\"id\")\n", 0),
             ("return \"lucid\".endswith(\"lu\")\n", 0),
+            ("return \"LUCID\".lower() == \"lucid\"\n", 1),
+            ("return \"lucid\".upper() == \"LUCID\"\n", 1),
+            ("return \"  lucid  \".strip() == \"lucid\"\n", 1),
+            ("return len(\"  lucid  \".strip())\n", 5),
             ("return \"abc\"[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[-1] == \"c\"\n", 1),
@@ -20835,6 +20863,9 @@ return total
                 "suffix = \"id\"\ntext = \"lucid\"\nreturn text.endswith(suffix)\n",
                 1,
             ),
+            ("text = \"LUCID\"\nreturn text.lower() == \"lucid\"\n", 1),
+            ("text = \"lucid\"\nreturn text.upper() == \"LUCID\"\n", 1),
+            ("text = \"  lucid  \"\nreturn len(text.strip())\n", 5),
             ("text = \"lucid\"\nreturn 1 if \"u\" in text else 0\n", 1),
             ("text = \"lucid\"\nreturn 0 if \"z\" in text else 1\n", 1),
             ("text = \"\"\nreturn 0 if bool(text) else 1\n", 1),
