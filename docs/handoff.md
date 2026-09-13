@@ -2006,6 +2006,9 @@ diverged:
   Function-body lowering routes the same final no-`else` dynamic `elif`
   assignment shape through that CIR path when an earlier initialized value
   supplies the fall-through result.
+  Parameterized final `if`/`elif` assignment ladders with comparison
+  conditions now stay on the parameter-aware linear CIR path instead of being
+  diverted to the older parameter-free module-`if` adapter.
   Simple dynamic diamonds no longer have to be the final statement: when both
   arms assign the same local, the Phi result rebinds that local and later
   straight-line statements lower in the merge block.

@@ -6816,27 +6816,31 @@ impl Function {
                 return Err(LowerError::UnsupportedExpression);
             }
         }
-        if let [lucid_syntax::Stmt::If {
-            condition: lucid_syntax::Expr::Binary { op, .. },
-            ..
-        }] = module.statements.as_slice()
-        {
-            if !matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
-                return Self::from_module_if(module);
+        if parameter_names.is_empty() {
+            if let [lucid_syntax::Stmt::If {
+                condition: lucid_syntax::Expr::Binary { op, .. },
+                ..
+            }] = module.statements.as_slice()
+            {
+                if !matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or) {
+                    return Self::from_module_if(module);
+                }
             }
         }
-        if let [lucid_syntax::Stmt::If {
-            condition:
-                lucid_syntax::Expr::Unary {
-                    op: lucid_syntax::UnaryOp::Not,
-                    expr,
-                    ..
-                },
-            ..
-        }] = module.statements.as_slice()
-        {
-            if matches!(expr.as_ref(), lucid_syntax::Expr::Binary { .. }) {
-                return Self::from_module_if(module);
+        if parameter_names.is_empty() {
+            if let [lucid_syntax::Stmt::If {
+                condition:
+                    lucid_syntax::Expr::Unary {
+                        op: lucid_syntax::UnaryOp::Not,
+                        expr,
+                        ..
+                    },
+                ..
+            }] = module.statements.as_slice()
+            {
+                if matches!(expr.as_ref(), lucid_syntax::Expr::Binary { .. }) {
+                    return Self::from_module_if(module);
+                }
             }
         }
         if let [lucid_syntax::Stmt::Export(inner)] = module.statements.as_slice() {
@@ -15923,6 +15927,15 @@ return total
         assert_eq!(function.execute_with_args(&[1, 1]), Ok(Some(10)));
         assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(20)));
         assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(40)));
+        let module = lucid_syntax::parse(
+            "if value > 10:\n    high = 100\nelif value > 0:\n    positive = 1\nelse:\n    fallback = 0\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear_with_params(&module, &["value".into()])
+            .expect("final dynamic elif comparison ladder should merge branch result values");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
         let module = lucid_syntax::parse(
             "fallback = 40\nif first:\n    left = 10\nelif second:\n    middle = 20\n",
         )
