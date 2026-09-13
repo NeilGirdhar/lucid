@@ -5941,6 +5941,167 @@ impl Function {
                 },
             }
         }
+        fn loop_operand(
+            expr: &lucid_syntax::Expr,
+            result: ValueId,
+            index_name: &str,
+            bound_aliases: &[&lucid_syntax::Stmt],
+            parameter_names: &[String],
+            depth: usize,
+            next_value: &mut u32,
+        ) -> Option<Vec<Instruction>> {
+            if depth > bound_aliases.len() {
+                return None;
+            }
+            match Function::const_int_expr(expr) {
+                Some(value) => Some(vec![Instruction::ConstInt { result, value }]),
+                None => match expr {
+                    lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
+                        let zero = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        Some(vec![
+                            Instruction::ConstInt {
+                                result: zero,
+                                value: 0,
+                            },
+                            Instruction::Add {
+                                result,
+                                left: ValueId(3),
+                                right: zero,
+                            },
+                        ])
+                    }
+                    lucid_syntax::Expr::Ident { name, .. } => {
+                        if let Some(value) = bound_alias_value(name, bound_aliases) {
+                            loop_operand(
+                                value,
+                                result,
+                                index_name,
+                                bound_aliases,
+                                parameter_names,
+                                depth + 1,
+                                next_value,
+                            )
+                        } else {
+                            Some(vec![Instruction::Param {
+                                result,
+                                index: parameter_names
+                                    .iter()
+                                    .position(|parameter| parameter == name)?
+                                    as u32,
+                            }])
+                        }
+                    }
+                    lucid_syntax::Expr::Unary { op, expr, .. }
+                        if matches!(
+                            op,
+                            lucid_syntax::UnaryOp::Pos | lucid_syntax::UnaryOp::Neg
+                        ) =>
+                    {
+                        match op {
+                            lucid_syntax::UnaryOp::Pos => loop_operand(
+                                expr,
+                                result,
+                                index_name,
+                                bound_aliases,
+                                parameter_names,
+                                depth,
+                                next_value,
+                            ),
+                            lucid_syntax::UnaryOp::Neg => {
+                                let operand_value = ValueId(*next_value);
+                                *next_value = next_value.checked_add(1)?;
+                                let mut instructions = loop_operand(
+                                    expr,
+                                    operand_value,
+                                    index_name,
+                                    bound_aliases,
+                                    parameter_names,
+                                    depth,
+                                    next_value,
+                                )?;
+                                instructions.push(Instruction::Neg {
+                                    result,
+                                    operand: operand_value,
+                                });
+                                Some(instructions)
+                            }
+                            _ => None,
+                        }
+                    }
+                    lucid_syntax::Expr::Binary {
+                        op, left, right, ..
+                    } if matches!(
+                        op,
+                        lucid_syntax::BinaryOp::Add
+                            | lucid_syntax::BinaryOp::Sub
+                            | lucid_syntax::BinaryOp::Mul
+                            | lucid_syntax::BinaryOp::Div
+                            | lucid_syntax::BinaryOp::FloorDiv
+                            | lucid_syntax::BinaryOp::Mod
+                    ) =>
+                    {
+                        let left_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let right_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let mut instructions = loop_operand(
+                            left,
+                            left_temp,
+                            index_name,
+                            bound_aliases,
+                            parameter_names,
+                            depth,
+                            next_value,
+                        )?;
+                        instructions.extend(loop_operand(
+                            right,
+                            right_temp,
+                            index_name,
+                            bound_aliases,
+                            parameter_names,
+                            depth,
+                            next_value,
+                        )?);
+                        instructions.push(match op {
+                            lucid_syntax::BinaryOp::Add => Instruction::Add {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Sub => Instruction::Sub {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Mul => Instruction::Mul {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Div => Instruction::Div {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::FloorDiv => Instruction::FloorDiv {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            lucid_syntax::BinaryOp::Mod => Instruction::Mod {
+                                result,
+                                left: left_temp,
+                                right: right_temp,
+                            },
+                            _ => return None,
+                        });
+                        Some(instructions)
+                    }
+                    _ => None,
+                },
+            }
+        }
         fn int_literal_operand(
             expr: &lucid_syntax::Expr,
             bound_aliases: &[&lucid_syntax::Stmt],
@@ -6063,9 +6224,10 @@ impl Function {
                     *next_value = next_value.checked_add(1)?;
                     let mut instructions = Vec::new();
                     if left_value != ValueId(3) {
-                        instructions.extend(operand(
+                        instructions.extend(loop_operand(
                             left,
                             left_value,
+                            index_name,
                             bound_aliases,
                             parameter_names,
                             0,
@@ -6073,9 +6235,10 @@ impl Function {
                         )?);
                     }
                     if right_value != ValueId(3) {
-                        instructions.extend(operand(
+                        instructions.extend(loop_operand(
                             right,
                             right_value,
+                            index_name,
                             bound_aliases,
                             parameter_names,
                             0,
@@ -6138,8 +6301,16 @@ impl Function {
                 lucid_syntax::Expr::Ident { name, .. } if name == index_name => {
                     Some(RangeAccumulatorOperand::Induction)
                 }
-                _ => operand(expr, result, &bound_aliases, parameter_names, 0, next_value)
-                    .map(RangeAccumulatorOperand::Materialized),
+                _ => loop_operand(
+                    expr,
+                    result,
+                    index_name,
+                    &bound_aliases,
+                    parameter_names,
+                    0,
+                    next_value,
+                )
+                .map(RangeAccumulatorOperand::Materialized),
             }
         };
         let parse_update = |statement: &lucid_syntax::Stmt,
@@ -13963,6 +14134,20 @@ return total
         )
         .expect("range boolean-guard accumulation should lower");
         assert_eq!(function.execute_with_args(&[6, 1, 5]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+for i in range(limit):
+    if i + 1 < high:
+        total += i
+return total
+"#,
+        )
+        .expect("range arithmetic-guard accumulation fixture should parse");
+        let function =
+            Function::from_module_linear_with_params(&module, &["limit".into(), "high".into()])
+                .expect("range arithmetic-guard accumulation should lower");
+        assert_eq!(function.execute_with_args(&[6, 5]), Ok(Some(6)));
 
         let module = lucid_syntax::parse(
             r#"seeded = seed

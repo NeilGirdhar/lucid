@@ -13372,6 +13372,15 @@ mod tests {
         assert_eq!(function.execute_with_args(&[6, 1, 5]), Ok(Some(9)));
 
         let file = db.add_file(
+            "range-arithmetic-guard-accumulate.lucid",
+            "def shifted_sum(limit: int, high: int):\n    total = 0\n    for i in range(limit):\n        if i + 1 < high:\n            total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "shifted_sum".into())
+            .as_ref()
+            .expect("range arithmetic-guard accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[6, 5]), Ok(Some(6)));
+
+        let file = db.add_file(
             "counted-while-dead-if-broken.lucid",
             "def countdown(n: int):\n    while n > 0:\n        n -= 1\n    if_broken:\n        n = 100\n    return n\n",
         );

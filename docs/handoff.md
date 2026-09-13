@@ -2140,6 +2140,8 @@ diverged:
   merge Phi before the induction step.
   Guard conditions in this counted range path now lower boolean `and`, `or`,
   and `not` expressions recursively on top of the existing comparison lowering.
+  Guard operands can also use arithmetic expressions involving the range
+  induction variable, such as `i + 1 < high`.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
