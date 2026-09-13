@@ -4444,10 +4444,15 @@ impl TypeChecker {
         self.class_method_type(parent, name)
     }
 
-    /// Return the value type yielded by a statically known iterable.  Built-in
-    /// containers expose their element type directly; user iterators expose it
-    /// through the declared return type of `next()`.
-    fn iterable_element_type(&self, iterable: &Type) -> Type {
+    /// Return the element type a checked iterable yields.
+    ///
+    /// Built-in containers expose their element type directly; user iterators
+    /// expose it through the declared return type of `next()`.
+    ///
+    /// HIR collection uses this after the checker has accepted a
+    /// comprehension or loop so that target-pattern bindings are recorded
+    /// with the same types the checker used.
+    pub fn iterable_element_type(&self, iterable: &Type) -> Type {
         match iterable {
             Type::View { inner, .. } => self.iterable_element_type(inner),
             Type::Class {
@@ -6872,7 +6877,12 @@ impl TypeChecker {
         }
     }
 
-    fn bind_match_pattern_types(&mut self, pattern: &Pattern, subject_type: &Type) {
+    /// Bind names introduced by a pattern using the type of the matched value.
+    ///
+    /// This is shared by checking and typed-HIR collection so destructuring
+    /// scopes in comprehensions, loops, matches, and context managers stay in
+    /// one place.
+    pub fn bind_match_pattern_types(&mut self, pattern: &Pattern, subject_type: &Type) {
         match pattern {
             Pattern::Ident(name, _)
                 if !matches!(
