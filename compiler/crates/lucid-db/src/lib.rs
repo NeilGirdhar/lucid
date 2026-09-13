@@ -12831,6 +12831,48 @@ mod tests {
         assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
 
         let file = db.add_file(
+            "statement-nested-static-local-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = 0\n        if true:\n            result = value + 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested static local branch should lower inside dynamic outer branch");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-nested-static-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = 0\n            if true:\n                result = value + 10\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match arm nested static local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-branch-local-augassign-return.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = value\n        result += 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("branch local augmented assignment return should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(8)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-branch-local-augassign-return.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = value\n            result += 10\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match branch local augmented assignment return should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(8)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
             "statement-match-nested-dynamic-local-augassign-branch.lucid",
             "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = value\n            if value > 0:\n                result += 10\n            return result\n        case _:\n            return -1\n",
         );
