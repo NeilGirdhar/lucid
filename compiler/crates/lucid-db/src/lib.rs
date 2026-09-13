@@ -349,6 +349,7 @@ fn first_parse_error_span(db: &dyn Db, file: SourceFile) -> lucid_syntax::Span {
             .into_iter()
             .next()
             .map(|error| error.span)
+            .or_else(|| source_fallback_span(db, file))
             .unwrap_or_default(),
         Err(_) => first_lexical_error_span(db, file),
     }
@@ -9318,6 +9319,15 @@ mod tests {
             "x"
         );
         assert_eq!(*source_position(&db, file, offset), (1, 2));
+    }
+
+    #[test]
+    fn parse_error_span_fallback_uses_source_text() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("ok.lucid", "value = 1\n");
+        let span = first_parse_error_span(&db, file);
+        assert_ne!(span, lucid_syntax::Span::default());
+        assert_eq!(span_text(&db, file, span).as_ref(), "v");
     }
 
     #[test]
