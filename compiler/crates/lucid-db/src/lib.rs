@@ -171,12 +171,21 @@ pub enum Severity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct RelatedDiagnostic {
+    pub file: SourceFile,
+    pub message: String,
+    pub span: lucid_syntax::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct Diagnostic {
     pub file: SourceFile,
     pub severity: Severity,
     pub code: String,
     pub message: String,
     pub span: lucid_syntax::Span,
+    pub related: Arc<[RelatedDiagnostic]>,
+    pub fix: Option<String>,
 }
 
 #[salsa::tracked]
@@ -7420,6 +7429,8 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
                     code: "E0001".into(),
                     message: format!("Parse error: {}", parse_error.message),
                     span: parse_error.span,
+                    related: Arc::from([]),
+                    fix: None,
                 });
             }
         }
@@ -7430,6 +7441,8 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
                 code: "E0001".into(),
                 message: error.to_string(),
                 span: first_parse_error_span(db, file),
+                related: Arc::from([]),
+                fix: None,
             });
         }
         return Arc::from(diagnostics);
@@ -7439,8 +7452,10 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
     for declaration in declarations.iter() {
         let name = declaration.symbol.name(db);
         if let Some(previous) = seen.get(name.as_str()) {
-            let dispatch_overload =
-                *previous && declaration.kind == DeclKind::Function && declaration.is_dispatch;
+            let (previous_dispatch, previous_span) = *previous;
+            let dispatch_overload = previous_dispatch
+                && declaration.kind == DeclKind::Function
+                && declaration.is_dispatch;
             if dispatch_overload {
                 continue;
             }
@@ -7450,11 +7465,20 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
                 code: "E0100".into(),
                 message: format!("duplicate top-level declaration '{name}'"),
                 span: declaration.span,
+                related: Arc::from([RelatedDiagnostic {
+                    file,
+                    message: "previous declaration is here".into(),
+                    span: previous_span,
+                }]),
+                fix: None,
             });
         } else {
             seen.insert(
                 name.to_string(),
-                declaration.kind == DeclKind::Function && declaration.is_dispatch,
+                (
+                    declaration.kind == DeclKind::Function && declaration.is_dispatch,
+                    declaration.span,
+                ),
             );
         }
     }
@@ -7470,6 +7494,8 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
             code: "E0200".into(),
             message: error.message,
             span: error.span,
+            related: Arc::from([]),
+            fix: None,
         });
     }
     Arc::from(diagnostics)
@@ -7507,6 +7533,8 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                     .into(),
                     message: message.to_string(),
                     span,
+                    related: Arc::from([]),
+                    fix: None,
                 });
             }
             return Arc::from(diagnostics);
@@ -7536,6 +7564,8 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                     code: "E0300".into(),
                     message: format!("unresolved module import '{import}'"),
                     span,
+                    related: Arc::from([]),
+                    fix: None,
                 });
             }
         }
@@ -7570,6 +7600,8 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                         code: "E0304".into(),
                         message: format!("cannot export private name '{name}'"),
                         span: statement_span(statement),
+                        related: Arc::from([]),
+                        fix: None,
                     });
                 }
             }
@@ -7589,6 +7621,8 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                         code: "E0305".into(),
                         message: format!("duplicate imported binding '{local_name}'"),
                         span: statement_span(statement),
+                        related: Arc::from([]),
+                        fix: None,
                     });
                 }
                 continue;
@@ -7614,6 +7648,8 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                         code: "E0305".into(),
                         message: format!("duplicate imported binding '{local_name}'"),
                         span: statement_span(statement),
+                        related: Arc::from([]),
+                        fix: None,
                     });
                 }
                 let exported = declarations
@@ -7626,6 +7662,8 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
                         code: "E0302".into(),
                         message: format!("cannot import '{name}' from module '{module_name}'"),
                         span: statement_span(statement),
+                        related: Arc::from([]),
+                        fix: None,
                     });
                 }
             }
@@ -11836,6 +11874,25 @@ mod tests {
         assert_eq!(diagnostics[0].code, "E0200");
         assert_eq!(diagnostics[0].severity, Severity::Error);
         assert!(diagnostics[0].span.end > diagnostics[0].span.start);
+    }
+
+    #[test]
+    fn duplicate_declaration_diagnostics_carry_related_span() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value = 1\nvalue = 2\n");
+        let diagnostics = file_diagnostics(&db, file);
+        let duplicate = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0100")
+            .expect("duplicate declaration diagnostic");
+        assert_eq!(duplicate.related.len(), 1);
+        assert_eq!(duplicate.related[0].file, file);
+        assert_eq!(duplicate.related[0].message, "previous declaration is here");
+        assert_eq!(
+            span_text(&db, file, duplicate.related[0].span).as_ref(),
+            "value"
+        );
+        assert_eq!(duplicate.fix, None);
     }
 
     #[test]

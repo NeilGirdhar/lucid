@@ -367,6 +367,38 @@ fn emit_database_diagnostics(
             diagnostic_underline_prefix(line.as_ref(), column),
             "^".repeat(underline_len)
         );
+        for related in diagnostic.related.iter() {
+            eprintln!(
+                "  = {}:{}:{}: {}",
+                related.file.path(database),
+                related.span.line,
+                related.span.column,
+                related.message
+            );
+            let related_line =
+                lucid_db::source_line(database, related.file, related.span.line as u32);
+            if related_line.is_empty() {
+                continue;
+            }
+            eprintln!("    {}", related_line);
+            let related_column = related.span.column.max(1);
+            let (related_end_line, related_end_column) =
+                *lucid_db::source_position(database, related.file, related.span.end as u32);
+            let related_underline_len = if related_end_line == related.span.line as u32
+                && related_end_column > related_column as u32
+            {
+                related_end_column
+                    .saturating_sub(related_column as u32)
+                    .max(1) as usize
+            } else {
+                1
+            };
+            eprintln!(
+                "    {}{}",
+                diagnostic_underline_prefix(related_line.as_ref(), related_column),
+                "-".repeat(related_underline_len)
+            );
+        }
     }
 }
 

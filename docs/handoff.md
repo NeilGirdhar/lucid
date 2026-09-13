@@ -1651,7 +1651,10 @@ diverged:
 * Duplicate top-level declarations now produce explicit project diagnostics
   instead of collapsing to one symbol index entry.
 * Structured per-file diagnostics now carry severity, stable error codes,
-  source-file identity, messages, and spans through a Salsa query.
+  source-file identity, messages, primary spans, labelled related spans, and
+  optional machine-readable fixes through a Salsa query.
+  Duplicate top-level declarations now use the related-span channel to point
+  at the previous declaration.
 * Lexical parse diagnostics now recover their source range from the lossless
   CST instead of reporting a zero-length placeholder span.
 * Project diagnostics now consume those structured file diagnostics, including
