@@ -13374,6 +13374,15 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5, 3, 1]), Ok(Some(-3)));
 
         let file = db.add_file(
+            "counted-while-unused-constant-setup.lucid",
+            "def sum_down(n: int):\n    unused = 1 + 2\n    total = 0\n    while n > 0:\n        total += n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "sum_down".into())
+            .as_ref()
+            .expect("unused constant setup should not block counted while accumulation");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let file = db.add_file(
             "counted-while-conditional-elif-accumulate.lucid",
             "def tiered_sum(n: int, high: int, low: int):\n    total = 0\n    while n > 0:\n        if n > high:\n            total += n\n        elif n > low:\n            total += 1\n        else:\n            total -= n\n        n -= 1\n    return total\n",
         );

@@ -4951,6 +4951,11 @@ impl Function {
                 true,
             )
         }
+        fn discardable_unused_alias(statement: &lucid_syntax::Stmt) -> bool {
+            initialized_ident(statement)
+                .and_then(|(_, expr)| Function::const_int_expr(expr))
+                .is_some()
+        }
         let statements = module.statements.as_slice();
         let (
             acc_name,
@@ -5771,7 +5776,7 @@ impl Function {
         let used_elif_acc_alias = elif_accumulator_update
             .as_ref()
             .is_some_and(|(_, _, used_alias)| *used_alias);
-        if alias_initial.is_some()
+        if alias_initial.is_some_and(|statement| !discardable_unused_alias(statement))
             && !used_acc_alias
             && !used_else_acc_alias
             && !used_elif_acc_alias
@@ -14101,6 +14106,20 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "seed".into()])
                 .expect("parameter-seeded while accumulator should lower");
         assert_eq!(function.execute_with_args(&[3, 7]), Ok(Some(13)));
+
+        let module = lucid_syntax::parse(
+            r#"unused = 1 + 2
+total = 0
+while n > 0:
+    total += n
+    n -= 1
+return total
+"#,
+        )
+        .expect("unused setup alias while accumulator fixture should parse");
+        let function = Function::from_module_linear_with_params(&module, &["n".into()])
+            .expect("unused constant setup alias should not block while accumulator lowering");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
 
         let module = lucid_syntax::parse(
             r#"total = 1 + 2

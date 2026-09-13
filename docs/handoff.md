@@ -627,8 +627,9 @@ diverged:
   `run-cir`, and native result ABI. The native result ABI now carries a hidden
   error-status Phi through CFG blocks, so the first recoverable arithmetic
   error is preserved across branches and loop back-edges instead of being
-  limited to one block. An unused pre-loop alias is still rejected instead of
-  being treated as loop setup.
+  limited to one block. A dead constant pre-loop alias no longer blocks
+  counted accumulator lowering; potentially effectful or recoverable unused
+  setup still stays out of this discard path.
   Parameter-counted `while` loops also support one loop-carried accumulator
   initialized from a checked constant integer expression or parameter, then
   updated before the induction update. Plain counted loops and accumulator
