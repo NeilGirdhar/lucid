@@ -8462,6 +8462,73 @@ impl Function {
                     instructions.push(Instruction::ConstInt { result: id, value });
                     Ok(id)
                 }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "sum"
+                    ) && (args.len() == 1 || args.len() == 2) =>
+                {
+                    let mut total = if let Some(start) = args.get(1) {
+                        let value = lower(
+                            &start.value,
+                            bindings,
+                            aggregate_bindings,
+                            instructions,
+                            next,
+                        )?;
+                        constant_int(value, instructions)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                    } else {
+                        0
+                    };
+                    let mut add_value =
+                        |value: ValueId, instructions: &[Instruction]| -> Result<(), LowerError> {
+                            let value = constant_int(value, instructions)
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            total = total
+                                .checked_add(value)
+                                .ok_or(LowerError::UnsupportedExpression)?;
+                            Ok(())
+                        };
+                    match &args[0].value {
+                        lucid_syntax::Expr::List { elements, .. }
+                        | lucid_syntax::Expr::Set { elements, .. } => {
+                            for element in elements {
+                                let value = lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                                add_value(value, instructions)?;
+                            }
+                        }
+                        lucid_syntax::Expr::Ident { name, .. } => {
+                            match aggregate_bindings
+                                .get(name)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                            {
+                                AggregateBinding::List(elements)
+                                | AggregateBinding::Set(elements) => {
+                                    for value in elements {
+                                        add_value(*value, instructions)?;
+                                    }
+                                }
+                                AggregateBinding::Dict(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                            }
+                        }
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    }
+                    let id = result(next);
+                    instructions.push(Instruction::ConstInt {
+                        result: id,
+                        value: total,
+                    });
+                    Ok(id)
+                }
                 lucid_syntax::Expr::Index { value, index, .. } => {
                     let index_value =
                         lower(index, bindings, aggregate_bindings, instructions, next)?;
@@ -19585,6 +19652,9 @@ return total
             ("return min(40, 42, 41)\n", 40),
             ("return max(40, 42, 41)\n", 42),
             ("base = 40\nreturn max(abs(-base), min(42, base + 1))\n", 41),
+            ("return sum([10, 20, 12])\n", 42),
+            ("values = [10, 20, 12]\nreturn sum(values, 1)\n", 43),
+            ("values = {10, 20, 12}\nreturn sum(values)\n", 42),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();
