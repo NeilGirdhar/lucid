@@ -4442,6 +4442,43 @@ impl TypeChecker {
         })
     }
 
+    fn builtin_collection_method_type(
+        &self,
+        class_name: &str,
+        type_args: &[Type],
+        attr: &str,
+    ) -> Option<Type> {
+        match (class_name, attr, type_args.len()) {
+            ("dict" | "frozendict", "update" | "clear", 2) => {
+                Some(Type::Function {
+                    params: if attr == "update" {
+                        vec![Type::TypeVar("Any".into())]
+                    } else {
+                        Vec::new()
+                    },
+                    return_type: Box::new(Type::None),
+                })
+            }
+            ("list", "extend" | "clear", _) => {
+                Some(Type::Function {
+                    params: if attr == "extend" {
+                        vec![Type::TypeVar("Any".into())]
+                    } else {
+                        Vec::new()
+                    },
+                    return_type: Box::new(Type::None),
+                })
+            }
+            ("set" | "frozenset", "clear", _) => {
+                Some(Type::Function {
+                    params: Vec::new(),
+                    return_type: Box::new(Type::None),
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn class_method_type(&self, class_name: &str, name: &str) -> Option<Type> {
         if let Some(method) = self
             .env
@@ -4748,6 +4785,48 @@ impl TypeChecker {
                 Ok(Some(Type::Bool))
             }
             ("dict", "clear", [_, _]) => Ok(Some(Type::None)),
+            ("dict", "update", [key_type, value_type]) => {
+                if let Some(argument) = args.first().filter(|argument| {
+                    !argument.is_spread && !argument.is_dict_spread && !argument.is_gather_spread
+                }) {
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if !self.is_iterable_type(&argument_type) {
+                        return Err(TypeError {
+                            message: format!(
+                                "dict.update() argument must be iterable, got {:?}",
+                                argument_type
+                            ),
+                            span: argument.value.span(),
+                        });
+                    }
+                    // Validate that iterable yields key-value pairs matching our dict types
+                    if let Some((k, v)) = self.iterable_pair_element_types(&argument_type) {
+                        if !matches!(key_type, Type::Never)
+                            && !k.is_subtype_of(key_type, &self.env)
+                        {
+                            return Err(TypeError {
+                                message: format!(
+                                    "dict.update() key type {:?} does not match expected {:?}",
+                                    k, key_type
+                                ),
+                                span: argument.value.span(),
+                            });
+                        }
+                        if !matches!(value_type, Type::Never)
+                            && !v.is_subtype_of(value_type, &self.env)
+                        {
+                            return Err(TypeError {
+                                message: format!(
+                                    "dict.update() value type {:?} does not match expected {:?}",
+                                    v, value_type
+                                ),
+                                span: argument.value.span(),
+                            });
+                        }
+                    }
+                }
+                Ok(Some(Type::None))
+            }
             _ => Ok(None),
         }
     }
@@ -11402,6 +11481,10 @@ impl TypeChecker {
                             self.builtin_dict_view_method_type(name, type_args, attr)
                         {
                             Ok(method_type)
+                        } else if let Some(method_type) =
+                            self.builtin_collection_method_type(name, type_args, attr)
+                        {
+                            Ok(method_type)
                         } else if let Some(getter_type) = self.class_getter_type(name, attr) {
                             Ok(getter_type)
                         } else if let Some(field_type) = self.class_field_type(name, attr) {
@@ -14155,6 +14238,18 @@ class Child(Base):
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_ok(), "tuple[int, int] should accept record literal (1, 2): {:?}", result);
+    }
+
+    #[test]
+    fn dict_update_and_clear_methods_are_recognized() {
+        let code = r#"d = {"a": 1}
+d.update({"b": 2})
+d.clear()
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "dict.update and dict.clear should be recognized: {:?}", result);
     }
 
     #[test]
