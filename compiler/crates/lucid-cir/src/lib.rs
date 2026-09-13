@@ -8355,12 +8355,18 @@ impl Function {
             StringRecord(Vec<String>),
             FloatRecord(Vec<f64>),
             SingletonRecord(Vec<SingletonBinding>),
+            MixedRecord(Vec<AggregateElement>),
             String(String),
             Bytes(Vec<u8>),
             Range(Vec<i64>),
             Float(f64),
             None,
             Ellipsis,
+        }
+        #[derive(Clone)]
+        enum AggregateElement {
+            Value(ValueId),
+            Aggregate(AggregateBinding),
         }
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
         enum SingletonBinding {
@@ -8411,6 +8417,20 @@ impl Function {
             let index = usize::try_from(index).ok()?;
             (index < usize::try_from(len).ok()?).then_some(index)
         }
+        fn mixed_record_element<'a>(
+            value: &lucid_syntax::Expr,
+            index: &lucid_syntax::Expr,
+            aggregate_bindings: &'a HashMap<String, AggregateBinding>,
+        ) -> Option<&'a AggregateElement> {
+            let lucid_syntax::Expr::Ident { name, .. } = value else {
+                return None;
+            };
+            let AggregateBinding::MixedRecord(elements) = aggregate_bindings.get(name)? else {
+                return None;
+            };
+            let selected = select_constant_index(elements.len(), constant_index(index)?)?;
+            elements.get(selected)
+        }
         fn constant_string(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -8425,7 +8445,11 @@ impl Function {
                     _ => None,
                 },
                 lucid_syntax::Expr::Index { value, index, .. } => {
-                    if let Some(value) = constant_string(value, aggregate_bindings) {
+                    if let Some(AggregateElement::Aggregate(AggregateBinding::String(value))) =
+                        mixed_record_element(value, index, aggregate_bindings)
+                    {
+                        Some(value.clone())
+                    } else if let Some(value) = constant_string(value, aggregate_bindings) {
                         let selected =
                             select_constant_index(value.chars().count(), constant_index(index)?)?;
                         value.chars().nth(selected).map(|ch| ch.to_string())
@@ -9012,7 +9036,11 @@ impl Function {
                     _ => None,
                 },
                 lucid_syntax::Expr::Index { value, index, .. } => {
-                    if let Some(values) = constant_float_list(value, aggregate_bindings) {
+                    if let Some(AggregateElement::Aggregate(AggregateBinding::Float(value))) =
+                        mixed_record_element(value, index, aggregate_bindings)
+                    {
+                        Some(*value)
+                    } else if let Some(values) = constant_float_list(value, aggregate_bindings) {
                         let selected = select_constant_index(values.len(), constant_index(index)?)?;
                         values.get(selected).copied()
                     } else if let Some(values) = constant_float_record(value, aggregate_bindings) {
@@ -9306,7 +9334,21 @@ impl Function {
                     _ => None,
                 },
                 lucid_syntax::Expr::Index { value, index, .. } => {
-                    if let Some(values) = constant_singleton_list(value, aggregate_bindings) {
+                    if let Some(AggregateElement::Aggregate(
+                        AggregateBinding::None | AggregateBinding::Ellipsis,
+                    )) = mixed_record_element(value, index, aggregate_bindings)
+                    {
+                        match mixed_record_element(value, index, aggregate_bindings)? {
+                            AggregateElement::Aggregate(AggregateBinding::None) => {
+                                Some(SingletonBinding::None)
+                            }
+                            AggregateElement::Aggregate(AggregateBinding::Ellipsis) => {
+                                Some(SingletonBinding::Ellipsis)
+                            }
+                            _ => None,
+                        }
+                    } else if let Some(values) = constant_singleton_list(value, aggregate_bindings)
+                    {
                         let selected = select_constant_index(values.len(), constant_index(index)?)?;
                         values.get(selected).copied()
                     } else if let Some(values) =
@@ -9710,6 +9752,7 @@ impl Function {
                             AggregateBinding::SingletonIntDict(entries) => entries.len(),
                             AggregateBinding::SingletonFloatDict(entries) => entries.len(),
                             AggregateBinding::Record(elements) => elements.len(),
+                            AggregateBinding::MixedRecord(elements) => elements.len(),
                             AggregateBinding::StringRecord(_)
                             | AggregateBinding::FloatRecord(_)
                             | AggregateBinding::SingletonRecord(_) => {
@@ -9873,6 +9916,7 @@ impl Function {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                             AggregateBinding::Record(elements) => !elements.is_empty(),
+                            AggregateBinding::MixedRecord(elements) => !elements.is_empty(),
                             AggregateBinding::StringRecord(_) => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
@@ -10261,6 +10305,9 @@ impl Function {
                                 AggregateBinding::SingletonRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::MixedRecord(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
@@ -10446,6 +10493,9 @@ impl Function {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::SingletonRecord(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::MixedRecord(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::String(_) => {
@@ -10649,6 +10699,19 @@ impl Function {
                                 }
                                 AggregateBinding::SingletonRecord(_) => {
                                     Err(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::MixedRecord(elements) => {
+                                    let selected = select_sequence(elements.len())
+                                        .ok_or(LowerError::UnsupportedExpression)?;
+                                    match elements
+                                        .get(selected)
+                                        .ok_or(LowerError::UnsupportedExpression)?
+                                    {
+                                        AggregateElement::Value(value) => Ok(*value),
+                                        AggregateElement::Aggregate(_) => {
+                                            Err(LowerError::UnsupportedExpression)
+                                        }
+                                    }
                                 }
                                 AggregateBinding::Dict(entries) => {
                                     select_mapping(entries, instructions)
@@ -11381,6 +11444,9 @@ impl Function {
                                         contains |= contains_value(*value, instructions)?;
                                     }
                                 }
+                                AggregateBinding::MixedRecord(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::String(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
@@ -12045,6 +12111,16 @@ impl Function {
                 SingletonBinding::Ellipsis => AggregateBinding::Ellipsis,
             }
         }
+        fn int_record_element(
+            value: i64,
+            instructions: &mut Vec<Instruction>,
+            next: &mut u32,
+        ) -> AggregateElement {
+            AggregateElement::Value(push_const_int(value, instructions, next))
+        }
+        fn aggregate_record_element(aggregate: AggregateBinding) -> AggregateElement {
+            AggregateElement::Aggregate(aggregate)
+        }
         fn aggregate_dict_view_loop_values(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -12104,6 +12180,15 @@ impl Function {
                         AggregateLoopValue::Value(push_const_int(*value, instructions, next))
                     })
                     .collect(),
+                ("items", AggregateBinding::StringIntDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(AggregateBinding::String(key.clone())),
+                            int_record_element(*value, instructions, next),
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::StringFloatDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| {
@@ -12116,6 +12201,15 @@ impl Function {
                         AggregateLoopValue::Aggregate(AggregateBinding::Float(*value))
                     })
                     .collect(),
+                ("items", AggregateBinding::StringFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(AggregateBinding::String(key.clone())),
+                            aggregate_record_element(AggregateBinding::Float(*value)),
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::StringSingletonDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| {
@@ -12125,6 +12219,15 @@ impl Function {
                 ("values", AggregateBinding::StringSingletonDict(entries)) => entries
                     .iter()
                     .map(|(_, value)| AggregateLoopValue::Aggregate(singleton_aggregate(*value)))
+                    .collect(),
+                ("items", AggregateBinding::StringSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(AggregateBinding::String(key.clone())),
+                            aggregate_record_element(singleton_aggregate(*value)),
+                        ]))
+                    })
                     .collect(),
                 ("keys", AggregateBinding::IntStringDict(entries)) => entries
                     .iter()
@@ -12136,6 +12239,15 @@ impl Function {
                     .iter()
                     .map(|(_, value)| {
                         AggregateLoopValue::Aggregate(AggregateBinding::String(value.clone()))
+                    })
+                    .collect(),
+                ("items", AggregateBinding::IntStringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            int_record_element(*key, instructions, next),
+                            aggregate_record_element(AggregateBinding::String(value.clone())),
+                        ]))
                     })
                     .collect(),
                 ("keys", AggregateBinding::IntFloatDict(entries)) => entries
@@ -12150,6 +12262,15 @@ impl Function {
                         AggregateLoopValue::Aggregate(AggregateBinding::Float(*value))
                     })
                     .collect(),
+                ("items", AggregateBinding::IntFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            int_record_element(*key, instructions, next),
+                            aggregate_record_element(AggregateBinding::Float(*value)),
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::IntSingletonDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| {
@@ -12159,6 +12280,15 @@ impl Function {
                 ("values", AggregateBinding::IntSingletonDict(entries)) => entries
                     .iter()
                     .map(|(_, value)| AggregateLoopValue::Aggregate(singleton_aggregate(*value)))
+                    .collect(),
+                ("items", AggregateBinding::IntSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            int_record_element(*key, instructions, next),
+                            aggregate_record_element(singleton_aggregate(*value)),
+                        ]))
+                    })
                     .collect(),
                 ("keys", AggregateBinding::FloatDict(entries)) => entries
                     .iter()
@@ -12188,6 +12318,15 @@ impl Function {
                         AggregateLoopValue::Value(push_const_int(*value, instructions, next))
                     })
                     .collect(),
+                ("items", AggregateBinding::FloatIntDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(AggregateBinding::Float(*key)),
+                            int_record_element(*value, instructions, next),
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::FloatStringDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| AggregateLoopValue::Aggregate(AggregateBinding::Float(*key)))
@@ -12198,6 +12337,15 @@ impl Function {
                         AggregateLoopValue::Aggregate(AggregateBinding::String(value.clone()))
                     })
                     .collect(),
+                ("items", AggregateBinding::FloatStringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(AggregateBinding::Float(*key)),
+                            aggregate_record_element(AggregateBinding::String(value.clone())),
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::FloatSingletonDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| AggregateLoopValue::Aggregate(AggregateBinding::Float(*key)))
@@ -12205,6 +12353,15 @@ impl Function {
                 ("values", AggregateBinding::FloatSingletonDict(entries)) => entries
                     .iter()
                     .map(|(_, value)| AggregateLoopValue::Aggregate(singleton_aggregate(*value)))
+                    .collect(),
+                ("items", AggregateBinding::FloatSingletonDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(AggregateBinding::Float(*key)),
+                            aggregate_record_element(singleton_aggregate(*value)),
+                        ]))
+                    })
                     .collect(),
                 ("keys", AggregateBinding::SingletonDict(entries)) => entries
                     .iter()
@@ -12232,6 +12389,15 @@ impl Function {
                         AggregateLoopValue::Aggregate(AggregateBinding::String(value.clone()))
                     })
                     .collect(),
+                ("items", AggregateBinding::SingletonStringDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(singleton_aggregate(*key)),
+                            aggregate_record_element(AggregateBinding::String(value.clone())),
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::SingletonIntDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| AggregateLoopValue::Aggregate(singleton_aggregate(*key)))
@@ -12242,6 +12408,15 @@ impl Function {
                         AggregateLoopValue::Value(push_const_int(*value, instructions, next))
                     })
                     .collect(),
+                ("items", AggregateBinding::SingletonIntDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(singleton_aggregate(*key)),
+                            int_record_element(*value, instructions, next),
+                        ]))
+                    })
+                    .collect(),
                 ("keys", AggregateBinding::SingletonFloatDict(entries)) => entries
                     .iter()
                     .map(|(key, _)| AggregateLoopValue::Aggregate(singleton_aggregate(*key)))
@@ -12250,6 +12425,15 @@ impl Function {
                     .iter()
                     .map(|(_, value)| {
                         AggregateLoopValue::Aggregate(AggregateBinding::Float(*value))
+                    })
+                    .collect(),
+                ("items", AggregateBinding::SingletonFloatDict(entries)) => entries
+                    .iter()
+                    .map(|(key, value)| {
+                        AggregateLoopValue::Aggregate(AggregateBinding::MixedRecord(vec![
+                            aggregate_record_element(singleton_aggregate(*key)),
+                            aggregate_record_element(AggregateBinding::Float(*value)),
+                        ]))
                     })
                     .collect(),
                 _ => return None,
@@ -12607,6 +12791,7 @@ impl Function {
                     | AggregateBinding::StringRecord(_)
                     | AggregateBinding::FloatRecord(_)
                     | AggregateBinding::SingletonRecord(_)
+                    | AggregateBinding::MixedRecord(_)
                     | AggregateBinding::String(_)
                     | AggregateBinding::Bytes(_)
                     | AggregateBinding::Range(_)
@@ -12641,6 +12826,7 @@ impl Function {
                     | AggregateBinding::StringRecord(_)
                     | AggregateBinding::FloatRecord(_)
                     | AggregateBinding::SingletonRecord(_)
+                    | AggregateBinding::MixedRecord(_)
                     | AggregateBinding::String(_)
                     | AggregateBinding::Bytes(_)
                     | AggregateBinding::Range(_)
@@ -12685,6 +12871,7 @@ impl Function {
                         AggregateBinding::SingletonIntDict(_) => None,
                         AggregateBinding::SingletonFloatDict(_) => None,
                         AggregateBinding::Record(elements) => Some(!elements.is_empty()),
+                        AggregateBinding::MixedRecord(elements) => Some(!elements.is_empty()),
                         AggregateBinding::StringRecord(_) => None,
                         AggregateBinding::FloatRecord(_) => None,
                         AggregateBinding::SingletonRecord(_) => None,
@@ -24181,6 +24368,26 @@ return total
                 .expect("bound float dictionary item views should iterate key-value records")
                 .execute(),
             Ok(Some(2))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\npairs = {\"a\": 10, \"bc\": 20}\nfor item in pairs.items():\n    value = value + len(item[0]) + item[1]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound string-int dictionary item views should iterate mixed records")
+                .execute(),
+            Ok(Some(33))
+        );
+        let module = lucid_syntax::parse(
+            "value = 0\npairs = {1: \"a\", 2: \"bc\"}\nfor item in pairs.items():\n    value = value + item[0] + len(item[1])\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Function::from_module(&module)
+                .expect("bound int-string dictionary item views should iterate mixed records")
+                .execute(),
+            Ok(Some(6))
         );
         let module = lucid_syntax::parse(
             "value = 0\nfor item in {1: \"a\", 2: \"bc\"}.values():\n    value = value + len(item)\n",
