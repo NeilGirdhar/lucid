@@ -1783,6 +1783,45 @@ impl Function {
                                     literal_values: None,
                                 }));
                             }
+                            if matches!(inner_shape.kind, "dict")
+                                && nodes
+                                    .get(inner_shape.source_id as usize)
+                                    .is_some_and(|source| source.kind == "dict")
+                                && matches!(kind, "list" | "set" | "reversed" | "sorted")
+                            {
+                                let mut positions = inner_shape.member_positions.clone();
+                                if kind == "reversed" {
+                                    positions.reverse();
+                                } else if kind == "sorted" {
+                                    positions.sort_by_key(|position| {
+                                        typed_shape_literal_order(
+                                            &inner_shape,
+                                            *position,
+                                            nodes,
+                                            parameter_names,
+                                            local_bindings,
+                                        )
+                                    });
+                                    if positions.iter().any(|position| {
+                                        typed_shape_literal_order(
+                                            &inner_shape,
+                                            *position,
+                                            nodes,
+                                            parameter_names,
+                                            local_bindings,
+                                        )
+                                        .is_none()
+                                    }) {
+                                        return Ok(None);
+                                    }
+                                }
+                                return Ok(Some(TypedAggregateShape {
+                                    kind: if kind == "set" { "set" } else { "list" },
+                                    source_id: inner_shape.source_id,
+                                    member_positions: positions,
+                                    literal_values: None,
+                                }));
+                            }
                             return Ok(match (kind, inner_shape.kind) {
                                 ("list", "list" | "record") => Some(TypedAggregateShape {
                                     kind: "list",
@@ -1919,6 +1958,30 @@ impl Function {
                                     member_positions: (0..operand.children.len())
                                         .step_by(2)
                                         .collect(),
+                                    literal_values: None,
+                                })
+                            }
+                            "dict"
+                                if matches!(kind, "list" | "set" | "reversed" | "sorted")
+                                    && operand.children.len() % 2 == 0 =>
+                            {
+                                let mut positions =
+                                    (0..operand.children.len()).step_by(2).collect::<Vec<_>>();
+                                if kind == "reversed" {
+                                    positions.reverse();
+                                } else if kind == "sorted" {
+                                    positions.sort_by_key(|position| literal_order(*position));
+                                    if positions
+                                        .iter()
+                                        .any(|position| literal_order(*position).is_none())
+                                    {
+                                        return Ok(None);
+                                    }
+                                }
+                                Some(TypedAggregateShape {
+                                    kind: if kind == "set" { "set" } else { "list" },
+                                    source_id: operand_id,
+                                    member_positions: positions,
                                     literal_values: None,
                                 })
                             }
@@ -29180,6 +29243,183 @@ return total
         let function = Function::from_typed_function_body(&nodes, 20, &[])
             .expect("typed dict constructor should flatten iterable pairs");
         assert_eq!(function.execute(), Ok(Some(33)));
+    }
+
+    #[test]
+    fn lowers_typed_dict_key_iterable_constructors() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("list".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("set".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("sorted".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("reversed".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("len".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![5, 6, 7, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "index".into(),
+                detail: None,
+                children: vec![10, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![7, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "index".into(),
+                detail: None,
+                children: vec![15, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "call".into(),
+                detail: None,
+                children: vec![3, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "index".into(),
+                detail: None,
+                children: vec![17, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 19,
+                kind: "call".into(),
+                detail: None,
+                children: vec![4, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 20,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![12, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 21,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![20, 16],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 22,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![21, 18],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 23,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![22, 19],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 23, &[])
+            .expect("typed dict iterable constructors should expose keys");
+        assert_eq!(function.execute(), Ok(Some(7)));
     }
 
     #[test]
