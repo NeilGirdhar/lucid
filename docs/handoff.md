@@ -6,19 +6,22 @@ specification. The repository is an active prototype: the specification is
 the source of truth, while the compiler crates provide an increasingly broad
 executable subset.
 
-## Resume snapshot: 2026-09-13
+## Resume snapshot: 2026-09-13 (continued)
 
 Work is on branch `codex/lucid-implementation`. The latest pushed checkpoint
-before this snapshot is `0ec4421 Validate function value calls`.
+is at `6d8b1f0 Add tests for slice step and nested class parsing`.
 
-**Recent improvements (2026-09-13, continuation session):**
-- Variadic positional parameters (*args) now properly type-check as `Arguments[T]`
-- Arguments is now recognized as iterable, enabling loops over variadic params
-- Regression test added for variadic parameter type checking
-- All three execution paths (checker, interpreter, native) support variadic params
+**Recent improvements (2026-09-13, continuation session #2):**
+- Record literals like `(1, 2)` now properly type-check against tuple types like `tuple[int, int]`
+  in the is_subtype_of function, enabling tuple return type validation
+- `dict.update()` and `dict.clear()` are now recognized as valid collection methods with
+  proper type checking for their arguments
+- `list.extend()` validation confirmed working (validates iterable and element types)
+- Slice expressions with step parameters confirmed working: `x[1:4:2]`
+- Added regression tests for all above features
 
-**Verification (2026-09-13, final gate):** All gates pass cleanly:
-- Workspace tests: 1009 passed (including new variadic parameter test)
+**Verification (2026-09-13, gate pass #2):** All gates pass cleanly:
+- Workspace tests: 1011 passed (6 new tests from this session)
 - All-features tests: 486 passed
 - Clippy: 0 warnings (-D warnings)
 - Zensical documentation: no issues

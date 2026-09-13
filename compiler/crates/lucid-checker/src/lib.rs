@@ -489,12 +489,9 @@ impl Type {
                     return false;
                 }
                 // Each element type must match
-                return source
-                    .iter()
-                    .zip(tuple_elements.iter())
-                    .all(|((_, source_type), target_type)| {
-                        source_type.is_subtype_of(target_type, env)
-                    });
+                return source.iter().zip(tuple_elements.iter()).all(
+                    |((_, source_type), target_type)| source_type.is_subtype_of(target_type, env),
+                );
             }
         }
         if let (
@@ -4449,32 +4446,26 @@ impl TypeChecker {
         attr: &str,
     ) -> Option<Type> {
         match (class_name, attr, type_args.len()) {
-            ("dict" | "frozendict", "update" | "clear", 2) => {
-                Some(Type::Function {
-                    params: if attr == "update" {
-                        vec![Type::TypeVar("Any".into())]
-                    } else {
-                        Vec::new()
-                    },
-                    return_type: Box::new(Type::None),
-                })
-            }
-            ("list", "extend" | "clear", _) => {
-                Some(Type::Function {
-                    params: if attr == "extend" {
-                        vec![Type::TypeVar("Any".into())]
-                    } else {
-                        Vec::new()
-                    },
-                    return_type: Box::new(Type::None),
-                })
-            }
-            ("set" | "frozenset", "clear", _) => {
-                Some(Type::Function {
-                    params: Vec::new(),
-                    return_type: Box::new(Type::None),
-                })
-            }
+            ("dict" | "frozendict", "update" | "clear", 2) => Some(Type::Function {
+                params: if attr == "update" {
+                    vec![Type::TypeVar("Any".into())]
+                } else {
+                    Vec::new()
+                },
+                return_type: Box::new(Type::None),
+            }),
+            ("list", "extend" | "clear", _) => Some(Type::Function {
+                params: if attr == "extend" {
+                    vec![Type::TypeVar("Any".into())]
+                } else {
+                    Vec::new()
+                },
+                return_type: Box::new(Type::None),
+            }),
+            ("set" | "frozenset", "clear", _) => Some(Type::Function {
+                params: Vec::new(),
+                return_type: Box::new(Type::None),
+            }),
             _ => None,
         }
     }
@@ -4801,8 +4792,7 @@ impl TypeChecker {
                     }
                     // Validate that iterable yields key-value pairs matching our dict types
                     if let Some((k, v)) = self.iterable_pair_element_types(&argument_type) {
-                        if !matches!(key_type, Type::Never)
-                            && !k.is_subtype_of(key_type, &self.env)
+                        if !matches!(key_type, Type::Never) && !k.is_subtype_of(key_type, &self.env)
                         {
                             return Err(TypeError {
                                 message: format!(
@@ -14237,7 +14227,11 @@ class Child(Base):
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
-        assert!(result.is_ok(), "tuple[int, int] should accept record literal (1, 2): {:?}", result);
+        assert!(
+            result.is_ok(),
+            "tuple[int, int] should accept record literal (1, 2): {:?}",
+            result
+        );
     }
 
     #[test]
@@ -14249,7 +14243,11 @@ d.clear()
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
-        assert!(result.is_ok(), "dict.update and dict.clear should be recognized: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "dict.update and dict.clear should be recognized: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -14260,7 +14258,11 @@ xs.extend([3, 4])
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
-        assert!(result.is_ok(), "list.extend with matching element types should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "list.extend with matching element types should succeed: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -14271,7 +14273,11 @@ xs.extend(["bad"])
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
-        assert!(result.is_err(), "list.extend with mismatched element types should fail: {:?}", result);
+        assert!(
+            result.is_err(),
+            "list.extend with mismatched element types should fail: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -14280,7 +14286,11 @@ xs.extend(["bad"])
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
-        assert!(result.is_ok(), "slice with step should be valid: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "slice with step should be valid: {:?}",
+            result
+        );
     }
 
     #[test]
