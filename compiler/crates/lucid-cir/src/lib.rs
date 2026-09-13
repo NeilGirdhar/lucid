@@ -8321,6 +8321,13 @@ impl Function {
             Bytes(Vec<u8>),
             Range(Vec<i64>),
             Float(f64),
+            None,
+            Ellipsis,
+        }
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum SingletonBinding {
+            None,
+            Ellipsis,
         }
         let mut instructions = Vec::new();
         let mut bindings = HashMap::<String, ValueId>::new();
@@ -8376,6 +8383,27 @@ impl Function {
                     expr,
                     ..
                 } => Some(-constant_float(expr, aggregate_bindings)?),
+                _ => None,
+            }
+        }
+        fn constant_singleton(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<SingletonBinding> {
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::None,
+                    ..
+                } => Some(SingletonBinding::None),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Ellipsis,
+                    ..
+                } => Some(SingletonBinding::Ellipsis),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::None => Some(SingletonBinding::None),
+                    AggregateBinding::Ellipsis => Some(SingletonBinding::Ellipsis),
+                    _ => None,
+                },
                 _ => None,
             }
         }
@@ -8463,6 +8491,9 @@ impl Function {
                             }
                             AggregateBinding::Range(values) => values.len(),
                             AggregateBinding::Float(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
+                            AggregateBinding::None | AggregateBinding::Ellipsis => {
                                 return Err(LowerError::UnsupportedExpression);
                             }
                         },
@@ -8555,6 +8586,10 @@ impl Function {
                             value: lucid_syntax::LiteralValue::None,
                             ..
                         } => false,
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Ellipsis,
+                            ..
+                        } => true,
                         lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings
                             .get(name)
                             .ok_or(LowerError::UnsupportedExpression)?
@@ -8567,6 +8602,8 @@ impl Function {
                             AggregateBinding::Bytes(value) => !value.is_empty(),
                             AggregateBinding::Range(values) => !values.is_empty(),
                             AggregateBinding::Float(value) => *value != 0.0,
+                            AggregateBinding::None => false,
+                            AggregateBinding::Ellipsis => true,
                         },
                         expr if constant_float(expr, aggregate_bindings).is_some() => {
                             constant_float(expr, aggregate_bindings)
@@ -8752,6 +8789,9 @@ impl Function {
                                 AggregateBinding::Float(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::None | AggregateBinding::Ellipsis => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                             }
                         }
                         _ => return Err(LowerError::UnsupportedExpression),
@@ -8833,6 +8873,9 @@ impl Function {
                                     }
                                 }
                                 AggregateBinding::Float(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::None | AggregateBinding::Ellipsis => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                             }
@@ -8959,6 +9002,9 @@ impl Function {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::Float(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
+                                AggregateBinding::None | AggregateBinding::Ellipsis => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
                             }
@@ -9151,27 +9197,20 @@ impl Function {
                         | lucid_syntax::BinaryOp::NotIdentity
                         | lucid_syntax::BinaryOp::Is
                         | lucid_syntax::BinaryOp::IsNot
-                ) && matches!(
-                    (left.as_ref(), right.as_ref()),
-                    (
-                        lucid_syntax::Expr::Literal {
-                            value: lucid_syntax::LiteralValue::None,
-                            ..
-                        },
-                        lucid_syntax::Expr::Literal {
-                            value: lucid_syntax::LiteralValue::None,
-                            ..
-                        }
-                    )
-                ) =>
+                ) && constant_singleton(left, aggregate_bindings).is_some()
+                    && constant_singleton(right, aggregate_bindings).is_some() =>
                 {
+                    let equal = constant_singleton(left, aggregate_bindings)
+                        .ok_or(LowerError::UnsupportedExpression)?
+                        == constant_singleton(right, aggregate_bindings)
+                            .ok_or(LowerError::UnsupportedExpression)?;
                     let value = match op {
                         lucid_syntax::BinaryOp::Eq
                         | lucid_syntax::BinaryOp::Identity
-                        | lucid_syntax::BinaryOp::Is => true,
+                        | lucid_syntax::BinaryOp::Is => equal,
                         lucid_syntax::BinaryOp::NotEq
                         | lucid_syntax::BinaryOp::NotIdentity
-                        | lucid_syntax::BinaryOp::IsNot => false,
+                        | lucid_syntax::BinaryOp::IsNot => !equal,
                         _ => unreachable!(),
                     };
                     let id = result(next);
@@ -9266,6 +9305,9 @@ impl Function {
                                     contains = values.contains(&needle);
                                 }
                                 AggregateBinding::Float(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::None | AggregateBinding::Ellipsis => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                             }
@@ -9877,6 +9919,8 @@ impl Function {
                         AggregateBinding::Bytes(value) => Some(!value.is_empty()),
                         AggregateBinding::Range(values) => Some(!values.is_empty()),
                         AggregateBinding::Float(value) => Some(*value != 0.0),
+                        AggregateBinding::None => Some(false),
+                        AggregateBinding::Ellipsis => Some(true),
                     },
                 },
                 lucid_syntax::Expr::Unary {
@@ -10050,6 +10094,14 @@ impl Function {
                     value: lucid_syntax::LiteralValue::Float(value),
                     ..
                 } => Ok(Some(AggregateBinding::Float(*value))),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::None,
+                    ..
+                } => Ok(Some(AggregateBinding::None)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Ellipsis,
+                    ..
+                } => Ok(Some(AggregateBinding::Ellipsis)),
                 lucid_syntax::Expr::Call { .. } => {
                     Ok(const_range_values(expr).map(AggregateBinding::Range))
                 }
@@ -20551,6 +20603,17 @@ return total
             ("return None != None\n", 0),
             ("return None is not None\n", 0),
             ("return 42 if None else 7\n", 7),
+            ("value = None\nreturn bool(value)\n", 0),
+            ("value = None\nreturn 0 if value else 7\n", 7),
+            ("return bool(...)\n", 1),
+            ("return ... == ...\n", 1),
+            ("return ... is ...\n", 1),
+            ("return ... != ...\n", 0),
+            ("return ... is not ...\n", 0),
+            ("value = ...\nreturn bool(value)\n", 1),
+            ("value = ...\nreturn value is ...\n", 1),
+            ("return None == ...\n", 0),
+            ("return None is not ...\n", 1),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();

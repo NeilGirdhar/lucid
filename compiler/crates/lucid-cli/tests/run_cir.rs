@@ -1367,7 +1367,7 @@ fn run_cir_lowers_constant_none_predicates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    return not bool(None) and None == None and None is None and not (None != None) and not (None is not None)\n",
+        "def answer():\n    missing = None\n    marker = ...\n    return not bool(missing) and bool(marker) and None == None and None is None and not (None != None) and not (None is not None) and marker is ... and None is not marker\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
