@@ -2051,6 +2051,12 @@ diverged:
   Nested dynamic control flow inside a synthesized match arm still requires
   nested CFG inlining, because branch lowering does not yet splice a complete
   inner CFG into the outer match ladder.
+  Constant-subject matches are farther along: once an arm is selected
+  statically, its body is normalized for statically selected nested branches
+  and then routed through the linear CFG lowerer when it contains a live
+  explicit return.
+  That covers a selected match arm containing an `if true` wrapper around a
+  dynamic inner `if` that merges a local before returning.
 * A statically selected outer `if` branch that contains a dynamic inner `if`
   and an explicit return now routes the selected branch body through the
   linear CFG lowerer.

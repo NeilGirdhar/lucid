@@ -2623,6 +2623,71 @@ pub fn lower_function_body(
                 _ => None,
             }
         }
+        fn match_contains_explicit_return(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements.iter().any(|statement| match statement {
+                lucid_syntax::Stmt::Return { .. } => true,
+                lucid_syntax::Stmt::If {
+                    then_branch,
+                    elif_branches,
+                    else_branch,
+                    ..
+                } => {
+                    match_contains_explicit_return(then_branch)
+                        || elif_branches
+                            .iter()
+                            .any(|(_, branch)| match_contains_explicit_return(branch))
+                        || else_branch
+                            .as_deref()
+                            .is_some_and(match_contains_explicit_return)
+                }
+                _ => false,
+            })
+        }
+        fn normalize_static_match_statements(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Vec<lucid_syntax::Stmt> {
+            let mut normalized = Vec::new();
+            for statement in statements {
+                match statement {
+                    lucid_syntax::Stmt::If {
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch,
+                        ..
+                    } => match static_truth(condition) {
+                        Some(true) => {
+                            normalized.extend(normalize_static_match_statements(then_branch))
+                        }
+                        Some(false) => {
+                            let mut selected = None;
+                            let mut unknown = false;
+                            for (elif_condition, branch) in elif_branches {
+                                match static_truth(elif_condition) {
+                                    Some(true) => {
+                                        selected = Some(branch.as_slice());
+                                        break;
+                                    }
+                                    Some(false) => {}
+                                    None => {
+                                        unknown = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if unknown {
+                                normalized.push(statement.clone());
+                            } else if let Some(branch) = selected.or(else_branch.as_deref()) {
+                                normalized.extend(normalize_static_match_statements(branch));
+                            }
+                        }
+                        None => normalized.push(statement.clone()),
+                    },
+                    _ => normalized.push(statement.clone()),
+                }
+            }
+            normalized
+        }
         let constant_selected_arm = primitive_literal(subject).and_then(|subject_literal| {
             let mut selected = None;
             for arm in arms {
@@ -2648,6 +2713,19 @@ pub fn lower_function_body(
             selected
         });
         if let Some(selected_arm) = constant_selected_arm {
+            let selected_statements = normalize_static_match_statements(&selected_arm.body);
+            if match_contains_explicit_return(&selected_statements) {
+                let selected_module = lucid_syntax::Module {
+                    statements: selected_statements,
+                    span: source_function.span,
+                };
+                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                    &selected_module,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(lowered));
+                }
+            }
             if let Some((value, bindings)) = match_arm_value_with_bindings(selected_arm)? {
                 let nodes = function
                     .body_expressions
@@ -8913,6 +8991,16 @@ mod tests {
             .as_ref()
             .expect("constant subject selected static branch should preserve locals");
         assert_eq!(function.execute_with_args(&[20]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-subject-nested-dynamic-branch-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true:\n            if true:\n                result = 0\n                if value > 0:\n                    result = value + 10\n                return result\n            else:\n                return -2\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant selected match arm should route nested dynamic body through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(0)));
 
         let file = db.add_file(
             "constant-subject-void-match.lucid",
