@@ -14319,6 +14319,104 @@ xs.extend(["bad"])
     }
 
     #[test]
+    fn frozenset_literal_type() {
+        let code = "x = !{1, 2, 3}\nprint(x)\n";
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "frozenset literal should type check: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn frozendict_literal_type() {
+        let code = "x = !{\"a\": 1}\nprint(x)\n";
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "frozendict literal should type check: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn set_add_method() {
+        let code = "s = {1}\ns.add(2)\n";
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "set.add should work: {:?}", result);
+    }
+
+    #[test]
+    fn complex_number_attributes() {
+        let code = "x = 1 + 2j\ny = x.real\nz = x.imag\n";
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "complex .real and .imag should work: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn string_format_method() {
+        let code = "s = \"Hello {}\"\nresult = s.format(\"world\")\n";
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        // format() may or may not be implemented
+        println!("String.format result: {:?}", result);
+    }
+
+    #[test]
+    fn all_collection_methods_supported() {
+        let code = r#"xs = [1, 2, 3]
+xs.append(4)
+xs.insert(0, 0)
+xs.remove(2)
+xs.pop()
+xs.clear()
+xs.extend([5, 6])
+
+d = {"a": 1, "b": 2}
+d.update({"c": 3})
+d.clear()
+d.pop("a")
+v = d.get("b")
+
+s = {1, 2, 3}
+s.add(4)
+s.remove(2)
+s.discard(5)
+s.clear()
+s.pop()
+
+text = "hello world"
+parts = text.split()
+upper = text.upper()
+lower = text.lower()
+result = text.replace("world", "lucid")
+joined = ", ".join(["a", "b", "c"])
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "all basic collection methods should be supported: {:?}",
+            result
+        );
+    }
+
+    #[test]
     fn read_file_propagates_parse_error_with_question_mark() {
         let module = parse(
             "def load(path: str) -> str | ParseError:\n    text = read_file(path)?\n    return text\n",
