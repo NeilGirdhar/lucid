@@ -4986,9 +4986,9 @@ impl TypeChecker {
     }
 
     fn extract_type_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
-        // Extract type narrowing from conditions like "x is None" or "x is not None"
+        // Extract type narrowing from conditions like "x is None", "x is not None"
         if let Expr::Binary {
-            op: BinaryOp::Is,
+            op: op_type,
             left,
             right,
             ..
@@ -5002,24 +5002,49 @@ impl TypeChecker {
                         ..
                     } = &**right
                     {
-                        // x is None: then_branch x is None, else_branch x is not None
-                        let not_none = match current_type {
-                            Type::Union(types) => {
-                                Type::make_union(
-                                    types
-                                        .iter()
-                                        .filter(|t| !matches!(t, Type::None))
-                                        .cloned()
-                                        .collect(),
-                                )
+                        match op_type {
+                            BinaryOp::Is => {
+                                // x is None: then_branch x is None, else_branch x is not None
+                                let not_none = match current_type {
+                                    Type::Union(types) => {
+                                        Type::make_union(
+                                            types
+                                                .iter()
+                                                .filter(|t| !matches!(t, Type::None))
+                                                .cloned()
+                                                .collect(),
+                                        )
+                                    }
+                                    Type::None => Type::Never,
+                                    _ => current_type.clone(),
+                                };
+                                return (
+                                    Some((name.clone(), Type::None)),
+                                    Some((name.clone(), not_none)),
+                                );
                             }
-                            Type::None => Type::Never,
-                            _ => current_type.clone(),
-                        };
-                        return (
-                            Some((name.clone(), Type::None)),
-                            Some((name.clone(), not_none)),
-                        );
+                            BinaryOp::IsNot => {
+                                // x is not None: then_branch x is not None, else_branch x is None
+                                let not_none = match current_type {
+                                    Type::Union(types) => {
+                                        Type::make_union(
+                                            types
+                                                .iter()
+                                                .filter(|t| !matches!(t, Type::None))
+                                                .cloned()
+                                                .collect(),
+                                        )
+                                    }
+                                    Type::None => Type::Never,
+                                    _ => current_type.clone(),
+                                };
+                                return (
+                                    Some((name.clone(), not_none)),
+                                    Some((name.clone(), Type::None)),
+                                );
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -19183,6 +19208,25 @@ else:
         assert!(
             result.is_ok(),
             "type narrowing on 'not (x is None)' should work: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn type_narrowing_on_is_not_none_check() {
+        let code = r#"x: int | None = None
+
+if x is not None:
+    y = x  # x should be narrowed to int
+else:
+    z = x  # x should be narrowed to None
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "type narrowing on 'x is not None' should work: {:?}",
             result
         );
     }
