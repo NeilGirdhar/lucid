@@ -8871,6 +8871,98 @@ impl Function {
                     op: op @ (lucid_syntax::BinaryOp::In | lucid_syntax::BinaryOp::NotIn),
                     right,
                     ..
+                } if matches!(
+                    (left.as_ref(), right.as_ref()),
+                    (
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(_),
+                            ..
+                        },
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(_),
+                            ..
+                        }
+                    )
+                ) =>
+                {
+                    let (
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(needle),
+                            ..
+                        },
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(haystack),
+                            ..
+                        },
+                    ) = (left.as_ref(), right.as_ref())
+                    else {
+                        unreachable!();
+                    };
+                    let contains = haystack.contains(needle);
+                    let value = match op {
+                        lucid_syntax::BinaryOp::In => contains,
+                        lucid_syntax::BinaryOp::NotIn => !contains,
+                        _ => unreachable!(),
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Binary {
+                    left, op, right, ..
+                } if matches!(
+                    op,
+                    lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::Lt
+                        | lucid_syntax::BinaryOp::LtEq
+                        | lucid_syntax::BinaryOp::Gt
+                        | lucid_syntax::BinaryOp::GtEq
+                ) && matches!(
+                    (left.as_ref(), right.as_ref()),
+                    (
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(_),
+                            ..
+                        },
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(_),
+                            ..
+                        }
+                    )
+                ) =>
+                {
+                    let (
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(left),
+                            ..
+                        },
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(right),
+                            ..
+                        },
+                    ) = (left.as_ref(), right.as_ref())
+                    else {
+                        unreachable!();
+                    };
+                    let value = match op {
+                        lucid_syntax::BinaryOp::Eq => left == right,
+                        lucid_syntax::BinaryOp::NotEq => left != right,
+                        lucid_syntax::BinaryOp::Lt => left < right,
+                        lucid_syntax::BinaryOp::LtEq => left <= right,
+                        lucid_syntax::BinaryOp::Gt => left > right,
+                        lucid_syntax::BinaryOp::GtEq => left >= right,
+                        _ => unreachable!(),
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Binary {
+                    left,
+                    op: op @ (lucid_syntax::BinaryOp::In | lucid_syntax::BinaryOp::NotIn),
+                    right,
+                    ..
                 } => {
                     let needle = lower(left, bindings, aggregate_bindings, instructions, next)?;
                     let needle = constant_int(needle, instructions)
@@ -19897,6 +19989,24 @@ return total
             ("return 2 in {1: 10, 2: 20}\n", 1),
             ("values = {1: 10, 2: 20}\nreturn 3 not in values\n", 1),
             ("return 10 in {1: 10, 2: 20}\n", 0),
+        ] {
+            let module = lucid_syntax::parse(source).unwrap();
+            let function = Function::from_module_linear(&module).unwrap();
+            assert_eq!(function.execute(), Ok(Some(expected)), "{source}");
+        }
+    }
+
+    #[test]
+    fn linear_module_lowering_lowers_constant_string_predicates() {
+        for (source, expected) in [
+            ("return \"a\" == \"a\"\n", 1),
+            ("return \"a\" != \"b\"\n", 1),
+            ("return \"a\" < \"b\"\n", 1),
+            ("return \"b\" <= \"b\"\n", 1),
+            ("return \"c\" > \"b\"\n", 1),
+            ("return \"c\" >= \"c\"\n", 1),
+            ("return \"u\" in \"lucid\"\n", 1),
+            ("return \"z\" not in \"lucid\"\n", 1),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();
