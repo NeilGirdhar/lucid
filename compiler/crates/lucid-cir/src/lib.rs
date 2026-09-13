@@ -1415,14 +1415,23 @@ impl Function {
                         let callee = nodes
                             .get(node.children[0] as usize)
                             .ok_or(LowerError::UnsupportedExpression)?;
-                        if callee.detail.as_deref() == Some("dict") {
-                            Some(TypedAggregateShape {
+                        match callee.detail.as_deref() {
+                            Some("list") => Some(TypedAggregateShape {
+                                kind: "list",
+                                source_id,
+                                member_positions: Vec::new(),
+                            }),
+                            Some("set") => Some(TypedAggregateShape {
+                                kind: "set",
+                                source_id,
+                                member_positions: Vec::new(),
+                            }),
+                            Some("dict") => Some(TypedAggregateShape {
                                 kind: "dict",
                                 source_id,
                                 member_positions: Vec::new(),
-                            })
-                        } else {
-                            None
+                            }),
+                            _ => None,
                         }
                     }
                     "call" if node.children.len() == 2 => {
@@ -26035,6 +26044,148 @@ return total
             Function::from_typed_function_body_with_locals(&nodes, 13, &[], &[("items".into(), 5)])
                 .expect("typed list/set constructors should feed aggregate consumers");
         assert_eq!(function.execute(), Ok(Some(5)));
+    }
+
+    #[test]
+    fn lowers_typed_empty_list_set_constructors() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("list".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("set".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("len".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("bool".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![3, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "unary".into(),
+                detail: Some("Not".into()),
+                children: vec![7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "binary".into(),
+                detail: Some("NotIn".into()),
+                children: vec![9, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "list".into(),
+                detail: None,
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![4, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "set".into(),
+                detail: None,
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![5, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![6, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![15, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![16, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![17, 14],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 18, &[])
+            .expect("typed empty list/set constructors should lower");
+        assert_eq!(function.execute(), Ok(Some(4)));
     }
 
     #[test]
