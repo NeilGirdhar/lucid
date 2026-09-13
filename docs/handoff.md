@@ -12,6 +12,11 @@ Work is on branch `codex/lucid-implementation`. The latest pushed checkpoint
 is at `459cda9 Add tests confirming math function return types are properly typed`.
 
 **Recent improvements (2026-09-13, second continuation):**
+- Implemented proper return types for `min()` and `max()` builtins. These now return the element
+  type of their iterable argument instead of `Any`, enabling type-safe min/max usage:
+  - `min([1, 2, 3])` now correctly inferred as `int`
+  - `min(["a", "b"])` now correctly inferred as `str`
+  - Type mismatches are caught statically (e.g., assigning `min(list[int])` to `float` is rejected)
 - Confirmed that numeric function return types (`cos`, `sin`, `tan`, `sqrt`, `floor`, `ceil`, `monotonic`)
   already have complete proper return type support in the checker (returning `float` or `int`
   as appropriate), addressing one of the documented gaps. The implementation already includes:
@@ -41,8 +46,11 @@ is at `459cda9 Add tests confirming math function return types are properly type
   - String method coverage (upper, lower, split, replace, join, startswith, endswith)
 
 **Verification (2026-09-13, second continuation gate):** All gates pass cleanly:
-- Workspace tests: 1023 passed (30 new tests from this combined extended session)
+- Workspace tests: 1025 passed (32 new tests from this combined extended session)
+  - 3 tests for math function return types (trig, floor/ceil)
+  - 2 tests for min/max element type preservation
 - All-features tests: 486 passed (verified via `cargo test --workspace --all-features --all-targets --quiet`)
+- Checker tests: 191 passed (+3 in second continuation)
 - Clippy: 0 warnings (-D warnings)
 - Zensical documentation: no issues
 - Specification examples: 257 validated (203 positive + 54 expected failures)
@@ -99,6 +107,11 @@ Recommended next work:
 **Verified as already implemented:**
 - Numeric function return types for `cos`, `sin`, `tan`, `sqrt`, `floor`, `ceil`, `monotonic`
   already have proper typed return contracts and are enforced statically in the checker.
+- `min()` and `max()` now return element types of their iterable arguments instead of `Any`.
+
+**Recently closed gaps (second continuation):**
+- `min()` and `max()` builtin functions now have concrete typed return contracts based on
+  argument types (implemented in this continuation session).
 
 **Major gaps remaining:**
 - Design and implement the richer `fields()` result shape described in
