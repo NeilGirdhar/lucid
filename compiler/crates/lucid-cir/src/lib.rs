@@ -8410,6 +8410,20 @@ impl Function {
                         _ => unreachable!(),
                     }
                 }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Attribute { attr, .. } if attr == "replace"
+                    ) && args.len() == 2 =>
+                {
+                    let lucid_syntax::Expr::Attribute { value, .. } = func.as_ref() else {
+                        unreachable!();
+                    };
+                    let value = constant_string(value, aggregate_bindings)?;
+                    let old = constant_string(&args[0].value, aggregate_bindings)?;
+                    let new = constant_string(&args[1].value, aggregate_bindings)?;
+                    Some(value.replace(&old, &new))
+                }
                 _ => None,
             }
         }
@@ -20838,7 +20852,9 @@ return total
             ("return \"LUCID\".lower() == \"lucid\"\n", 1),
             ("return \"lucid\".upper() == \"LUCID\"\n", 1),
             ("return \"  lucid  \".strip() == \"lucid\"\n", 1),
+            ("return \"banana\".replace(\"na\", \"NA\") == \"baNANA\"\n", 1),
             ("return len(\"  lucid  \".strip())\n", 5),
+            ("return len(\"banana\".replace(\"na\", \"NA\"))\n", 6),
             ("return \"abc\"[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[1] == \"b\"\n", 1),
             ("text = \"abc\"\nreturn text[-1] == \"c\"\n", 1),
@@ -20866,6 +20882,10 @@ return total
             ("text = \"LUCID\"\nreturn text.lower() == \"lucid\"\n", 1),
             ("text = \"lucid\"\nreturn text.upper() == \"LUCID\"\n", 1),
             ("text = \"  lucid  \"\nreturn len(text.strip())\n", 5),
+            (
+                "text = \"banana\"\nold = \"na\"\nnew = \"NA\"\nreturn text.replace(old, new) == \"baNANA\"\n",
+                1,
+            ),
             ("text = \"lucid\"\nreturn 1 if \"u\" in text else 0\n", 1),
             ("text = \"lucid\"\nreturn 0 if \"z\" in text else 1\n", 1),
             ("text = \"\"\nreturn 0 if bool(text) else 1\n", 1),
