@@ -8419,6 +8419,123 @@ impl Function {
                 lucid_syntax::Expr::Call { func, args, .. }
                     if matches!(
                         func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "bool"
+                    ) && args.len() == 1 =>
+                {
+                    let value = match &args[0].value {
+                        lucid_syntax::Expr::List { elements, .. } => {
+                            for element in elements {
+                                let _ = lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                            }
+                            !elements.is_empty()
+                        }
+                        lucid_syntax::Expr::Set { elements, .. } => {
+                            for element in elements {
+                                let _ = lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                            }
+                            !elements.is_empty()
+                        }
+                        lucid_syntax::Expr::Dict { entries, .. } => {
+                            for (key, value) in entries {
+                                let _ =
+                                    lower(key, bindings, aggregate_bindings, instructions, next)?;
+                                let _ =
+                                    lower(value, bindings, aggregate_bindings, instructions, next)?;
+                            }
+                            !entries.is_empty()
+                        }
+                        lucid_syntax::Expr::Call { .. } => {
+                            if let Some(values) = const_range_values(&args[0].value) {
+                                !values.is_empty()
+                            } else {
+                                let value = lower(
+                                    &args[0].value,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                                constant_value_truth(value, instructions)
+                                    .ok_or(LowerError::UnsupportedExpression)?
+                            }
+                        }
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(value),
+                            ..
+                        } => !value.is_empty(),
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bytes(value),
+                            ..
+                        } => !value.is_empty(),
+                        lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings
+                            .get(name)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                        {
+                            AggregateBinding::List(elements) => !elements.is_empty(),
+                            AggregateBinding::Set(elements) => !elements.is_empty(),
+                            AggregateBinding::Dict(entries) => !entries.is_empty(),
+                        },
+                        _ => {
+                            let value = lower(
+                                &args[0].value,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )?;
+                            constant_value_truth(value, instructions)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                        }
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstBool { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "int"
+                    ) && args.len() == 1 =>
+                {
+                    let value = match &args[0].value {
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(value),
+                            ..
+                        } => value
+                            .trim()
+                            .parse::<i64>()
+                            .map_err(|_| LowerError::UnsupportedExpression)?,
+                        _ => {
+                            let value = lower(
+                                &args[0].value,
+                                bindings,
+                                aggregate_bindings,
+                                instructions,
+                                next,
+                            )?;
+                            constant_int(value, instructions)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                        }
+                    };
+                    let id = result(next);
+                    instructions.push(Instruction::ConstInt { result: id, value });
+                    Ok(id)
+                }
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
                         lucid_syntax::Expr::Ident { name, .. } if name == "abs"
                     ) && args.len() == 1 =>
                 {
@@ -19746,6 +19863,20 @@ return total
             ("return all([])\n", 1),
             ("return any([])\n", 0),
             ("values = {false, 0, 2}\nreturn any(values)\n", 1),
+            ("return int(true)\n", 1),
+            ("return int(false)\n", 0),
+            ("return int(\"42\")\n", 42),
+            ("return bool(0)\n", 0),
+            ("return bool(1)\n", 1),
+            ("return bool(abs(-1))\n", 1),
+            ("return bool(\"\")\n", 0),
+            ("return bool(\"lucid\")\n", 1),
+            ("return bool([])\n", 0),
+            ("return bool([1])\n", 1),
+            ("return bool({1: 2})\n", 1),
+            ("return bool(range(0))\n", 0),
+            ("return bool(range(3))\n", 1),
+            ("values = [1]\nreturn bool(values)\n", 1),
         ] {
             let module = lucid_syntax::parse(source).unwrap();
             let function = Function::from_module_linear(&module).unwrap();
