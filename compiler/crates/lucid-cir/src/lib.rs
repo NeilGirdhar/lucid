@@ -3109,6 +3109,51 @@ impl Function {
                         return Ok(result);
                     }
                     if callee.kind == "name"
+                        && matches!(callee.detail.as_deref(), Some("min" | "max"))
+                        && node.children.len() >= 3
+                    {
+                        let mut lowered_args = Vec::with_capacity(node.children.len() - 1);
+                        let mut selected = None::<(usize, i64)>;
+                        for (index, arg) in node.children.iter().copied().skip(1).enumerate() {
+                            let order = typed_constant_order(
+                                arg,
+                                id,
+                                nodes,
+                                parameter_names,
+                                local_bindings,
+                            )
+                            .ok_or(LowerError::UnsupportedExpression)?;
+                            let value = lower(
+                                arg,
+                                nodes,
+                                lowered,
+                                instructions,
+                                next,
+                                parameter_names,
+                                local_bindings,
+                            )?;
+                            lowered_args.push(value);
+                            let replace = match (
+                                callee.detail.as_deref(),
+                                selected.map(|(_, value)| value),
+                            ) {
+                                (_, None) => true,
+                                (Some("min"), Some(current)) => order < current,
+                                (Some("max"), Some(current)) => order > current,
+                                _ => unreachable!(),
+                            };
+                            if replace {
+                                selected = Some((index, order));
+                            }
+                        }
+                        let Some((selected, _)) = selected else {
+                            return Err(LowerError::UnsupportedExpression);
+                        };
+                        result = lowered_args[selected];
+                        lowered.insert(id, result);
+                        return Ok(result);
+                    }
+                    if callee.kind == "name"
                         && matches!(
                             callee.detail.as_deref(),
                             Some("len" | "bool" | "all" | "any" | "sum" | "min" | "max")
@@ -31959,6 +32004,71 @@ return total
         assert_eq!(function.execute_with_args(&[11, 22, 33]), Ok(Some(33)));
         assert_eq!(function.execute_with_args(&[33, 11, 22]), Ok(Some(33)));
         assert_eq!(function.execute_with_args(&[33, 22, 11]), Ok(Some(33)));
+    }
+
+    #[test]
+    fn lowers_nested_constant_order_min_max_expressions() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(30)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 2, 3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 3, 4, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![5, 6],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 7, &[])
+            .expect("nested constant-order min/max should lower inside expressions");
+        assert_eq!(function.execute(), Ok(Some(40)));
     }
 
     #[test]

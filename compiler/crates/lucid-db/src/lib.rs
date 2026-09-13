@@ -10204,6 +10204,15 @@ mod tests {
         assert_eq!(function.execute_with_args(&[33, 22, 11]), Ok(Some(33)));
 
         let file = db.add_file(
+            "nested-constant-min-max.lucid",
+            "def combined():\n    return min(30, 10, 20) + max(10, 20, 30)\n",
+        );
+        let function = lower_function_body(&db, file, "combined".into())
+            .as_ref()
+            .expect("nested constant-order min/max should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(40)));
+
+        let file = db.add_file(
             "match.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return 33\n",
         );
