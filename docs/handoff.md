@@ -1120,10 +1120,11 @@ diverged:
   same CIR diamond and native result ABI.
   Branch-local assignments followed by `return name` use the same SSA diamond
   and native result ABI, so the local's value is merged explicitly.
-  Initialized branch-local assignments preserve setup-before-branch ordering:
-  the initializer now executes before the condition even when every branch
-  overwrites the returned local, so recoverable initializer errors cannot be
-  skipped by the branch shortcut.
+  Initialized branch-local assignments preserve setup-before-branch ordering
+  for both two-arm conditionals and `if`/`elif` ladders: the initializer now
+  executes before the first condition even when every branch overwrites the
+  returned local, so recoverable initializer errors cannot be skipped by the
+  branch shortcut.
   Literal string, float, and `none` equality/identity comparisons are folded
   at the same boundary.
   Integer `+`, `-`, `*`, `//`, and `%` subexpressions in comparisons are

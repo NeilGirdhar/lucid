@@ -3346,6 +3346,74 @@ fn run_cir_executes_initialized_local_before_branch_assignment() {
 }
 
 #[test]
+fn run_cir_executes_initialized_local_before_elif_assignment() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_initialized_local_division_elif_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, value: int, scale: int):\n    result = seed // scale\n    if value > 10:\n        result = seed + 100\n    elif value > 0:\n        result = seed + 1\n    else:\n        result = seed - 100\n    return result\n",
+    )
+    .expect("temporary source should be writable");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,5,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        selected.status.success(),
+        "selected elif branch failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "11");
+    assert!(
+        fallback.status.success(),
+        "fallback branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "-90");
+    assert!(
+        !error.status.success(),
+        "initializer division by zero should fail before elif assignment"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+}
+
+#[test]
 fn run_cir_executes_setup_before_guard_return() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_setup_guard_return_{}.lucid",

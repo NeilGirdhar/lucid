@@ -10928,6 +10928,146 @@ impl Function {
         Ok(function)
     }
 
+    /// Lower `local = setup; if condition: local = then; elif ...; else:
+    /// local = else; return local` while preserving setup-before-condition
+    /// ordering. A `None` branch expression means that arm leaves `local`
+    /// unchanged and returns the setup value.
+    pub fn from_parameterized_initialized_if_elif_chain_direct(
+        local_name: &str,
+        setup_expr: &lucid_syntax::Expr,
+        condition: &lucid_syntax::Expr,
+        then_expr: Option<&lucid_syntax::Expr>,
+        elif_branches: &[(&lucid_syntax::Expr, Option<&lucid_syntax::Expr>)],
+        else_expr: Option<&lucid_syntax::Expr>,
+        parameter_names: &[String],
+    ) -> Result<Self, LowerError> {
+        if elif_branches.is_empty() {
+            return Self::from_parameterized_initialized_if_direct(
+                local_name,
+                setup_expr,
+                condition,
+                then_expr,
+                else_expr,
+                parameter_names,
+            );
+        }
+        let mut entry_instructions = parameter_names
+            .iter()
+            .enumerate()
+            .map(|(index, _)| Instruction::Param {
+                result: ValueId(index as u32),
+                index: index as u32,
+            })
+            .collect::<Vec<_>>();
+        let mut next = parameter_names.len() as u32;
+        let setup_value = Self::lower_parameter_expr(
+            setup_expr,
+            parameter_names,
+            &mut entry_instructions,
+            &mut next,
+        )?;
+        let local_bindings = [(local_name, setup_value)];
+        let condition_value = Self::lower_parameter_expr_with_locals(
+            condition,
+            parameter_names,
+            &local_bindings,
+            &mut entry_instructions,
+            &mut next,
+        )?;
+        let mut then_instructions = Vec::new();
+        let then_value = match then_expr {
+            Some(expr) => Self::lower_parameter_expr_with_locals(
+                expr,
+                parameter_names,
+                &local_bindings,
+                &mut then_instructions,
+                &mut next,
+            )?,
+            None => setup_value,
+        };
+        let mut blocks = vec![
+            Block {
+                id: BlockId(0),
+                instructions: entry_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: BlockId(1),
+                    else_block: BlockId(2),
+                },
+            },
+            Block {
+                id: BlockId(1),
+                instructions: then_instructions,
+                terminator: Terminator::Return(Some(then_value)),
+            },
+        ];
+        let mut condition_block = 2_u32;
+        for (index, (elif_condition, elif_expr)) in elif_branches.iter().enumerate() {
+            let then_block = condition_block + 1;
+            let false_block = condition_block + 2;
+            let mut condition_instructions = Vec::new();
+            let condition_value = Self::lower_parameter_expr_with_locals(
+                elif_condition,
+                parameter_names,
+                &local_bindings,
+                &mut condition_instructions,
+                &mut next,
+            )?;
+            let mut then_instructions = Vec::new();
+            let then_value = match elif_expr {
+                Some(expr) => Self::lower_parameter_expr_with_locals(
+                    expr,
+                    parameter_names,
+                    &local_bindings,
+                    &mut then_instructions,
+                    &mut next,
+                )?,
+                None => setup_value,
+            };
+            blocks.push(Block {
+                id: BlockId(condition_block),
+                instructions: condition_instructions,
+                terminator: Terminator::Branch {
+                    condition: condition_value,
+                    then_block: BlockId(then_block),
+                    else_block: BlockId(false_block),
+                },
+            });
+            blocks.push(Block {
+                id: BlockId(then_block),
+                instructions: then_instructions,
+                terminator: Terminator::Return(Some(then_value)),
+            });
+            if index == elif_branches.len() - 1 {
+                let mut else_instructions = Vec::new();
+                let else_value = match else_expr {
+                    Some(expr) => Self::lower_parameter_expr_with_locals(
+                        expr,
+                        parameter_names,
+                        &local_bindings,
+                        &mut else_instructions,
+                        &mut next,
+                    )?,
+                    None => setup_value,
+                };
+                blocks.push(Block {
+                    id: BlockId(false_block),
+                    instructions: else_instructions,
+                    terminator: Terminator::Return(Some(else_value)),
+                });
+            }
+            condition_block = false_block;
+        }
+        let function = Self {
+            entry: BlockId(0),
+            blocks,
+        };
+        function
+            .verify()
+            .map_err(|_| LowerError::UnsupportedExpression)?;
+        Ok(function)
+    }
+
     /// Lower a parameterized match whose scrutinee is one positional value,
     /// every explicit arm is an integer/boolean literal, and the final arm is
     /// a wildcard.  Each arm returns a primitive literal.  The decision chain
