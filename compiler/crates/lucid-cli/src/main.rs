@@ -593,8 +593,16 @@ fn emit_cir_file(path_str: &str, function_name: Option<&str>) {
             exit(1);
         }
     };
-    let database = lucid_db::CompilerDatabase::default();
-    let file = lucid_db::SourceFile::new(&database, source, path_str.to_string());
+    let mut database = lucid_db::CompilerDatabase::default();
+    let file = database.add_file(path_str.to_string(), source);
+    let diagnostics = lucid_db::file_diagnostics(&database, file);
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
+    {
+        emit_database_diagnostics(&database, file, path_str, diagnostics);
+        exit(1);
+    }
     let lowered = function_name.map_or_else(
         || lucid_db::lower_module(&database, file),
         |name| lucid_db::lower_function_body(&database, file, name.to_string()),
@@ -623,10 +631,14 @@ fn run_cir_file(
             exit(1);
         }
     };
-    let database = lucid_db::CompilerDatabase::default();
-    let file = lucid_db::SourceFile::new(&database, source, path_str.to_string());
-    if let Err(error) = lucid_db::typed_module(&database, file) {
-        eprintln!("Type error: {error}");
+    let mut database = lucid_db::CompilerDatabase::default();
+    let file = database.add_file(path_str.to_string(), source);
+    let diagnostics = lucid_db::file_diagnostics(&database, file);
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
+    {
+        emit_database_diagnostics(&database, file, path_str, diagnostics);
         exit(1);
     }
     if let Some(name) = function_name {

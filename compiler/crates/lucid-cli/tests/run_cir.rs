@@ -406,6 +406,62 @@ fn emit_c_rejects_source_that_fails_type_checking() {
 }
 
 #[test]
+fn emit_cir_renders_source_line_for_type_errors() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_emit_cir_invalid_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value: int = \"wrong\"\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "emit-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "emit-cir should render the source line before lowering: {stderr}"
+    );
+    assert!(
+        stderr.contains("^^^^^"),
+        "emit-cir should underline the offending span: {stderr}"
+    );
+}
+
+#[test]
+fn run_cir_renders_source_line_for_type_errors() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_invalid_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value: int = \"wrong\"\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "run-cir should render the source line before lowering: {stderr}"
+    );
+    assert!(
+        stderr.contains("^^^^^"),
+        "run-cir should underline the offending span: {stderr}"
+    );
+}
+
+#[test]
 fn check_renders_source_line_for_structured_diagnostics() {
     let path = std::env::temp_dir().join(format!(
         "lucid_check_diagnostic_{}.lucid",
