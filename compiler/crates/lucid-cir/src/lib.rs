@@ -5517,77 +5517,172 @@ impl Function {
             induction_name: &str,
             parameter_names: &[String],
             alias_initial: Option<&lucid_syntax::Stmt>,
+            next_value: &mut u32,
         ) -> Option<(Vec<Instruction>, ValueId)> {
-            let lucid_syntax::Expr::Binary {
-                op, left, right, ..
-            } = expr
-            else {
-                return None;
-            };
-            let mut instructions = Vec::new();
-            let left_value = if matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == induction_name)
-            {
-                ValueId(2)
-            } else {
-                let (left_instructions, _) = operand_instruction(
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bool(value),
+                    ..
+                } => {
+                    let condition_value = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1)?;
+                    Some((
+                        vec![Instruction::ConstBool {
+                            result: condition_value,
+                            value: *value,
+                        }],
+                        condition_value,
+                    ))
+                }
+                lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Not,
+                    expr,
+                    ..
+                } => {
+                    let (mut instructions, operand_value) = while_guard_condition(
+                        expr,
+                        induction_name,
+                        parameter_names,
+                        alias_initial,
+                        next_value,
+                    )?;
+                    let condition_value = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1)?;
+                    instructions.push(Instruction::Not {
+                        result: condition_value,
+                        operand: operand_value,
+                    });
+                    Some((instructions, condition_value))
+                }
+                lucid_syntax::Expr::Binary {
+                    op: logical_op @ (lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or),
                     left,
-                    ValueId(16),
-                    ValueId(20),
-                    ValueId(21),
-                    parameter_names,
-                    alias_initial,
-                    true,
-                )?;
-                instructions.extend(left_instructions);
-                ValueId(16)
-            };
-            let right_value = if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == induction_name)
-            {
-                ValueId(2)
-            } else {
-                let (right_instructions, _) = operand_instruction(
                     right,
-                    ValueId(17),
-                    ValueId(22),
-                    ValueId(23),
-                    parameter_names,
-                    alias_initial,
-                    true,
-                )?;
-                instructions.extend(right_instructions);
-                ValueId(17)
-            };
-            instructions.push(match op {
-                lucid_syntax::BinaryOp::NotEq
-                | lucid_syntax::BinaryOp::NotIdentity
-                | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
-                    result: ValueId(18),
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
-                    result: ValueId(18),
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
-                    result: ValueId(18),
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
-                    result: ValueId(18),
-                    left: left_value,
-                    right: right_value,
-                },
-                lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
-                    result: ValueId(18),
-                    left: left_value,
-                    right: right_value,
-                },
-                _ => return None,
-            });
-            Some((instructions, ValueId(18)))
+                    ..
+                } => {
+                    let (mut instructions, left_value) = while_guard_condition(
+                        left,
+                        induction_name,
+                        parameter_names,
+                        alias_initial,
+                        next_value,
+                    )?;
+                    let (right_instructions, right_value) = while_guard_condition(
+                        right,
+                        induction_name,
+                        parameter_names,
+                        alias_initial,
+                        next_value,
+                    )?;
+                    instructions.extend(right_instructions);
+                    let condition_value = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1)?;
+                    instructions.push(match logical_op {
+                        lucid_syntax::BinaryOp::And => Instruction::And {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::Or => Instruction::Or {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        _ => return None,
+                    });
+                    Some((instructions, condition_value))
+                }
+                lucid_syntax::Expr::Binary {
+                    op, left, right, ..
+                } => {
+                    let mut instructions = Vec::new();
+                    let left_value = if matches!(left.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == induction_name)
+                    {
+                        ValueId(2)
+                    } else {
+                        let value = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let left_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let right_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let (left_instructions, _) = operand_instruction(
+                            left,
+                            value,
+                            left_temp,
+                            right_temp,
+                            parameter_names,
+                            alias_initial,
+                            true,
+                        )?;
+                        instructions.extend(left_instructions);
+                        value
+                    };
+                    let right_value = if matches!(right.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == induction_name)
+                    {
+                        ValueId(2)
+                    } else {
+                        let value = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let left_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let right_temp = ValueId(*next_value);
+                        *next_value = next_value.checked_add(1)?;
+                        let (right_instructions, _) = operand_instruction(
+                            right,
+                            value,
+                            left_temp,
+                            right_temp,
+                            parameter_names,
+                            alias_initial,
+                            true,
+                        )?;
+                        instructions.extend(right_instructions);
+                        value
+                    };
+                    let condition_value = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1)?;
+                    instructions.push(match op {
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => Instruction::CmpEq {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => Instruction::CmpNe {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::Lt => Instruction::CmpLt {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::LtEq => Instruction::CmpLe {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::Gt => Instruction::CmpGt {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        lucid_syntax::BinaryOp::GtEq => Instruction::CmpGe {
+                            result: condition_value,
+                            left: left_value,
+                            right: right_value,
+                        },
+                        _ => return None,
+                    });
+                    Some((instructions, condition_value))
+                }
+                _ => None,
+            }
         }
         let (guard_condition, accumulator_statement, induction_statement) = match &body[0] {
             lucid_syntax::Stmt::If {
@@ -5756,11 +5851,13 @@ impl Function {
         let mut step_instructions = induction_step_instructions;
         step_instructions.push(induction_update);
         let blocks = if let Some((guard_condition, _)) = guard_condition {
+            let mut next_value = 28;
             let (guard_instructions, guard_value) = while_guard_condition(
                 guard_condition,
                 induction_name,
                 parameter_names,
                 alias_initial,
+                &mut next_value,
             )?;
             if else_update_instructions.is_empty() {
                 vec![
@@ -14436,6 +14533,25 @@ return total
             Function::from_module_linear_with_params(&module, &["n".into(), "cutoff".into()])
                 .expect("guarded while accumulator else should lower through CIR");
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let module = lucid_syntax::parse(
+            r#"total = 0
+while n > 0:
+    if n > cutoff and n < high:
+        total += n
+    else:
+        total -= n
+    n -= 1
+return total
+"#,
+        )
+        .expect("boolean guarded while accumulator else fixture should parse");
+        let function = Function::from_module_linear_with_params(
+            &module,
+            &["n".into(), "cutoff".into(), "high".into()],
+        )
+        .expect("boolean guarded while accumulator else should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 1, 5]), Ok(Some(3)));
 
         let module = lucid_syntax::parse(
             r#"total = 0
