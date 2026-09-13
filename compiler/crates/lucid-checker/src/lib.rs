@@ -468,6 +468,35 @@ impl Type {
                     found.is_some_and(|(_, actual)| actual.is_subtype_of(expected, env))
                 });
         }
+        // Record literal (e.g., 1, 2) can be assigned to a tuple type
+        // (e.g., tuple[int, int]) if all fields are positional and match.
+        if let (
+            Type::Record { fields: source, .. },
+            Type::Class {
+                name: class_name,
+                type_args: tuple_elements,
+                ..
+            },
+        ) = (self, target)
+        {
+            if class_name == "tuple" {
+                // All source fields must be positional (no names)
+                if source.iter().any(|(name, _)| name.is_some()) {
+                    return false;
+                }
+                // Lengths must match
+                if source.len() != tuple_elements.len() {
+                    return false;
+                }
+                // Each element type must match
+                return source
+                    .iter()
+                    .zip(tuple_elements.iter())
+                    .all(|((_, source_type), target_type)| {
+                        source_type.is_subtype_of(target_type, env)
+                    });
+            }
+        }
         if let (
             Type::Class {
                 name: class_name,
@@ -4748,13 +4777,10 @@ impl TypeChecker {
             }
             Type::Class {
                 name, type_args, ..
-            } if name == "Arguments" =>
-            {
-                type_args
-                    .first()
-                    .cloned()
-                    .unwrap_or(Type::TypeVar("Any".into()))
-            }
+            } if name == "Arguments" => type_args
+                .first()
+                .cloned()
+                .unwrap_or(Type::TypeVar("Any".into())),
             Type::Class { name, .. } if name == "range" => Type::Int,
             Type::Class { name, .. }
                 if matches!(name.as_str(), "Bytes" | "ByteArray" | "MemoryView") =>
@@ -14120,6 +14146,15 @@ class Child(Base):
         TypeChecker::new().check_module(&module).expect(
             "promote[A, B] arithmetic bodies should preserve the promoted placeholder type",
         );
+    }
+
+    #[test]
+    fn tuple_return_type_matches_record_literal() {
+        let code = "def pair() -> tuple[int, int]:\n    return 1, 2\n\npair()\n";
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "tuple[int, int] should accept record literal (1, 2): {:?}", result);
     }
 
     #[test]
