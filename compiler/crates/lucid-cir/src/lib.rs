@@ -12195,6 +12195,47 @@ impl Function {
                     }
                     if matches!(
                         func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "reversed"
+                    ) && args.len() == 1
+                        && args.iter().all(|arg| {
+                            arg.name.is_none()
+                                && !arg.is_spread
+                                && !arg.is_dict_spread
+                                && !arg.is_gather_spread
+                        })
+                    {
+                        let iterable = &args[0].value;
+                        if let Some(mut values) = constant_string_list(iterable, aggregate_bindings)
+                        {
+                            values.reverse();
+                            return Ok(Some(AggregateBinding::StringList(values)));
+                        }
+                        if let Some(mut values) = constant_float_list(iterable, aggregate_bindings)
+                        {
+                            values.reverse();
+                            return Ok(Some(AggregateBinding::FloatList(values)));
+                        }
+                        let int_values = match iterable {
+                            lucid_syntax::Expr::List { elements, .. } => elements
+                                .iter()
+                                .map(constant_index)
+                                .collect::<Option<Vec<_>>>(),
+                            _ => const_range_values(iterable),
+                        };
+                        if let Some(mut values) = int_values {
+                            values.reverse();
+                            let mut elements = Vec::with_capacity(values.len());
+                            for value in values {
+                                let id = ValueId(*next);
+                                *next += 1;
+                                instructions.push(Instruction::ConstInt { result: id, value });
+                                elements.push(id);
+                            }
+                            return Ok(Some(AggregateBinding::List(elements)));
+                        }
+                    }
+                    if matches!(
+                        func.as_ref(),
                         lucid_syntax::Expr::Ident { name, .. } if name == "list"
                     ) && args.len() == 1
                         && args.iter().all(|arg| {
@@ -23332,6 +23373,14 @@ return total
                 "values = sorted(range(3))\nreturn values[0] * 100 + values[1] * 10 + values[2]\n",
                 12,
             ),
+            (
+                "values = reversed([1, 2, 3])\nreturn values[0] * 100 + values[1] * 10 + values[2]\n",
+                321,
+            ),
+            (
+                "values = reversed(range(3))\nreturn values[0] * 100 + values[1] * 10 + values[2]\n",
+                210,
+            ),
             ("values = {10, 20, 12}\nreturn sum(values)\n", 42),
             ("return len(range(5))\n", 5),
             ("return sum(range(5))\n", 10),
@@ -23465,6 +23514,7 @@ return total
             ("return \"b\" in list(\"ab\".chars)\n", 1),
             ("return \"b\" in set(\"ab\".chars)\n", 1),
             ("values = sorted(\"ba\".chars)\nreturn values[0] == \"a\"\n", 1),
+            ("values = reversed(\"ab\".chars)\nreturn values[0] == \"b\"\n", 1),
             (
                 "values = set({1: \"a\", 2: \"bc\"}.values())\nreturn \"bc\" in values\n",
                 1,
@@ -23628,6 +23678,10 @@ return total
             ("values = [1.5, 2.5]\nreturn values[1] == 2.5\n", 1),
             ("values = [1.5, 2.5]\nreturn 1.5 in values\n", 1),
             ("values = sorted([2.5, 1.5])\nreturn values[0] == 1.5\n", 1),
+            (
+                "values = reversed([1.5, 2.5])\nreturn values[0] == 2.5\n",
+                1,
+            ),
             ("return {1.5, 2.5} == {2.5, 1.5}\n", 1),
             ("values = {1.5, 2.5}\nreturn 2.5 in values\n", 1),
             ("return (1.5, 2.5) == (1.5, 2.5)\n", 1),

@@ -1505,6 +1505,35 @@ fn run_cir_materializes_sorted_constant_iterables() {
 }
 
 #[test]
+fn run_cir_materializes_reversed_constant_iterables() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_reversed_materialize_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    numbers = reversed([1, 2, 3])\n    ranged = reversed(range(3))\n    chars = reversed(\"ab\".chars)\n    floats = reversed([1.5, 2.5])\n    return numbers[0] == 3 and ranged[0] == 2 and chars[0] == \"b\" and floats[0] == 2.5\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function reversed materialization failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
 fn run_cir_lowers_constant_string_predicates_in_typed_function_body() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_function_string_predicates_{}.lucid",
