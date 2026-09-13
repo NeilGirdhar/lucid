@@ -2303,8 +2303,6 @@ impl TypeChecker {
         // their runtime checks, while names remain visible to the checker as
         // ordinary first-class builtins instead of undefined variables.
         for name in [
-            "dict",
-            "set",
             "enumerate",
             "map",
             "reversed",
@@ -2341,6 +2339,21 @@ impl TypeChecker {
         // cross the static boundary and fail only inside a backend.
         let any = Type::TypeVar("Any".into());
         let builtin_contracts = [
+            (
+                "list",
+                0,
+                Some(1),
+                vec![any.clone()],
+                Type::Class {
+                    name: "list".into(),
+                    type_args: vec![any.clone()],
+                    parent: None,
+                    traits: Vec::new(),
+                    interfaces: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                },
+            ),
             (
                 "dict",
                 0,
@@ -10836,6 +10849,28 @@ impl TypeChecker {
                                             is_sealed: false,
                                         })
                                     }
+                                    "set" if self.is_iterable_type(&argument_type) => {
+                                        Some(Type::Class {
+                                            name: "set".into(),
+                                            type_args: vec![self.iterable_element_type(&argument_type)],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
+                                    "list" if self.is_iterable_type(&argument_type) => {
+                                        Some(Type::Class {
+                                            name: "list".into(),
+                                            type_args: vec![self.iterable_element_type(&argument_type)],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
+                                    }
                                     "freeze" => Some(Self::frozen_type(argument_type)),
                                     "abs" => match argument_type {
                                         Type::Int | Type::LiteralInt(_) => Some(Type::Int),
@@ -18698,6 +18733,52 @@ x: int = timestamp
         assert!(
             result.is_ok(),
             "monotonic() should return float: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn list_preserves_element_type() {
+        let code = r#"numbers: list[int] = [1, 2, 3]
+copied = list(numbers)
+first: int = copied[0]
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "list() should preserve element type: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn set_preserves_element_type() {
+        let code = r#"numbers: list[int] = [1, 2, 3]
+unique = set(numbers)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "set() should preserve element type: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn dict_infers_key_value_types() {
+        let code = r#"pairs: list[(int, str)] = [(1, "a"), (2, "b")]
+d = dict(pairs)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "dict() should infer types from pairs: {:?}",
             result
         );
     }
