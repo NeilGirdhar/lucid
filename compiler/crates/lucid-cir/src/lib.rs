@@ -8316,6 +8316,7 @@ impl Function {
             List(Vec<ValueId>),
             StringList(Vec<String>),
             Set(Vec<ValueId>),
+            StringSet(Vec<String>),
             Dict(Vec<(ValueId, ValueId)>),
             StringDict(Vec<(String, String)>),
             Record(Vec<ValueId>),
@@ -8509,6 +8510,22 @@ impl Function {
                 _ => None,
             }
         }
+        fn constant_string_set(
+            expr: &lucid_syntax::Expr,
+            aggregate_bindings: &HashMap<String, AggregateBinding>,
+        ) -> Option<Vec<String>> {
+            match expr {
+                lucid_syntax::Expr::Set { elements, .. } => elements
+                    .iter()
+                    .map(|element| constant_string(element, aggregate_bindings))
+                    .collect(),
+                lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings.get(name)? {
+                    AggregateBinding::StringSet(values) => Some(values.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
         fn constant_string_record(
             expr: &lucid_syntax::Expr,
             aggregate_bindings: &HashMap<String, AggregateBinding>,
@@ -8686,6 +8703,11 @@ impl Function {
                                 .ok_or(LowerError::UnsupportedExpression)?
                                 .len()
                         }
+                        expr if constant_string_set(expr, aggregate_bindings).is_some() => {
+                            constant_string_set(expr, aggregate_bindings)
+                                .ok_or(LowerError::UnsupportedExpression)?
+                                .len()
+                        }
                         expr if constant_string_dict(expr, aggregate_bindings).is_some() => {
                             constant_string_dict(expr, aggregate_bindings)
                                 .ok_or(LowerError::UnsupportedExpression)?
@@ -8742,6 +8764,7 @@ impl Function {
                             AggregateBinding::List(elements) => elements.len(),
                             AggregateBinding::StringList(elements) => elements.len(),
                             AggregateBinding::Set(elements) => elements.len(),
+                            AggregateBinding::StringSet(elements) => elements.len(),
                             AggregateBinding::Dict(entries) => entries.len(),
                             AggregateBinding::StringDict(entries) => entries.len(),
                             AggregateBinding::Record(_) | AggregateBinding::StringRecord(_) => {
@@ -8859,6 +8882,9 @@ impl Function {
                             AggregateBinding::List(elements) => !elements.is_empty(),
                             AggregateBinding::StringList(elements) => !elements.is_empty(),
                             AggregateBinding::Set(elements) => !elements.is_empty(),
+                            AggregateBinding::StringSet(_) => {
+                                return Err(LowerError::UnsupportedExpression);
+                            }
                             AggregateBinding::Dict(entries) => !entries.is_empty(),
                             AggregateBinding::StringDict(_) => {
                                 return Err(LowerError::UnsupportedExpression);
@@ -9053,6 +9079,9 @@ impl Function {
                                 AggregateBinding::StringDict(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
+                                AggregateBinding::StringSet(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
                                 AggregateBinding::StringList(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
@@ -9145,6 +9174,9 @@ impl Function {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::StringDict(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
+                                }
+                                AggregateBinding::StringSet(_) => {
                                     return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::StringList(_) => {
@@ -9293,6 +9325,9 @@ impl Function {
                                         .ok_or(LowerError::UnsupportedExpression)
                                 }
                                 AggregateBinding::Set(_) => Err(LowerError::UnsupportedExpression),
+                                AggregateBinding::StringSet(_) => {
+                                    Err(LowerError::UnsupportedExpression)
+                                }
                                 AggregateBinding::StringList(_) => {
                                     Err(LowerError::UnsupportedExpression)
                                 }
@@ -9602,19 +9637,23 @@ impl Function {
                     ..
                 } if constant_string(left, aggregate_bindings).is_some()
                     && (constant_string_list(right, aggregate_bindings).is_some()
+                        || constant_string_set(right, aggregate_bindings).is_some()
                         || constant_string_dict(right, aggregate_bindings).is_some()) =>
                 {
                     let needle = constant_string(left, aggregate_bindings)
                         .ok_or(LowerError::UnsupportedExpression)?;
-                    let contains =
-                        if let Some(haystack) = constant_string_list(right, aggregate_bindings) {
-                            haystack.contains(&needle)
-                        } else {
-                            constant_string_dict(right, aggregate_bindings)
-                                .ok_or(LowerError::UnsupportedExpression)?
-                                .iter()
-                                .any(|(key, _)| key == &needle)
-                        };
+                    let contains = if let Some(haystack) =
+                        constant_string_list(right, aggregate_bindings)
+                    {
+                        haystack.contains(&needle)
+                    } else if let Some(haystack) = constant_string_set(right, aggregate_bindings) {
+                        haystack.contains(&needle)
+                    } else {
+                        constant_string_dict(right, aggregate_bindings)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                            .iter()
+                            .any(|(key, _)| key == &needle)
+                    };
                     let value = match op {
                         lucid_syntax::BinaryOp::In => contains,
                         lucid_syntax::BinaryOp::NotIn => !contains,
@@ -9691,6 +9730,9 @@ impl Function {
                                     for value in elements {
                                         contains |= contains_value(*value, instructions)?;
                                     }
+                                }
+                                AggregateBinding::StringSet(_) => {
+                                    return Err(LowerError::UnsupportedExpression);
                                 }
                                 AggregateBinding::Dict(entries) => {
                                     for (key, _) in entries {
@@ -10357,6 +10399,13 @@ impl Function {
                     right.sort_unstable();
                     Some(left == right)
                 }
+                (AggregateBinding::StringSet(left), AggregateBinding::StringSet(right)) => {
+                    let mut left = left.clone();
+                    let mut right = right.clone();
+                    left.sort_unstable();
+                    right.sort_unstable();
+                    Some(left == right)
+                }
                 (AggregateBinding::Dict(left), AggregateBinding::Dict(right)) => {
                     let mut left = int_pairs(left)?;
                     let mut right = int_pairs(right)?;
@@ -10389,6 +10438,7 @@ impl Function {
                     AggregateBinding::List(_)
                     | AggregateBinding::StringList(_)
                     | AggregateBinding::Set(_)
+                    | AggregateBinding::StringSet(_)
                     | AggregateBinding::Dict(_)
                     | AggregateBinding::StringDict(_)
                     | AggregateBinding::Record(_)
@@ -10402,6 +10452,7 @@ impl Function {
                     AggregateBinding::List(_)
                     | AggregateBinding::StringList(_)
                     | AggregateBinding::Set(_)
+                    | AggregateBinding::StringSet(_)
                     | AggregateBinding::Dict(_)
                     | AggregateBinding::StringDict(_)
                     | AggregateBinding::Record(_)
@@ -10428,6 +10479,7 @@ impl Function {
                         AggregateBinding::List(elements) => Some(!elements.is_empty()),
                         AggregateBinding::StringList(elements) => Some(!elements.is_empty()),
                         AggregateBinding::Set(elements) => Some(!elements.is_empty()),
+                        AggregateBinding::StringSet(_) => None,
                         AggregateBinding::Dict(entries) => Some(!entries.is_empty()),
                         AggregateBinding::StringDict(_) => None,
                         AggregateBinding::Record(elements) => Some(!elements.is_empty()),
@@ -10565,6 +10617,9 @@ impl Function {
                     Ok(Some(AggregateBinding::List(values)))
                 }
                 lucid_syntax::Expr::Set { elements, .. } => {
+                    if let Some(values) = constant_string_set(expr, aggregate_bindings) {
+                        return Ok(Some(AggregateBinding::StringSet(values)));
+                    }
                     let mut values = Vec::with_capacity(elements.len());
                     for element in elements {
                         values.push(lower(
@@ -21114,6 +21169,11 @@ return total
             ("return \"a\" in [\"a\", \"b\"]\n", 1),
             ("return \"c\" not in [\"a\", \"b\"]\n", 1),
             ("return \"b\" in \"a,b\".split(\",\")\n", 1),
+            ("return len({\"a\", \"b\"})\n", 2),
+            ("return {\"a\", \"b\"} == {\"b\", \"a\"}\n", 1),
+            ("return {\"a\", \"b\"} != {\"a\", \"c\"}\n", 1),
+            ("return \"a\" in {\"a\", \"b\"}\n", 1),
+            ("return \"c\" not in {\"a\", \"b\"}\n", 1),
             ("return (\"a\", \"b\") == (\"a\", \"b\")\n", 1),
             ("return (\"a\", \"b\") != (\"a\", \"c\")\n", 1),
             ("return (\"a\", \"b\")[1] == \"b\"\n", 1),
@@ -21176,6 +21236,14 @@ return total
             ),
             (
                 "parts = [\"a\", \"b\"]\nneedle = \"b\"\nreturn needle in parts\n",
+                1,
+            ),
+            (
+                "values = {\"a\", \"b\"}\nneedle = \"b\"\nreturn len(values) == 2 and needle in values\n",
+                1,
+            ),
+            (
+                "left = {\"a\", \"b\"}\nright = {\"b\", \"a\"}\nreturn left == right\n",
                 1,
             ),
             (
