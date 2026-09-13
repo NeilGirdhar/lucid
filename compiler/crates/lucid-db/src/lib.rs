@@ -3503,17 +3503,184 @@ pub fn lower_function_body(
         if let Some(first_arm) = arms.first()
             && matches!(first_arm.pattern, lucid_syntax::Pattern::Wildcard(_))
         {
-            let selected_statements = normalize_static_match_statements(&first_arm.body);
-            if match_contains_explicit_return(&selected_statements) {
-                let selected_module = lucid_syntax::Module {
-                    statements: selected_statements,
-                    span: source_function.span,
-                };
-                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
-                    &selected_module,
-                    &function.parameter_names,
-                ) {
-                    return Ok(Arc::new(lowered));
+            if let Some(guard) = first_arm.guard.as_ref()
+                && static_truth(guard) != Some(true)
+                && let Some(next_arm) = arms.get(1)
+                && matches!(next_arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+                && next_arm.guard.is_none()
+            {
+                fn guarded_match_expr_has_identifier(expr: &lucid_syntax::Expr) -> bool {
+                    match expr {
+                        lucid_syntax::Expr::Ident { .. } => true,
+                        lucid_syntax::Expr::Unary { expr, .. } => {
+                            guarded_match_expr_has_identifier(expr)
+                        }
+                        lucid_syntax::Expr::Binary { left, right, .. } => {
+                            guarded_match_expr_has_identifier(left)
+                                || guarded_match_expr_has_identifier(right)
+                        }
+                        _ => false,
+                    }
+                }
+                fn guarded_match_expr_has_division(expr: &lucid_syntax::Expr) -> bool {
+                    match expr {
+                        lucid_syntax::Expr::Unary { expr, .. } => {
+                            guarded_match_expr_has_division(expr)
+                        }
+                        lucid_syntax::Expr::Binary {
+                            left, right, op, ..
+                        } => {
+                            matches!(
+                                op,
+                                lucid_syntax::BinaryOp::Div
+                                    | lucid_syntax::BinaryOp::FloorDiv
+                                    | lucid_syntax::BinaryOp::Mod
+                            ) || guarded_match_expr_has_division(left)
+                                || guarded_match_expr_has_division(right)
+                        }
+                        _ => false,
+                    }
+                }
+                fn guarded_match_assignment_value_for_name<'a>(
+                    statements: &'a [lucid_syntax::Stmt],
+                    expected_name: &str,
+                ) -> Option<&'a lucid_syntax::Expr> {
+                    let mut meaningful = statements
+                        .iter()
+                        .filter(|statement| !branch_noop_statement(statement));
+                    let statement = meaningful.next()?;
+                    if meaningful.next().is_some() {
+                        return None;
+                    }
+                    match statement {
+                        lucid_syntax::Stmt::Assignment {
+                            target: lucid_syntax::Expr::Ident { name, .. },
+                            value,
+                            ..
+                        }
+                        | lucid_syntax::Stmt::VarDef {
+                            pattern: lucid_syntax::Pattern::Ident(name, _),
+                            value: Some(value),
+                            ..
+                        } if name == expected_name => Some(value),
+                        _ => None,
+                    }
+                }
+                let guarded_and_expr =
+                    |left: &lucid_syntax::Expr, right: &lucid_syntax::Expr| -> lucid_syntax::Expr {
+                        lucid_syntax::Expr::Binary {
+                            op: lucid_syntax::BinaryOp::And,
+                            left: Box::new(left.clone()),
+                            right: Box::new(right.clone()),
+                            span: right.span(),
+                        }
+                    };
+                if guarded_match_expr_has_identifier(guard)
+                    && !guarded_match_expr_has_division(guard)
+                    && let Some(else_value) = match_arm_value(next_arm)
+                {
+                    let meaningful_then = first_arm
+                        .body
+                        .iter()
+                        .filter(|statement| !branch_noop_statement(statement))
+                        .collect::<Vec<_>>();
+                    if let [
+                        lucid_syntax::Stmt::Assignment {
+                            target: lucid_syntax::Expr::Ident { name, .. },
+                            value: initial_value,
+                            ..
+                        }
+                        | lucid_syntax::Stmt::VarDef {
+                            pattern: lucid_syntax::Pattern::Ident(name, _),
+                            value: Some(initial_value),
+                            ..
+                        },
+                        lucid_syntax::Stmt::If {
+                            condition: inner_condition,
+                            then_branch: inner_then,
+                            elif_branches: inner_elifs,
+                            else_branch: inner_else,
+                            ..
+                        },
+                        lucid_syntax::Stmt::Return {
+                            value:
+                                Some(lucid_syntax::Expr::Ident {
+                                    name: returned_name,
+                                    ..
+                                }),
+                            ..
+                        },
+                    ] = meaningful_then.as_slice()
+                        && name == returned_name
+                        && static_truth(inner_condition).is_none()
+                        && guarded_match_expr_has_identifier(inner_condition)
+                        && !guarded_match_expr_has_division(inner_condition)
+                        && inner_elifs.iter().all(|(elif_condition, _)| {
+                            static_truth(elif_condition).is_none()
+                                && guarded_match_expr_has_identifier(elif_condition)
+                                && !guarded_match_expr_has_division(elif_condition)
+                        })
+                        && let Some(inner_then_value) =
+                            guarded_match_assignment_value_for_name(inner_then, name)
+                    {
+                        let Some(inner_elif_values) = inner_elifs
+                            .iter()
+                            .map(|(elif_condition, branch)| {
+                                guarded_match_assignment_value_for_name(branch, name)
+                                    .map(|value| (guarded_and_expr(guard, elif_condition), value))
+                            })
+                            .collect::<Option<Vec<_>>>()
+                        else {
+                            return Err(Arc::from("unsupported guarded wildcard match arm"));
+                        };
+                        let combined_condition = guarded_and_expr(guard, inner_condition);
+                        let inner_fallback = match inner_else.as_deref() {
+                            Some(branch) => {
+                                let Some(value) =
+                                    guarded_match_assignment_value_for_name(branch, name)
+                                else {
+                                    return Err(Arc::from(
+                                        "unsupported guarded wildcard match arm",
+                                    ));
+                                };
+                                value
+                            }
+                            None => initial_value,
+                        };
+                        let mut elif_values = inner_elif_values
+                            .iter()
+                            .map(|(condition, value)| (condition, *value))
+                            .collect::<Vec<_>>();
+                        elif_values.push((guard, inner_fallback));
+                        return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                            &combined_condition,
+                            inner_then_value,
+                            &elif_values,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported guarded wildcard match arm"));
+                    }
+                }
+            }
+            if first_arm
+                .guard
+                .as_ref()
+                .is_none_or(|guard| static_truth(guard) == Some(true))
+            {
+                let selected_statements = normalize_static_match_statements(&first_arm.body);
+                if match_contains_explicit_return(&selected_statements) {
+                    let selected_module = lucid_syntax::Module {
+                        statements: selected_statements,
+                        span: source_function.span,
+                    };
+                    if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                        &selected_module,
+                        &function.parameter_names,
+                    ) {
+                        return Ok(Arc::new(lowered));
+                    }
                 }
             }
             if let Some(value) = match_arm_value(first_arm) {
@@ -9177,6 +9344,17 @@ mod tests {
             .expect("leading wildcard dynamic local match should route selected arm through CIR");
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[7, -2]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "leading-guarded-wildcard-dynamic-local-match.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case _ if value > 0:\n            result = 0\n            if value > 10:\n                result = 100\n            elif value > 0:\n                result = value + 10\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded leading wildcard match should preserve guard before selected arm");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[7, -2]), Ok(Some(-1)));
 
         let file = db.add_file(
             "match-noop-local-return.lucid",

@@ -2088,6 +2088,10 @@ diverged:
   through the linear CFG lowerer before considering later unreachable arms, so
   wildcard-first order is preserved even when the arm contains dynamic local
   control flow.
+  A leading guarded wildcard followed by an unguarded wildcard now lowers the
+  same nested local pattern as an explicit guarded ladder, so the guard-false
+  path reaches the fallback arm instead of treating the first wildcard as
+  unconditional.
   The adapter is limited to primitive, non-division guard conditions so it does
   not introduce eager recoverable errors while nested CFG splicing is still
   incomplete.
