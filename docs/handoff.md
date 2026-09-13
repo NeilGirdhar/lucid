@@ -710,11 +710,11 @@ diverged:
   body-local `return`: empty list/range loops and literal-pattern loops with no
   matching element ignore the unreachable body while preserving iterable
   expression evaluation.
-* Pure discarded expressions before value and bare returns now pass through
-  CIR lowering; effectful expressions remain rejected instead of being dropped.
-  Their rejection now carries a dedicated diagnostic explaining that an
-  effectful discarded expression needs a non-typed-CIR lowering path.
-  The same pure-discard filter now applies before final `pass`, with effectful
+* Discarded primitive expressions before value and bare returns now pass through
+  CIR lowering, so recoverable division and overflow still report before the
+  final return. Unsupported discarded calls remain rejected by the expression
+  lowerer instead of being dropped.
+  The same ordered-prefix path now applies before final `pass`, with unsupported
   discarded expressions rejected instead of erased.
   Selected static branches apply the same no-op filter for `assert(true)`,
   statically false loops, empty loops, and nested statically false no-`else`

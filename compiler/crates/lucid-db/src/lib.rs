@@ -9472,6 +9472,23 @@ mod tests {
     }
 
     #[test]
+    fn function_body_cir_preserves_discarded_prefix_arithmetic_overflow() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "discarded-prefix-overflow.lucid",
+            "def answer(value: int):\n    value + 1\n    return 42\n",
+        );
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("discarded arithmetic prefix should still lower");
+        assert_eq!(
+            lowered.execute_with_args(&[i64::MAX]),
+            Err(lucid_cir::ExecuteError::ArithmeticOverflow)
+        );
+        assert_eq!(lowered.execute_with_args(&[0]), Ok(Some(42)));
+    }
+
+    #[test]
     fn typed_module_accepts_continue_in_for_function_body() {
         let mut db = CompilerDatabase::default();
         let file = db.add_file(
@@ -12972,6 +12989,10 @@ mod tests {
             .as_ref()
             .expect("pure discarded expression before bare return should lower through CIR");
         assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(
+            function.execute_with_args(&[i64::MAX]),
+            Err(lucid_cir::ExecuteError::ArithmeticOverflow)
+        );
     }
 
     #[test]
