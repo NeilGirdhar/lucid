@@ -1370,10 +1370,67 @@ impl Function {
                     })
                     .map(|(_, binding_id)| *binding_id)
             }
+            #[derive(Clone)]
             struct TypedAggregateShape {
                 kind: &'static str,
                 source_id: u32,
                 member_positions: Vec<usize>,
+                literal_values: Option<Vec<i64>>,
+            }
+            fn typed_node_int_literal(node: &TypedExprNode) -> Option<i64> {
+                match node.literal {
+                    Some(TypedLiteral::Int(value)) => Some(value),
+                    _ => None,
+                }
+            }
+            fn typed_range_values(
+                node: &TypedExprNode,
+                nodes: &[TypedExprNode],
+            ) -> Result<Option<Vec<i64>>, LowerError> {
+                if node.kind != "call" || !(2..=4).contains(&node.children.len()) {
+                    return Ok(None);
+                }
+                let callee = nodes
+                    .get(node.children[0] as usize)
+                    .ok_or(LowerError::UnsupportedExpression)?;
+                if callee.kind != "name" || callee.detail.as_deref() != Some("range") {
+                    return Ok(None);
+                }
+                let args = node
+                    .children
+                    .iter()
+                    .skip(1)
+                    .map(|child| {
+                        nodes
+                            .get(*child as usize)
+                            .and_then(typed_node_int_literal)
+                            .ok_or(LowerError::UnsupportedExpression)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (mut current, stop, step) = match args.as_slice() {
+                    [stop] => (0, *stop, 1),
+                    [start, stop] => (*start, *stop, 1),
+                    [start, stop, step] => (*start, *stop, *step),
+                    _ => return Ok(None),
+                };
+                if step == 0 {
+                    return Err(LowerError::UnsupportedExpression);
+                }
+                let mut values = Vec::new();
+                while if step > 0 {
+                    current < stop
+                } else {
+                    current > stop
+                } {
+                    if values.len() >= 2048 {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    values.push(current);
+                    current = current
+                        .checked_add(step)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                }
+                Ok(Some(values))
             }
             fn typed_aggregate_shape(
                 id: u32,
@@ -1390,26 +1447,38 @@ impl Function {
                 let node = nodes
                     .get(source_id as usize)
                     .ok_or(LowerError::UnsupportedExpression)?;
+                if let Some(values) = typed_range_values(node, nodes)? {
+                    return Ok(Some(TypedAggregateShape {
+                        kind: "list",
+                        source_id,
+                        member_positions: (0..values.len()).collect(),
+                        literal_values: Some(values),
+                    }));
+                }
                 let shape = match node.kind.as_str() {
                     "list" => Some(TypedAggregateShape {
                         kind: "list",
                         source_id,
                         member_positions: (0..node.children.len()).collect(),
+                        literal_values: None,
                     }),
                     "set" => Some(TypedAggregateShape {
                         kind: "set",
                         source_id,
                         member_positions: (0..node.children.len()).collect(),
+                        literal_values: None,
                     }),
                     "record" => Some(TypedAggregateShape {
                         kind: "record",
                         source_id,
                         member_positions: (0..node.children.len()).collect(),
+                        literal_values: None,
                     }),
                     "dict" if node.children.len() % 2 == 0 => Some(TypedAggregateShape {
                         kind: "dict",
                         source_id,
                         member_positions: (0..node.children.len()).step_by(2).collect(),
+                        literal_values: None,
                     }),
                     "call" if node.children.len() == 1 => {
                         let callee = nodes
@@ -1420,16 +1489,19 @@ impl Function {
                                 kind: "list",
                                 source_id,
                                 member_positions: Vec::new(),
+                                literal_values: None,
                             }),
                             Some("set") => Some(TypedAggregateShape {
                                 kind: "set",
                                 source_id,
                                 member_positions: Vec::new(),
+                                literal_values: None,
                             }),
                             Some("dict") => Some(TypedAggregateShape {
                                 kind: "dict",
                                 source_id,
                                 member_positions: Vec::new(),
+                                literal_values: None,
                             }),
                             _ => None,
                         }
@@ -1475,28 +1547,18 @@ impl Function {
                             else {
                                 return Ok(None);
                             };
-                            let source = nodes
-                                .get(inner_shape.source_id as usize)
-                                .ok_or(LowerError::UnsupportedExpression)?;
-                            let literal_order = |position: usize| {
-                                let child_id = *source.children.get(position)?;
-                                let child = nodes.get(child_id as usize)?;
-                                match child.literal {
-                                    Some(TypedLiteral::Int(value)) => Some(value),
-                                    Some(TypedLiteral::Bool(value)) => Some(i64::from(value)),
-                                    None => None,
-                                }
-                            };
                             return Ok(match (kind, inner_shape.kind) {
                                 ("list", "list" | "record") => Some(TypedAggregateShape {
                                     kind: "list",
                                     source_id: inner_shape.source_id,
                                     member_positions: inner_shape.member_positions,
+                                    literal_values: inner_shape.literal_values,
                                 }),
                                 ("set", "list" | "record" | "set") => Some(TypedAggregateShape {
                                     kind: "set",
                                     source_id: inner_shape.source_id,
                                     member_positions: inner_shape.member_positions,
+                                    literal_values: inner_shape.literal_values,
                                 }),
                                 ("reversed", "list" | "record") => Some(TypedAggregateShape {
                                     kind: "list",
@@ -1506,20 +1568,24 @@ impl Function {
                                         .into_iter()
                                         .rev()
                                         .collect(),
+                                    literal_values: inner_shape.literal_values,
                                 }),
                                 ("sorted", "list" | "record" | "set") => {
-                                    let mut positions = inner_shape.member_positions;
-                                    positions.sort_by_key(|position| literal_order(*position));
-                                    if positions
-                                        .iter()
-                                        .any(|position| literal_order(*position).is_none())
-                                    {
+                                    let mut positions = inner_shape.member_positions.clone();
+                                    positions.sort_by_key(|position| {
+                                        typed_shape_literal_order(&inner_shape, *position, nodes)
+                                    });
+                                    if positions.iter().any(|position| {
+                                        typed_shape_literal_order(&inner_shape, *position, nodes)
+                                            .is_none()
+                                    }) {
                                         None
                                     } else {
                                         Some(TypedAggregateShape {
                                             kind: "list",
                                             source_id: inner_shape.source_id,
                                             member_positions: positions,
+                                            literal_values: inner_shape.literal_values,
                                         })
                                     }
                                 }
@@ -1527,6 +1593,7 @@ impl Function {
                                     kind: "dict",
                                     source_id: inner_shape.source_id,
                                     member_positions: inner_shape.member_positions,
+                                    literal_values: None,
                                 }),
                                 _ => None,
                             });
@@ -1557,12 +1624,14 @@ impl Function {
                                     },
                                     source_id: operand_id,
                                     member_positions,
+                                    literal_values: None,
                                 })
                             }
                             "set" if kind == "set" => Some(TypedAggregateShape {
                                 kind,
                                 source_id: operand_id,
                                 member_positions: (0..operand.children.len()).collect(),
+                                literal_values: None,
                             }),
                             "set" if kind == "sorted" => {
                                 let mut positions = (0..operand.children.len()).collect::<Vec<_>>();
@@ -1577,6 +1646,7 @@ impl Function {
                                     kind: "list",
                                     source_id: operand_id,
                                     member_positions: positions,
+                                    literal_values: None,
                                 })
                             }
                             "dict" if kind == "dict" && operand.children.len() % 2 == 0 => {
@@ -1586,6 +1656,7 @@ impl Function {
                                     member_positions: (0..operand.children.len())
                                         .step_by(2)
                                         .collect(),
+                                    literal_values: None,
                                 })
                             }
                             _ => None,
@@ -1599,6 +1670,9 @@ impl Function {
                 shape: &TypedAggregateShape,
                 nodes: &[TypedExprNode],
             ) -> Result<Vec<u32>, LowerError> {
+                if shape.literal_values.is_some() {
+                    return Ok(Vec::new());
+                }
                 let aggregate = nodes
                     .get(shape.source_id as usize)
                     .ok_or(LowerError::UnsupportedExpression)?;
@@ -1607,6 +1681,60 @@ impl Function {
                 } else {
                     Ok(aggregate.children.clone())
                 }
+            }
+            fn typed_shape_literal_order(
+                shape: &TypedAggregateShape,
+                position: usize,
+                nodes: &[TypedExprNode],
+            ) -> Option<i64> {
+                if let Some(values) = &shape.literal_values {
+                    return values.get(position).copied();
+                }
+                let aggregate = nodes.get(shape.source_id as usize)?;
+                let child_id = *aggregate.children.get(position)?;
+                let child = nodes.get(child_id as usize)?;
+                match child.literal {
+                    Some(TypedLiteral::Int(value)) => Some(value),
+                    Some(TypedLiteral::Bool(value)) => Some(i64::from(value)),
+                    None => None,
+                }
+            }
+            fn push_typed_shape_values(
+                shape: &TypedAggregateShape,
+                nodes: &[TypedExprNode],
+                lowered: &mut std::collections::HashMap<u32, ValueId>,
+                instructions: &mut Vec<Instruction>,
+                next: &mut u32,
+                parameter_names: &[String],
+                local_bindings: &[(String, u32)],
+            ) -> Result<Vec<ValueId>, LowerError> {
+                if let Some(values) = &shape.literal_values {
+                    let mut lowered_values = Vec::with_capacity(values.len());
+                    for value in values {
+                        let result = ValueId(*next);
+                        *next += 1;
+                        instructions.push(Instruction::ConstInt {
+                            result,
+                            value: *value,
+                        });
+                        lowered_values.push(result);
+                    }
+                    return Ok(lowered_values);
+                }
+                let child_ids = typed_aggregate_child_ids(shape, nodes)?;
+                let mut lowered_values = Vec::with_capacity(child_ids.len());
+                for child in child_ids {
+                    lowered_values.push(lower(
+                        child,
+                        nodes,
+                        lowered,
+                        instructions,
+                        next,
+                        parameter_names,
+                        local_bindings,
+                    )?);
+                }
+                Ok(lowered_values)
             }
             if node.kind == "name"
                 && !parameter_names
@@ -1668,19 +1796,15 @@ impl Function {
                         parameter_names,
                         local_bindings,
                     )?;
-                    let child_ids = typed_aggregate_child_ids(&shape, nodes)?;
-                    let mut lowered_children = Vec::with_capacity(child_ids.len());
-                    for child in &child_ids {
-                        lowered_children.push(lower(
-                            *child,
-                            nodes,
-                            lowered,
-                            instructions,
-                            next,
-                            parameter_names,
-                            local_bindings,
-                        )?);
-                    }
+                    let lowered_children = push_typed_shape_values(
+                        &shape,
+                        nodes,
+                        lowered,
+                        instructions,
+                        next,
+                        parameter_names,
+                        local_bindings,
+                    )?;
                     let mut comparisons = Vec::with_capacity(member_positions.len());
                     for position in member_positions {
                         let right = *lowered_children
@@ -1745,31 +1869,7 @@ impl Function {
                                 (Some(left), Some(right)) => (left, right),
                                 _ => return Err(LowerError::UnsupportedExpression),
                             };
-                        let lower_shape_values =
-                            |shape: &TypedAggregateShape,
-                             nodes: &[TypedExprNode],
-                             lowered: &mut std::collections::HashMap<u32, ValueId>,
-                             instructions: &mut Vec<Instruction>,
-                             next: &mut u32,
-                             parameter_names: &[String],
-                             local_bindings: &[(String, u32)]|
-                             -> Result<Vec<ValueId>, LowerError> {
-                                let child_ids = typed_aggregate_child_ids(shape, nodes)?;
-                                let mut values = Vec::with_capacity(child_ids.len());
-                                for child in &child_ids {
-                                    values.push(lower(
-                                        *child,
-                                        nodes,
-                                        lowered,
-                                        instructions,
-                                        next,
-                                        parameter_names,
-                                        local_bindings,
-                                    )?);
-                                }
-                                Ok(values)
-                            };
-                        let left_values = lower_shape_values(
+                        let left_values = push_typed_shape_values(
                             &left_shape,
                             nodes,
                             lowered,
@@ -1778,7 +1878,7 @@ impl Function {
                             parameter_names,
                             local_bindings,
                         )?;
-                        let right_values = lower_shape_values(
+                        let right_values = push_typed_shape_values(
                             &right_shape,
                             nodes,
                             lowered,
@@ -1900,48 +2000,45 @@ impl Function {
                             (Some(left), Some(right)) => (left, right),
                             _ => return Err(LowerError::UnsupportedExpression),
                         };
-                        let left_aggregate = nodes
-                            .get(left_shape.source_id as usize)
-                            .ok_or(LowerError::UnsupportedExpression)?;
-                        let right_aggregate = nodes
-                            .get(right_shape.source_id as usize)
-                            .ok_or(LowerError::UnsupportedExpression)?;
                         let left_is_set = left_shape.kind == "set";
-                        let mut left_values = Vec::with_capacity(left_shape.member_positions.len());
-                        for position in &left_shape.member_positions {
-                            let child = left_aggregate
-                                .children
-                                .get(*position)
-                                .copied()
-                                .ok_or(LowerError::UnsupportedExpression)?;
-                            left_values.push(lower(
-                                child,
-                                nodes,
-                                lowered,
-                                instructions,
-                                next,
-                                parameter_names,
-                                local_bindings,
-                            )?);
-                        }
-                        let mut right_values =
-                            Vec::with_capacity(right_shape.member_positions.len());
-                        for position in &right_shape.member_positions {
-                            let child = right_aggregate
-                                .children
-                                .get(*position)
-                                .copied()
-                                .ok_or(LowerError::UnsupportedExpression)?;
-                            right_values.push(lower(
-                                child,
-                                nodes,
-                                lowered,
-                                instructions,
-                                next,
-                                parameter_names,
-                                local_bindings,
-                            )?);
-                        }
+                        let left_lowered = push_typed_shape_values(
+                            &left_shape,
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let right_lowered = push_typed_shape_values(
+                            &right_shape,
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let left_values = left_shape
+                            .member_positions
+                            .iter()
+                            .map(|position| {
+                                left_lowered
+                                    .get(*position)
+                                    .copied()
+                                    .ok_or(LowerError::UnsupportedExpression)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let right_values = right_shape
+                            .member_positions
+                            .iter()
+                            .map(|position| {
+                                right_lowered
+                                    .get(*position)
+                                    .copied()
+                                    .ok_or(LowerError::UnsupportedExpression)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
                         if left_shape.kind != right_shape.kind {
                             instructions.push(Instruction::ConstBool {
                                 result,
@@ -2038,9 +2135,6 @@ impl Function {
                         parameter_names,
                         local_bindings,
                     )? {
-                        let aggregate = nodes
-                            .get(shape.source_id as usize)
-                            .ok_or(LowerError::UnsupportedExpression)?;
                         if shape.kind == "dict" {
                             let Some(needle) = index_node.literal else {
                                 return Err(LowerError::UnsupportedExpression);
@@ -2100,24 +2194,25 @@ impl Function {
                             if !(0..len).contains(&index) {
                                 return Err(LowerError::UnsupportedExpression);
                             }
-                            let mut member_values =
-                                Vec::with_capacity(shape.member_positions.len());
-                            for position in &shape.member_positions {
-                                let child = aggregate
-                                    .children
-                                    .get(*position)
-                                    .copied()
-                                    .ok_or(LowerError::UnsupportedExpression)?;
-                                member_values.push(lower(
-                                    child,
-                                    nodes,
-                                    lowered,
-                                    instructions,
-                                    next,
-                                    parameter_names,
-                                    local_bindings,
-                                )?);
-                            }
+                            let lowered_values = push_typed_shape_values(
+                                &shape,
+                                nodes,
+                                lowered,
+                                instructions,
+                                next,
+                                parameter_names,
+                                local_bindings,
+                            )?;
+                            let member_values = shape
+                                .member_positions
+                                .iter()
+                                .map(|position| {
+                                    lowered_values
+                                        .get(*position)
+                                        .copied()
+                                        .ok_or(LowerError::UnsupportedExpression)
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
                             lower(
                                 node.children[1],
                                 nodes,
@@ -2320,17 +2415,8 @@ impl Function {
                             parameter_names,
                             local_bindings,
                         )?;
-                        let aggregate_shape = match shape {
-                            Some(shape) => {
-                                let aggregate = nodes
-                                    .get(shape.source_id as usize)
-                                    .ok_or(LowerError::UnsupportedExpression)?;
-                                (
-                                    shape.member_positions.len(),
-                                    shape.member_positions,
-                                    aggregate,
-                                )
-                            }
+                        let shape = match shape {
+                            Some(shape) => shape,
                             None if callee.detail.as_deref() == Some("bool")
                                 && node.children.len() == 2 =>
                             {
@@ -2360,27 +2446,23 @@ impl Function {
                             }
                             _ => return Err(LowerError::UnsupportedExpression),
                         };
-                        let (length, member_positions, aggregate) = aggregate_shape;
-                        let child_ids = if aggregate.kind == "call" && aggregate.children.len() == 1
-                        {
-                            Vec::new()
-                        } else {
-                            aggregate.children.clone()
-                        };
-                        let mut lowered_members = Vec::with_capacity(member_positions.len());
-                        for (position, child) in child_ids.iter().enumerate() {
-                            let lowered_child = lower(
-                                *child,
-                                nodes,
-                                lowered,
-                                instructions,
-                                next,
-                                parameter_names,
-                                local_bindings,
-                            )?;
-                            if member_positions.contains(&position) {
-                                lowered_members.push(lowered_child);
-                            }
+                        let length = shape.member_positions.len();
+                        let lowered_values = push_typed_shape_values(
+                            &shape,
+                            nodes,
+                            lowered,
+                            instructions,
+                            next,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let mut lowered_members = Vec::with_capacity(shape.member_positions.len());
+                        for position in &shape.member_positions {
+                            lowered_members.push(
+                                *lowered_values
+                                    .get(*position)
+                                    .ok_or(LowerError::UnsupportedExpression)?,
+                            );
                         }
                         let start = if node.children.len() == 3 {
                             Some(lower(
@@ -2450,23 +2532,11 @@ impl Function {
                                         }
                                         let mut selected = None::<(usize, i64)>;
                                         for (member_index, position) in
-                                            member_positions.iter().copied().enumerate()
+                                            shape.member_positions.iter().copied().enumerate()
                                         {
-                                            let child = aggregate
-                                                .children
-                                                .get(position)
-                                                .copied()
-                                                .ok_or(LowerError::UnsupportedExpression)?;
-                                            let child = nodes
-                                                .get(child as usize)
-                                                .ok_or(LowerError::UnsupportedExpression)?;
-                                            let order_value = match child.literal {
-                                                Some(TypedLiteral::Int(value)) => value,
-                                                Some(TypedLiteral::Bool(value)) => i64::from(value),
-                                                None => {
-                                                    return Err(LowerError::UnsupportedExpression)
-                                                }
-                                            };
+                                            let order_value =
+                                                typed_shape_literal_order(&shape, position, nodes)
+                                                    .ok_or(LowerError::UnsupportedExpression)?;
                                             let replace = match (
                                                 callee.detail.as_deref(),
                                                 selected.map(|(_, value)| value),
@@ -26924,6 +26994,377 @@ return total
             Function::from_typed_function_body_with_locals(&nodes, 21, &[], &[("items".into(), 5)])
                 .expect("typed sorted should feed aggregate consumers");
         assert_eq!(function.execute(), Ok(Some(8)));
+    }
+
+    #[test]
+    fn lowers_typed_range_for_aggregate_consumers() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("range".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("len".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(5)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 5, 6, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "index".into(),
+                detail: None,
+                children: vec![8, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "binary".into(),
+                detail: Some("In".into()),
+                children: vec![5, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "call".into(),
+                detail: None,
+                children: vec![3, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "call".into(),
+                detail: None,
+                children: vec![4, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![10, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![16, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![17, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 19,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![18, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 20,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![19, 15],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 20, &[])
+            .expect("typed range should feed aggregate consumers");
+        assert_eq!(function.execute(), Ok(Some(12)));
+    }
+
+    #[test]
+    fn lowers_typed_range_constructor_composition() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("range".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("list".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("reversed".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "name".into(),
+                detail: Some("sorted".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(3)),
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 5],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "list".into(),
+                detail: None,
+                children: vec![8, 9, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "binary".into(),
+                detail: Some("Eq".into()),
+                children: vec![7, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "index".into(),
+                detail: None,
+                children: vec![13, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "call".into(),
+                detail: None,
+                children: vec![3, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "index".into(),
+                detail: None,
+                children: vec![15, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "call".into(),
+                detail: None,
+                children: vec![4, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![12, 14],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 19,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![18, 16],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 20,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![19, 17],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 20, &[])
+            .expect("typed range should compose through aggregate constructors");
+        assert_eq!(function.execute(), Ok(Some(6)));
+    }
+
+    #[test]
+    fn typed_range_rejects_zero_step() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("range".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("len".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(4)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 2, 3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 5],
+                literal: None,
+            },
+        ];
+        assert_eq!(
+            Function::from_typed_function_body(&nodes, 6, &[]),
+            Err(LowerError::UnsupportedExpression)
+        );
     }
 
     #[test]
