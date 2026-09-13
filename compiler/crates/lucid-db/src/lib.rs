@@ -13336,6 +13336,15 @@ mod tests {
         assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
 
         let file = db.add_file(
+            "counted-while-conditional-else-accumulate.lucid",
+            "def signed_sum(n: int, cutoff: int):\n    total = 0\n    while n > 0:\n        if n > cutoff:\n            total += n\n        else:\n            total -= n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "signed_sum".into())
+            .as_ref()
+            .expect("counted while conditional else accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let file = db.add_file(
             "range-accumulate.lucid",
             "def sum_to(n: int):\n    total = 0\n    for i in range(n):\n        total += i\n    return total\n",
         );

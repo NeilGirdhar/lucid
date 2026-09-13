@@ -2147,6 +2147,8 @@ diverged:
 * Counted `while` accumulator lowering now accepts a single guarded accumulator
   update before the induction update, preserving the induction step on every
   iteration and merging either the updated or carried accumulator value.
+  The guarded shape also accepts an `else` accumulator update and merges the
+  selected then/else accumulator value before applying the induction step.
 * The compiler database now exposes an incremental resolved-module HIR
   artifact bundling stable declarations, visibility, spans, and imports.
 * Visibility queries now consume that resolved-module artifact directly,
