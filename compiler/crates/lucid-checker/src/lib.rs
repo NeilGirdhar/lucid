@@ -4500,6 +4500,20 @@ impl TypeChecker {
         }
     }
 
+    fn iterable_pair_element_types(&self, iterable: &Type) -> Option<(Type, Type)> {
+        match self.iterable_element_type(iterable) {
+            Type::Record { fields, .. } if fields.len() == 2 => {
+                Some((fields[0].1.clone(), fields[1].1.clone()))
+            }
+            Type::Class {
+                name, type_args, ..
+            } if name == "list" && type_args.len() == 1 => {
+                self.iterable_pair_element_types(type_args.first()?)
+            }
+            _ => None,
+        }
+    }
+
     fn is_iterable_type(&self, iterable: &Type) -> bool {
         let base = match iterable {
             Type::View { inner, .. } => inner.as_ref(),
@@ -9876,6 +9890,19 @@ impl TypeChecker {
                                         if let Type::Class { type_args, .. } = argument_type {
                                             Some(Type::Class { name: "dict".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
                                         } else { None }
+                                    }
+                                    "dict" => {
+                                        let (key_type, value_type) =
+                                            self.iterable_pair_element_types(&argument_type)?;
+                                        Some(Type::Class {
+                                            name: "dict".into(),
+                                            type_args: vec![key_type, value_type],
+                                            parent: None,
+                                            traits: Vec::new(),
+                                            interfaces: Vec::new(),
+                                            fields: HashMap::new(),
+                                            is_sealed: false,
+                                        })
                                     }
                                     "freeze" => Some(Self::frozen_type(argument_type)),
                                     "abs" => match argument_type {
@@ -15761,6 +15788,20 @@ def reject(value: not int) -> none:
         ));
         assert!(matches!(
             checker.env.variables.get("copy").map(|(ty, _)| ty),
+            Some(Type::Class { name, type_args, .. })
+                if name == "dict" && type_args == &vec![Type::Str, Type::Int]
+        ));
+        let mut pair_checker = TypeChecker::new();
+        pair_checker
+            .check_module(
+                &parse(
+                    "pairs: dict[str, int] = {\"a\": 1}\ncopy = dict(pairs.items())\nvalue: int = copy[\"a\"]\n",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            pair_checker.env.variables.get("copy").map(|(ty, _)| ty),
             Some(Type::Class { name, type_args, .. })
                 if name == "dict" && type_args == &vec![Type::Str, Type::Int]
         ));

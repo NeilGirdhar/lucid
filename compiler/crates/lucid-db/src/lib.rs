@@ -10225,6 +10225,16 @@ mod tests {
         assert_eq!(function.execute_with_args(&[20, 22]), Ok(Some(44)));
 
         let file = db.add_file(
+            "dict-items-copy.lucid",
+            "def dict_copy_value(left: int, right: int):\n    mapping = {1: left, 2: right}\n    copy = dict(mapping.items())\n    return copy[2]\n",
+        );
+        let function = lower_function_body(&db, file, "dict_copy_value".into())
+            .as_ref()
+            .expect("dict constructor from typed item views should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[20, 22]), Ok(Some(22)));
+
+        let file = db.add_file(
             "dynamic-pow.lucid",
             "def power(base: int, exponent: int):\n    return pow(base, exponent)\n",
         );
