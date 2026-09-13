@@ -4985,6 +4985,91 @@ impl TypeChecker {
         )
     }
 
+    fn extract_type_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
+        // Extract type narrowing from conditions like "x is None" or "x is not None"
+        if let Expr::Binary {
+            op: BinaryOp::Is,
+            left,
+            right,
+            ..
+        } = condition
+        {
+            if let Expr::Ident { name, .. } = &**left {
+                if let Some((current_type, _)) = self.env.variables.get(name) {
+                    // Check if right side is None
+                    if let Expr::Literal {
+                        value: LiteralValue::None,
+                        ..
+                    } = &**right
+                    {
+                        // x is None: then_branch x is None, else_branch x is not None
+                        let not_none = match current_type {
+                            Type::Union(types) => {
+                                Type::make_union(
+                                    types
+                                        .iter()
+                                        .filter(|t| !matches!(t, Type::None))
+                                        .cloned()
+                                        .collect(),
+                                )
+                            }
+                            Type::None => Type::Never,
+                            _ => current_type.clone(),
+                        };
+                        return (
+                            Some((name.clone(), Type::None)),
+                            Some((name.clone(), not_none)),
+                        );
+                    }
+                }
+            }
+        } else if let Expr::Unary {
+            op: UnaryOp::Not,
+            expr,
+            ..
+        } = condition
+        {
+            // Handle "not (x is None)" which is equivalent to "x is not None"
+            if let Expr::Binary {
+                op: BinaryOp::Is,
+                left,
+                right,
+                ..
+            } = &**expr
+            {
+                if let Expr::Ident { name, .. } = &**left {
+                    if let Some((current_type, _)) = self.env.variables.get(name) {
+                        if let Expr::Literal {
+                            value: LiteralValue::None,
+                            ..
+                        } = &**right
+                        {
+                            // not (x is None): then_branch x is not None, else_branch x is None
+                            let not_none = match current_type {
+                                Type::Union(types) => {
+                                    Type::make_union(
+                                        types
+                                            .iter()
+                                            .filter(|t| !matches!(t, Type::None))
+                                            .cloned()
+                                            .collect(),
+                                    )
+                                }
+                                Type::None => Type::Never,
+                                _ => current_type.clone(),
+                            };
+                            return (
+                                Some((name.clone(), not_none)),
+                                Some((name.clone(), Type::None)),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        (None, None)
+    }
+
     fn normalize_literal_types(&self, ty: &Type) -> Type {
         match ty {
             Type::LiteralBool(_) => Type::Bool,
@@ -6834,9 +6919,39 @@ impl TypeChecker {
                         span: condition.span(),
                     });
                 }
+
+                // Extract type narrowing from condition
+                let (narrow_to_type, narrow_else_to_type) =
+                    self.extract_type_narrowing(condition);
+
+                // Save environment
+                let saved_vars = self.env.variables.clone();
+
+                // Apply narrowing to then_branch
+                if let Some((var_name, new_type)) = &narrow_to_type {
+                    if let Some((_, mutability)) = self.env.variables.get(var_name) {
+                        self.env.variables.insert(
+                            var_name.clone(),
+                            (new_type.clone(), mutability.clone()),
+                        );
+                    }
+                }
+
                 for s in then_branch {
                     self.check_statement(s)?;
                 }
+
+                // Restore and apply else narrowing
+                self.env.variables = saved_vars.clone();
+                if let Some((var_name, new_type)) = &narrow_else_to_type {
+                    if let Some((_, mutability)) = saved_vars.get(var_name) {
+                        self.env.variables.insert(
+                            var_name.clone(),
+                            (new_type.clone(), mutability.clone()),
+                        );
+                    }
+                }
+
                 for (c, b) in elif_branches {
                     Self::reject_bare_skip_value(c, "elif condition")?;
                     let elif_type = self.type_of_expr(c)?;
@@ -6855,6 +6970,9 @@ impl TypeChecker {
                         self.check_statement(s)?;
                     }
                 }
+
+                // Restore original environment
+                self.env.variables = saved_vars;
                 Ok(())
             }
             Stmt::For {
@@ -19027,6 +19145,44 @@ c = a < b
         assert!(
             result.is_ok(),
             "str < str should be allowed (same type): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn type_narrowing_on_none_check() {
+        let code = r#"x: int | None = None
+
+if x is None:
+    y = x  # x should be narrowed to None
+else:
+    z = x  # x should be narrowed to int
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "type narrowing on 'x is None' should work: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn type_narrowing_on_not_none_check() {
+        let code = r#"x: int | None = None
+
+if not (x is None):
+    y = x  # x should be narrowed to int
+else:
+    z = x  # x should be narrowed to None
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "type narrowing on 'not (x is None)' should work: {:?}",
             result
         );
     }
