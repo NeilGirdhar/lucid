@@ -1454,7 +1454,7 @@ fn run_cir_materializes_constant_iterables_with_list_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    numbers = list(range(3))\n    chars = list(\"ab\".chars)\n    keys = list({1: 10, 2: 20}.keys())\n    values = list({1: 10, 2: 20}.values())\n    pairs = {1: 10, 2: 20}\n    items = list(pairs.items())\n    scores = {\"a\": 30, \"bc\": 40}\n    mixed = list(scores.items())\n    return numbers[2] + keys[0] + keys[1] + values[0] + values[1] + items[1][0] + items[1][1] + len(mixed[1][0]) + mixed[1][1] if chars[1] == \"b\" else 0\n",
+        "def answer():\n    numbers = list(range(3))\n    chars = list(\"ab\".chars)\n    keys = list({1: 10, 2: 20}.keys())\n    values = list({1: 10, 2: 20}.values())\n    pairs = {1: 10, 2: 20}\n    items = list(pairs.items())\n    scores = {\"a\": 30, \"bc\": 40}\n    mixed = list(scores.items())\n    total = numbers[2] + keys[0] + keys[1] + values[0] + values[1] + items[1][0] + items[1][1] + len(mixed[1][0]) + mixed[1][1]\n    for item in mixed:\n        total += len(item[0]) + item[1]\n    return total if chars[1] == \"b\" else 0\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
@@ -1472,7 +1472,7 @@ fn run_cir_materializes_constant_iterables_with_list_in_typed_function_body() {
         "run-cir function list materialization failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "99");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "172");
 }
 
 #[test]

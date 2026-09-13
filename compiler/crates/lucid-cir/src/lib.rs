@@ -14762,6 +14762,40 @@ impl Function {
                 }
                 lucid_syntax::Stmt::For {
                     target: lucid_syntax::Pattern::Ident(name, _),
+                    iterable: lucid_syntax::Expr::Ident { name: iterable, .. },
+                    body,
+                    ..
+                } if matches!(
+                    aggregate_bindings.get(iterable),
+                    Some(AggregateBinding::AggregateList(_) | AggregateBinding::AggregateSet(_))
+                ) =>
+                {
+                    let aggregate = aggregate_bindings
+                        .get(iterable)
+                        .ok_or(LowerError::UnsupportedExpression)?;
+                    let values = match aggregate {
+                        AggregateBinding::AggregateList(values)
+                        | AggregateBinding::AggregateSet(values) => values
+                            .iter()
+                            .cloned()
+                            .map(AggregateLoopValue::Aggregate)
+                            .collect::<Vec<_>>(),
+                        _ => unreachable!(),
+                    };
+                    if values.is_empty() {
+                        return Ok(());
+                    }
+                    if contains_return(body) {
+                        return Err(LowerError::UnsupportedExpression);
+                    }
+                    for value in values {
+                        bind_aggregate_loop_value(name, value, bindings, aggregate_bindings);
+                        visit_all(body, bindings, aggregate_bindings, instructions, next, last)?;
+                    }
+                    Ok(())
+                }
+                lucid_syntax::Stmt::For {
+                    target: lucid_syntax::Pattern::Ident(name, _),
                     iterable:
                         lucid_syntax::Expr::List { elements, .. }
                         | lucid_syntax::Expr::Set { elements, .. },
@@ -25350,6 +25384,13 @@ return total
         .unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(44)));
+
+        let module = lucid_syntax::parse(
+            "total = 0\npairs = {\"a\": 40, \"bc\": 42}\nitems = list(pairs.items())\nfor item in items:\n    total = total + len(item[0]) + item[1]\nreturn total\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(85)));
 
         let module = lucid_syntax::parse(
             "pairs = {1: 40, 2: 42}\nitems = set(pairs.items())\nreturn len(items)\n",
