@@ -2093,6 +2093,10 @@ diverged:
   The same explicit-ladder strategy now covers an outer `elif` arm containing
   the nested local branch, preserving the preceding branch and the final
   fallback.
+  Multi-arm literal/wildcard `match` normalization now reuses that outer
+  `elif` nested-local adapter after the simple linear CFG attempt, so a middle
+  guarded wildcard arm with a nested local branch preserves the earlier literal
+  arm and the final fallback.
   A leading wildcard match arm with a live return now routes that selected arm
   through the linear CFG lowerer before considering later unreachable arms, so
   wildcard-first order is preserved even when the arm contains dynamic local
