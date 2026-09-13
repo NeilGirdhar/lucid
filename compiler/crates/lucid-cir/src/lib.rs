@@ -1458,6 +1458,130 @@ impl Function {
                     _ => None,
                 }
             }
+            fn typed_constant_bool(
+                id: u32,
+                current_id: u32,
+                nodes: &[TypedExprNode],
+                parameter_names: &[String],
+                local_bindings: &[(String, u32)],
+            ) -> Option<bool> {
+                let node = nodes.get(id as usize)?;
+                let id = local_binding_id(node, current_id, parameter_names, local_bindings)
+                    .unwrap_or(id);
+                let node = nodes.get(id as usize)?;
+                if let Some(literal) = node.literal {
+                    return match literal {
+                        TypedLiteral::Bool(value) => Some(value),
+                        TypedLiteral::Int(value) => Some(value != 0),
+                    };
+                }
+                match node.kind.as_str() {
+                    "unary" if node.children.len() == 1 => match node.detail.as_deref()? {
+                        "Not" => Some(!typed_constant_bool(
+                            node.children[0],
+                            current_id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )?),
+                        _ => None,
+                    },
+                    "binary" if node.children.len() == 2 => {
+                        if node.detail.as_deref() == Some("And") {
+                            let left = typed_constant_bool(
+                                node.children[0],
+                                current_id,
+                                nodes,
+                                parameter_names,
+                                local_bindings,
+                            )?;
+                            return if left {
+                                typed_constant_bool(
+                                    node.children[1],
+                                    current_id,
+                                    nodes,
+                                    parameter_names,
+                                    local_bindings,
+                                )
+                            } else {
+                                Some(false)
+                            };
+                        }
+                        if node.detail.as_deref() == Some("Or") {
+                            let left = typed_constant_bool(
+                                node.children[0],
+                                current_id,
+                                nodes,
+                                parameter_names,
+                                local_bindings,
+                            )?;
+                            return if left {
+                                Some(true)
+                            } else {
+                                typed_constant_bool(
+                                    node.children[1],
+                                    current_id,
+                                    nodes,
+                                    parameter_names,
+                                    local_bindings,
+                                )
+                            };
+                        }
+                        if matches!(
+                            node.detail.as_deref(),
+                            Some("Eq" | "Identity" | "Is" | "NotEq" | "NotIdentity" | "IsNot")
+                        ) {
+                            if let (Some(left), Some(right)) = (
+                                typed_constant_bool(
+                                    node.children[0],
+                                    current_id,
+                                    nodes,
+                                    parameter_names,
+                                    local_bindings,
+                                ),
+                                typed_constant_bool(
+                                    node.children[1],
+                                    current_id,
+                                    nodes,
+                                    parameter_names,
+                                    local_bindings,
+                                ),
+                            ) {
+                                return Some(match node.detail.as_deref()? {
+                                    "Eq" | "Identity" | "Is" => left == right,
+                                    "NotEq" | "NotIdentity" | "IsNot" => left != right,
+                                    _ => unreachable!(),
+                                });
+                            }
+                        }
+                        let left = typed_constant_int(
+                            node.children[0],
+                            current_id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        let right = typed_constant_int(
+                            node.children[1],
+                            current_id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )?;
+                        match node.detail.as_deref()? {
+                            "Eq" | "Identity" | "Is" => Some(left == right),
+                            "NotEq" | "NotIdentity" | "IsNot" => Some(left != right),
+                            "Lt" => Some(left < right),
+                            "LtEq" => Some(left <= right),
+                            "Gt" => Some(left > right),
+                            "GtEq" => Some(left >= right),
+                            _ => None,
+                        }
+                    }
+                    _ => typed_constant_int(id, current_id, nodes, parameter_names, local_bindings)
+                        .map(|value| value != 0),
+                }
+            }
             fn typed_range_values(
                 node: &TypedExprNode,
                 nodes: &[TypedExprNode],
@@ -1805,6 +1929,16 @@ impl Function {
                     Some(TypedLiteral::Bool(value)) => Some(i64::from(value)),
                     None => {
                         typed_constant_int(id, current_id, nodes, parameter_names, local_bindings)
+                            .or_else(|| {
+                                typed_constant_bool(
+                                    id,
+                                    current_id,
+                                    nodes,
+                                    parameter_names,
+                                    local_bindings,
+                                )
+                                .map(i64::from)
+                            })
                     }
                 }
             }
@@ -27219,6 +27353,127 @@ return total
         let function = Function::from_typed_function_body(&nodes, 13, &[])
             .expect("typed aggregate ordering should fold constant expression members");
         assert_eq!(function.execute(), Ok(Some(5)));
+    }
+
+    #[test]
+    fn lowers_typed_ordered_aggregates_with_constant_bool_expression_members() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("sorted".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("min".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "name".into(),
+                detail: Some("max".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "binary".into(),
+                detail: Some("Lt".into()),
+                children: vec![3, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Bool(false)),
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "unary".into(),
+                detail: Some("Not".into()),
+                children: vec![6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "record".into(),
+                detail: None,
+                children: vec![5, 6, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "index".into(),
+                detail: None,
+                children: vec![10, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "call".into(),
+                detail: None,
+                children: vec![1, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "call".into(),
+                detail: None,
+                children: vec![2, 8],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![11, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![14, 13],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 15, &[])
+            .expect("typed aggregate ordering should fold constant bool expression members");
+        assert_eq!(function.execute(), Ok(Some(1)));
     }
 
     #[test]
