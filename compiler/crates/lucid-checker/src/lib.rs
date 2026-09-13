@@ -18322,6 +18322,19 @@ print(classify(1))
     }
 
     #[test]
+    fn abs_preserves_numeric_types() {
+        let code = r#"x: int = 5
+y: float = -3.14
+z_int = abs(x)
+z_float = abs(y)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "abs() should preserve numeric types: {:?}", result);
+    }
+
+    #[test]
     fn unsupported_special_methods_are_rejected() {
         // Verify that unsupported Python special methods are caught by the checker
         let unsupported_methods = vec![
