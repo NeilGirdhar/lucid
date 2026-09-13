@@ -10213,6 +10213,15 @@ mod tests {
         assert_eq!(function.execute(), Ok(Some(40)));
 
         let file = db.add_file(
+            "nested-local-constant-min-max.lucid",
+            "def combined():\n    high = 30\n    low = 10\n    middle = 20\n    return min(high, low, middle) + max(low, middle, high)\n",
+        );
+        let function = lower_function_body(&db, file, "combined".into())
+            .as_ref()
+            .expect("nested local constant min/max should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(40)));
+
+        let file = db.add_file(
             "match.lucid",
             "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return 33\n",
         );
