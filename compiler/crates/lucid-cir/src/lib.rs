@@ -2476,21 +2476,14 @@ impl Function {
                         && node.children.len() == 2
                     {
                         let operand_id = node.children[1];
-                        let operand = nodes
-                            .get(operand_id as usize)
-                            .ok_or(LowerError::UnsupportedExpression)?;
-                        let operand_id =
-                            local_binding_id(operand, operand_id, parameter_names, local_bindings)
-                                .unwrap_or(operand_id);
-                        let operand_value = match nodes
-                            .get(operand_id as usize)
-                            .ok_or(LowerError::UnsupportedExpression)?
-                            .literal
-                        {
-                            Some(TypedLiteral::Int(value)) => value,
-                            Some(TypedLiteral::Bool(value)) => i64::from(value),
-                            None => return Err(LowerError::UnsupportedExpression),
-                        };
+                        let operand_value = typed_constant_order(
+                            operand_id,
+                            id,
+                            nodes,
+                            parameter_names,
+                            local_bindings,
+                        )
+                        .ok_or(LowerError::UnsupportedExpression)?;
                         let operand = lower(
                             node.children[1],
                             nodes,
@@ -29328,11 +29321,39 @@ return total
                 children: vec![8, 7],
                 literal: None,
             },
+            TypedExprNode {
+                id: 10,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "binary".into(),
+                detail: Some("Sub".into()),
+                children: vec![10, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![9, 12],
+                literal: None,
+            },
         ];
         let function =
-            Function::from_typed_function_body_with_locals(&nodes, 9, &[], &[("value".into(), 3)])
+            Function::from_typed_function_body_with_locals(&nodes, 13, &[], &[("value".into(), 3)])
                 .expect("typed abs should lower constant primitive operands");
-        assert_eq!(function.execute(), Ok(Some(53)));
+        assert_eq!(function.execute(), Ok(Some(61)));
     }
 
     #[test]
