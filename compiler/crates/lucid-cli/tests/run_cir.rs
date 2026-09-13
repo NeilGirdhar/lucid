@@ -1251,7 +1251,7 @@ fn run_cir_lowers_membership_of_constant_aggregates_in_typed_function_body() {
     ));
     fs::write(
         &path,
-        "def answer():\n    values = {1, 2, 3}\n    left = [1, 2]\n    right = [1, 2]\n    numbers = range(3)\n    tuple_values = (1, 2, 3)\n    copied = dict({1: 10, 2: 20})\n    paired = dict([[1, 10], [2, 20]])\n    tuple_paired = dict(((1, 10), (2, 20)))\n    items_copy = dict({1: 10, 2: 20}.items())\n    return 2 in values and values == {3, 2, 1} and left == right and numbers == range(3) and 2 in tuple_values and 4 not in tuple_values and copied[2] == 20 and paired[1] == 10 and tuple_paired[2] == 20 and items_copy[1] == 10\n",
+        "def answer():\n    values = {1, 2, 3}\n    left = [1, 2]\n    right = [1, 2]\n    numbers = range(3)\n    tuple_values = (1, 2, 3)\n    copied = dict({1: 10, 2: 20})\n    paired = dict([[1, 10], [2, 20]])\n    tuple_paired = dict(((1, 10), (2, 20)))\n    literal_items_copy = dict({1: 10, 2: 20}.items())\n    source_items = {1: 10, 2: 20}\n    bound_items_copy = dict(source_items.items())\n    return 2 in values and values == {3, 2, 1} and left == right and numbers == range(3) and 2 in tuple_values and 4 not in tuple_values and copied[2] == 20 and paired[1] == 10 and tuple_paired[2] == 20 and literal_items_copy[1] == 10 and bound_items_copy[2] == 20\n",
     )
     .expect("temporary source should be writable");
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))

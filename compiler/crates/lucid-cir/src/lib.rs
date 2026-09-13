@@ -12561,6 +12561,50 @@ impl Function {
                             return Ok(Some(AggregateBinding::Dict(Vec::new())));
                         }
                         let source = &args[0].value;
+                        if let lucid_syntax::Expr::Call {
+                            func: view_func,
+                            args: view_args,
+                            ..
+                        } = source
+                        {
+                            if view_args.is_empty() {
+                                if let lucid_syntax::Expr::Attribute { value, attr, .. } =
+                                    view_func.as_ref()
+                                {
+                                    if attr == "items" {
+                                        if let lucid_syntax::Expr::Ident { name, .. } =
+                                            value.as_ref()
+                                        {
+                                            if let Some(aggregate) =
+                                                aggregate_bindings.get(name).cloned()
+                                            {
+                                                match aggregate {
+                                                    AggregateBinding::Dict(_)
+                                                    | AggregateBinding::StringDict(_)
+                                                    | AggregateBinding::StringIntDict(_)
+                                                    | AggregateBinding::StringFloatDict(_)
+                                                    | AggregateBinding::StringSingletonDict(_)
+                                                    | AggregateBinding::IntStringDict(_)
+                                                    | AggregateBinding::IntSingletonDict(_)
+                                                    | AggregateBinding::FloatDict(_)
+                                                    | AggregateBinding::IntFloatDict(_)
+                                                    | AggregateBinding::FloatIntDict(_)
+                                                    | AggregateBinding::FloatStringDict(_)
+                                                    | AggregateBinding::FloatSingletonDict(_)
+                                                    | AggregateBinding::SingletonDict(_)
+                                                    | AggregateBinding::SingletonStringDict(_)
+                                                    | AggregateBinding::SingletonIntDict(_)
+                                                    | AggregateBinding::SingletonFloatDict(_) => {
+                                                        return Ok(Some(aggregate));
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if let lucid_syntax::Expr::Ident { name, .. } = source {
                             if let Some(aggregate) = aggregate_bindings.get(name).cloned() {
                                 match aggregate {
@@ -24328,6 +24372,13 @@ return total
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
 
+        let module = lucid_syntax::parse(
+            "pairs = {1: 40, 2: 42}\nvalues = dict(pairs.items())\nreturn values[2]\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(42)));
+
         let module = lucid_syntax::parse("return {1: 40, 2: 42}[1 + 1]\n").unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
@@ -24644,6 +24695,10 @@ return total
                 "values = dict([[\"a\", \"b\"]])\nreturn values[\"a\"] == \"b\"\n",
                 1,
             ),
+            (
+                "pairs = {\"a\": \"b\"}\nvalues = dict(pairs.items())\nreturn values[\"a\"] == \"b\"\n",
+                1,
+            ),
             ("return \"a\" in {\"a\": \"b\"}.keys()\n", 1),
             ("return \"b\" in {\"a\": \"b\"}.values()\n", 1),
             ("values = {\"a\": \"b\"}\nreturn \"b\" in values.values()\n", 1),
@@ -24820,6 +24875,10 @@ return total
                 "values = dict([[1.5, 2.5]])\nreturn values[1.5] == 2.5\n",
                 1,
             ),
+            (
+                "pairs = {1.5: 2.5}\nvalues = dict(pairs.items())\nreturn values[1.5] == 2.5\n",
+                1,
+            ),
             ("return 1.5 in {1.5: 2.5}.keys()\n", 1),
             ("return 2.5 in {1.5: 2.5}.values()\n", 1),
             ("values = {1.5: 2.5}\nreturn 2.5 in values.values()\n", 1),
@@ -24897,6 +24956,10 @@ return total
             ),
             (
                 "values = dict([[None, ...]])\nreturn values[None] is ...\n",
+                1,
+            ),
+            (
+                "pairs = {None: ...}\nvalues = dict(pairs.items())\nreturn values[None] is ...\n",
                 1,
             ),
             ("return None in {None: ...}.keys()\n", 1),
