@@ -9036,6 +9036,12 @@ impl TypeChecker {
                     | BinaryOp::Shr => {
                         if lt == Type::Int && rt == Type::Int {
                             Ok(Type::Int)
+                        } else if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr)
+                            && matches!(&lt, Type::Class { name, .. } if name == "set")
+                            && matches!(&rt, Type::Class { name, .. } if name == "set")
+                        {
+                            // set & set (intersection) and set | set (union)
+                            Ok(lt)
                         } else {
                             Err(TypeError {
                                 message: format!(
@@ -18781,5 +18787,49 @@ d = dict(pairs)
             "dict() should infer types from pairs: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn set_intersection_preserves_type() {
+        let code = r#"a: set[int] = {1, 2, 3}
+b: set[int] = {2, 3, 4}
+c = a & b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "set & set should work (intersection): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn set_union_preserves_type() {
+        let code = r#"a: set[int] = {1, 2, 3}
+b: set[int] = {2, 3, 4}
+c = a | b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "set | set should work (union): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn set_bitwise_requires_sets() {
+        let code = r#"a: set[int] = {1, 2, 3}
+b: int = 5
+c = a & b
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_err(), "set & int should be rejected");
     }
 }
