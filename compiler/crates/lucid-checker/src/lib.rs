@@ -2382,7 +2382,15 @@ impl TypeChecker {
             ),
             ("reversed", 1, Some(1), vec![any.clone()], any.clone()),
             ("iter", 1, Some(1), vec![any.clone()], any.clone()),
-            ("locals", 0, Some(0), Vec::new(), any.clone()),
+            ("locals", 0, Some(0), Vec::new(), Type::Class {
+                name: "dict".into(),
+                type_args: vec![Type::Str, any.clone()],
+                parent: None,
+                traits: Vec::new(),
+                interfaces: Vec::new(),
+                fields: HashMap::new(),
+                is_sealed: false,
+            }),
             (
                 "format",
                 1,
@@ -18554,6 +18562,16 @@ total = sum(numbers)
             "sum without start should infer element type: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn locals_returns_dict_with_string_keys() {
+        let code = r#"local_vars = locals()
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "locals() should type-check: {:?}", result);
     }
 
     #[test]
