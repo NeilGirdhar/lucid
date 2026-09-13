@@ -6687,9 +6687,13 @@ pub fn lower_function_body(
                                 },
                                 setup,
                             )) = statements[..statements.len() - 1].split_last()
-                            && elif_branches.is_empty()
                             && static_truth(condition).is_none()
                             && has_identifier(condition)
+                            && elif_branches.iter().all(|(elif_condition, branch)| {
+                                static_truth(elif_condition).is_none()
+                                    && has_identifier(elif_condition)
+                                    && single_value_return(branch).is_some()
+                            })
                             && let Some(then_value) = single_value_return(then_branch)
                         {
                             if function.is_async {
@@ -6733,16 +6737,41 @@ pub fn lower_function_body(
                                 find_id(then_value.span()),
                                 find_id(fallback_value.span()),
                             ) {
-                                return lucid_cir::Function::from_typed_statement_if(
+                                let elif_ids = elif_branches
+                                    .iter()
+                                    .map(|(elif_condition, branch)| {
+                                        let elif_value =
+                                            single_value_return(branch).ok_or_else(|| {
+                                                Arc::<str>::from(
+                                                    "function has no lowerable expression",
+                                                )
+                                            })?;
+                                        let condition_id = find_id(elif_condition.span())
+                                            .ok_or_else(|| {
+                                                Arc::<str>::from(
+                                                    "function has no lowerable expression",
+                                                )
+                                            })?;
+                                        let value_id =
+                                            find_id(elif_value.span()).ok_or_else(|| {
+                                                Arc::<str>::from(
+                                                    "function has no lowerable expression",
+                                                )
+                                            })?;
+                                        Ok((condition_id, value_id))
+                                    })
+                                    .collect::<Result<Vec<_>, Arc<str>>>()?;
+                                return lucid_cir::Function::from_typed_statement_if_elif_chain_direct(
                                     &nodes,
                                     condition_id,
                                     then_id,
+                                    &elif_ids,
                                     fallback_id,
                                     &function.parameter_names,
                                     &local_bindings,
                                 )
                                 .map(Arc::new)
-                                .map_err(|_| Arc::from("unsupported setup guard return"));
+                                .map_err(|_| Arc::from("unsupported setup guard return chain"));
                             }
                             return Err(Arc::from("function has no lowerable expression"));
                         }
@@ -10979,6 +11008,17 @@ mod tests {
             .expect("setup before guard return should lower through CIR");
         assert_eq!(function.execute_with_args(&[10, 1]), Ok(Some(11)));
         assert_eq!(function.execute_with_args(&[10, 0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "setup-guard-elif-return.lucid",
+            "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return base\n    elif second:\n        return base * 2\n    return base * 3\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before guard elif return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
 
         let file = db.add_file(
             "void-guard-return.lucid",
