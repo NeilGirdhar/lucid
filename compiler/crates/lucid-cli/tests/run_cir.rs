@@ -1186,6 +1186,35 @@ fn run_cir_lowers_constant_dict_indexing_in_typed_function_body() {
 }
 
 #[test]
+fn run_cir_lowers_len_of_constant_aggregates_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_len_aggregate_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    values = [1, 2, 3]\n    pairs = {1: 10, 2: 20}\n    return len(values) * 10 + len(pairs) + len([4, 5])\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function aggregate len failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "34");
+}
+
+#[test]
 fn run_cir_short_circuits_logical_condition_inside_typed_if() {
     let path = std::env::temp_dir().join(format!(
         "lucid_run_cir_typed_if_short_circuit_{}.lucid",

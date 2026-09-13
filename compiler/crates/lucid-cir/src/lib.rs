@@ -8348,6 +8348,57 @@ impl Function {
                     .get(name)
                     .copied()
                     .ok_or(LowerError::UnsupportedExpression),
+                lucid_syntax::Expr::Call { func, args, .. }
+                    if matches!(
+                        func.as_ref(),
+                        lucid_syntax::Expr::Ident { name, .. } if name == "len"
+                    ) && args.len() == 1 =>
+                {
+                    let length = match &args[0].value {
+                        lucid_syntax::Expr::List { elements, .. } => {
+                            for element in elements {
+                                let _ = lower(
+                                    element,
+                                    bindings,
+                                    aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                            }
+                            elements.len()
+                        }
+                        lucid_syntax::Expr::Dict { entries, .. } => {
+                            for (key, value) in entries {
+                                let _ =
+                                    lower(key, bindings, aggregate_bindings, instructions, next)?;
+                                let _ =
+                                    lower(value, bindings, aggregate_bindings, instructions, next)?;
+                            }
+                            entries.len()
+                        }
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Str(value),
+                            ..
+                        } => value.chars().count(),
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bytes(value),
+                            ..
+                        } => value.len(),
+                        lucid_syntax::Expr::Ident { name, .. } => match aggregate_bindings
+                            .get(name)
+                            .ok_or(LowerError::UnsupportedExpression)?
+                        {
+                            AggregateBinding::List(elements) => elements.len(),
+                            AggregateBinding::Dict(entries) => entries.len(),
+                        },
+                        _ => return Err(LowerError::UnsupportedExpression),
+                    };
+                    let value =
+                        i64::try_from(length).map_err(|_| LowerError::UnsupportedExpression)?;
+                    let id = result(next);
+                    instructions.push(Instruction::ConstInt { result: id, value });
+                    Ok(id)
+                }
                 lucid_syntax::Expr::Index { value, index, .. } => {
                     let index_value =
                         lower(index, bindings, aggregate_bindings, instructions, next)?;
@@ -19359,6 +19410,21 @@ return total
         .unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
+    }
+
+    #[test]
+    fn linear_module_lowering_lowers_len_of_constant_aggregates() {
+        for (source, expected) in [
+            ("values = [1, 2, 3]\nreturn len(values)\n", 3),
+            ("return len([1, 2, 3])\n", 3),
+            ("values = {1: 10, 2: 20}\nreturn len(values)\n", 2),
+            ("return len({1: 10, 2: 20})\n", 2),
+            ("return len(\"abc\")\n", 3),
+        ] {
+            let module = lucid_syntax::parse(source).unwrap();
+            let function = Function::from_module_linear(&module).unwrap();
+            assert_eq!(function.execute(), Ok(Some(expected)), "{source}");
+        }
     }
 
     #[test]
