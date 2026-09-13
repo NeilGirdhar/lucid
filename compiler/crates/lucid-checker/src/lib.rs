@@ -4985,6 +4985,47 @@ impl TypeChecker {
         )
     }
 
+    fn normalize_literal_types(&self, ty: &Type) -> Type {
+        match ty {
+            Type::LiteralBool(_) => Type::Bool,
+            Type::LiteralInt(_) => Type::Int,
+            Type::LiteralFloat(_) => Type::Float,
+            Type::LiteralStr(_) => Type::Str,
+            Type::Record { fields, is_open } => Type::Record {
+                fields: fields
+                    .iter()
+                    .map(|(name, fty)| (name.clone(), self.normalize_literal_types(fty)))
+                    .collect(),
+                is_open: *is_open,
+            },
+            Type::Union(types) => {
+                let normalized: Vec<Type> = types
+                    .iter()
+                    .map(|t| self.normalize_literal_types(t))
+                    .collect();
+                Type::make_union(normalized)
+            }
+            Type::Class { name, type_args, parent, traits, interfaces, fields, is_sealed } => {
+                Type::Class {
+                    name: name.clone(),
+                    type_args: type_args
+                        .iter()
+                        .map(|t| self.normalize_literal_types(t))
+                        .collect(),
+                    parent: parent.clone(),
+                    traits: traits.clone(),
+                    interfaces: interfaces.clone(),
+                    fields: fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), self.normalize_literal_types(v)))
+                        .collect(),
+                    is_sealed: *is_sealed,
+                }
+            }
+            other => other.clone(),
+        }
+    }
+
     fn is_buffer_type(&self, value: &Type) -> bool {
         let base = match value {
             Type::View { inner, .. } => inner.as_ref(),
@@ -11191,16 +11232,10 @@ impl TypeChecker {
                     .filter(|e| !matches!(e, Expr::Skip(_)))
                     .map(|e| self.type_of_expr(e))
                     .collect::<Result<Vec<_>, TypeError>>()?;
-                // Normalize literal types to their base types
+                // Normalize literal types to their base types recursively
                 let normalized: Vec<Type> = elem_types
                     .into_iter()
-                    .map(|t| match t {
-                        Type::LiteralBool(_) => Type::Bool,
-                        Type::LiteralInt(_) => Type::Int,
-                        Type::LiteralFloat(_) => Type::Float,
-                        Type::LiteralStr(_) => Type::Str,
-                        other => other,
-                    })
+                    .map(|t| self.normalize_literal_types(&t))
                     .collect();
                 Ok(Type::Class {
                     name: "list".to_string(),
@@ -11218,16 +11253,10 @@ impl TypeChecker {
                     .filter(|e| !matches!(e, Expr::Skip(_)))
                     .map(|e| self.type_of_expr(e))
                     .collect::<Result<Vec<_>, TypeError>>()?;
-                // Normalize literal types to their base types
+                // Normalize literal types to their base types recursively
                 let normalized: Vec<Type> = elem_types
                     .into_iter()
-                    .map(|t| match t {
-                        Type::LiteralBool(_) => Type::Bool,
-                        Type::LiteralInt(_) => Type::Int,
-                        Type::LiteralFloat(_) => Type::Float,
-                        Type::LiteralStr(_) => Type::Str,
-                        other => other,
-                    })
+                    .map(|t| self.normalize_literal_types(&t))
                     .collect();
                 if let Some(unhashable) = normalized
                     .iter()
