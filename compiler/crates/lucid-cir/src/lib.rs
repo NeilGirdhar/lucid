@@ -1537,7 +1537,7 @@ impl Function {
                     if callee.kind == "name"
                         && matches!(
                             callee.detail.as_deref(),
-                            Some("len" | "bool" | "all" | "any")
+                            Some("len" | "bool" | "all" | "any" | "sum")
                         )
                     {
                         let aggregate_id = node.children[1];
@@ -1595,7 +1595,27 @@ impl Function {
                                     value: length > 0,
                                 });
                             }
-                            Some("all" | "any") => {
+                            Some("all" | "any" | "sum") => {
+                                if callee.detail.as_deref() == Some("sum") {
+                                    if lowered_members.is_empty() {
+                                        instructions
+                                            .push(Instruction::ConstInt { result, value: 0 });
+                                    } else {
+                                        result = lowered_members[0];
+                                        for member in lowered_members.into_iter().skip(1) {
+                                            let combined = ValueId(*next);
+                                            *next += 1;
+                                            instructions.push(Instruction::Add {
+                                                result: combined,
+                                                left: result,
+                                                right: member,
+                                            });
+                                            result = combined;
+                                        }
+                                    }
+                                    lowered.insert(id, result);
+                                    return Ok(result);
+                                }
                                 let identity = callee.detail.as_deref() == Some("all");
                                 if lowered_members.is_empty() {
                                     instructions.push(Instruction::ConstBool {
@@ -25621,6 +25641,244 @@ return total
         let function = Function::from_typed_function_body(&nodes, 5, &[])
             .expect("typed all should evaluate dict values before reducing keys");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+    }
+
+    #[test]
+    fn lowers_typed_sum_of_constant_aggregates() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(10)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(20)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(12)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "list".into(),
+                detail: None,
+                children: vec![1, 2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 4],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 6,
+                kind: "set".into(),
+                detail: None,
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 7,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 6],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "record".into(),
+                detail: None,
+                children: vec![1, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "name".into(),
+                detail: Some("items".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 10,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 9],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 11,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![1, 3, 2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 12,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 11],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 13,
+                kind: "list".into(),
+                detail: None,
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 14,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 13],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 15,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![5, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 16,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![15, 10],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 17,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![16, 12],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 18,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![17, 14],
+                literal: None,
+            },
+        ];
+        let function =
+            Function::from_typed_function_body_with_locals(&nodes, 18, &[], &[("items".into(), 8)])
+                .expect("typed sum should lower constant aggregate literals");
+        assert_eq!(function.execute(), Ok(Some(124)));
+    }
+
+    #[test]
+    fn typed_sum_evaluates_dict_values_and_preserves_overflow() {
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "dict".into(),
+                detail: None,
+                children: vec![1, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 5, &[])
+            .expect("typed sum should evaluate dict values before reducing keys");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("sum".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "name".into(),
+                detail: Some("value".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "list".into(),
+                detail: None,
+                children: vec![1, 2],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 3],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 4, &["value".into()])
+            .expect("typed sum should preserve arithmetic overflow");
+        assert_eq!(
+            function.execute_with_args(&[i64::MAX]),
+            Err(ExecuteError::ArithmeticOverflow)
+        );
     }
 
     #[test]
