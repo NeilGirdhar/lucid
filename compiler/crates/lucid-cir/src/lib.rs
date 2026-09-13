@@ -2457,7 +2457,7 @@ impl Function {
                     }
                     if callee.kind == "name"
                         && callee.detail.as_deref() == Some("round")
-                        && node.children.len() == 2
+                        && (node.children.len() == 2 || node.children.len() == 3)
                     {
                         result = lower(
                             node.children[1],
@@ -2468,6 +2468,17 @@ impl Function {
                             parameter_names,
                             local_bindings,
                         )?;
+                        if node.children.len() == 3 {
+                            lower(
+                                node.children[2],
+                                nodes,
+                                lowered,
+                                instructions,
+                                next,
+                                parameter_names,
+                                local_bindings,
+                            )?;
+                        }
                         lowered.insert(id, result);
                         return Ok(result);
                     }
@@ -29438,15 +29449,36 @@ return total
                 children: vec![2, 5],
                 literal: None,
             },
+            TypedExprNode {
+                id: 7,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(2)),
+            },
+            TypedExprNode {
+                id: 8,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 7],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 9,
+                kind: "binary".into(),
+                detail: Some("Add".into()),
+                children: vec![6, 8],
+                literal: None,
+            },
         ];
         let function = Function::from_typed_function_body_with_locals(
             &nodes,
-            6,
+            9,
             &["value".into()],
             &[("local".into(), 3)],
         )
         .expect("typed round should lower integer primitive operands");
-        assert_eq!(function.execute_with_args(&[30]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[30]), Ok(Some(72)));
     }
 
     #[test]
@@ -29490,6 +29522,54 @@ return total
         ];
         let function = Function::from_typed_function_body(&nodes, 4, &[])
             .expect("typed round should preserve operand errors");
+        assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
+
+        let nodes = vec![
+            TypedExprNode {
+                id: 0,
+                kind: "name".into(),
+                detail: Some("round".into()),
+                children: vec![],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 1,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(5)),
+            },
+            TypedExprNode {
+                id: 2,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(1)),
+            },
+            TypedExprNode {
+                id: 3,
+                kind: "literal".into(),
+                detail: None,
+                children: vec![],
+                literal: Some(TypedLiteral::Int(0)),
+            },
+            TypedExprNode {
+                id: 4,
+                kind: "binary".into(),
+                detail: Some("FloorDiv".into()),
+                children: vec![2, 3],
+                literal: None,
+            },
+            TypedExprNode {
+                id: 5,
+                kind: "call".into(),
+                detail: None,
+                children: vec![0, 1, 4],
+                literal: None,
+            },
+        ];
+        let function = Function::from_typed_function_body(&nodes, 5, &[])
+            .expect("typed round should preserve ndigits errors");
         assert_eq!(function.execute(), Err(ExecuteError::DivisionByZero));
     }
 
