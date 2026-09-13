@@ -2461,8 +2461,20 @@ impl TypeChecker {
                     is_sealed: false,
                 },
             ),
-            ("min", 1, None, vec![any.clone()], any.clone()),
-            ("max", 1, None, vec![any.clone()], any.clone()),
+            (
+                "min",
+                1,
+                None,
+                vec![any.clone()],
+                Type::TypeVar("ElementType".into()),
+            ),
+            (
+                "max",
+                1,
+                None,
+                vec![any.clone()],
+                Type::TypeVar("ElementType".into()),
+            ),
             (
                 "map",
                 2,
@@ -10798,6 +10810,9 @@ impl TypeChecker {
                                     },
                                     "sqrt" | "sin" | "cos" | "tan" => Some(Type::Float),
                                     "floor" | "ceil" => Some(Type::Int),
+                                    "min" | "max" if self.is_iterable_type(&argument_type) => {
+                                        Some(self.iterable_element_type(&argument_type))
+                                    }
                                     "env_var" => {
                                         let fallback_type = if let Some(arg) =
                                             args.get(1).filter(|arg| {
@@ -18377,6 +18392,33 @@ f: float = floor(x)
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_err(), "floor returns int, not float");
+    }
+
+    #[test]
+    fn min_max_preserve_element_type() {
+        let code = r#"numbers: list[int] = [1, 2, 3]
+min_val = min(numbers)
+max_val = max(numbers)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "min/max should preserve element type: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn min_max_return_correct_type() {
+        let code = r#"numbers: list[int] = [1, 2, 3]
+min_val: float = min(numbers)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_err(), "min returns element type (int), not float");
     }
 
     #[test]
