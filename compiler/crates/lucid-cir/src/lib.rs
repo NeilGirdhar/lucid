@@ -3721,7 +3721,13 @@ impl Function {
                 || (node.kind == "call"
                     && node.children.first().is_some_and(|callee| {
                         nodes.get(*callee as usize).is_some_and(|callee| {
-                            callee.kind == "name" && callee.detail.as_deref() == Some("range")
+                            (callee.kind == "name"
+                                && matches!(
+                                    callee.detail.as_deref(),
+                                    Some("range" | "list" | "set" | "dict" | "sorted" | "reversed")
+                                ))
+                                || (callee.kind == "attribute"
+                                    && matches!(callee.detail.as_deref(), Some("keys" | "values")))
                         })
                     }))
         };

@@ -10195,6 +10195,26 @@ mod tests {
         assert_eq!(function.execute_with_args(&[22, 33, 11]), Ok(Some(44)));
 
         let file = db.add_file(
+            "constructor-aggregate-alias.lucid",
+            "def constructor_total():\n    values = list(range(5))\n    return len(values)\n",
+        );
+        let function = lower_function_body(&db, file, "constructor_total".into())
+            .as_ref()
+            .expect("constructor aggregate aliases should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute(), Ok(Some(5)));
+
+        let file = db.add_file(
+            "dict-view-aggregate-alias.lucid",
+            "def dict_value_total(left: int, right: int):\n    mapping = {1: left, 2: right}\n    values = mapping.values()\n    return sum(values) + len(values)\n",
+        );
+        let function = lower_function_body(&db, file, "dict_value_total".into())
+            .as_ref()
+            .expect("dict view aggregate aliases should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[20, 22]), Ok(Some(44)));
+
+        let file = db.add_file(
             "dynamic-pow.lucid",
             "def power(base: int, exponent: int):\n    return pow(base, exponent)\n",
         );
