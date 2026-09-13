@@ -13291,6 +13291,70 @@ impl Function {
                     }
                     Ok(Some(AggregateBinding::Dict(values)))
                 }
+                lucid_syntax::Expr::DictComp {
+                    key,
+                    value,
+                    target,
+                    iter,
+                    condition,
+                    ..
+                } => {
+                    let Some(records) =
+                        dict_item_records(iter, bindings, aggregate_bindings, instructions, next)?
+                    else {
+                        return Ok(None);
+                    };
+                    let mut values = Vec::with_capacity(records.len());
+                    for record in records {
+                        let mut local_bindings = bindings.clone();
+                        let mut local_aggregate_bindings = aggregate_bindings.clone();
+                        bind_aggregate_record_target(
+                            target,
+                            record,
+                            &mut local_bindings,
+                            &mut local_aggregate_bindings,
+                        )?;
+                        if let Some(condition) = condition {
+                            let keep = if let Some(truth) = statement_static_truth(
+                                condition,
+                                &local_bindings,
+                                &local_aggregate_bindings,
+                                instructions,
+                            ) {
+                                truth
+                            } else {
+                                let value = lower(
+                                    condition,
+                                    &local_bindings,
+                                    &local_aggregate_bindings,
+                                    instructions,
+                                    next,
+                                )?;
+                                constant_value_truth(value, instructions)
+                                    .ok_or(LowerError::UnsupportedExpression)?
+                            };
+                            if !keep {
+                                continue;
+                            }
+                        }
+                        let key = lower(
+                            key,
+                            &local_bindings,
+                            &local_aggregate_bindings,
+                            instructions,
+                            next,
+                        )?;
+                        let value = lower(
+                            value,
+                            &local_bindings,
+                            &local_aggregate_bindings,
+                            instructions,
+                            next,
+                        )?;
+                        values.push((key, value));
+                    }
+                    Ok(Some(AggregateBinding::Dict(values)))
+                }
                 lucid_syntax::Expr::Record { fields, .. } => {
                     if let Some(values) = constant_string_record(expr, aggregate_bindings) {
                         return Ok(Some(AggregateBinding::StringRecord(values)));
@@ -25560,6 +25624,20 @@ return total
         .unwrap();
         let function = Function::from_module_linear(&module).unwrap();
         assert_eq!(function.execute(), Ok(Some(42)));
+
+        let module = lucid_syntax::parse(
+            "pairs = {1: 40, 2: 42}\nvalues = {key: value + 1 for key, value in pairs.items()}\nreturn values[2]\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(43)));
+
+        let module = lucid_syntax::parse(
+            "pairs = {1: 40, 2: 42}\nvalues = {key: value for key, value in pairs.items() if key == 2}\nreturn len(values) + values[2]\n",
+        )
+        .unwrap();
+        let function = Function::from_module_linear(&module).unwrap();
+        assert_eq!(function.execute(), Ok(Some(43)));
 
         let module = lucid_syntax::parse(
             "pairs = {1: 40, 2: 42}\nitems = list(pairs.items())\nreturn items[1][0] + items[1][1]\n",
