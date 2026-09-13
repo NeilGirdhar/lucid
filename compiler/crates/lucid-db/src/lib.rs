@@ -3555,12 +3555,6 @@ pub fn lower_function_body(
                 ));
             }
         };
-        let Some(then_value) = match_arm_value(literal_arm) else {
-            return Err(Arc::from("unsupported match arm for function CIR lowering"));
-        };
-        let Some(else_value) = match_arm_value(wildcard_arm) else {
-            return Err(Arc::from("unsupported match arm for function CIR lowering"));
-        };
         let lucid_syntax::Pattern::Literal(literal, span) = &literal_arm.pattern else {
             return Err(Arc::from("unsupported match literal pattern"));
         };
@@ -3572,6 +3566,155 @@ pub fn lower_function_body(
                 span: *span,
             }),
             span: *span,
+        };
+        fn match_expr_has_identifier(expr: &lucid_syntax::Expr) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { .. } => true,
+                lucid_syntax::Expr::Unary { expr, .. } => match_expr_has_identifier(expr),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    match_expr_has_identifier(left) || match_expr_has_identifier(right)
+                }
+                _ => false,
+            }
+        }
+        fn match_expr_has_division(expr: &lucid_syntax::Expr) -> bool {
+            match expr {
+                lucid_syntax::Expr::Unary { expr, .. } => match_expr_has_division(expr),
+                lucid_syntax::Expr::Binary {
+                    left, right, op, ..
+                } => {
+                    matches!(
+                        op,
+                        lucid_syntax::BinaryOp::Div
+                            | lucid_syntax::BinaryOp::FloorDiv
+                            | lucid_syntax::BinaryOp::Mod
+                    ) || match_expr_has_division(left)
+                        || match_expr_has_division(right)
+                }
+                _ => false,
+            }
+        }
+        fn match_assignment_value_for_name<'a>(
+            statements: &'a [lucid_syntax::Stmt],
+            expected_name: &str,
+        ) -> Option<&'a lucid_syntax::Expr> {
+            let mut meaningful = statements
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement));
+            let statement = meaningful.next()?;
+            if meaningful.next().is_some() {
+                return None;
+            }
+            match statement {
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(value),
+                    ..
+                } if name == expected_name => Some(value),
+                _ => None,
+            }
+        }
+        let match_and_expr =
+            |left: &lucid_syntax::Expr, right: &lucid_syntax::Expr| lucid_syntax::Expr::Binary {
+                op: lucid_syntax::BinaryOp::And,
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+                span: right.span(),
+            };
+        if static_truth(&condition).is_none()
+            && match_expr_has_identifier(&condition)
+            && !match_expr_has_division(&condition)
+            && let Some(else_value) = match_arm_value(wildcard_arm)
+        {
+            let meaningful_then = literal_arm
+                .body
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement))
+                .collect::<Vec<_>>();
+            if let [
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value: initial_value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(initial_value),
+                    ..
+                },
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+                lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: returned_name,
+                            ..
+                        }),
+                    ..
+                },
+            ] = meaningful_then.as_slice()
+                && name == returned_name
+                && static_truth(inner_condition).is_none()
+                && match_expr_has_identifier(inner_condition)
+                && !match_expr_has_division(inner_condition)
+                && inner_elifs.iter().all(|(elif_condition, _)| {
+                    static_truth(elif_condition).is_none()
+                        && match_expr_has_identifier(elif_condition)
+                        && !match_expr_has_division(elif_condition)
+                })
+                && let Some(inner_then_value) = match_assignment_value_for_name(inner_then, name)
+            {
+                let Some(inner_elif_values) = inner_elifs
+                    .iter()
+                    .map(|(elif_condition, branch)| {
+                        match_assignment_value_for_name(branch, name)
+                            .map(|value| (match_and_expr(&condition, elif_condition), value))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Err(Arc::from("unsupported nested match local elif branch"));
+                };
+                let combined_condition = match_and_expr(&condition, inner_condition);
+                let inner_fallback = match inner_else.as_deref() {
+                    Some(branch) => {
+                        let Some(value) = match_assignment_value_for_name(branch, name) else {
+                            return Err(Arc::from("unsupported nested match local elif branch"));
+                        };
+                        value
+                    }
+                    None => initial_value,
+                };
+                let mut elif_values = inner_elif_values
+                    .iter()
+                    .map(|(condition, value)| (condition, *value))
+                    .collect::<Vec<_>>();
+                elif_values.push((&condition, inner_fallback));
+                return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    &combined_condition,
+                    inner_then_value,
+                    &elif_values,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported nested match local elif branch"));
+            }
+        }
+        let Some(then_value) = match_arm_value(literal_arm) else {
+            return Err(Arc::from("unsupported match arm for function CIR lowering"));
+        };
+        let Some(else_value) = match_arm_value(wildcard_arm) else {
+            return Err(Arc::from("unsupported match arm for function CIR lowering"));
         };
         return lucid_cir::Function::from_parameterized_if(
             &condition,
@@ -11969,6 +12112,18 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(2)));
         assert_eq!(function.execute_with_args(&[0, 11]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-nested-dynamic-local-elif-else-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = 0\n            if value > 10:\n                result = 100\n            elif value > 0:\n                result = value + 10\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match arm nested dynamic local elif else branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(-1)));
     }
 
     #[test]

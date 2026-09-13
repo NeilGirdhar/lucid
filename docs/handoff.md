@@ -2081,6 +2081,9 @@ diverged:
   `else`, using the initialized local as the selected-arm fall-through result.
   It also accepts an inner `else` that assigns the returned local, using that
   assignment as the selected-arm fallback.
+  The two-arm literal/wildcard `match` lowering now recognizes the same nested
+  local pattern inside the literal arm and lowers it through the same explicit
+  ladder strategy.
   The adapter is limited to primitive, non-division guard conditions so it does
   not introduce eager recoverable errors while nested CFG splicing is still
   incomplete.
