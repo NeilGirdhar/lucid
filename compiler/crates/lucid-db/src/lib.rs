@@ -3747,6 +3747,7 @@ pub fn lower_function_body(
             }),
             span: *span,
         };
+        let match_condition = arm_condition(literal_arm).unwrap_or_else(|| condition.clone());
         fn match_expr_has_identifier(expr: &lucid_syntax::Expr) -> bool {
             match expr {
                 lucid_syntax::Expr::Ident { .. } => true,
@@ -3806,9 +3807,9 @@ pub fn lower_function_body(
                 right: Box::new(right.clone()),
                 span: right.span(),
             };
-        if static_truth(&condition).is_none()
-            && match_expr_has_identifier(&condition)
-            && !match_expr_has_division(&condition)
+        if static_truth(&match_condition).is_none()
+            && match_expr_has_identifier(&match_condition)
+            && !match_expr_has_division(&match_condition)
             && let Some(else_value) = match_arm_value(wildcard_arm)
         {
             let meaningful_then = literal_arm
@@ -3858,13 +3859,13 @@ pub fn lower_function_body(
                     .iter()
                     .map(|(elif_condition, branch)| {
                         match_assignment_value_for_name(branch, name)
-                            .map(|value| (match_and_expr(&condition, elif_condition), value))
+                            .map(|value| (match_and_expr(&match_condition, elif_condition), value))
                     })
                     .collect::<Option<Vec<_>>>()
                 else {
                     return Err(Arc::from("unsupported nested match local elif branch"));
                 };
-                let combined_condition = match_and_expr(&condition, inner_condition);
+                let combined_condition = match_and_expr(&match_condition, inner_condition);
                 let inner_fallback = match inner_else.as_deref() {
                     Some(branch) => {
                         let Some(value) = match_assignment_value_for_name(branch, name) else {
@@ -3878,7 +3879,7 @@ pub fn lower_function_body(
                     .iter()
                     .map(|(condition, value)| (condition, *value))
                     .collect::<Vec<_>>();
-                elif_values.push((&condition, inner_fallback));
+                elif_values.push((&match_condition, inner_fallback));
                 return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
                     &combined_condition,
                     inner_then_value,
@@ -3897,7 +3898,7 @@ pub fn lower_function_body(
             return Err(Arc::from("unsupported match arm for function CIR lowering"));
         };
         return lucid_cir::Function::from_parameterized_if(
-            &condition,
+            &match_condition,
             then_value,
             else_value,
             &function.parameter_names,
@@ -12324,6 +12325,18 @@ mod tests {
         assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
         assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
         assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-guarded-match-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1 if value > 0:\n            result = 0\n            if value > 10:\n                result = 100\n            elif value > 0:\n                result = value + 10\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded literal match arm should gate nested local branch");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(-1)));
         assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(-1)));
     }
 

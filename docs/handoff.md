@@ -2084,6 +2084,9 @@ diverged:
   The two-arm literal/wildcard `match` lowering now recognizes the same nested
   local pattern inside the literal arm and lowers it through the same explicit
   ladder strategy.
+  Guarded literal arms use the full pattern-plus-guard condition for every
+  nested local branch, so a pattern match with a false guard falls through to
+  the wildcard arm instead of the literal arm's inner fallback.
   A leading wildcard match arm with a live return now routes that selected arm
   through the linear CFG lowerer before considering later unreachable arms, so
   wildcard-first order is preserved even when the arm contains dynamic local
