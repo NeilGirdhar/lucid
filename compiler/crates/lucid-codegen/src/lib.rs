@@ -2114,11 +2114,11 @@ impl CCodeGenerator {
             self.indent -= 1;
             self.emit_line("}");
         }
-        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_BYTES;");
-        self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_LIST || (value.type == LUCID_TYPE_PTR && value.ptr && lucid_object_buffer(value.ptr));");
-        self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Sized\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_ITERATOR || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Container\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_ITERATOR || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_STR || value.type == LUCID_TYPE_DOTTED_PATH || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Iterable\") == 0 || strcmp(capability, \"Collection\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_ITERATOR || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_DICT || value.type == LUCID_TYPE_SET || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_BYTES;");
+        self.emit_line("if (strcmp(capability, \"Buffer\") == 0) return value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_BYTES || value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_ITERATOR || (value.type == LUCID_TYPE_PTR && value.ptr && lucid_object_buffer(value.ptr));");
+        self.emit_line("if (strcmp(capability, \"Sequence\") == 0 || strcmp(capability, \"Reversible\") == 0) return value.type == LUCID_TYPE_LIST || value.type == LUCID_TYPE_ITERATOR || value.type == LUCID_TYPE_MEMORYVIEW || value.type == LUCID_TYPE_RANGE || value.type == LUCID_TYPE_BYTES;");
         self.emit_line(
             "if (strcmp(capability, \"Shape\") == 0) return value.type == LUCID_TYPE_LIST;",
         );
@@ -2440,6 +2440,7 @@ typedef enum {
     LUCID_TYPE_MEMORYVIEW,
     LUCID_TYPE_RANGE,
     LUCID_TYPE_LIST,
+    LUCID_TYPE_ITERATOR,
     LUCID_TYPE_DICT,
     LUCID_TYPE_SET,
     LUCID_TYPE_PTR,
@@ -4723,6 +4724,11 @@ static inline LucidList* lucid_iterable_to_list(LucidVal value) {
         for (int64_t i = 0; i < value.list->len; ++i) lucid_list_append(out, value.list->items[i]);
         return out;
     }
+    if (value.type == LUCID_TYPE_ITERATOR && value.list) {
+        LucidList* out = lucid_list_new(value.list->len);
+        for (int64_t i = 0; i < value.list->len; ++i) lucid_list_append(out, value.list->items[i]);
+        return out;
+    }
     if (value.type == LUCID_TYPE_MEMORYVIEW && value.view) {
         return lucid_memoryview_to_list(value.view);
     }
@@ -5141,6 +5147,7 @@ static inline void lucid_print_val(LucidVal v) {
         case LUCID_TYPE_MEMORYVIEW: printf("<memoryview len=%ld>", v.view ? v.view->len : 0); break;
         case LUCID_TYPE_NONE: printf("none"); break;
         case LUCID_TYPE_LIST: printf("[list len=%ld]", v.list ? v.list->len : 0); break;
+        case LUCID_TYPE_ITERATOR: printf("<iterator len=%ld>", v.list ? v.list->len : 0); break;
         case LUCID_TYPE_DICT: printf("[dict len=%ld]", v.dict ? v.dict->len : 0); break;
         case LUCID_TYPE_SET: printf("[set len=%ld]", v.set ? v.set->len : 0); break;
         case LUCID_TYPE_PTR: printf("[obj %p]", v.ptr); break;
