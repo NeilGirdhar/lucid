@@ -3757,6 +3757,15 @@ impl TypeChecker {
                             .extend(branch_checker.infer_return_types_in_statements(else_branch)?);
                     }
                 }
+                Stmt::Function(nested) => {
+                    // Register nested function in environment for return type inference
+                    if let Ok(nested_type) = self.named_function_signature_type(nested) {
+                        self.env.variables.insert(
+                            nested.name.clone(),
+                            (nested_type, MutabilityView::Immutable),
+                        );
+                    }
+                }
                 _ => {
                     if self.check_statement(statement).is_err() {
                         return None;
