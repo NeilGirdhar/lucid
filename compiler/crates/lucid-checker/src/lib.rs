@@ -19560,4 +19560,50 @@ def process(node: Node) -> int:
             result
         );
     }
+
+    #[test]
+    fn test_callable_method_type_contracts() {
+        let code = r#"class Point:
+    x: int
+    y: int
+
+    def distance(self) -> float:
+        return 0.0
+
+def apply_method(obj, method_fn):
+    return method_fn()
+
+p = Point(1, 2)
+m = p.distance  # Method value type
+result: float = apply_method(p, m)  # Pass method to higher-order function
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "method values should have callable types: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_callable_closure_preservation() {
+        let code = r#"def make_adder(x: int):
+    def add(y: int) -> int:
+        return x + y
+    return add
+
+adder = make_adder(5)
+result: int = adder(3)
+"#;
+        let module = parse(code).unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(
+            result.is_ok(),
+            "callable closures should preserve types: {:?}",
+            result
+        );
+    }
 }
