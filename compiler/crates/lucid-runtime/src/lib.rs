@@ -383,6 +383,7 @@ pub enum Value {
     Skip,
     Sentinel(String),
     Return(Box<Value>),
+    Iterator(Rc<RefCell<Vec<Value>>>),
 }
 
 impl Value {
@@ -415,6 +416,7 @@ impl Value {
             Value::DottedPath(_) => "DottedPath",
             Value::Sentinel(name) => name.as_str(),
             Value::Return(val) => val.type_name(),
+            Value::Iterator(_) => "iterator",
         }
     }
 
@@ -628,6 +630,7 @@ impl fmt::Debug for Value {
             Value::DottedPath(parts) => write!(f, "{}", parts.join(".")),
             Value::Sentinel(s) => write!(f, "{s}"),
             Value::Return(val) => write!(f, "return {:?}", val),
+            Value::Iterator(items) => write!(f, "<iterator {:?}>", *items.borrow()),
         }
     }
 }
@@ -3078,7 +3081,7 @@ impl Interpreter {
                             )))
                         })
                         .collect();
-                    Ok(Value::List(Rc::new(RefCell::new(rows))))
+                    Ok(Value::Iterator(Rc::new(RefCell::new(rows))))
                 }),
             },
         );
@@ -3130,7 +3133,7 @@ impl Interpreter {
                         let pair = Value::List(Rc::new(RefCell::new(vec![Value::Int(index), value])));
                         index += 1; pair
                     }).collect();
-                    Ok(Value::List(Rc::new(RefCell::new(pairs))))
+                    Ok(Value::Iterator(Rc::new(RefCell::new(pairs))))
                 }),
             },
         );
@@ -3178,7 +3181,7 @@ impl Interpreter {
                         }
                     };
                     values.reverse();
-                    Ok(Value::List(Rc::new(RefCell::new(values))))
+                    Ok(Value::Iterator(Rc::new(RefCell::new(values))))
                 }),
             },
         );
@@ -3684,12 +3687,12 @@ impl Interpreter {
                     match &args[0] {
                         Value::List(_) | Value::Range { .. } | Value::Set(_) => {
                             Ok(match &args[0] {
-                                Value::List(_) => args[0].clone(),
-                                Value::Range { start, stop, step } => Value::List(Rc::new(
+                                Value::List(items) => Value::Iterator(items.clone()),
+                                Value::Range { start, stop, step } => Value::Iterator(Rc::new(
                                     RefCell::new(materialize_range(*start, *stop, *step)),
                                 )),
                                 Value::Set(values) => {
-                                    Value::List(Rc::new(RefCell::new(values.borrow().clone())))
+                                    Value::Iterator(Rc::new(RefCell::new(values.borrow().clone())))
                                 }
                                 _ => {
                                     return Err(RuntimeError {
@@ -3766,7 +3769,7 @@ impl Interpreter {
                     let mapped = values.into_iter().map(|value| {
                         interp.invoke_value(args[0].clone(), vec![(None, value)], Span::default())
                     }).collect::<Result<Vec<_>, _>>()?;
-                    Ok(Value::List(Rc::new(RefCell::new(mapped))))
+                    Ok(Value::Iterator(Rc::new(RefCell::new(mapped))))
                 }),
             },
         );
