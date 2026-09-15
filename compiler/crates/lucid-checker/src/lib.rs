@@ -7173,6 +7173,9 @@ impl TypeChecker {
                 // Check if then_branch has an exit (return/break/continue)
                 let then_branch_exits = Self::branch_exits(&then_branch);
 
+                // Track variables defined in then branch BEFORE restoring
+                let vars_after_then = self.env.variables.clone();
+
                 // Restore and apply else narrowing
                 self.env.variables = saved_vars.clone();
                 self.narrowing_constraints = saved_attr_constraints.clone();
@@ -7229,8 +7232,33 @@ impl TypeChecker {
                     if let Some((attr_path, new_type)) = &narrow_attr_else_to_type {
                         self.narrowing_constraints.insert(attr_path.clone(), new_type.clone());
                     }
+                } else if !then_branch_exits && else_branch.is_some() {
+                    // Then branch completes, else exists: check if both complete or only then
+                    if !else_branch_exits {
+                        // Both branches complete normally: merge variables defined in both
+                        let vars_after_else = self.env.variables.clone();
+                        let mut merged_vars = saved_vars.clone();
+
+                        // Add variables that were defined in both branches
+                        for (var_name, (var_type, mutability)) in vars_after_then.iter() {
+                            if !saved_vars.contains_key(var_name)
+                                && vars_after_else.get(var_name) == Some(&(var_type.clone(), mutability.clone())) {
+                                // Variable defined in both branches - preserve it
+                                merged_vars.insert(var_name.clone(), (var_type.clone(), mutability.clone()));
+                            }
+                        }
+                        self.env.variables = merged_vars;
+                    } else {
+                        // Only then branch completes, else exits: keep then branch variables
+                        self.env.variables = vars_after_then;
+                    }
+                    self.narrowing_constraints = saved_attr_constraints;
+                } else if !then_branch_exits && else_branch.is_none() {
+                    // No else branch and then completes normally: keep variables from then branch
+                    self.env.variables = vars_after_then;
+                    self.narrowing_constraints = saved_attr_constraints;
                 } else {
-                    // Restore original environment if we're not applying post-if narrowing
+                    // Restore original environment (both exit, or other combinations)
                     self.env.variables = saved_vars;
                     self.narrowing_constraints = saved_attr_constraints;
                 }
