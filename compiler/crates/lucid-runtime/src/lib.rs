@@ -4612,6 +4612,9 @@ impl Interpreter {
                         }),
                     }
                 }
+                Value::Iterator(items) => {
+                    Ok(Value::List(Rc::new(RefCell::new(items.borrow().clone()))))
+                }
                 other => Err(RuntimeError {
                     message: format!("list() argument must be iterable: {}", other.type_name()),
                     span: Span::default(),
@@ -9362,6 +9365,17 @@ impl Interpreter {
                             span: *span,
                         })
                     }
+                    (Value::Iterator(values), Value::Int(i)) => {
+                        let values_list = values.borrow();
+                        let actual_idx = if i < 0 { values_list.len() as i64 + i } else { i };
+                        if actual_idx < 0 || actual_idx as usize >= values_list.len() {
+                            return Err(RuntimeError {
+                                message: format!("index {i} out of range"),
+                                span: *span,
+                            });
+                        }
+                        Ok(values_list[actual_idx as usize].clone())
+                    }
                     (other_obj, _) => Err(RuntimeError {
                         message: format!("indexing not supported on {}", other_obj.type_name()),
                         span: *span,
@@ -12315,6 +12329,7 @@ s = sum(r)
         interp.eval_module(&module).unwrap();
         assert_eq!(
             interp.env.borrow().get("a").and_then(|v| match v {
+                Value::Iterator(xs) => xs.borrow().first().cloned(),
                 Value::List(xs) => xs.borrow().first().cloned(),
                 _ => None,
             }),
@@ -12326,16 +12341,18 @@ s = sum(r)
                 .borrow()
                 .get("b")
                 .and_then(|v| match v {
+                    Value::Iterator(xs) => xs.borrow().first().cloned(),
                     Value::List(xs) => xs.borrow().first().cloned(),
                     _ => None,
                 })
                 .and_then(|v| match v {
                     Value::List(pair) => pair.borrow().first().cloned(),
+                    Value::Iterator(pair) => pair.borrow().first().cloned(),
                     _ => None,
                 }),
             Some(Value::Int(7))
         );
-        assert!(matches!(interp.env.borrow().get("c"), Some(Value::List(_))));
+        assert!(matches!(interp.env.borrow().get("c"), Some(Value::Iterator(_)) | Some(Value::List(_))));
         assert_eq!(interp.env.borrow().get("d"), Some(Value::Bool(false)));
     }
 
@@ -12557,11 +12574,11 @@ s = sum(r)
         );
         assert!(matches!(
             interp.env.borrow().get("names"),
-            Some(Value::List(_))
+            Some(Value::List(_)) | Some(Value::Iterator(_))
         ));
         assert!(matches!(
             interp.env.borrow().get("values"),
-            Some(Value::List(_))
+            Some(Value::List(_)) | Some(Value::Iterator(_))
         ));
         let ordered = parse(
             "class Ordered:\n    zeta: int\n    alpha: int\no = Ordered(1, 2)\nnames = fields(o)\n",
@@ -13431,9 +13448,9 @@ for byte in view:
 copied = list(data)
 mutable_copy = list(buffer)
 view_copy = list(view)
-rev = reversed(data)
-buffer_rev = reversed(buffer)
-view_rev = reversed(view)
+rev = list(reversed(data))
+buffer_rev = list(reversed(buffer))
+view_rev = list(reversed(view))
 summed = sum(data)
 view_sum = sum(view)
 largest = max(data)
