@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 lucid-syntax = { path = "../lucid-syntax" }
 lucid-checker = { path = "../lucid-checker" }
+lucid-abi = { path = "../lucid-abi" }
+num-bigint = "0.4"
+num-traits = "0.2"

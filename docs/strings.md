@@ -81,8 +81,8 @@ for ch in text:          # error
 
 chars: ~Sequence[str] = text.chars
 chars[0]
-"e" in chars     # True: some element equals "e"
-"el" in chars    # False: no element equals "el" -- chars holds one-character str
+"e" in chars     # true: some element equals "e"
+"el" in chars    # false: no element equals "el" -- chars holds one-character str
 
 for ch in text.chars:
     ...
@@ -92,8 +92,8 @@ counting, a real and useful job in its own right, just not the one
 `Sequence` promises, and not one that needs `chars` to reach:
 
 ```python
-"e" in text     # True: substring search
-"el" in text    # True: substring search
+"e" in text     # true: substring search
+"el" in text    # true: substring search
 len(text)
 ```
 ## No `%` string formatting

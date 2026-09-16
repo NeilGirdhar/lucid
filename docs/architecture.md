@@ -26,10 +26,10 @@ execution backend:
 
 1. The lexer scans UTF-8 source text, translates whitespace indentation into
    indent and dedent tokens, and produces a token stream.
-2. The parser organizes tokens into a typed abstract syntax tree rooted in a
-   module declaration.
+2. The parser organizes tokens into an abstract syntax tree for the source
+   module.
 3. The static checker verifies types, validates single inheritance, enforces
-   interface contracts, checks pattern exhaustiveness, and checks mutability
+   trait obligations, checks pattern exhaustiveness, and checks mutability
    permissions.
 4. The execution driver dispatches the verified tree either to the native code
    generator or to the reference interpreter.
@@ -80,11 +80,10 @@ expressions. It produces an abstract syntax tree rooted in the `Module` node.
 
 The syntax tree preserves language semantics:
 
-* Distinct declaration nodes for `interface`, `trait`, and `class` types,
-  enforcing the separation between obligations, reusable behavior, and owned
-  state.
+* Distinct declaration nodes for `trait` and `class`, keeping stateless
+  obligations and reusable behavior separate from owned state.
 * Explicit mutability annotations on type references: mutable `T`, read-only
-  view `&T`, and deeply immutable object `!T`.
+  view `~T`, and deeply immutable object `!T`.
 * Multiple dispatch annotations on operator definitions: `dispatch def`.
 * Error propagation syntax: the postfix `?` operator on expressions.
 
@@ -106,12 +105,9 @@ undefined attribute accesses at compile time.
 
 The checker enforces structural rules defined in the specification:
 
-* An *interface* specifies abstract obligations without method bodies or
-  state. The checker verifies that any concrete class declaring conformance
-  implements every required method with an identical signature.
-* A *trait* provides reusable method bodies without fields. The checker
-  ensures traits compose into classes without conflicting method
-  implementations.
+* A *trait* specifies obligations, reusable method bodies, or both, without
+  fields. The checker verifies required members and rejects unresolved
+  conflicts between reusable implementations.
 * A *class* defines owned state and constructors. The checker rejects any
   class declaration specifying more than one parent class.
 
@@ -127,7 +123,7 @@ identifying the missing pattern.
 Lucid tracks mutability permissions through three view types:
 
 * A *mutable reference*, written as `T`, permits field mutation.
-* A *read-only view*, written as `&T`, forbids mutating attributes through
+* A *read-only view*, written as `~T`, forbids mutating attributes through
   this reference while permitting reads.
 * A *deeply immutable object*, written as `!T`, guarantees that neither the
   instance nor any transitively reachable field mutates.
@@ -155,11 +151,12 @@ with link-time optimizations to produce a machine binary.
 
 ### Unboxed hardware representations
 
-Primitive types map directly to machine registers:
+Primitive values use native representations where their semantics permit it:
 
-* The `Int` type maps to `int64_t`.
-* The `Float` type maps to `double`.
-* The `Bool` type maps to `bool`.
+* `float` uses an IEEE 754 double-precision representation.
+* `bool` uses a native boolean representation.
+* Small `int` values may use a machine-word fast path, but integers promote
+  without overflow because Lucid integers have arbitrary precision.
 
 Arithmetic operations compile to native CPU instructions (such as `addq`,
 `imulq`, and `sqrtsd`) without heap allocations, type tag inspections, or
@@ -202,7 +199,7 @@ engine.
 The interpreter represents runtime values using a tagged enum:
 
 * Primitive values: integers, floating-point numbers, booleans, and strings.
-* Collection values: lists, dictionaries, sets, and anonymous records.
+* Collection values: lists, dictionaries, and sets.
 * Callable values: user functions, closures, and built-in primitives.
 * Object instances: class instances storing field tables and parent pointers.
 

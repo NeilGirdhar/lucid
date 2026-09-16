@@ -316,6 +316,9 @@ common case for free:
 
 ```python
 class FileHandle(AbstractContextManager):
+    def close(self) -> none:
+        ...
+
     contextmanager def __cm__(self) -> Self:
         yield self
         self.close()

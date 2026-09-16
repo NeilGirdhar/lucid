@@ -1,16 +1,25 @@
-use lucid_syntax::parse;
 use lucid_checker::TypeChecker;
 use lucid_runtime::{Interpreter, Value};
+use lucid_syntax::parse;
 
 fn run_lucid(source: &str) -> (Result<(), String>, Result<Value, String>) {
     let module = match parse(source) {
         Ok(m) => m,
-        Err(e) => return (Err(format!("parse error: {e}")), Err(format!("parse error: {e}"))),
+        Err(e) => {
+            return (
+                Err(format!("parse error: {e}")),
+                Err(format!("parse error: {e}")),
+            );
+        }
     };
     let mut checker = TypeChecker::new();
-    let check_res = checker.check_module(&module).map_err(|e| format!("type error: {}", e.message));
+    let check_res = checker
+        .check_module(&module)
+        .map_err(|e| format!("type error: {}", e.message));
     let mut interp = Interpreter::new();
-    let eval_res = interp.eval_module(&module).map_err(|e| format!("runtime error: {}", e.message));
+    let eval_res = interp
+        .eval_module(&module)
+        .map_err(|e| format!("runtime error: {}", e.message));
     (check_res, eval_res)
 }
 
@@ -39,10 +48,66 @@ fp = freeze(p)
 "#;
     let val = eval_ok(src);
     if let Value::Object { is_frozen, .. } = val {
-        assert!(*is_frozen.borrow(), "freeze() must transition object to deeply frozen");
+        assert!(
+            *is_frozen.borrow(),
+            "freeze() must transition object to deeply frozen"
+        );
     } else {
         panic!("expected Object, got {:?}", val);
     }
+}
+
+#[test]
+fn test_identity_checks_accept_declaration_kind_rhs() {
+    let src = r#"
+class Box:
+    pass
+
+value = Box()
+is_class = value is class
+is_trait = value is trait
+"#;
+    let (chk, evl) = run_lucid(src);
+    assert!(chk.is_ok(), "typecheck failed: {:?}", chk.err());
+    assert!(evl.is_ok(), "evaluation failed: {:?}", evl.err());
+}
+
+#[test]
+fn test_identity_checks_reject_dead_exact_class_tests() {
+    for source in [
+        "class HasLen:\n    def __len__(self) -> int:\n        return 1\nvalue = HasLen()\ncheck = value is Sized\n",
+        "class Animal:\n    pass\nclass Dog(Animal):\n    pass\nvalue = Animal()\ncheck = value is Dog\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("exact class"));
+    }
+}
+
+#[test]
+fn test_conditions_accept_bool_protocol_not_len_fallback() {
+    let truthy = r#"
+class Flag:
+    value: bool
+    factory __init__(cls, value: bool):
+        return construct(value)
+    def __bool__(self) -> bool:
+        return self.value
+
+if Flag(true):
+    pass
+"#;
+    let (chk, _evl) = run_lucid(truthy);
+    assert!(
+        chk.is_ok(),
+        "__bool__ should satisfy condition: {:?}",
+        chk.err()
+    );
+
+    let len_only = "class SizedOnly:\n    def __len__(self) -> int:\n        return 1\nif SizedOnly():\n    pass\n";
+    let (chk, _evl) = run_lucid(len_only);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("condition must be bool"));
 }
 
 #[test]
@@ -101,7 +166,7 @@ fn test_names_destructuring_and_cell() {
     let src = r#"
 (a, b) = [10, 20]
 cell = Cell(a)
-cell_val = cell
+cell_val = cell.value
 "#;
     let val = eval_ok(src);
     assert_eq!(val, Value::Int(10));
@@ -148,7 +213,7 @@ frozen_acc = freeze(acc)
 #[test]
 fn test_generics_higher_kinded_and_variance() {
     let src = r#"
-class Box[+T]:
+class Box[out T]:
     val: T
     factory __init__(cls, val: T):
         return construct(val)
@@ -175,14 +240,30 @@ b = true
     assert!(evl.is_ok());
 }
 
+#[test]
+fn test_bool_does_not_satisfy_numeric_capabilities() {
+    let src = r#"
+trait SupportsIndex:
+    def __index__(self: ~Self) -> int
+
+def repeat(count: SupportsIndex) -> none:
+    pass
+
+repeat(true)
+"#;
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("incompatible type"));
+}
+
 // ---------------------------------------------------------------------------
 // 7. Modern type specification overview (docs/type-specification.rst)
 // ---------------------------------------------------------------------------
 #[test]
 fn test_type_specification_pillars() {
     let src = r#"
-interface Printable:
-    def format() -> str
+trait Printable:
+    def format(self) -> str
 
 trait Formatted:
     def format() -> str:
@@ -194,17 +275,21 @@ class Doc(Formatted, Printable):
         return construct(title)
 "#;
     let (chk, _evl) = run_lucid(src);
-    assert!(chk.is_ok(), "Type specification pillars should type check cleanly: {:?}", chk.err());
+    assert!(
+        chk.is_ok(),
+        "Type specification pillars should type check cleanly: {:?}",
+        chk.err()
+    );
 }
 
 // ---------------------------------------------------------------------------
-// 8. Interfaces (docs/interfaces.rst)
+// 8. Implementing a trait after the fact (docs/traits.md)
 // ---------------------------------------------------------------------------
 #[test]
-fn test_interfaces_retroactive_implementation() {
+fn test_traits_retroactive_implementation() {
     let src = r#"
-interface Describable:
-    def describe() -> str
+trait Describable:
+    def describe(self) -> str
 
 class Widget:
     name: str
@@ -259,6 +344,28 @@ class Derived(Base1, Base2):
     assert!(chk.unwrap_err().contains("multiple class parents"));
 }
 
+#[test]
+fn test_class_inheritance_rejects_programmable_type_hooks() {
+    for source in [
+        "class Hook:\n    def __mro_entries__(self) -> int:\n        return 1\n",
+        "class Hook:\n    def __prepare__(self) -> int:\n        return 1\n",
+        "class Hook:\n    def __instancecheck__(self) -> bool:\n        return true\n",
+        "class Hook:\n    def __subclasscheck__(self) -> bool:\n        return true\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("not supported"));
+    }
+}
+
+#[test]
+fn test_class_inheritance_rejects_keyword_class_bases() {
+    let src = "class Meta:\n    pass\nclass Model(metaclass=Meta):\n    pass\n";
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("unsupported class option"));
+}
+
 // ---------------------------------------------------------------------------
 // 10. Classes (docs/classes.rst)
 // ---------------------------------------------------------------------------
@@ -280,6 +387,47 @@ inst = BaseClass(99)
         assert_eq!(class_name, "BaseClass");
     } else {
         panic!("expected BaseClass instance");
+    }
+}
+
+#[test]
+fn test_classes_reject_dynamic_attribute_hooks() {
+    for source in [
+        "class Hook:\n    def __getattr__(self, name: str) -> int:\n        return 1\n",
+        "class Hook:\n    def __getattribute__(self, name: str) -> int:\n        return 1\n",
+        "class Hook:\n    def __setattr__(self, name: str, value: int):\n        pass\n",
+        "class Hook:\n    def __del__(self):\n        pass\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("not supported"));
+    }
+}
+
+#[test]
+fn test_classes_reject_descriptor_hooks() {
+    for source in [
+        "class Descriptor:\n    def __get__(self, obj: object, owner: object) -> int:\n        return 1\n",
+        "class Descriptor:\n    def __set__(self, obj: object, value: int):\n        pass\n",
+        "class Descriptor:\n    def __delete__(self, obj: object):\n        pass\n",
+        "class Descriptor:\n    def __set_name__(self, owner: object, name: str):\n        pass\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("not supported"));
+    }
+}
+
+#[test]
+fn test_classes_reject_removed_python_decorators() {
+    for source in [
+        "class Tools:\n    @staticmethod\n    def answer() -> int:\n        return 42\n",
+        "class Circle:\n    @property\n    def area(self) -> int:\n        return 1\n",
+        "class Factory:\n    @classmethod\n    def make(cls) -> int:\n        return 1\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("not supported"));
     }
 }
 
@@ -322,10 +470,42 @@ res = broken
 }
 
 #[test]
+fn test_control_flow_continue_does_not_trigger_if_broken() {
+    let src = r#"
+broken = false
+total = 0
+for x in [1, 2, 3]:
+    if x == 2:
+        continue
+    total += x
+if_broken:
+    broken = true
+
+res = total
+"#;
+    let val = eval_ok(src);
+    assert_eq!(val, Value::Int(4));
+
+    let src = r#"
+broken = false
+for x in [1, 2, 3]:
+    continue
+if_broken:
+    broken = true
+
+res = broken
+"#;
+    let val = eval_ok(src);
+    assert_eq!(val, Value::Bool(false));
+}
+
+#[test]
 fn test_control_flow_with_statement() {
     let src = r#"
-x = 10
-with x as ctx:
+contextmanager def managed():
+    yield 10
+
+with managed() as ctx:
     y = 42
 res = y
 "#;
@@ -351,7 +531,24 @@ def sound(p: Pet) -> str:
             return "woof"
 "#;
     let (chk, _) = run_lucid(src);
-    assert!(chk.is_ok(), "Exhaustive match on Pet union should succeed: {:?}", chk.err());
+    assert!(
+        chk.is_ok(),
+        "Exhaustive match on Pet union should succeed: {:?}",
+        chk.err()
+    );
+}
+
+#[test]
+fn test_control_flow_match_expression_subject_requires_alias() {
+    let src = r#"
+def render(value: int) -> int:
+    match value + 1:
+        case _:
+            return value
+"#;
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("requires `as` alias"));
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +563,10 @@ lst = [x * 2 for x in [1, 2, 3]]
 "#;
     let val = eval_ok(src);
     if let Value::List(items) = val {
-        assert_eq!(*items.borrow(), vec![Value::Int(2), Value::Int(4), Value::Int(6)]);
+        assert_eq!(
+            *items.borrow(),
+            vec![Value::Int(2), Value::Int(4), Value::Int(6)]
+        );
     } else {
         panic!("expected list, got {:?}", val);
     }
@@ -379,7 +579,10 @@ nums = [1, skip, 2, skip, 3]
 "#;
     let val = eval_ok(src);
     if let Value::List(items) = val {
-        assert_eq!(*items.borrow(), vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        assert_eq!(
+            *items.borrow(),
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
     } else {
         panic!("expected list without skip elements, got {:?}", val);
     }
@@ -389,7 +592,10 @@ nums = [1, skip, 2, skip, 3]
 fn test_collections_rejection_of_adjacent_string_concatenation() {
     let src = r#"path = "/api/" "users""#;
     let res = parse(src);
-    assert!(res.is_err(), "Lucid must reject implicit adjacent string literal concatenation");
+    assert!(
+        res.is_err(),
+        "Lucid must reject implicit adjacent string literal concatenation"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -405,13 +611,25 @@ item = arr[2]
     assert_eq!(val, Value::Int(30));
 }
 
+#[test]
+fn test_indexing_rejects_delitem_dunder() {
+    let src = r#"
+class Bag:
+    def __delitem__(self, index: int):
+        pass
+"#;
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("__delitem__ is not supported"));
+}
+
 // ---------------------------------------------------------------------------
 // 15. Calls (docs/calls.rst)
 // ---------------------------------------------------------------------------
 #[test]
 fn test_calls_anonymous_closures() {
     let src = r#"
-f = def(x): x * 3
+f: (int) -> int = def(x): x * 3
 res = f(4)
 "#;
     let val = eval_ok(src);
@@ -426,6 +644,22 @@ res = f()
 "#;
     let val = eval_ok(src);
     assert_eq!(val, Value::Int(42));
+}
+
+#[test]
+fn test_calls_reject_positional_after_keyword_argument() {
+    let src = r#"
+def f(left: int, right: int, tail: int) -> int:
+    return left + right + tail
+
+res = f(tail=3, *[1, 2])
+"#;
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(
+        chk.unwrap_err()
+            .contains("positional argument follows keyword argument")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +692,18 @@ def calculate(a: int) -> int:
     assert!(chk.is_ok());
 }
 
+#[test]
+fn test_decorators_reject_python_overload() {
+    for source in [
+        "@overload\ndef parse(value: str) -> int:\n    return 1\n",
+        "@typing.overload\ndef parse(value: str) -> int:\n    return 1\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("overload is not supported"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 18. Project configuration (docs/project-configuration.rst)
 // ---------------------------------------------------------------------------
@@ -478,10 +724,10 @@ config = {"name": "lucid-project", "version": "1.0"}
 #[test]
 fn test_modules_export_syntax() {
     let src = r#"
-export def helper(x: int) -> int:
+def helper(x: int) -> int:
     return x + 1
 
-export class Service:
+class Service:
     port: int
     factory __init__(cls, port: int):
         return construct(port)
@@ -489,6 +735,30 @@ export class Service:
     let (chk, evl) = run_lucid(src);
     assert!(chk.is_ok());
     assert!(evl.is_ok());
+}
+
+#[test]
+fn test_modules_reject_dunder_all() {
+    let src = "__all__ = [\"helper\"]\nhelper = 1\n";
+    let (chk, _evl) = run_lucid(src);
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("__all__ is not supported"));
+}
+
+#[test]
+fn test_removed_type_builtin_call_is_rejected() {
+    let (chk, _evl) = run_lucid("value = type(1)\n");
+    assert!(chk.is_err());
+    assert!(chk.unwrap_err().contains("type() is not supported"));
+}
+
+#[test]
+fn test_removed_string_codepoint_builtins_are_rejected() {
+    for source in ["letter = chr(65)\n", "codepoint = ord(\"A\")\n"] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("is not a bare builtin"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,12 +769,34 @@ fn test_keywords_lexer_and_parser_support() {
     let src = r#"
 let final_val = 100
 final fixed = 200
-skip_item = skip
 f = def: fixed
 "#;
     let (chk, evl) = run_lucid(src);
     assert!(chk.is_ok());
     assert!(evl.is_ok());
+}
+
+#[test]
+fn test_skip_is_not_a_standalone_value() {
+    for source in ["value = skip\n", "def f():\n    return skip\n"] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("skip cannot be used"));
+    }
+}
+
+#[test]
+fn test_await_identity_for_non_future_values() {
+    let src = r#"
+async def load() -> int:
+    return 40
+
+direct: int = await 2
+future: int = await load()
+res = direct + future
+"#;
+    let val = eval_ok(src);
+    assert_eq!(val, Value::Int(42));
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +819,31 @@ slug = "-".join(upper_words)
     assert_eq!(val, Value::Str("LUCID-EXPRESSIVE-FAST".to_string()));
 }
 
+#[test]
+fn test_sum_rejects_nonnumeric_elements() {
+    for source in ["total = sum([\"bad\"])\n", "total = sum([true])\n"] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+        assert!(chk.unwrap_err().contains("elements must be numeric"));
+    }
+}
+
+#[test]
+fn test_strings_require_chars_for_iterable_builtins() {
+    for source in [
+        "letters = list(\"abc\")\n",
+        "def f(x: str) -> str:\n    return x\nletters = map(f, \"abc\")\n",
+        "pairs = zip(\"ab\", [1, 2])\n",
+        "letters = reversed(\"abc\")\n",
+    ] {
+        let (chk, _evl) = run_lucid(source);
+        assert!(chk.is_err());
+    }
+
+    let (chk, _evl) = run_lucid("letters = list(\"abc\".chars)\n");
+    assert!(chk.is_ok(), "str.chars should be iterable: {:?}", chk.err());
+}
+
 // ---------------------------------------------------------------------------
 // 22. Multi-file Module Imports
 // ---------------------------------------------------------------------------
@@ -540,14 +857,20 @@ fn test_multi_file_module_imports() {
     let helper_path = temp_dir.join("helper.lucid");
     let main_path = temp_dir.join("main.lucid");
 
-    fs::write(&helper_path, r#"
-export def add_ten(x: int) -> int:
+    fs::write(
+        &helper_path,
+        r#"
+def add_ten(x: int) -> int:
     return x + 10
 
-export multiplier = 3
-"#).unwrap();
+multiplier = 3
+"#,
+    )
+    .unwrap();
 
-    fs::write(&main_path, r#"
+    fs::write(
+        &main_path,
+        r#"
 from .helper import add_ten, multiplier
 import .helper as h
 
@@ -555,7 +878,9 @@ res1 = add_ten(5)
 res2 = multiplier * 2
 res3 = h.multiplier * 3
 final_res = res1 + res2 + res3
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let source = fs::read_to_string(&main_path).unwrap();
     let module = parse(&source).unwrap();
@@ -572,5 +897,121 @@ final_res = res1 + res2 + res3
     // res1 = 15, res2 = 6, res3 = 9 => 15 + 6 + 9 = 30
     assert_eq!(final_res, Value::Int(30));
 
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_native_local_from_imports() {
+    use std::fs;
+    use std::process::Command;
+    let temp_dir =
+        std::env::temp_dir().join(format!("lucid_native_imports_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let helper_path = temp_dir.join("helper.lucid");
+    let main_path = temp_dir.join("main.lucid");
+    let output_path = temp_dir.join("main_bin");
+    fs::write(
+        &helper_path,
+        "def add_ten(x: int) -> int:\n    return x + 10\n\nmultiplier = 3\n",
+    )
+    .unwrap();
+    fs::write(&main_path, "from .helper import add_ten\nimport .helper as h\nprint(add_ten(5))\nprint(h.multiplier * 2)\n").unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "build",
+            main_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "native import build failed");
+    let run = Command::new(&output_path).output().unwrap();
+    assert!(
+        run.status.success(),
+        "native import program failed: {:?}",
+        run
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "15\n6\n");
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_native_declaration_only_import_cycle() {
+    use std::fs;
+    use std::process::Command;
+    let temp_dir =
+        std::env::temp_dir().join(format!("lucid_native_decl_cycle_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let a_path = temp_dir.join("a.lucid");
+    let b_path = temp_dir.join("b.lucid");
+    let output_path = temp_dir.join("a_bin");
+    fs::write(&a_path, "from .b import B\nclass A:\n    pass\n").unwrap();
+    fs::write(&b_path, "from .a import A\nclass B:\n    pass\n").unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "build",
+            a_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "declaration cycle build failed");
+    let run = Command::new(&output_path).output().unwrap();
+    assert!(run.status.success(), "declaration cycle binary failed");
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_spec_command_exits_nonzero_when_positive_snippet_fails() {
+    use std::fs;
+    use std::process::Command;
+    let temp_dir = std::env::temp_dir().join(format!(
+        "lucid_spec_exit_failure_{}_{}",
+        std::process::id(),
+        "typecheck"
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(
+        temp_dir.join("broken.md"),
+        "```python\nvalue: int = \"wrong\"\n```\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["test-spec", temp_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "test-spec should fail when a positive snippet does not typecheck"
+    );
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_spec_command_exits_zero_when_all_snippets_validate() {
+    use std::fs;
+    use std::process::Command;
+    let temp_dir = std::env::temp_dir().join(format!(
+        "lucid_spec_exit_success_{}_{}",
+        std::process::id(),
+        "typecheck"
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(temp_dir.join("ok.md"), "```python\nvalue: int = 42\n```\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["test-spec", temp_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "test-spec should pass when every positive snippet validates: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     let _ = fs::remove_dir_all(&temp_dir);
 }

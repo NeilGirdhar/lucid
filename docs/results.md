@@ -28,7 +28,7 @@ type ParseResult = Value | ParseError
 def parse(text: str) -> ParseResult:
     ...
 
-match parse(text):
+match parse(text) as result:
     case Value:
         ...
     case ParseError:

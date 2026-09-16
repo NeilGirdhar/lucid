@@ -1,0 +1,10 @@
+[package]
+name = "lucid-ir"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lucid-syntax = { path = "../lucid-syntax" }
+lucid-abi = { path = "../lucid-abi" }
+
+[dev-dependencies]

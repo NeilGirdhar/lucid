@@ -1,0 +1,6157 @@
+use std::fs;
+use std::process::Command;
+
+#[test]
+fn run_cir_compiles_and_executes_initializer() {
+    let path = std::env::temp_dir().join(format!("lucid_run_cir_{}.lucid", std::process::id()));
+    fs::write(&path, "answer = 6 * 7\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
+#[test]
+fn run_entry_invokes_named_interpreter_function() {
+    let path = std::env::temp_dir().join(format!("lucid_run_entry_{}.lucid", std::process::id()));
+    fs::write(&path, "def main():\n    return 42\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--entry",
+            "main",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("42"),
+        "stdout was: {:?}, stderr was: {:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_entry_requires_a_name() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_entry_missing_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "answer = 42\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--entry",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires a function name"));
+}
+
+#[test]
+fn native_run_invokes_zero_argument_entry() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_native_entry_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "def main():\n    return 42\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--native",
+            "--entry",
+            "main",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "native run failed: stdout={:?}, stderr={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
+}
+
+#[test]
+fn run_entry_rejects_duplicate_flags() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_entry_duplicate_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "def main():\n    return 42\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--entry",
+            "main",
+            "--entry",
+            "main",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("only once"));
+}
+
+#[test]
+fn run_entry_resolves_manifest_entry_point_target() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_run_manifest_entry_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let manifest = root.join("project.yaml");
+    let source = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(
+        &manifest,
+        "name: demo\nversion: \"0.1\"\nentry-points:\n  serve: .child.answer\n",
+    )
+    .expect("manifest should be writable");
+    fs::write(&child, "def answer():\n    return 42\n").expect("child module should be writable");
+    fs::write(&source, "import child\n").expect("entry module should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            source.to_str().expect("temporary path should be UTF-8"),
+            "--entry",
+            "serve",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(
+        output.status.success(),
+        "run failed: stdout={:?}, stderr={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
+}
+
+#[test]
+fn run_entry_rejects_unknown_manifest_entry_point() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_run_manifest_entry_unknown_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    fs::write(
+        root.join("project.yaml"),
+        "name: demo\nversion: \"0.1\"\nentry-points:\n  serve: .main\n",
+    )
+    .expect("manifest should be writable");
+    let source = root.join("main.lucid");
+    fs::write(&source, "def main():\n    return 42\n").expect("source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            source.to_str().expect("temporary path should be UTF-8"),
+            "--entry",
+            "missing",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown entry point"));
+}
+
+#[test]
+fn run_reports_unresolved_imports_before_runtime() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_run_missing_import_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let source = root.join("main.lucid");
+    fs::write(&source, "import missing\nvalue = 1\n").expect("source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            source.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0300"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("import missing"),
+        "diagnostic should render unresolved import source: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Runtime Error"),
+        "unresolved imports should fail before runtime: {stderr}"
+    );
+}
+
+#[test]
+fn native_commands_report_unresolved_imports_with_source() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_native_missing_import_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let source = root.join("main.lucid");
+    let output_bin = root.join("out");
+    fs::write(&source, "import missing\nvalue = 1\n").expect("source should be writable");
+    for args in [
+        vec![
+            "run".to_string(),
+            source
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+            "--native".to_string(),
+        ],
+        vec![
+            "emit-c".to_string(),
+            source
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "build".to_string(),
+            source
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+            "-o".to_string(),
+            output_bin
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args(args.iter().map(String::as_str))
+            .output()
+            .expect("lucid binary should execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?} should fail");
+        assert!(
+            stderr.contains("E0300"),
+            "{args:?}: unexpected stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("import missing"),
+            "{args:?}: diagnostic should render unresolved import source: {stderr}"
+        );
+        assert!(
+            !stderr.contains("Import Error: cannot resolve"),
+            "{args:?}: native commands should use structured diagnostics: {stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn run_reports_imported_module_type_errors_before_runtime() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_run_import_type_error_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\n").expect("main should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("child.lucid"),
+        "diagnostic should point at imported file: {stderr}"
+    );
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "diagnostic should render imported file source: {stderr}"
+    );
+}
+
+#[test]
+fn native_run_resolves_manifest_entry_point_target() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_native_manifest_entry_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    fs::write(
+        root.join("project.yaml"),
+        "name: demo\nversion: \"0.1\"\nentry-points:\n  serve: .child.answer\n",
+    )
+    .expect("manifest should be writable");
+    fs::write(root.join("child.lucid"), "def answer():\n    return 42\n")
+        .expect("child module should be writable");
+    let source = root.join("main.lucid");
+    fs::write(&source, "import child\n").expect("entry module should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            source.to_str().expect("temporary path should be UTF-8"),
+            "--native",
+            "--entry",
+            "serve",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(
+        output.status.success(),
+        "native run failed: stdout={:?}, stderr={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
+}
+
+#[test]
+fn run_entry_enters_manifest_library_context() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_run_library_context_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    fs::write(
+        root.join("project.yaml"),
+        "name: demo\nversion: \"0.1\"\nlibrary-context: .managed\nentry-points:\n  serve: .main\n",
+    )
+    .expect("manifest should be writable");
+    let source = root.join("main.lucid");
+    fs::write(
+        &source,
+        "contextmanager def managed():\n    print(\"setup\")\n    yield none\n    print(\"teardown\")\ndef main():\n    return 42\n",
+    )
+    .expect("source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            source.to_str().expect("temporary path should be UTF-8"),
+            "--entry",
+            "serve",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(
+        output.status.success(),
+        "run failed: stdout={:?}, stderr={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("setup"));
+    assert!(stdout.contains("teardown"));
+    assert!(stdout.contains("42"));
+}
+
+#[test]
+fn native_run_rejects_manifest_library_context_until_native_cleanup_abi_exists() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_native_library_context_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    fs::write(
+        root.join("project.yaml"),
+        "name: demo\nversion: \"0.1\"\nlibrary-context: .managed\n",
+    )
+    .expect("manifest should be writable");
+    let source = root.join("main.lucid");
+    fs::write(&source, "contextmanager def managed():\n    yield none\n")
+        .expect("source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            source.to_str().expect("temporary path should be UTF-8"),
+            "--native",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("library-context"));
+}
+
+#[test]
+fn run_entry_lazily_loads_manifest_context_module() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_run_lazy_library_context_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    fs::write(
+        root.join("project.yaml"),
+        "name: demo\nversion: \"0.1\"\nlibrary-context: .setup.managed\nentry-points:\n  serve: .main\n",
+    )
+    .expect("manifest should be writable");
+    fs::write(
+        root.join("setup.lucid"),
+        "contextmanager def managed():\n    print(\"setup\")\n    yield none\n    print(\"teardown\")\n",
+    )
+    .expect("context module should be writable");
+    let source = root.join("main.lucid");
+    fs::write(&source, "def main():\n    return 42\n").expect("source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            source.to_str().expect("temporary path should be UTF-8"),
+            "--entry",
+            "serve",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("setup"));
+    assert!(stdout.contains("teardown"));
+    assert!(stdout.contains("42"));
+}
+
+#[test]
+fn run_cir_step_limit_executes_through_bounded_abi_path() {
+    let path =
+        std::env::temp_dir().join(format!("lucid_run_cir_limit_{}.lucid", std::process::id()));
+    fs::write(
+        &path,
+        "def add(left: int, right: int):\n    return left + right\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "add",
+            "--args",
+            "20,22",
+            "--step-limit",
+            "32",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
+#[test]
+fn run_cir_rejects_non_positive_step_limit() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_bad_limit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "answer = 42\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--step-limit",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("positive integer"));
+}
+
+#[test]
+fn run_cir_validates_ancestor_project_manifest() {
+    let root = std::env::temp_dir().join(format!("lucid_run_cir_manifest_{}", std::process::id()));
+    let nested = root.join("src/pkg");
+    fs::create_dir_all(&nested).expect("temporary project directory should be creatable");
+    fs::write(root.join("project.yaml"), "name: bad name\n").expect("manifest should be writable");
+    let path = nested.join("main.lucid");
+    fs::write(&path, "answer = 42\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Project configuration error"));
+}
+
+#[test]
+fn emit_c_rejects_source_that_fails_type_checking() {
+    let path =
+        std::env::temp_dir().join(format!("lucid_emit_c_invalid_{}.lucid", std::process::id()));
+    fs::write(&path, "for ch in \"abc\":\n    pass\n")
+        .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "emit-c",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("for ch in \"abc\":"),
+        "emit-c should render the source line before codegen: {stderr}"
+    );
+}
+
+#[test]
+fn emit_c_renders_imported_module_type_diagnostics() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_emit_c_import_invalid_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\n").expect("entry module should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child module should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "emit-c",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("child.lucid"),
+        "diagnostic should point at the imported module: {stderr}"
+    );
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "diagnostic should render imported source line: {stderr}"
+    );
+    assert!(
+        stderr.contains("^^^^^"),
+        "diagnostic should underline imported source span: {stderr}"
+    );
+}
+
+#[test]
+fn native_run_renders_imported_module_type_diagnostics() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_native_run_import_invalid_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\n").expect("entry module should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child module should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run",
+            main.to_str().expect("temporary path should be UTF-8"),
+            "--native",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("child.lucid"),
+        "diagnostic should point at the imported module: {stderr}"
+    );
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "diagnostic should render imported source line: {stderr}"
+    );
+}
+
+#[test]
+fn emit_cir_renders_source_line_for_type_errors() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_emit_cir_invalid_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value: int = \"wrong\"\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "emit-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "emit-cir should render the source line before lowering: {stderr}"
+    );
+    assert!(
+        stderr.contains("^^^^^"),
+        "emit-cir should underline the offending span: {stderr}"
+    );
+}
+
+#[test]
+fn run_cir_renders_source_line_for_type_errors() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_invalid_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value: int = \"wrong\"\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "run-cir should render the source line before lowering: {stderr}"
+    );
+    assert!(
+        stderr.contains("^^^^^"),
+        "run-cir should underline the offending span: {stderr}"
+    );
+}
+
+#[test]
+fn cir_commands_report_unresolved_imports_before_lowering() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_cir_missing_import_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let source = root.join("main.lucid");
+    fs::write(&source, "import missing\nvalue = 1\n").expect("source should be writable");
+    for command in ["emit-cir", "run-cir"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args([
+                command,
+                source.to_str().expect("temporary path should be UTF-8"),
+            ])
+            .output()
+            .expect("lucid binary should execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{command} should fail");
+        assert!(
+            stderr.contains("E0300"),
+            "{command}: unexpected stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("import missing"),
+            "{command}: diagnostic should render unresolved import source: {stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn cir_commands_report_imported_module_type_errors() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_cir_import_type_error_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\nvalue = 1\n").expect("main should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child should be writable");
+    for command in ["emit-cir", "run-cir"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args([
+                command,
+                main.to_str().expect("temporary path should be UTF-8"),
+            ])
+            .output()
+            .expect("lucid binary should execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{command} should fail");
+        assert!(
+            stderr.contains("E0200"),
+            "{command}: unexpected stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("child.lucid"),
+            "{command}: diagnostic should point at imported file: {stderr}"
+        );
+        assert!(
+            stderr.contains("value: int = \"wrong\""),
+            "{command}: diagnostic should render imported file source: {stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn check_renders_source_line_for_structured_diagnostics() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_check_diagnostic_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value: int = \"wrong\"\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "diagnostic should render the source line: {stderr}"
+    );
+    assert!(
+        stderr.contains("^^^^^"),
+        "diagnostic should underline the offending span: {stderr}"
+    );
+}
+
+#[test]
+fn check_reports_unresolved_local_imports() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_check_missing_import_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let path = root.join("main.lucid");
+    fs::write(&path, "import missing\nvalue = 1\n").expect("source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0300"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("import missing"),
+        "diagnostic should render unresolved import line: {stderr}"
+    );
+}
+
+#[test]
+fn check_accepts_builtin_and_local_imports() {
+    let root =
+        std::env::temp_dir().join(format!("lucid_check_local_import_{}", std::process::id()));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import math\nimport child\nvalue = 1\n").expect("main should be writable");
+    fs::write(&child, "answer: int = 42\n").expect("child should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    assert!(
+        output.status.success(),
+        "check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_reports_imported_module_type_errors() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_check_import_type_error_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "import child\n").expect("main should be writable");
+    fs::write(&child, "value: int = \"wrong\"\n").expect("child should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("child.lucid"),
+        "diagnostic should point at imported file: {stderr}"
+    );
+    assert!(
+        stderr.contains("value: int = \"wrong\""),
+        "diagnostic should render imported file source: {stderr}"
+    );
+}
+
+#[test]
+fn check_and_run_resolve_relative_local_imports() {
+    let root = std::env::temp_dir().join(format!("lucid_relative_imports_{}", std::process::id()));
+    let package = root.join("pkg");
+    fs::create_dir_all(&package).expect("temporary package directory should be writable");
+    let main = root.join("main.lucid");
+    fs::write(&main, "import pkg.a\nvalue = 1\n").expect("main should be writable");
+    fs::write(package.join("a.lucid"), "from .b import answer\n")
+        .expect("module should be writable");
+    fs::write(package.join("b.lucid"), "answer: int = 42\n").expect("module should be writable");
+    for command in ["check", "run"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args([
+                command,
+                main.to_str().expect("temporary path should be UTF-8"),
+            ])
+            .output()
+            .expect("lucid binary should execute");
+        assert!(
+            output.status.success(),
+            "{command} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn commands_report_unresolved_relative_imports_in_imported_modules() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_missing_relative_import_{}",
+        std::process::id()
+    ));
+    let package = root.join("pkg");
+    fs::create_dir_all(&package).expect("temporary package directory should be writable");
+    let main = root.join("main.lucid");
+    let output_bin = root.join("out");
+    fs::write(&main, "import pkg.a\nvalue = 1\n").expect("main should be writable");
+    fs::write(package.join("a.lucid"), "from .missing import answer\n")
+        .expect("module should be writable");
+    for args in [
+        vec![
+            "check".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "run".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "emit-cir".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "run-cir".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "run".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+            "--native".to_string(),
+        ],
+        vec![
+            "emit-c".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+        vec![
+            "build".to_string(),
+            main.to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+            "-o".to_string(),
+            output_bin
+                .to_str()
+                .expect("temporary path should be UTF-8")
+                .to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args(args.iter().map(String::as_str))
+            .output()
+            .expect("lucid binary should execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?} should fail");
+        assert!(
+            stderr.contains("E0300"),
+            "{args:?}: unexpected stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("pkg/a.lucid") || stderr.contains("pkg\\a.lucid"),
+            "{args:?}: diagnostic should point at imported module: {stderr}"
+        );
+        assert!(
+            stderr.contains("from .missing import answer"),
+            "{args:?}: diagnostic should render unresolved relative import: {stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn check_does_not_duplicate_private_from_import_diagnostics() {
+    let root = std::env::temp_dir().join(format!(
+        "lucid_check_private_from_import_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).expect("temporary project directory should be writable");
+    let main = root.join("main.lucid");
+    let child = root.join("child.lucid");
+    fs::write(&main, "from child import _hidden\n").expect("main should be writable");
+    fs::write(&child, "_hidden = 1\n").expect("child should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            main.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_dir_all(&root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0200"), "unexpected stderr: {stderr}");
+    assert!(
+        !stderr.contains("E0302"),
+        "private import should not also emit missing-name diagnostic: {stderr}"
+    );
+}
+
+#[test]
+fn check_preserves_tabs_in_diagnostic_underlines() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_check_tab_diagnostic_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value =\t@\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0001"), "unexpected stderr: {stderr}");
+    assert!(stderr.contains("value =\t@"));
+    let underline = stderr
+        .lines()
+        .find(|line| line.contains('^'))
+        .unwrap_or_else(|| panic!("diagnostic should underline the offending span: {stderr}"));
+    assert!(
+        underline.contains('\t'),
+        "underline prefix should preserve tabs from the source line: {stderr}"
+    );
+}
+
+#[test]
+fn check_renders_related_diagnostic_spans() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_check_related_diagnostic_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value = 1\nvalue = 2\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "check",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E0100"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("previous declaration is here"),
+        "diagnostic should render related span label: {stderr}"
+    );
+    assert!(
+        stderr.contains("value = 1"),
+        "diagnostic should render related source line: {stderr}"
+    );
+}
+
+#[test]
+fn run_cir_uses_statement_and_cfg_lowering() {
+    let path = std::env::temp_dir().join(format!("lucid_run_cir_cfg_{}.lucid", std::process::id()));
+    fs::write(
+        &path,
+        "if 1 < 2:\n    y = 4\n    answer = y + 2\nelse:\n    answer = 0\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+#[test]
+fn run_cir_can_select_a_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "def answer():\n    return 6 * 7\n")
+        .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
+#[test]
+fn run_cir_rejects_missing_typed_function_name() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_missing_function_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "def answer():\n    return 42\n")
+        .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "missing",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("run-cir: function 'missing' not found"),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_passes_integer_arguments_to_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_args_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def add(left: int, right: int):\n    return left + right\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "add",
+            "--args",
+            "20,22",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function args failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
+#[test]
+fn run_cir_lowers_constant_list_indexing_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_list_index_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    values = [40, 41, 42]\n    record = (10, 20, 30)\n    return values[2] + record[1]\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function list index failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "62");
+}
+
+#[test]
+fn run_cir_lowers_constant_dict_indexing_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_dict_index_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    values = {1: 40, 2: 42}\n    return values[2]\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function dict index failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
+#[test]
+fn run_cir_lowers_len_of_constant_aggregates_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_len_aggregate_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    values = [1, 2, 3]\n    unique = {4, 5, 6}\n    pairs = {1: 10, 2: 20}\n    copied = dict(pairs)\n    empty = dict()\n    tuple_values = (7, 8, 9)\n    data = b\"abc\"\n    return len(values) * 10 + len(unique) + len(pairs) + len(copied) + len(empty) + len([4, 5]) + len(tuple_values) + len(data) + len(pairs.keys()) + len(pairs.values()) + len(pairs.items())\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function aggregate len failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "51");
+}
+
+#[test]
+fn run_cir_lowers_constant_integer_builtins_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_integer_builtins_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    values = [1, 2]\n    flags = {false, 0, 2}\n    numbers = range(5)\n    empty = range(0)\n    positives = range(1, 4)\n    data = b\"ABC\"\n    no_bytes = b\"\"\n    byte_list = list(data)\n    byte_set = set(data)\n    sorted_bytes = sorted(b\"CBA\")\n    reversed_bytes = reversed(data)\n    record = (1,)\n    tuple_values = (3, 1, 2)\n    tuple_list = list(tuple_values)\n    tuple_set = set(tuple_values)\n    sorted_tuple = sorted(tuple_values)\n    reversed_tuple = reversed(tuple_values)\n    pairs = {1: 10}\n    empty_dict = dict()\n    label = \"42\"\n    return all(values) and any(flags) and bool(range(3)) and not bool([]) and bool(data) and bool(record) and bool(pairs.keys()) and bool(pairs.values()) and bool(pairs.items()) and not bool(empty_dict.items()) and int(true) == 1 and int(\"42\") == 42 and int(label) == 42 and int(1 < 2) == 1 and 3 in numbers and 7 not in numbers and 66 in data and data[1] == 66 and 120 not in data and sum(numbers) == 10 and sum(data) == 198 and min(data) == 65 and max(data) == 67 and all(data) and any(data) and all(no_bytes) and not any(no_bytes) and byte_list[2] == 67 and 66 in byte_set and sorted_bytes[0] == 65 and reversed_bytes[0] == 67 and sum(tuple_values) == 6 and min(tuple_values) == 1 and max(tuple_values) == 3 and all(tuple_values) and tuple_list[1] == 1 and 2 in tuple_set and sorted_tuple[0] == 1 and reversed_tuple[0] == 2 and len(numbers) == 5 and not bool(empty) and all(positives) and not any(empty)\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function integer builtins failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_lowers_bound_integer_dictionary_views_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_bound_integer_dict_views_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    pairs = {1: 10, 2: 20}\n    keys = list(pairs.keys())\n    values = set(pairs.values())\n    sorted_keys = sorted(pairs.keys())\n    reversed_values = reversed(pairs.values())\n    return keys[0] + keys[1] == 3 and 20 in values and 2 in pairs.keys() and 20 in pairs.values() and sorted_keys[0] == 1 and reversed_values[0] == 20\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function bound integer dictionary views failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_lowers_bound_integer_dictionary_view_builtins_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_bound_integer_dict_view_builtins_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    pairs = {1: 10, 2: 20}\n    keyed = {\"a\": 10, \"b\": 20}\n    return sum(pairs.values()) == 30 and min(pairs.keys()) == 1 and max(pairs.values()) == 20 and all(pairs.keys()) and any(pairs.values()) and sum(keyed.values()) == 30\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function bound integer dictionary view builtins failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_lowers_membership_of_constant_aggregates_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_membership_aggregate_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    values = {1, 2, 3}\n    left = [1, 2]\n    right = [1, 2]\n    numbers = range(3)\n    tuple_values = (1, 2, 3)\n    copied = dict({1: 10, 2: 20})\n    paired = dict([[1, 10], [2, 20]])\n    tuple_paired = dict(((1, 10), (2, 20)))\n    literal_items_copy = dict({1: 10, 2: 20}.items())\n    source_items = {1: 10, 2: 20}\n    bound_items_copy = dict(source_items.items())\n    comp = {key: value + 1 for key, value in source_items.items()}\n    filtered = {key: value for key, value in source_items.items() if key == 2}\n    return 2 in values and values == {3, 2, 1} and left == right and numbers == range(3) and 2 in tuple_values and 4 not in tuple_values and copied[2] == 20 and paired[1] == 10 and tuple_paired[2] == 20 and literal_items_copy[1] == 10 and bound_items_copy[2] == 20 and comp[2] == 21 and len(filtered) == 1 and filtered[2] == 20\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function aggregate membership failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_executes_constant_tuple_for_loop_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_tuple_for_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    for item in (1, 2, 3):\n        total += item\n    for _ in ():\n        total = 100\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function tuple for loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+#[test]
+fn run_cir_executes_constant_bytes_for_loop_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_bytes_for_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    for item in b\"abc\":\n        total += item\n    for _ in b\"\":\n        total = 100\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function bytes for loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "294");
+}
+
+#[test]
+fn run_cir_executes_constant_chars_for_loop_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_chars_for_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    text = \"abcba\"\n    for ch in text.chars:\n        total += len(ch)\n    for \"b\" in text.chars:\n        total += 10\n    for _ in \"\".chars:\n        total = 100\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function chars for loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "25");
+}
+
+#[test]
+fn run_cir_executes_constant_dict_view_for_loops_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_dict_views_for_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    for key in {1: 10, 2: 20}.keys():\n        total += key\n    for value in {1: 10, 2: 20}.values():\n        total += value\n    for item in {1: 10, 2: 20}.items():\n        total += item[0] + item[1]\n    pairs = {1: 10, 2: 20}\n    for item in pairs.items():\n        total += item[0] + item[1]\n    for key, value in pairs.items():\n        total += key + value\n    names = {\"a\": \"bc\", \"de\": \"f\"}\n    for item in names.items():\n        total += len(item[0]) + len(item[1])\n    floats = {1.5: 2.5, 3.5: 4.5}\n    for item in floats.items():\n        total += int(item[0] < item[1])\n    scores = {\"a\": 10, \"bc\": 20}\n    for item in scores.items():\n        total += len(item[0]) + item[1]\n    for key, value in scores.items():\n        total += len(key) + value\n    labels = {1: \"a\", 2: \"bc\"}\n    for item in labels.items():\n        total += item[0] + len(item[1])\n    for text in {1: \"a\", 2: \"bc\"}.values():\n        total += len(text)\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function dict view for loops failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "215");
+}
+
+#[test]
+fn run_cir_materializes_constant_iterables_with_list_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_list_materialize_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    numbers = list(range(3))\n    chars = list(\"ab\".chars)\n    keys = list({1: 10, 2: 20}.keys())\n    values = list({1: 10, 2: 20}.values())\n    pairs = {1: 10, 2: 20}\n    items = list(pairs.items())\n    scores = {\"a\": 30, \"bc\": 40}\n    mixed = list(scores.items())\n    total = numbers[2] + keys[0] + keys[1] + values[0] + values[1] + items[1][0] + items[1][1] + len(mixed[1][0]) + mixed[1][1]\n    for item in mixed:\n        total += len(item[0]) + item[1]\n    for key, value in mixed:\n        total += len(key) + value\n    return total if chars[1] == \"b\" else 0\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function list materialization failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "245");
+}
+
+#[test]
+fn run_cir_materializes_constant_iterables_with_set_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_set_materialize_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    numbers = set(range(3))\n    chars = set(\"ab\".chars)\n    keys = set({1: 10, 2: 20}.keys())\n    values = set({1: 10, 2: 20}.values())\n    texts = set({1: \"a\", 2: \"bc\"}.values())\n    missing = set({1: none}.values())\n    pairs = {1: 10, 2: 20}\n    items = set(pairs.items())\n    return 2 in numbers and \"b\" in chars and 2 in keys and 20 in values and \"bc\" in texts and none in missing and len(items) == 2\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function set materialization failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_lowers_direct_membership_in_constant_materialized_iterables() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_direct_materialized_membership_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    return 2 in list(range(3)) and 2 in set(range(3)) and 2 in {1: 10, 2: 20}.keys() and 20 in {1: 10, 2: 20}.values() and 20 in list({1: 10, 2: 20}.values()) and \"b\" in list(\"ab\".chars) and \"b\" in set(\"ab\".chars)\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function direct materialized membership failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_materializes_sorted_constant_iterables() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_sorted_materialize_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    numbers = sorted([3, 1, 2])\n    unique = sorted({3, 1, 2})\n    ranged = sorted(range(3))\n    chars = sorted(\"ba\".chars)\n    floats = sorted([2.5, 1.5])\n    return numbers[0] == 1 and unique[1] == 2 and ranged[2] == 2 and chars[0] == \"a\" and floats[0] == 1.5\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function sorted materialization failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_materializes_reversed_constant_iterables() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_reversed_materialize_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    numbers = reversed([1, 2, 3])\n    ranged = reversed(range(3))\n    chars = reversed(\"ab\".chars)\n    floats = reversed([1.5, 2.5])\n    return numbers[0] == 3 and ranged[0] == 2 and chars[0] == \"b\" and floats[0] == 2.5\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function reversed materialization failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_lowers_enumerate_over_constant_integer_iterables() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_enumerate_constant_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    for pair in enumerate([10, 20], 3):\n        total = total + pair[0] + pair[1]\n    for i, item in enumerate(range(2), 5):\n        total = total + i * 10 + item\n    for pair in enumerate(b\"AB\"):\n        total = total + pair[0] + pair[1]\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function enumerate lowering failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "280");
+}
+
+#[test]
+fn run_cir_lowers_zip_over_constant_integer_iterables() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_zip_constant_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    total = 0\n    for pair in zip([1, 2], [10, 20]):\n        total = total + pair[0] * pair[1]\n    for left, right in zip(range(2), b\"AB\"):\n        total = total + left + right\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function zip lowering failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "182");
+}
+
+#[test]
+fn run_cir_lowers_constant_string_predicates_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_string_predicates_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    text = \"lucid\"\n    padded = \"  Lucid  \"\n    parts = \"lu,cid\".split(\",\")\n    tuple_parts = (\"lu\", \"cid\")\n    tuple_list = list(tuple_parts)\n    tuple_set = set(tuple_parts)\n    tuple_sorted = sorted((\"cid\", \"lu\"))\n    tuple_reversed = reversed(tuple_parts)\n    lookup = {\"lu\": \"cid\"}\n    lookup_values = list(lookup.values())\n    lookup_keys = set(lookup.keys())\n    needle = \"u\"\n    missing = \"z\"\n    score = len(text) if needle in text else 1 // 0\n    return score == 5 and bool(text) and text[1] == \"u\" and missing not in text and text.startswith(\"lu\") and text.endswith(\"id\") and padded.strip().lower() == text and text.upper() == \"LUCID\" and len(parts) == 2 and \"\".join(parts) == text and \"cid\" in parts and \"z\" not in parts and \"cid\" in tuple_parts and \"z\" not in tuple_parts and tuple_list[1] == \"cid\" and \"lu\" in tuple_set and tuple_sorted[0] == \"cid\" and tuple_reversed[0] == \"cid\" and \"lu\" in lookup.keys() and \"cid\" in lookup.values() and lookup_values[0] == \"cid\" and \"lu\" in lookup_keys\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function string predicates failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_lowers_constant_string_predicate_statement_if_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_string_predicate_if_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    text = \"lucid\"\n    if \"u\" in text:\n        return 1\n    else:\n        return 0\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function string predicate if failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_lowers_constant_float_predicates_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_float_predicates_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    value = 1.5\n    empty = 0.0\n    values = [1.5, 2.5]\n    tuple_values = (1.5, 2.5)\n    tuple_list = list(tuple_values)\n    tuple_set = set(tuple_values)\n    tuple_sorted = sorted((2.5, 1.5))\n    tuple_reversed = reversed(tuple_values)\n    lookup = {1.5: 2.5}\n    lookup_values = list(lookup.values())\n    lookup_keys = set(lookup.keys())\n    selected = 1 if value else 0\n    if value < 2.5:\n        return selected and bool(value) and not bool(empty) and value != 2.5 and len(values) == 2 and values[1] == 2.5 and value in values and lookup[value] == 2.5 and 1.5 in lookup.keys() and 2.5 in lookup.values() and lookup_values[0] == 2.5 and 1.5 in lookup_keys and 2.5 in tuple_values and 3.5 not in tuple_values and tuple_list[1] == 2.5 and 2.5 in tuple_set and tuple_sorted[0] == 1.5 and tuple_reversed[0] == 2.5\n    else:\n        return false\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function float predicates failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_lowers_constant_none_predicates_in_typed_function_body() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_none_predicates_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def answer():\n    missing = none\n    marker = ...\n    values = [none, ...]\n    tuple_values = (none, ...)\n    tuple_list = list(tuple_values)\n    tuple_set = set(tuple_values)\n    lookup = {none: none}\n    view_lookup = {none: ...}\n    view_values = list(view_lookup.values())\n    view_keys = set(view_lookup.keys())\n    string_lookup = {\"a\": none}\n    singleton_lookup = {none: \"a\"}\n    int_lookup = {1: none}\n    singleton_int_lookup = {none: 1}\n    float_lookup = {1.5: none}\n    singleton_float_lookup = {none: 1.5}\n    return not bool(missing) and bool(marker) and none == none and none is none and not (none != none) and not (none is not none) and marker is ... and none is not marker and len(values) == 2 and values[0] is none and marker in values and none in tuple_values and marker in tuple_values and tuple_list[0] is none and marker in tuple_set and lookup[none] is none and none in view_lookup.keys() and marker in view_lookup.values() and view_values[0] is ... and none in view_keys and len(string_lookup) == 1 and \"a\" in string_lookup and string_lookup[\"a\"] is none and len(singleton_lookup) == 1 and none in singleton_lookup and singleton_lookup[none] == \"a\" and len(int_lookup) == 1 and 1 in int_lookup and int_lookup[1] is none and len(singleton_int_lookup) == 1 and none in singleton_int_lookup and singleton_int_lookup[none] == 1 and len(float_lookup) == 1 and 1.5 in float_lookup and float_lookup[1.5] is none and len(singleton_float_lookup) == 1 and none in singleton_float_lookup and singleton_float_lookup[none] == 1.5\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir function None predicates failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_short_circuits_logical_condition_inside_typed_if() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_typed_if_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def safe_or(x: int) -> bool:\n    return true if (x == 0 or 10 // x > 1) else false\n\ndef safe_and(x: int) -> bool:\n    return true if (x != 0 and 10 // x > 1) else false\n",
+    )
+    .expect("temporary source should be writable");
+    let or_zero = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "safe_or",
+            "--args",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let or_nonzero = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "safe_or",
+            "--args",
+            "10",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let and_zero = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "safe_and",
+            "--args",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let and_nonzero = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "safe_and",
+            "--args",
+            "2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        or_zero.status.success(),
+        "or zero argument should short-circuit before division: {}",
+        String::from_utf8_lossy(&or_zero.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&or_zero.stdout).trim(), "1");
+    assert!(
+        or_nonzero.status.success(),
+        "or nonzero argument failed: {}",
+        String::from_utf8_lossy(&or_nonzero.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&or_nonzero.stdout).trim(), "0");
+    assert!(
+        and_zero.status.success(),
+        "and zero argument should short-circuit before division: {}",
+        String::from_utf8_lossy(&and_zero.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&and_zero.stdout).trim(), "0");
+    assert!(
+        and_nonzero.status.success(),
+        "and nonzero argument failed: {}",
+        String::from_utf8_lossy(&and_nonzero.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&and_nonzero.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_preserves_logical_condition_effects_in_void_if() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_void_if_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def should_error(x: int):\n    if x == 0 and 10 // x > 1:\n        return\n\ndef should_skip(x: int):\n    if x != 0 and 10 // x > 1:\n        return\n",
+    )
+    .expect("temporary source should be writable");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_error",
+            "--args",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let skipped = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_skip",
+            "--args",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !error.status.success(),
+        "true left operand must evaluate the RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division error, got {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+    assert!(
+        skipped.status.success(),
+        "false left operand should short-circuit before division: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+}
+
+#[test]
+fn run_cir_preserves_logical_condition_effects_in_void_elif() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_void_elif_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def should_error(flag: int, x: int):\n    if flag > 0:\n        return\n    elif x == 0 and 10 // x > 1:\n        return\n\ndef should_skip(flag: int, x: int):\n    if flag > 0:\n        return\n    elif x != 0 and 10 // x > 1:\n        return\n",
+    )
+    .expect("temporary source should be writable");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let skipped = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !error.status.success(),
+        "true left operand in elif must evaluate the RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division error, got {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+    assert!(
+        skipped.status.success(),
+        "false left operand in elif should short-circuit before division: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+}
+
+#[test]
+fn run_cir_preserves_initial_logical_condition_effects_in_void_elif_chain() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_initial_void_elif_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def should_error(x: int, y: int):\n    if x == 0 and 10 // x > 1:\n        return\n    elif y > 0:\n        return\n\ndef should_skip(x: int, y: int):\n    if x != 0 and 10 // x > 1:\n        return\n    elif y > 0:\n        return\n",
+    )
+    .expect("temporary source should be writable");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let skipped = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "should_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !error.status.success(),
+        "true left operand in initial if must evaluate the RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division error, got {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+    assert!(
+        skipped.status.success(),
+        "false left operand in initial if should short-circuit before division: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+}
+
+#[test]
+fn run_cir_preserves_logical_condition_effects_in_value_elif_chain() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_value_elif_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def initial_skip(x: int, y: int) -> int:\n    if x != 0 and 10 // x > 1:\n        return 1\n    elif y > 0:\n        return 2\n    else:\n        return 3\n\ndef initial_error(x: int, y: int) -> int:\n    if x == 0 and 10 // x > 1:\n        return 1\n    elif y > 0:\n        return 2\n    else:\n        return 3\n\ndef elif_skip(flag: int, x: int) -> int:\n    if flag > 0:\n        return 1\n    elif x != 0 and 10 // x > 1:\n        return 2\n    else:\n        return 3\n\ndef elif_error(flag: int, x: int) -> int:\n    if flag > 0:\n        return 1\n    elif x == 0 and 10 // x > 1:\n        return 2\n    else:\n        return 3\n",
+    )
+    .expect("temporary source should be writable");
+    let initial_skip = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "initial_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let initial_error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "initial_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let elif_skip = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "elif_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let elif_error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "elif_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        initial_skip.status.success(),
+        "false left operand in initial value if should short-circuit: {}",
+        String::from_utf8_lossy(&initial_skip.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&initial_skip.stdout).trim(), "3");
+    assert!(
+        !initial_error.status.success(),
+        "true left operand in initial value if must evaluate RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&initial_error.stderr).contains("division by zero"),
+        "expected initial division error, got {}",
+        String::from_utf8_lossy(&initial_error.stderr)
+    );
+    assert!(
+        elif_skip.status.success(),
+        "false left operand in value elif should short-circuit: {}",
+        String::from_utf8_lossy(&elif_skip.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&elif_skip.stdout).trim(), "3");
+    assert!(
+        !elif_error.status.success(),
+        "true left operand in value elif must evaluate RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&elif_error.stderr).contains("division by zero"),
+        "expected elif division error, got {}",
+        String::from_utf8_lossy(&elif_error.stderr)
+    );
+}
+
+#[test]
+fn run_cir_preserves_logical_condition_effects_in_voids_value_fallback_chain() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_voids_value_fallback_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def initial_skip(x: int, y: int):\n    if x != 0 and 10 // x > 1:\n        return\n    elif y > 0:\n        return\n    return 3\n\ndef initial_error(x: int, y: int):\n    if x == 0 and 10 // x > 1:\n        return\n    elif y > 0:\n        return\n    return 3\n\ndef elif_skip(flag: int, x: int):\n    if flag > 0:\n        return\n    elif x != 0 and 10 // x > 1:\n        return\n    return 3\n\ndef elif_error(flag: int, x: int):\n    if flag > 0:\n        return\n    elif x == 0 and 10 // x > 1:\n        return\n    return 3\n",
+    )
+    .expect("temporary source should be writable");
+    let initial_skip = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "initial_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let initial_error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "initial_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let elif_skip = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "elif_skip",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let elif_error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "elif_error",
+            "--args",
+            "0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        initial_skip.status.success(),
+        "false left operand in initial void/value if should short-circuit: {}",
+        String::from_utf8_lossy(&initial_skip.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&initial_skip.stdout).trim(), "3");
+    assert!(
+        !initial_error.status.success(),
+        "true left operand in initial void/value if must evaluate RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&initial_error.stderr).contains("division by zero"),
+        "expected initial division error, got {}",
+        String::from_utf8_lossy(&initial_error.stderr)
+    );
+    assert!(
+        elif_skip.status.success(),
+        "false left operand in void/value elif should short-circuit: {}",
+        String::from_utf8_lossy(&elif_skip.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&elif_skip.stdout).trim(), "3");
+    assert!(
+        !elif_error.status.success(),
+        "true left operand in void/value elif must evaluate RHS division"
+    );
+    assert!(
+        String::from_utf8_lossy(&elif_error.stderr).contains("division by zero"),
+        "expected elif division error, got {}",
+        String::from_utf8_lossy(&elif_error.stderr)
+    );
+}
+
+#[test]
+fn run_cir_preserves_logical_condition_effects_after_setup_binding() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_setup_guard_short_circuit_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def setup_skip(x: int):\n    z = x\n    if z != 0 and 10 // z > 1:\n        return 1\n    elif x > 0:\n        return 2\n    return 3\n",
+    )
+    .expect("temporary source should be writable");
+    let skip = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "setup_skip",
+            "--args",
+            "0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "setup_skip",
+            "--args",
+            "2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "setup_skip",
+            "--args",
+            "-1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        skip.status.success(),
+        "false left operand after setup binding should short-circuit: {}",
+        String::from_utf8_lossy(&skip.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&skip.stdout).trim(), "3");
+    assert!(
+        selected.status.success(),
+        "true setup guard should select first branch: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "1");
+    assert!(
+        fallback.status.success(),
+        "false setup guard should fall through: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "3");
+}
+
+#[test]
+fn run_cir_executes_dynamic_parameter_conditional() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_if_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int):\n    if value > 0:\n        return value + 1\n    else:\n        return -value\n",
+    )
+    .expect("temporary source should be writable");
+    let positive = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let negative = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        positive.status.success(),
+        "positive branch failed: {}",
+        String::from_utf8_lossy(&positive.stderr)
+    );
+    assert!(
+        negative.status.success(),
+        "negative branch failed: {}",
+        String::from_utf8_lossy(&negative.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&positive.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&negative.stdout).trim(), "41");
+}
+
+#[test]
+fn run_cir_executes_parameter_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def countdown(n: int):\n    while n > 0:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "countdown",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+}
+
+#[test]
+fn run_cir_executes_counted_while_with_pass_pass_tail() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_while_pass_pass_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def countdown(n: int):\n    while n > 0:\n        n -= 1\n        pass\n        pass\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "countdown",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir pass/pass loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+}
+
+#[test]
+fn run_cir_executes_signed_update_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_signed_update_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def countdown(n: int):\n    while n > 0:\n        n += -1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "countdown",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir signed-update counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+}
+
+#[test]
+fn run_cir_executes_parameter_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def countdown(n: int, step: int):\n    while n > 0:\n        n -= step\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "countdown",
+            "--args",
+            "10,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-2");
+}
+
+#[test]
+fn run_cir_executes_constant_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_constant_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    while n > 0:\n        n -= 1 + 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir constant-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-1");
+}
+
+#[test]
+fn run_cir_executes_constant_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_constant_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    while n > 1 + 1:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir constant-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+}
+
+#[test]
+fn run_cir_executes_local_constant_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_constant_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    stop = 1 + 1\n    while n > stop:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local constant-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+}
+
+#[test]
+fn run_cir_executes_dynamic_arithmetic_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_dynamic_arithmetic_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, limit: int):\n    stop = limit + 1\n    while n > stop:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir dynamic arithmetic-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
+}
+
+#[test]
+fn run_cir_executes_division_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_division_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, limit: int, scale: int):\n    while n > limit // scale:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir division-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir division-bound counted loop zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_local_division_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_division_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, limit: int, scale: int):\n    stop = limit // scale\n    while n > stop:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir local division-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir local division-bound counted loop zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_local_alias_arithmetic_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_alias_arithmetic_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, limit: int):\n    stop = limit\n    while n > stop + 1:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local alias arithmetic-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
+}
+
+#[test]
+fn run_cir_executes_local_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def countdown(n: int, step: int):\n    tick = step\n    while n > 0:\n        n -= tick\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "countdown",
+            "--args",
+            "10,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-2");
+}
+
+#[test]
+fn run_cir_executes_local_constant_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_constant_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    tick = 1 + 1\n    while n > 0:\n        n -= tick\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local constant-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-1");
+}
+
+#[test]
+fn run_cir_executes_dynamic_arithmetic_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_dynamic_arithmetic_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, step: int):\n    tick = step + 1\n    while n > 0:\n        n -= tick\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "10,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir dynamic arithmetic-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-2");
+}
+
+#[test]
+fn run_cir_executes_division_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_division_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, step: int, scale: int):\n    while n > 0:\n        n -= step // scale\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "10,4,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir division-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "10,4,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir division-step counted loop zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_unary_dynamic_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_unary_dynamic_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def climb(n: int, limit: int, step: int):\n    tick = -step\n    while n < limit:\n        n -= tick\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "climb",
+            "--args",
+            "1,10,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir unary dynamic-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_local_init_local_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_init_local_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def countdown(n: int, step: int):\n    value = n\n    tick = step\n    while value > 0:\n        value -= tick\n    return value\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "countdown",
+            "--args",
+            "10,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-init local-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-2");
+}
+
+#[test]
+fn run_cir_executes_local_constant_init_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_constant_init_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain():\n    value = 1 + 2\n    while value > 0:\n        value -= 1\n    return value\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local constant-init counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+}
+
+#[test]
+fn run_cir_executes_local_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def clamp_down(n: int, limit: int):\n    value = n\n    stop = limit\n    while value > stop:\n        value -= 1\n    return value\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "clamp_down",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+}
+
+#[test]
+fn run_cir_executes_local_bound_parameter_induction_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_bound_parameter_induction_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain_to(n: int, limit: int):\n    stop = limit\n    while n > stop:\n        n -= 1\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain_to",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-bound parameter-induction loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+}
+
+#[test]
+fn run_cir_executes_local_bound_local_step_parameter_induction_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_bound_local_step_parameter_induction_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain_to(n: int, limit: int, step: int):\n    stop = limit\n    tick = step\n    while n > stop:\n        n -= tick\n    return n\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain_to",
+            "--args",
+            "10,2,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-bound local-step parameter-induction loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_executes_local_bound_local_step_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_bound_local_step_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def clamp_down(n: int, limit: int, step: int):\n    value = n\n    stop = limit\n    tick = step\n    while value > stop:\n        value -= tick\n    return value\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "clamp_down",
+            "--args",
+            "10,2,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-bound local-step counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_executes_void_local_bound_counted_while_loop() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_void_local_bound_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def clamp_down(n: int, limit: int):\n    value = n\n    stop = limit\n    while value > stop:\n        value -= 1\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "clamp_down",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir void local-bound counted loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn run_cir_executes_void_counted_while_with_continue() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_void_continue_while_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int):\n    while n > 0:\n        n -= 1\n        continue\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir void counted while with continue failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn run_cir_executes_parameter_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count(n: int):\n    total = 0\n    while n > 0:\n        total += 1\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "4");
+}
+
+#[test]
+fn run_cir_executes_constant_seed_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_constant_seed_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_with_seed(n: int):\n    total = 1 + 2\n    while n > 0:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_with_seed",
+            "--args",
+            "3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir constant-seed accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_local_step_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_by_step(n: int, step: int):\n    tick = step\n    total = 0\n    while n > 0:\n        total += tick\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_by_step",
+            "--args",
+            "5,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "15");
+}
+
+#[test]
+fn run_cir_executes_local_init_local_step_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_init_local_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_by_step(n: int, step: int):\n    value = n\n    tick = step\n    total = 0\n    while value > 0:\n        total += tick\n        value -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_by_step",
+            "--args",
+            "5,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-init local-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "15");
+}
+
+#[test]
+fn run_cir_executes_local_init_local_induction_step_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_init_local_induction_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_by_step(n: int, step: int):\n    value = n\n    tick = step\n    total = 0\n    while value > 0:\n        total += value\n        value -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_by_step",
+            "--args",
+            "10,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-init local-induction-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "22");
+}
+
+#[test]
+fn run_cir_executes_parameter_step_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_by_step(n: int, step: int, tick: int):\n    total = 0\n    while n > 0:\n        total += step\n        n -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_by_step",
+            "--args",
+            "10,4,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "16");
+}
+
+#[test]
+fn run_cir_executes_parameter_counted_while_induction_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_while_induction_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int):\n    total = 0\n    while n > 0:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir induction accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_signed_update_while_induction_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_signed_update_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int):\n    total = -1\n    while n > 0:\n        total += n\n        n += -1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir signed-update induction accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_commuted_update_while_induction_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_commuted_update_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int):\n    total = -1\n    while n > 0:\n        total += n\n        n = -1 + n\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir commuted-update induction accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_parameter_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int, limit: int):\n    total = 0\n    while n > limit:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
+fn run_cir_executes_division_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_division_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int, limit: int, scale: int):\n    total = 0\n    while n > limit // scale:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir division-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir division-bound zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_dynamic_arithmetic_counted_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_dynamic_arithmetic_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum(n: int, limit: int, step: int):\n    total = 0\n    stop = limit + 1\n    tick = step + 1\n    while n > stop:\n        total += step + 1\n        n -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum",
+            "--args",
+            "10,2,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir dynamic arithmetic accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_constant_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_constant_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int):\n    total = 0\n    while n > 1 + 1:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir constant-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
+fn run_cir_executes_local_induction_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_induction_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int):\n    total = 0\n    value = n\n    while value > 0:\n        total += value\n        value -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-induction accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_local_constant_induction_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_constant_induction_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to():\n    total = 0\n    value = 1 + 2\n    while value > 0:\n        total += value\n        value -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local constant-induction accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+#[test]
+fn run_cir_executes_local_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int, limit: int):\n    total = 0\n    value = n\n    stop = limit\n    while value > stop:\n        total += value\n        value -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
+fn run_cir_executes_parameter_induction_local_constant_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_induction_local_constant_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int):\n    total = 0\n    stop = 1 + 1\n    while n > stop:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-induction local constant-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
+fn run_cir_executes_parameter_induction_local_bound_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_induction_local_bound_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down_to(n: int, limit: int):\n    total = 0\n    stop = limit\n    while n > stop:\n        total += n\n        n -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down_to",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-induction local-bound accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
+fn run_cir_executes_local_bound_local_step_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_bound_local_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_by_step(n: int, limit: int, step: int):\n    value = n\n    stop = limit\n    tick = step\n    total = 0\n    while value > stop:\n        total += tick\n        value -= 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_by_step",
+            "--args",
+            "5,2,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-bound local-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_local_bound_local_induction_step_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_bound_local_induction_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_by_step(n: int, limit: int, step: int):\n    value = n\n    stop = limit\n    tick = step\n    total = 0\n    while value > stop:\n        total += value\n        value -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_by_step",
+            "--args",
+            "10,2,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local-bound local-induction-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "21");
+}
+
+#[test]
+fn run_cir_executes_parameter_induction_local_constant_step_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_induction_local_constant_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_by_step(n: int):\n    total = 0\n    tick = 1 + 1\n    while n > 0:\n        total += n\n        n -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_by_step",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-induction local constant-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_parameter_induction_local_bound_local_step_while_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_parameter_induction_local_bound_local_step_while_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_by_step(n: int, limit: int, step: int):\n    total = 0\n    stop = limit\n    tick = step\n    while n > stop:\n        total += n\n        n -= tick\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_by_step",
+            "--args",
+            "10,2,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir parameter-induction local-bound local-step accumulator loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "21");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_bound_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int):\n    total = 0\n    limit = n\n    for i in range(limit):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_constant_stop_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_constant_stop_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to():\n    total = 0\n    limit = 1 + 4\n    for i in range(limit):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range constant stop alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_seed_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_seed_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int, seed: int):\n    seeded = seed\n    total = seeded\n    for i in range(n):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "5,7",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range seed-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "17");
+}
+
+#[test]
+fn run_cir_executes_commuted_range_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_commuted_range_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_to(n: int):\n    total = 0\n    for i in range(n):\n        total = i + total\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_to",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir commuted range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_literal_step_range_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_literal_step_range_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_by_two(n: int):\n    total = 0\n    for i in range(n):\n        total += 2\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_by_two",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir literal-step range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_signed_literal_step_range_accumulator() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_signed_literal_step_range_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_down_by_two(n: int):\n    total = 0\n    for i in range(n):\n        total += -2\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_down_by_two",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir signed literal-step range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-10");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_step_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_step_alias_range_accumulator_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def count_by_step(n: int, step: int):\n    inc = step\n    total = 0\n    for i in range(n):\n        total += inc\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "count_by_step",
+            "--args",
+            "5,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir local step-alias range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "15");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_start_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_start_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_from(n: int, seed: int):\n    total = 0\n    begin = seed\n    for i in range(begin, n):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_from",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range start alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_constant_start_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_constant_start_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_from(n: int):\n    total = 0\n    begin = 1 + 1\n    for i in range(begin, n):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_from",
+            "--args",
+            "5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range constant start alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_chained_local_bound_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_chained_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_from(n: int, seed: int):\n    total = 0\n    start = seed\n    begin = start\n    for i in range(begin, n):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_from",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range chained-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_long_chained_local_bound_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_long_chained_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_from(n: int, seed: int):\n    total = 0\n    start = seed\n    middle = start\n    begin = middle\n    for i in range(begin, n):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_from",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range long chained-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_two_local_bound_aliases() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_two_aliases_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_between(seed: int, limit: int):\n    total = 0\n    begin = seed\n    stop = limit\n    for i in range(begin, stop):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_between",
+            "--args",
+            "2,6",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range two-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "14");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_reordered_local_bound_aliases() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_reordered_aliases_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_between(seed: int, limit: int):\n    begin = seed\n    stop = limit\n    total = 0\n    for i in range(begin, stop):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_between",
+            "--args",
+            "2,6",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range reordered-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "14");
+}
+
+#[test]
+fn run_cir_executes_descending_range_accumulator_with_local_bound_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_descending_range_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down(n: int, limit: int):\n    total = 0\n    stop = limit\n    for i in range(n, stop, -1):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir descending range alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "12");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_step_literal_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_step_literal_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down(n: int):\n    total = 0\n    stride = -1\n    for i in range(n, 0, stride):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range step literal-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_chained_local_step_literal_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_chained_step_literal_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down(n: int):\n    total = 0\n    raw_stride = -1\n    stride = raw_stride\n    for i in range(n, 0, stride):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range chained step literal-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_constant_local_step_alias() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_constant_step_alias_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down(n: int):\n    total = 0\n    stride = 0 - 1\n    for i in range(n, 0, stride):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down",
+            "--args",
+            "4",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range constant step-alias accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_dynamic_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_dynamic_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_stride(start: int, stop: int, step: int):\n    total = 0\n    for i in range(start, stop, step):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_stride",
+            "--args",
+            "0,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir range dynamic positive step accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_stride",
+            "--args",
+            "5,0,-2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir range dynamic negative step accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_stride",
+            "--args",
+            "0,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir range dynamic zero step accumulator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("range step cannot be zero"),
+        "expected range-step error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_dynamic_bound_expressions() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_dynamic_bound_expressions_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_window(start: int, stop: int, step: int):\n    total = 0\n    for i in range(start + 1, stop + 1, step + 1):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_window",
+            "--args",
+            "0,6,1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir range dynamic bound-expression accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_division_bound_expressions() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_division_bound_expressions_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_scaled(start: int, stop: int, step: int, scale: int):\n    total = 0\n    for i in range(start // scale, stop // scale, step // scale):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_scaled",
+            "--args",
+            "0,12,4,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir range division bound-expression accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_scaled",
+            "--args",
+            "0,12,4,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir range division zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_local_division_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_local_division_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_scaled_step(start: int, stop: int, step: int, scale: int):\n    stride = step // scale\n    total = 0\n    for i in range(start, stop, stride):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_scaled_step",
+            "--args",
+            "0,12,4,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir range local division-step accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "30");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_scaled_step",
+            "--args",
+            "0,12,4,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir range local division-step zero denominator should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_unary_dynamic_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_unary_dynamic_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_down(start: int, stop: int, step: int):\n    total = 0\n    stride = -step\n    for i in range(start, stop, stride):\n        total += i\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_down",
+            "--args",
+            "5,0,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir unary dynamic-step range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "9");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_unary_accumulator_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_unary_accumulator_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_penalty(n: int, step: int):\n    total = 0\n    for i in range(n):\n        total += -step\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_penalty",
+            "--args",
+            "5,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir unary accumulator-step range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-15");
+}
+
+#[test]
+fn run_cir_executes_range_accumulator_with_arithmetic_accumulator_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_range_arithmetic_accumulator_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def sum_bonus(n: int, step: int):\n    total = 0\n    for i in range(n):\n        total += step + 1\n    return total\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "sum_bonus",
+            "--args",
+            "5,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir arithmetic accumulator-step range accumulator failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "20");
+}
+
+#[test]
+fn run_cir_executes_void_range_with_local_aliases() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_void_range_aliases_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(n: int, limit: int):\n    stop = limit\n    stride = -1\n    for i in range(n, stop, stride):\n        continue\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir void range alias loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn run_cir_executes_void_range_with_dynamic_step() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_void_range_dynamic_step_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def drain(start: int, stop: int, step: int):\n    for i in range(start, stop, step):\n        continue\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "0,6,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir void dynamic positive-step range loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "5,0,-2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    assert!(
+        output.status.success(),
+        "run-cir void dynamic negative-step range loop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "drain",
+            "--args",
+            "0,6,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        !output.status.success(),
+        "run-cir void dynamic zero-step range loop should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("range step cannot be zero"),
+        "expected range-step error, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_conditional_return_expression() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_conditional_expr_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int):\n    return value + 1 if value > 0 else -value\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "conditional return failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "41");
+}
+
+#[test]
+fn run_cir_propagates_division_error_from_conditional_branch() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_branch_div_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(flag: int, left: int, right: int):\n    if flag > 0:\n        return left / right\n    else:\n        return 7\n",
+    )
+    .expect("temporary source should be writable");
+    let success = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,42,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,42,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let overflow = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,-9223372036854775808,-1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let alternate = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "0,42,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        success.status.success(),
+        "conditional division failed: {}",
+        String::from_utf8_lossy(&success.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&success.stdout).trim(), "21");
+    assert!(!error.status.success());
+    assert!(String::from_utf8_lossy(&error.stderr).contains("division by zero"));
+    assert!(!overflow.status.success());
+    assert!(String::from_utf8_lossy(&overflow.stderr).contains("arithmetic overflow"));
+    assert!(
+        alternate.status.success(),
+        "alternate branch failed: {}",
+        String::from_utf8_lossy(&alternate.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&alternate.stdout).trim(), "7");
+}
+
+#[test]
+fn run_cir_preserves_floor_division_semantics_in_conditional_branch() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_branch_floor_div_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(flag: int, left: int, right: int):\n    if flag > 0:\n        return left // right\n    else:\n        return 7\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,-5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,5,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "floor division failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "-3");
+    assert!(!error.status.success());
+    assert!(String::from_utf8_lossy(&error.stderr).contains("division by zero"));
+}
+
+#[test]
+fn run_cir_preserves_modulo_semantics_in_conditional_branch() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_branch_mod_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(flag: int, left: int, right: int):\n    if flag > 0:\n        return left % right\n    else:\n        return 7\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,-5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,5,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "modulo failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+    assert!(!error.status.success());
+    assert!(String::from_utf8_lossy(&error.stderr).contains("division by zero"));
+}
+
+#[test]
+fn run_cir_propagates_division_error_from_conditional_expression() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_conditional_div_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(flag: int, left: int, right: int):\n    return left / right if flag > 0 else 7\n",
+    )
+    .expect("temporary source should be writable");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,42,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let alternate = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "0,42,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!error.status.success());
+    assert!(String::from_utf8_lossy(&error.stderr).contains("division by zero"));
+    assert!(
+        alternate.status.success(),
+        "alternate branch failed: {}",
+        String::from_utf8_lossy(&alternate.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&alternate.stdout).trim(), "7");
+}
+
+#[test]
+fn run_cir_reports_arithmetic_overflow_from_result_abi() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_overflow_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def add(left: int, right: int):\n    return left + right\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "add",
+            "--args",
+            "9223372036854775807,1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("arithmetic overflow"));
+}
+
+#[test]
+fn run_cir_executes_branch_local_assignment() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_local_if_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int):\n    if value > 0:\n        result = value + 1\n    else:\n        result = -value\n    return result\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "branch-local function failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "41");
+}
+
+#[test]
+fn run_cir_executes_initialized_local_before_branch_assignment() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_initialized_local_division_if_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, flag: bool, scale: int):\n    result = seed // scale\n    if flag:\n        result = seed + 1\n    else:\n        result = seed + 2\n    return result\n",
+    )
+    .expect("temporary source should be writable");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        selected.status.success(),
+        "selected branch failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "11");
+    assert!(
+        fallback.status.success(),
+        "fallback branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "12");
+    assert!(
+        !error.status.success(),
+        "initializer division by zero should fail before branch assignment"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_initialized_local_before_elif_assignment() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_initialized_local_division_elif_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, value: int, scale: int):\n    result = seed // scale\n    if value > 10:\n        result = seed + 100\n    elif value > 0:\n        result = seed + 1\n    else:\n        result = seed - 100\n    return result\n",
+    )
+    .expect("temporary source should be writable");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,5,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        selected.status.success(),
+        "selected elif branch failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "11");
+    assert!(
+        fallback.status.success(),
+        "fallback branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "-90");
+    assert!(
+        !error.status.success(),
+        "initializer division by zero should fail before elif assignment"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_initialized_local_before_one_sided_assignment() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_initialized_local_division_one_sided_if_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, flag: bool, scale: int):\n    result = seed // scale\n    if flag:\n        result = seed + 1\n    return result\n",
+    )
+    .expect("temporary source should be writable");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        selected.status.success(),
+        "selected branch failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "11");
+    assert!(
+        fallback.status.success(),
+        "fallback branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "5");
+    assert!(
+        !error.status.success(),
+        "initializer division by zero should fail before one-sided branch assignment"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_initialized_local_before_dead_leading_elif_assignment() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_initialized_local_dead_leading_elif_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, value: int, scale: int):\n    result = seed // scale\n    if false:\n        result = seed + 100\n    elif value > 0:\n        result = seed + 1\n    return result\n",
+    )
+    .expect("temporary source should be writable");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,-5,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let error = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,-5,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        selected.status.success(),
+        "selected elif branch failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "11");
+    assert!(
+        fallback.status.success(),
+        "fallback branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "5");
+    assert!(
+        !error.status.success(),
+        "initializer division by zero should fail before dead-leading elif"
+    );
+    assert!(
+        String::from_utf8_lossy(&error.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&error.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_setup_before_guard_return() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_setup_guard_return_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, flag: bool):\n    base = seed + 1\n    if flag:\n        return base\n    return base * 2\n",
+    )
+    .expect("temporary source should be writable");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        selected.status.success(),
+        "selected guard return failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallback guard return failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "11");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "22");
+}
+
+#[test]
+fn run_cir_executes_setup_before_guard_elif_return() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_setup_guard_elif_return_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return base\n    elif second:\n        return base * 2\n    return base * 3\n",
+    )
+    .expect("temporary source should be writable");
+    let first = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let second = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        first.status.success(),
+        "first guard return failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "second guard return failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallback guard return failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).trim(), "11");
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), "22");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "33");
+}
+
+#[test]
+fn run_cir_executes_setup_before_guard_elif_else_return() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_setup_guard_elif_else_return_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return base\n    elif second:\n        return base * 2\n    else:\n        return base * 3\n",
+    )
+    .expect("temporary source should be writable");
+    let first = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let second = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        first.status.success(),
+        "first guard else return failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "second guard else return failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallback guard else return failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).trim(), "11");
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), "22");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "33");
+}
+
+#[test]
+fn run_cir_short_circuits_setup_guard_elif_else_division() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_setup_guard_elif_else_division_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, first: bool, second: bool, scale: int):\n    base = seed + 1\n    if first:\n        return base // scale\n    elif second:\n        return base * 2\n    else:\n        return base * 3\n",
+    )
+    .expect("temporary source should be writable");
+    let skipped = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,1,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1,0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        skipped.status.success(),
+        "unchosen division arm should not fail: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&skipped.stdout).trim(), "22");
+    assert!(
+        !selected.status.success(),
+        "chosen division-by-zero arm should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&selected.stderr).contains("division by zero"),
+        "expected division-by-zero error, got: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallback arm should not fail: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "33");
+}
+
+#[test]
+fn run_cir_executes_setup_before_mixed_guard_elif_return() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_setup_mixed_guard_elif_return_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return\n    elif second:\n        return base * 2\n    return base * 3\n",
+    )
+    .expect("temporary source should be writable");
+    let first = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,1,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let second = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,1",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "10,0,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        first.status.success(),
+        "first mixed guard return failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "second mixed guard return failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallback mixed guard return failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).trim(), "0");
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), "22");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "33");
+}
+
+#[test]
+fn run_cir_executes_post_diamond_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_post_diamond_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int):\n    if value > 0:\n        result = value\n    else:\n        result = -value\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let positive = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let negative = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        positive.status.success(),
+        "positive post-diamond function failed: {}",
+        String::from_utf8_lossy(&positive.stderr)
+    );
+    assert!(
+        negative.status.success(),
+        "negative post-diamond function failed: {}",
+        String::from_utf8_lossy(&negative.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&positive.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&negative.stdout).trim(), "42");
+}
+
+#[test]
+fn run_cir_executes_dynamic_elif_post_diamond_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_elif_post_diamond_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int, other: int):\n    if value > 0:\n        result = value\n    elif other > 0:\n        result = other\n    else:\n        result = 0\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let first = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "41,5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let second = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        first.status.success(),
+        "first branch failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "elif branch failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "else branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), "6");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_executes_dynamic_elif_initialized_fallback_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_elif_fallthrough_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int, other: int):\n    result = 0\n    if value > 0:\n        result = value\n    elif other > 0:\n        result = other\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let first = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "41,5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let second = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        first.status.success(),
+        "first branch failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "elif branch failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallthrough branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), "6");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_skips_static_false_elif_before_dynamic_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_static_false_elif_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(value: int, other: int):\n    if value > 0:\n        result = value\n    elif false:\n        result = 99\n    elif other > 0:\n        result = other\n    else:\n        result = 0\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,5",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "dynamic elif after static false branch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+#[test]
+fn run_cir_executes_multiple_dynamic_elif_post_diamond_continuation() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_multi_elif_post_diamond_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(a: int, b: int, c: int):\n    if a > 0:\n        result = a\n    elif b > 0:\n        result = b\n    elif c > 0:\n        result = c\n    else:\n        result = 0\n    return result + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let first = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "41,5,9",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let second = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,5,9",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let third = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-2,9",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-2,-3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        first.status.success(),
+        "first branch failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "second branch failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        third.status.success(),
+        "third branch failed: {}",
+        String::from_utf8_lossy(&third.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "else branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), "6");
+    assert_eq!(String::from_utf8_lossy(&third.stdout).trim(), "10");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "1");
+}
+
+#[test]
+fn run_cir_executes_unused_dynamic_elif_branch_locals() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_unused_elif_locals_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def choose(a: int, b: int, c: int):\n    if a > 0:\n        first = a\n    elif b > 0:\n        second = b\n    elif c > 0:\n        third = c\n    else:\n        fallback = 0\n    return 42\n",
+    )
+    .expect("temporary source should be writable");
+    let selected = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "1,2,3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let fallback = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "choose",
+            "--args",
+            "-1,-2,-3",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        selected.status.success(),
+        "selected unused branch failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert!(
+        fallback.status.success(),
+        "fallback unused branch failed: {}",
+        String::from_utf8_lossy(&fallback.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&selected.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&fallback.stdout).trim(), "42");
+}
+
+#[test]
+fn run_cir_executes_one_sided_parameter_conditional() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_optional_if_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def maybe(value: int):\n    if value > 0:\n        return value + 1\n",
+    )
+    .expect("temporary source should be writable");
+    let positive = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "maybe",
+            "--args",
+            "41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let negative = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "maybe",
+            "--args",
+            "-41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        positive.status.success(),
+        "positive branch failed: {}",
+        String::from_utf8_lossy(&positive.stderr)
+    );
+    assert!(
+        negative.status.success(),
+        "void fall-through failed: {}",
+        String::from_utf8_lossy(&negative.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&positive.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&negative.stdout).trim(), "0");
+}
+
+#[test]
+fn run_cir_executes_value_or_pass_conditional() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_function_pass_if_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def maybe(value: int):\n    if value > 0:\n        return value + 1\n    else:\n        pass\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "maybe",
+            "--args",
+            "41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let pass = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "maybe",
+            "--args",
+            "-41",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "value/pass function failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        pass.status.success(),
+        "pass branch failed: {}",
+        String::from_utf8_lossy(&pass.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&pass.stdout).trim(), "0");
+}
+
+#[test]
+fn run_cir_invokes_void_typed_function_without_integer_abi() {
+    let path =
+        std::env::temp_dir().join(format!("lucid_run_cir_void_{}.lucid", std::process::id()));
+    fs::write(&path, "def answer(value: int):\n    return\n")
+        .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "answer",
+            "--args",
+            "42",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir void function failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn run_cir_executes_parameterized_checked_division() {
+    let path = std::env::temp_dir().join(format!("lucid_run_cir_div_{}.lucid", std::process::id()));
+    fs::write(
+        &path,
+        "def divide(left: int, right: int):\n    return left / right\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "divide",
+            "--args",
+            "42,2",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "run-cir division failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "21");
+}
+
+#[test]
+fn run_cir_reports_parameterized_checked_division_error() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_div_zero_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def divide(left: int, right: int):\n    return left / right\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "divide",
+            "--args",
+            "42,0",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("division by zero"));
+}
+
+#[test]
+fn run_cir_reports_constant_negative_power_error() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_negative_power_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(&path, "value = 2 ** -1\n").expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("negative exponent"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_cir_executes_parameterized_power() {
+    let path = std::env::temp_dir().join(format!(
+        "lucid_run_cir_dynamic_power_{}.lucid",
+        std::process::id()
+    ));
+    fs::write(
+        &path,
+        "def power(base: int, exponent: int):\n    return base ** exponent\n",
+    )
+    .expect("temporary source should be writable");
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "run-cir",
+            path.to_str().expect("temporary path should be UTF-8"),
+            "--function",
+            "power",
+            "--args",
+            "2,10",
+        ])
+        .output()
+        .expect("lucid binary should execute");
+    let _ = fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "dynamic power failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1024");
+}

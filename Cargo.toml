@@ -1,10 +1,15 @@
 [workspace]
 members = [
     "compiler/crates/lucid-syntax",
+    "compiler/crates/lucid-abi",
+    "compiler/crates/lucid-db",
+    "compiler/crates/lucid-cir",
+    "compiler/crates/lucid-config",
     "compiler/crates/lucid-checker",
     "compiler/crates/lucid-codegen",
     "compiler/crates/lucid-runtime",
     "compiler/crates/lucid-cli",
+    "compiler/crates/lucid-ir",
 ]
 resolver = "2"
 

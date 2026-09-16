@@ -15,7 +15,7 @@ def partition(arr: list, low: int, high: int) -> int:
     arr[high] = temp
     return i + 1
 
-def quicksort(arr: list, low: int, high: int) -> None:
+def quicksort(arr: list, low: int, high: int) -> none:
     if low < high:
         pi = partition(arr, low, high)
         quicksort(arr, low, pi - 1)

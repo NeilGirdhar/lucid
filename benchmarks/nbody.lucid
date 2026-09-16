@@ -26,7 +26,7 @@ bodies = [
      5.15138902046611451e-05 * SOLAR_MASS]
 ]
 
-def offset_momentum(b_list: list) -> None:
+def offset_momentum(b_list: list) -> none:
     px = 0.0
     py = 0.0
     pz = 0.0
@@ -54,7 +54,7 @@ def energy(b_list: list) -> float:
             e -= (bi[6] * bj[6]) / d
     return e
 
-def advance(b_list: list, dt: float, steps: int) -> None:
+def advance(b_list: list, dt: float, steps: int) -> none:
     n = len(b_list)
     for _ in range(steps):
         for i in range(n):

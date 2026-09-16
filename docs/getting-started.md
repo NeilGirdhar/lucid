@@ -15,7 +15,7 @@ This guide walks through building the Lucid compiler, using the interactive REPL
 Clone the repository and build the workspace:
 
 ```bash
-git clone https://github.com/npow/lucid.git
+git clone https://github.com/NeilGirdhar/lucid.git
 cd lucid
 
 # Build release binary
@@ -87,7 +87,7 @@ Type :help for assistance, :exit or :quit to leave.
 ["CLEAN", "EXPRESSIVE"]
 >>> def add(a: int, b: int) -> int:
 ...     return a + b
-... 
+...
 >>> add(10, 32)
 42
 >>> :exit

@@ -1,0 +1,35 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The version and components come from rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets --no-fail-fast
+      - name: Specification conformance report
+        # The report is informational until every code block in docs/ passes;
+        # the summary counts are the thing to watch for regressions.
+        run: cargo run -p lucid-cli -- test-spec docs --verbose
+        continue-on-error: true
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: 3.x
+      - run: pip install zensical
+      - run: zensical build --clean --strict

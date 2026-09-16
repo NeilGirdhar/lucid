@@ -1,0 +1,8 @@
+[package]
+name = "lucid-abi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lucid-cir = { path = "../lucid-cir" }
+lucid-syntax = { path = "../lucid-syntax" }

@@ -1,0 +1,14752 @@
+//! Incremental compiler database.
+//!
+//! This crate deliberately starts at the source boundary.  Semantic queries
+//! are added only after their inputs have stable IDs; that prevents the old
+//! string-keyed checker state from leaking into the new pipeline.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use lucid_syntax::{Module, parse, parse_lossless};
+use rowan::GreenNode;
+
+#[salsa::db]
+pub trait Db: salsa::Database {}
+
+#[salsa::db]
+#[derive(Default)]
+pub struct CompilerDatabase {
+    storage: salsa::Storage<Self>,
+}
+
+#[salsa::db]
+impl salsa::Database for CompilerDatabase {}
+
+#[salsa::db]
+impl Db for CompilerDatabase {}
+
+#[salsa::input]
+#[derive(Debug)]
+pub struct SourceFile {
+    #[returns(ref)]
+    pub text: String,
+    #[returns(ref)]
+    pub path: String,
+}
+
+#[salsa::input]
+pub struct Project {
+    #[returns(ref)]
+    pub files: Vec<SourceFile>,
+}
+
+/// A stable declaration identity.  Names are only the spelling attached to a
+/// symbol; all later queries use this interned identity plus its defining file.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct Symbol {
+    pub file: SourceFile,
+    pub name: String,
+}
+
+/// Canonical type identity shared by typed-HIR consumers. The spelling is
+/// retained as the interned key for now; downstream queries use the stable ID
+/// rather than comparing independently formatted type strings.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct TypeId {
+    pub canonical: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclKind {
+    Class,
+    Trait,
+    TypeAlias,
+    Function,
+    Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct ResolvedDecl<'db> {
+    pub symbol: Symbol<'db>,
+    pub kind: DeclKind,
+    pub is_dispatch: bool,
+    pub exported: bool,
+    pub span: lucid_syntax::Span,
+}
+
+/// The resolved, module-level HIR boundary.  All names crossing this
+/// boundary have interned identities; consumers do not need to inspect the
+/// parser AST to answer declaration or import questions.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct ResolvedModule<'db> {
+    pub file: SourceFile,
+    pub declarations: Arc<[ResolvedDecl<'db>]>,
+    pub imports: Arc<[String]>,
+}
+
+/// A name made visible by an import, retaining both its local spelling and
+/// the defining symbol identity.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct ResolvedBinding<'db> {
+    pub local_name: String,
+    pub symbol: Symbol<'db>,
+}
+
+/// Validated module-level HIR. Initializers and their expression trees carry
+/// interned canonical types; the `checked` flag records the validation
+/// boundary consumed by downstream lowering.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct TypedModule<'db> {
+    pub resolved: Arc<ResolvedModule<'db>>,
+    pub initializers: Arc<[TypedInitializer<'db>]>,
+    pub functions: Arc<[TypedFunction<'db>]>,
+    /// Every expression reachable from a top-level initializer, in post-order.
+    /// Child IDs therefore always refer to an earlier node in this slice.
+    pub expressions: Arc<[TypedExpr<'db>]>,
+    pub checked: bool,
+}
+
+/// The parser-independent shape of a typed expression. `kind` is deliberately
+/// semantic rather than an AST enum: downstream consumers can match stable
+/// tags without depending on parser implementation details, while `children`
+/// provides the complete expression tree.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct TypedExpr<'db> {
+    pub id: u32,
+    pub type_id: TypeId<'db>,
+    pub type_name: String,
+    pub kind: String,
+    /// Operator, identifier, or attribute spelling when the kind has one.
+    /// It is `None` for structural nodes.
+    pub detail: Option<String>,
+    pub children: Arc<[u32]>,
+    /// Primitive literal payload retained so typed-HIR lowering does not
+    /// need to recover values by reparsing source text.
+    pub literal: Option<lucid_cir::TypedLiteral>,
+    pub span: lucid_syntax::Span,
+}
+
+/// A typed top-level initializer crossing the checker/HIR boundary. The
+/// symbol remains interned while the canonical type text is stable and
+/// serializable for snapshots and downstream backends.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct TypedInitializer<'db> {
+    pub symbol: Symbol<'db>,
+    pub type_id: TypeId<'db>,
+    pub type_name: String,
+    /// Root node in [`TypedModule::expressions`] for this initializer.
+    pub expression: u32,
+    pub span: lucid_syntax::Span,
+}
+
+/// A checked top-level function signature crossing the typed-HIR boundary.
+/// Each component is interned so downstream lowering can compare identities
+/// without reparsing or relying on printed type names.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct TypedFunction<'db> {
+    pub symbol: Symbol<'db>,
+    pub is_dispatch: bool,
+    pub is_async: bool,
+    pub parameter_names: Arc<[String]>,
+    pub required_parameters: Arc<[bool]>,
+    pub parameter_types: Arc<[TypeId<'db>]>,
+    pub return_type: TypeId<'db>,
+    /// All declared overloads, in declaration order. Ordinary functions have
+    /// one entry; dispatch functions retain the complete candidate set.
+    pub overload_types: Arc<[TypeId<'db>]>,
+    /// Post-order typed expression graph for this function's defaults and
+    /// body. IDs are local to the function, so separate overloads cannot
+    /// accidentally alias one another.
+    pub body_expressions: Arc<[TypedExpr<'db>]>,
+    pub span: lucid_syntax::Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::SalsaValue)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct RelatedDiagnostic {
+    pub file: SourceFile,
+    pub message: String,
+    pub span: lucid_syntax::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct DiagnosticFix {
+    pub message: String,
+    pub span: lucid_syntax::Span,
+    pub replacement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct Diagnostic {
+    pub file: SourceFile,
+    pub severity: Severity,
+    pub code: String,
+    pub message: String,
+    pub span: lucid_syntax::Span,
+    pub related: Arc<[RelatedDiagnostic]>,
+    pub fix: Option<DiagnosticFix>,
+}
+
+#[salsa::tracked]
+pub fn parse_file(db: &dyn Db, file: SourceFile) -> Arc<GreenNode> {
+    Arc::new(parse_lossless(file.text(db)).green().clone().into_owned())
+}
+
+#[salsa::tracked]
+pub fn source_position(db: &dyn Db, file: SourceFile, byte_offset: u32) -> (u32, u32) {
+    let source = file.text(db);
+    let mut offset = (byte_offset as usize).min(source.len());
+    while offset > 0 && !source.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    let prefix = &source[..offset];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32 + 1;
+    let tail = prefix.rsplit_once('\n').map_or(prefix, |(_, tail)| tail);
+    let tail = tail.strip_suffix('\r').unwrap_or(tail);
+    let column = tail.chars().count() as u32 + 1;
+    (line, column)
+}
+
+/// Convert a one-based Unicode line/column position to a UTF-8 byte offset.
+/// Positions past the end of the file clamp to its length; columns never
+/// split a code point, making this the safe inverse boundary for editors.
+#[salsa::tracked]
+pub fn source_offset(db: &dyn Db, file: SourceFile, line: u32, column: u32) -> u32 {
+    let source = file.text(db);
+    let target_line = line.max(1);
+    let target_column = column.max(1);
+    let mut current_line = 1u32;
+    let mut current_column = 1u32;
+    for (offset, character) in source.char_indices() {
+        if current_line == target_line && current_column == target_column {
+            return offset as u32;
+        }
+        if character == '\n' && current_line == target_line {
+            // Clamp a column past the line's content to the start of its
+            // terminator, excluding a preceding CR in CRLF input.
+            return offset.saturating_sub(usize::from(
+                offset > 0 && source.as_bytes()[offset - 1] == b'\r',
+            )) as u32;
+        }
+        if character == '\n' {
+            current_line += 1;
+            current_column = 1;
+        } else {
+            current_column += 1;
+        }
+    }
+    source.len() as u32
+}
+
+/// Return one-based source-line text without its line terminator. Both LF and
+/// CRLF input are accepted, and out-of-range lines return an empty string.
+#[salsa::tracked]
+pub fn source_line(db: &dyn Db, file: SourceFile, line: u32) -> Arc<str> {
+    let requested = line.max(1) as usize;
+    let Some(raw) = file.text(db).split('\n').nth(requested - 1) else {
+        return Arc::from("");
+    };
+    Arc::from(raw.strip_suffix('\r').unwrap_or(raw))
+}
+
+/// Return the UTF-8 source text covered by a byte span. Spans originate in
+/// the lexer, but callers may request a range ending inside a code point while
+/// rendering an editor diagnostic; clamp both boundaries to character
+/// boundaries instead of panicking on an invalid slice.
+#[salsa::tracked]
+pub fn span_text(db: &dyn Db, file: SourceFile, span: lucid_syntax::Span) -> Arc<str> {
+    let source = file.text(db);
+    let mut start = span.start.min(source.len());
+    let mut end = span.end.min(source.len());
+    while start > 0 && !source.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end > start && !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end < start {
+        return Arc::from("");
+    }
+    Arc::from(&source[start..end])
+}
+
+fn source_fallback_span(db: &dyn Db, file: SourceFile) -> Option<lucid_syntax::Span> {
+    let source = file.text(db);
+    let (start, character) = source
+        .char_indices()
+        .find(|(_, character)| !character.is_whitespace())
+        .or_else(|| source.char_indices().next())?;
+    let end = start + character.len_utf8();
+    let (line, column) = *source_position(db, file, start as u32);
+    Some(lucid_syntax::Span::new(
+        start,
+        end,
+        line as usize,
+        column as usize,
+    ))
+}
+
+fn first_lexical_error_span(db: &dyn Db, file: SourceFile) -> lucid_syntax::Span {
+    let cst = parse_file(db, file);
+    let Some(range) = lucid_syntax::error_ranges(
+        &rowan::SyntaxNode::<lucid_syntax::LucidLanguage>::new_root(cst.as_ref().clone()),
+    )
+    .into_iter()
+    .next() else {
+        return lucid_syntax::Span::default();
+    };
+    let start = u32::from(range.start());
+    let end = u32::from(range.end());
+    let (line, column) = *source_position(db, file, start);
+    lucid_syntax::Span::new(start as usize, end as usize, line as usize, column as usize)
+}
+
+/// Return the parser's own span for a grammar error when the source is
+/// lexically valid. `parse_ast` intentionally exposes a compact string for
+/// callers, but structured diagnostics must retain the precise token range
+/// reported by the recovering parser.
+fn first_parse_error_span(db: &dyn Db, file: SourceFile) -> lucid_syntax::Span {
+    match lucid_syntax::parse_recovering(file.text(db)) {
+        Ok((_, errors)) => errors
+            .into_iter()
+            .next()
+            .map(|error| error.span)
+            .or_else(|| source_fallback_span(db, file))
+            .unwrap_or_default(),
+        Err(_) => first_lexical_error_span(db, file),
+    }
+}
+
+/// Strict semantic parse, kept separate from the lossless CST query so editor
+/// recovery never becomes accidental language semantics.
+#[salsa::tracked]
+pub fn parse_ast(db: &dyn Db, file: SourceFile) -> Result<Arc<Module>, Arc<str>> {
+    parse(file.text(db)).map(Arc::new).map_err(Arc::<str>::from)
+}
+
+/// Semantic validation query.  Keeping this behind the database means the
+/// eventual resolved/typed HIR can replace the query body without changing
+/// callers or reintroducing direct AST walks in the driver.
+#[salsa::tracked]
+pub fn type_check_file(db: &dyn Db, file: SourceFile) -> Result<(), Arc<str>> {
+    typed_module(db, file)
+        .as_ref()
+        .map(|_| ())
+        .map_err(Arc::clone)
+}
+
+#[salsa::tracked]
+pub fn top_level_symbols<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<[Symbol<'db>]> {
+    let Ok(module) = parse_ast(db, file) else {
+        return Arc::from([]);
+    };
+    let mut symbols = Vec::new();
+    for statement in &module.statements {
+        let name = match statement {
+            lucid_syntax::Stmt::ClassDef { name, .. }
+            | lucid_syntax::Stmt::TraitDef { name, .. }
+            | lucid_syntax::Stmt::TypeAlias { name, .. }
+            | lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef { name, .. }) => Some(name),
+            lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                ..
+            } => Some(name),
+            _ => None,
+        };
+        if let Some(name) = name {
+            symbols.push(Symbol::new(db, file, name.clone()));
+        }
+    }
+    Arc::from(symbols)
+}
+
+/// Resolved declaration index used by later HIR and visibility queries.
+#[salsa::tracked]
+pub fn resolved_declarations<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<[ResolvedDecl<'db>]> {
+    let Ok(module) = parse_ast(db, file) else {
+        return Arc::from([]);
+    };
+    let mut declarations = Vec::new();
+    for statement in &module.statements {
+        let (name, kind, is_dispatch) = match statement {
+            lucid_syntax::Stmt::ClassDef { name, .. } => (Some(name), DeclKind::Class, false),
+            lucid_syntax::Stmt::TraitDef { name, .. } => (Some(name), DeclKind::Trait, false),
+            lucid_syntax::Stmt::TypeAlias { name, .. } => (Some(name), DeclKind::TypeAlias, false),
+            lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef {
+                name, is_dispatch, ..
+            }) => (Some(name), DeclKind::Function, *is_dispatch),
+            lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                ..
+            } => (Some(name), DeclKind::Value, false),
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                ..
+            } => (Some(name), DeclKind::Value, false),
+            _ => (None, DeclKind::Value, false),
+        };
+        let span = statement_span(statement);
+        if let Some(name) = name {
+            declarations.push(ResolvedDecl {
+                symbol: Symbol::new(db, file, name.clone()),
+                kind,
+                is_dispatch,
+                exported: !name.starts_with('_'),
+                span,
+            });
+        }
+    }
+    Arc::from(declarations)
+}
+
+#[salsa::tracked]
+pub fn imports(db: &dyn Db, file: SourceFile) -> Arc<[String]> {
+    let Ok(module) = parse_ast(db, file) else {
+        return Arc::from([]);
+    };
+    let mut names = Vec::new();
+    for statement in &module.statements {
+        match statement {
+            lucid_syntax::Stmt::Import { module, .. }
+            | lucid_syntax::Stmt::FromImport { module, .. } => names.push(module.clone()),
+            _ => {}
+        }
+    }
+    names.sort();
+    names.dedup();
+    Arc::from(names)
+}
+
+#[salsa::tracked]
+pub fn resolved_module<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<ResolvedModule<'db>> {
+    Arc::new(ResolvedModule {
+        file,
+        declarations: resolved_declarations(db, file).clone(),
+        imports: imports(db, file).clone(),
+    })
+}
+
+#[salsa::tracked]
+pub fn imported_bindings<'db>(
+    db: &'db dyn Db,
+    project: Project,
+    file: SourceFile,
+) -> Arc<[ResolvedBinding<'db>]> {
+    let Ok(module) = parse_ast(db, file) else {
+        return Arc::from([]);
+    };
+    let mut bindings = Vec::new();
+    for statement in &module.statements {
+        if let lucid_syntax::Stmt::Import { module, alias, .. } = statement {
+            let Some(imported_file) = resolve_import(db, project, file, module.clone()) else {
+                continue;
+            };
+            let local_name = alias.clone().unwrap_or_else(|| {
+                module
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(module)
+                    .trim_start_matches('.')
+                    .to_string()
+            });
+            bindings.push(ResolvedBinding {
+                local_name: local_name.clone(),
+                symbol: Symbol::new(db, *imported_file, local_name),
+            });
+            continue;
+        }
+        let lucid_syntax::Stmt::FromImport { module, names, .. } = statement else {
+            continue;
+        };
+        let Some(imported_file) = resolve_import(db, project, file, module.clone()) else {
+            continue;
+        };
+        for (name, alias) in names {
+            let Some(declaration) = resolved_declarations(db, *imported_file)
+                .iter()
+                .find(|decl| decl.exported && decl.symbol.name(db).as_str() == name)
+            else {
+                continue;
+            };
+            bindings.push(ResolvedBinding {
+                local_name: alias.clone().unwrap_or_else(|| name.clone()),
+                symbol: declaration.symbol,
+            });
+        }
+    }
+    bindings.sort_by(|left, right| left.local_name.cmp(&right.local_name));
+    bindings.dedup_by(|left, right| left.local_name == right.local_name);
+    Arc::from(bindings)
+}
+
+/// Return whether `module` is provided by the compiler/runtime rather than a
+/// project source file.
+pub fn is_builtin_module(module: &str) -> bool {
+    matches!(module, "math" | "sys" | "iteration")
+}
+
+fn collect_typed_exprs<'db>(
+    db: &'db dyn Db,
+    checker: &lucid_checker::TypeChecker,
+    expr: &lucid_syntax::Expr,
+    nodes: &mut Vec<TypedExpr<'db>>,
+) -> Result<u32, Arc<str>> {
+    use lucid_syntax::Expr;
+    fn push_typed_expr_node<'db>(
+        db: &'db dyn Db,
+        checker: &lucid_checker::TypeChecker,
+        expr: &lucid_syntax::Expr,
+        kind: &str,
+        children: Vec<u32>,
+        nodes: &mut Vec<TypedExpr<'db>>,
+    ) -> Result<u32, Arc<str>> {
+        let detail = match expr {
+            Expr::Ident { name, .. } => Some(name.clone()),
+            Expr::Binary { op, .. } => Some(format!("{op:?}")),
+            Expr::Unary { op, .. } => Some(format!("{op:?}")),
+            Expr::Attribute { attr, .. } => Some(attr.clone()),
+            _ => None,
+        };
+        let literal = match expr {
+            Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(lucid_cir::TypedLiteral::Int(*value)),
+            Expr::Literal {
+                value: lucid_syntax::LiteralValue::Bool(value),
+                ..
+            } => Some(lucid_cir::TypedLiteral::Bool(*value)),
+            _ => None,
+        };
+        let ty = checker
+            .type_of_expr(expr)
+            .map_err(|error| Arc::<str>::from(error.message))?
+            .canonical();
+        let id =
+            u32::try_from(nodes.len()).map_err(|_| Arc::<str>::from("too many expressions"))?;
+        let type_name = ty.canonical_string();
+        nodes.push(TypedExpr {
+            id,
+            type_id: TypeId::new(db, type_name.clone()),
+            type_name,
+            kind: kind.to_string(),
+            detail,
+            children: Arc::from(children),
+            literal,
+            span: expr.span(),
+        });
+        Ok(id)
+    }
+    match expr {
+        Expr::ListComp {
+            element,
+            target,
+            iter,
+            condition,
+            ..
+        } => {
+            let iter_id = collect_typed_exprs(db, checker, iter, nodes)?;
+            let iter_type = checker
+                .type_of_expr(iter)
+                .map_err(|error| Arc::<str>::from(error.message))?;
+            let mut sub = checker.clone();
+            let element_type = checker.iterable_element_type(&iter_type);
+            sub.bind_match_pattern_types(target, &element_type);
+            let element_id = collect_typed_exprs(db, &sub, element, nodes)?;
+            let mut children = vec![element_id, iter_id];
+            if let Some(condition) = condition {
+                children.push(collect_typed_exprs(db, &sub, condition, nodes)?);
+            }
+            return push_typed_expr_node(db, checker, expr, "list-comprehension", children, nodes);
+        }
+        Expr::SetComp {
+            element,
+            target,
+            iter,
+            condition,
+            ..
+        } => {
+            let iter_id = collect_typed_exprs(db, checker, iter, nodes)?;
+            let iter_type = checker
+                .type_of_expr(iter)
+                .map_err(|error| Arc::<str>::from(error.message))?;
+            let mut sub = checker.clone();
+            let element_type = checker.iterable_element_type(&iter_type);
+            sub.bind_match_pattern_types(target, &element_type);
+            let element_id = collect_typed_exprs(db, &sub, element, nodes)?;
+            let mut children = vec![element_id, iter_id];
+            if let Some(condition) = condition {
+                children.push(collect_typed_exprs(db, &sub, condition, nodes)?);
+            }
+            return push_typed_expr_node(db, checker, expr, "set-comprehension", children, nodes);
+        }
+        Expr::DictComp {
+            key,
+            value,
+            target,
+            iter,
+            condition,
+            ..
+        } => {
+            let iter_id = collect_typed_exprs(db, checker, iter, nodes)?;
+            let iter_type = checker
+                .type_of_expr(iter)
+                .map_err(|error| Arc::<str>::from(error.message))?;
+            let mut sub = checker.clone();
+            let element_type = checker.iterable_element_type(&iter_type);
+            sub.bind_match_pattern_types(target, &element_type);
+            let key_id = collect_typed_exprs(db, &sub, key, nodes)?;
+            let value_id = collect_typed_exprs(db, &sub, value, nodes)?;
+            let mut children = vec![key_id, value_id, iter_id];
+            if let Some(condition) = condition {
+                children.push(collect_typed_exprs(db, &sub, condition, nodes)?);
+            }
+            return push_typed_expr_node(db, checker, expr, "dict-comprehension", children, nodes);
+        }
+        _ => {}
+    }
+    let (kind, children): (&str, Vec<&Expr>) = match expr {
+        Expr::Literal { .. } => ("literal", Vec::new()),
+        Expr::Ident { .. } => ("name", Vec::new()),
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            let _ = op;
+            ("binary", vec![left, right])
+        }
+        Expr::Unary { expr, .. } => ("unary", vec![expr]),
+        Expr::Call { func, args, .. } => {
+            let mut children = vec![func.as_ref()];
+            children.extend(args.iter().map(|arg| &arg.value));
+            ("call", children)
+        }
+        Expr::Construct {
+            class_name: _,
+            args,
+            ..
+        } => ("construct", args.iter().map(|arg| &arg.value).collect()),
+        Expr::Propagate { expr, .. } => ("propagate", vec![expr]),
+        Expr::Await { expr, .. } => ("await", vec![expr]),
+        Expr::Attribute { value, .. } => ("attribute", vec![value]),
+        Expr::Index { value, index, .. } => ("index", vec![value, index]),
+        Expr::Slice {
+            start, stop, step, ..
+        } => {
+            let mut children = Vec::new();
+            children.extend(start.as_deref());
+            children.extend(stop.as_deref());
+            children.extend(step.as_deref());
+            ("slice", children)
+        }
+        Expr::Record { fields, .. } => ("record", fields.iter().map(|(_, value)| value).collect()),
+        Expr::List { elements, .. } => ("list", elements.iter().collect()),
+        Expr::Dict { entries, .. } => (
+            "dict",
+            entries
+                .iter()
+                .flat_map(|(key, value)| [key, value])
+                .collect(),
+        ),
+        Expr::Set { elements, .. } => ("set", elements.iter().collect()),
+        Expr::AnonymousDef { body, .. } => {
+            // Statements in an anonymous function are a separate body graph;
+            // preserve the node here and let function lowering own that body.
+            let _ = body;
+            ("anonymous-function", Vec::new())
+        }
+        Expr::Trust { expr, .. } => ("trust", vec![expr]),
+        Expr::Freeze { expr, .. } => ("freeze", vec![expr]),
+        Expr::Skip(_) => ("skip", Vec::new()),
+        Expr::Type(_) => ("type", Vec::new()),
+        Expr::ListComp {
+            element,
+            iter,
+            condition,
+            ..
+        } => {
+            let mut children = vec![element.as_ref(), iter.as_ref()];
+            children.extend(condition.as_deref());
+            ("list-comprehension", children)
+        }
+        Expr::SetComp {
+            element,
+            iter,
+            condition,
+            ..
+        } => {
+            let mut children = vec![element.as_ref(), iter.as_ref()];
+            children.extend(condition.as_deref());
+            ("set-comprehension", children)
+        }
+        Expr::DictComp {
+            key,
+            value,
+            iter,
+            condition,
+            ..
+        } => {
+            let mut children = vec![key.as_ref(), value.as_ref(), iter.as_ref()];
+            children.extend(condition.as_deref());
+            ("dict-comprehension", children)
+        }
+        Expr::IfExpr {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => ("if", vec![condition, then_branch, else_branch]),
+    };
+    let child_ids = children
+        .into_iter()
+        .map(|child| collect_typed_exprs(db, checker, child, nodes))
+        .collect::<Result<Vec<_>, _>>()?;
+    push_typed_expr_node(db, checker, expr, kind, child_ids, nodes)
+}
+
+fn collect_typed_body<'db>(
+    db: &'db dyn Db,
+    checker: &lucid_checker::TypeChecker,
+    statements: &[lucid_syntax::Stmt],
+    nodes: &mut Vec<TypedExpr<'db>>,
+) -> Result<(), Arc<str>> {
+    use lucid_syntax::Stmt;
+    for statement in statements {
+        match statement {
+            Stmt::VarDef {
+                value: Some(value), ..
+            } => {
+                collect_typed_exprs(db, checker, value, nodes)?;
+            }
+            Stmt::Assignment { target, value, .. } => {
+                if !matches!(target, lucid_syntax::Expr::Ident { .. }) {
+                    collect_typed_exprs(db, checker, target, nodes)?;
+                }
+                collect_typed_exprs(db, checker, value, nodes)?;
+            }
+            Stmt::AugAssign { target, value, .. } => {
+                collect_typed_exprs(db, checker, target, nodes)?;
+                collect_typed_exprs(db, checker, value, nodes)?;
+            }
+            Stmt::With { items, body, .. } => {
+                let mut body_checker = checker.clone();
+                for item in items {
+                    collect_typed_exprs(db, checker, &item.context_expr, nodes)?;
+                    if let Some(pattern) = &item.target {
+                        let context_type = checker
+                            .type_of_expr(&item.context_expr)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        body_checker.bind_match_pattern_types(pattern, &context_type);
+                    }
+                }
+                for statement in body {
+                    body_checker
+                        .check_statement(statement)
+                        .map_err(|error| Arc::<str>::from(error.message))?;
+                    collect_typed_body(db, &body_checker, std::slice::from_ref(statement), nodes)?;
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                span,
+                ..
+            } => {
+                let condition_id = collect_typed_exprs(db, checker, condition, nodes)?;
+                let collect_branch =
+                    |branch: &[lucid_syntax::Stmt], nodes: &mut Vec<TypedExpr<'db>>| {
+                        let mut branch_checker = checker.clone();
+                        for statement in branch {
+                            branch_checker
+                                .check_statement(statement)
+                                .map_err(|error| Arc::<str>::from(error.message))?;
+                            collect_typed_body(
+                                db,
+                                &branch_checker,
+                                std::slice::from_ref(statement),
+                                nodes,
+                            )?;
+                        }
+                        Ok::<(), Arc<str>>(())
+                    };
+                collect_branch(then_branch, nodes)?;
+                for (condition, body) in elif_branches {
+                    collect_typed_exprs(db, checker, condition, nodes)?;
+                    collect_branch(body, nodes)?;
+                }
+                if let Some(body) = else_branch {
+                    collect_branch(body, nodes)?;
+                }
+                // A conditional whose arms return directly is an expression
+                // at the CIR boundary. Preserve that relationship in typed
+                // HIR instead of leaving three unrelated expression nodes for
+                // the lowering stage to guess about.
+                if elif_branches.is_empty()
+                    && then_branch.len() == 1
+                    && else_branch.as_ref().is_some_and(|body| body.len() == 1)
+                    && let Stmt::Return {
+                        value: Some(then_value),
+                        ..
+                    } = &then_branch[0]
+                    && let Some(else_body) = else_branch.as_ref()
+                    && let Stmt::Return {
+                        value: Some(else_value),
+                        ..
+                    } = &else_body[0]
+                {
+                    let then_id = collect_typed_exprs(db, checker, then_value, nodes)?;
+                    let else_id = collect_typed_exprs(db, checker, else_value, nodes)?;
+                    let ty = checker
+                        .type_of_expr(then_value)
+                        .map_err(|error| Arc::<str>::from(error.message))?
+                        .canonical();
+                    let id = u32::try_from(nodes.len())
+                        .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                    nodes.push(TypedExpr {
+                        id,
+                        type_id: TypeId::new(db, ty.canonical_string()),
+                        type_name: ty.canonical_string(),
+                        kind: "if".into(),
+                        detail: Some("statement-return".into()),
+                        children: Arc::from([condition_id, then_id, else_id]),
+                        literal: None,
+                        span: *span,
+                    });
+                }
+                // A conditional that assigns one value in each arm and is
+                // followed by `return name` has the same SSA shape as direct
+                // returns. Record that shape in typed HIR as well. The
+                // assignment expressions have already been checked and
+                // collected above; this node only links them, so it cannot
+                // discard an initializer or accidentally execute both arms.
+                if elif_branches.is_empty()
+                    && then_branch.len() == 1
+                    && else_branch.as_ref().is_some_and(|body| body.len() == 1)
+                    && let Stmt::Assignment {
+                        target:
+                            lucid_syntax::Expr::Ident {
+                                name: then_name, ..
+                            },
+                        value: then_value,
+                        ..
+                    }
+                    | Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(then_name, _),
+                        value: Some(then_value),
+                        ..
+                    } = &then_branch[0]
+                    && let Some(else_body) = else_branch.as_ref()
+                    && let Stmt::Assignment {
+                        target:
+                            lucid_syntax::Expr::Ident {
+                                name: else_name, ..
+                            },
+                        value: else_value,
+                        ..
+                    }
+                    | Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(else_name, _),
+                        value: Some(else_value),
+                        ..
+                    } = &else_body[0]
+                    && then_name == else_name
+                {
+                    let then_id = collect_typed_exprs(db, checker, then_value, nodes)?;
+                    let else_id = collect_typed_exprs(db, checker, else_value, nodes)?;
+                    let ty = checker
+                        .type_of_expr(then_value)
+                        .map_err(|error| Arc::<str>::from(error.message))?
+                        .canonical();
+                    let id = u32::try_from(nodes.len())
+                        .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                    nodes.push(TypedExpr {
+                        id,
+                        type_id: TypeId::new(db, ty.canonical_string()),
+                        type_name: ty.canonical_string(),
+                        kind: "if".into(),
+                        detail: Some("statement-assignment".into()),
+                        children: Arc::from([condition_id, then_id, else_id]),
+                        literal: None,
+                        span: *span,
+                    });
+                }
+            }
+            Stmt::For {
+                target,
+                iterable,
+                body,
+                if_broken,
+                ..
+            } => {
+                collect_typed_exprs(db, checker, iterable, nodes)?;
+                let mut body_checker = checker.clone();
+                let iterable_type = checker
+                    .type_of_expr(iterable)
+                    .map_err(|error| Arc::<str>::from(error.message))?;
+                let element_type = checker.iterable_element_type(&iterable_type);
+                body_checker.bind_match_pattern_types(target, &element_type);
+                body_checker.env.loop_depth += 1;
+                let body_result = (|| {
+                    for statement in body {
+                        body_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &body_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
+                    Ok::<(), Arc<str>>(())
+                })();
+                body_checker.env.loop_depth -= 1;
+                body_result?;
+                if let Some(body) = if_broken {
+                    for statement in body {
+                        body_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &body_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
+                }
+            }
+            Stmt::While {
+                condition,
+                body,
+                if_broken,
+                ..
+            } => {
+                collect_typed_exprs(db, checker, condition, nodes)?;
+                let mut body_checker = checker.clone();
+                body_checker.env.loop_depth += 1;
+                let body_result = (|| {
+                    for statement in body {
+                        body_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &body_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
+                    Ok::<(), Arc<str>>(())
+                })();
+                body_checker.env.loop_depth -= 1;
+                body_result?;
+                if let Some(body) = if_broken {
+                    for statement in body {
+                        body_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &body_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
+                }
+            }
+            Stmt::Match {
+                subject,
+                subject_alias,
+                arms,
+                ..
+            } => {
+                let subject_id = collect_typed_exprs(db, checker, subject, nodes)?;
+                let subject_type = checker
+                    .type_of_expr(subject)
+                    .map_err(|error| Arc::<str>::from(error.message))?;
+                let subject_name = match subject {
+                    lucid_syntax::Expr::Ident { name, .. } => Some(name.as_str()),
+                    _ => None,
+                };
+                for arm in arms {
+                    let mut arm_checker = checker.clone();
+                    if let Some(alias) = subject_alias {
+                        arm_checker.env.variables.insert(
+                            alias.clone(),
+                            (subject_type.clone(), lucid_syntax::MutabilityView::ReadOnly),
+                        );
+                        arm_checker.env.exact_variables.remove(alias);
+                    }
+                    arm_checker.bind_match_pattern_types(&arm.pattern, &subject_type);
+                    if let Some(guard) = &arm.guard {
+                        collect_typed_exprs(db, &arm_checker, guard, nodes)?;
+                    }
+                    let narrowed =
+                        arm_checker.match_pattern_narrowed_type(&arm.pattern, &subject_type);
+                    if let Some(name) = subject_name {
+                        arm_checker.env.variables.insert(
+                            name.to_string(),
+                            (narrowed.clone(), lucid_syntax::MutabilityView::ReadOnly),
+                        );
+                        arm_checker.env.exact_variables.remove(name);
+                    }
+                    if let Some(alias) = subject_alias {
+                        arm_checker.env.variables.insert(
+                            alias.clone(),
+                            (narrowed, lucid_syntax::MutabilityView::ReadOnly),
+                        );
+                        arm_checker.env.exact_variables.remove(alias);
+                    }
+                    for statement in &arm.body {
+                        arm_checker
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(
+                            db,
+                            &arm_checker,
+                            std::slice::from_ref(statement),
+                            nodes,
+                        )?;
+                    }
+                }
+                // Preserve the control-flow relationship for the primitive
+                // literal/wildcard form. Without this synthetic node, the
+                // typed graph would contain unrelated subject and arm values
+                // and the lowering stage would have to recover match order
+                // from syntax again.
+                if arms.len() == 2
+                    && arms.iter().all(|arm| arm.guard.is_none())
+                    && let (
+                        lucid_syntax::Pattern::Literal(_, _),
+                        lucid_syntax::Pattern::Wildcard(_),
+                    ) = (&arms[0].pattern, &arms[1].pattern)
+                    && let (literal_arm, wildcard_arm) = (&arms[0], &arms[1])
+                    && let lucid_syntax::Pattern::Literal(literal, _) = &literal_arm.pattern
+                    && matches!(
+                        literal,
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_)
+                    )
+                    && let Some(literal_value) = match_arm_result(literal_arm)
+                    && let Some(wildcard_value) = match_arm_result(wildcard_arm)
+                {
+                    let literal_id = nodes
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == literal_value.span())
+                        .map(|node| node.id);
+                    let wildcard_id = nodes
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == wildcard_value.span())
+                        .map(|node| node.id);
+                    if let (Some(literal_id), Some(wildcard_id)) = (literal_id, wildcard_id) {
+                        let id = u32::try_from(nodes.len())
+                            .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                        let detail = match literal {
+                            lucid_syntax::LiteralValue::Int(value) => {
+                                format!("literal-int:{value}")
+                            }
+                            lucid_syntax::LiteralValue::Bool(value) => {
+                                format!("literal-bool:{value}")
+                            }
+                            _ => return Err(Arc::from("unsupported match literal")),
+                        };
+                        let ty = checker
+                            .type_of_expr(literal_value)
+                            .map_err(|error| Arc::<str>::from(error.message))?
+                            .canonical();
+                        nodes.push(TypedExpr {
+                            id,
+                            type_id: TypeId::new(db, ty.canonical_string()),
+                            type_name: ty.canonical_string(),
+                            kind: "match".into(),
+                            detail: Some(detail),
+                            children: Arc::from([subject_id, literal_id, wildcard_id]),
+                            literal: None,
+                            span: subject.span(),
+                        });
+                    }
+                }
+
+                fn typed_match_pure_expr(expr: &lucid_syntax::Expr) -> bool {
+                    matches!(
+                        expr,
+                        lucid_syntax::Expr::Literal { .. } | lucid_syntax::Expr::Ident { .. }
+                    )
+                }
+                fn typed_match_static_truth(expr: &lucid_syntax::Expr) -> Option<bool> {
+                    match expr {
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bool(value),
+                            ..
+                        } => Some(*value),
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Int(value),
+                            ..
+                        } => Some(*value != 0),
+                        lucid_syntax::Expr::Unary {
+                            op: lucid_syntax::UnaryOp::Not,
+                            expr,
+                            ..
+                        } => typed_match_static_truth(expr).map(|value| !value),
+                        lucid_syntax::Expr::Binary {
+                            op: lucid_syntax::BinaryOp::And,
+                            left,
+                            right,
+                            ..
+                        } => match typed_match_static_truth(left) {
+                            Some(false) => Some(false),
+                            Some(true) => typed_match_static_truth(right),
+                            None => None,
+                        },
+                        lucid_syntax::Expr::Binary {
+                            op: lucid_syntax::BinaryOp::Or,
+                            left,
+                            right,
+                            ..
+                        } => match typed_match_static_truth(left) {
+                            Some(true) => Some(true),
+                            Some(false) => typed_match_static_truth(right),
+                            None => None,
+                        },
+                        lucid_syntax::Expr::Binary {
+                            op, left, right, ..
+                        } => {
+                            let (
+                                lucid_syntax::Expr::Literal {
+                                    value: lucid_syntax::LiteralValue::Bool(left),
+                                    ..
+                                },
+                                lucid_syntax::Expr::Literal {
+                                    value: lucid_syntax::LiteralValue::Bool(right),
+                                    ..
+                                },
+                            ) = (left.as_ref(), right.as_ref())
+                            else {
+                                return None;
+                            };
+                            match op {
+                                lucid_syntax::BinaryOp::Eq
+                                | lucid_syntax::BinaryOp::Identity
+                                | lucid_syntax::BinaryOp::Is => Some(left == right),
+                                lucid_syntax::BinaryOp::NotEq
+                                | lucid_syntax::BinaryOp::NotIdentity
+                                | lucid_syntax::BinaryOp::IsNot => Some(left != right),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+                fn typed_match_selected_static_branch<'a>(
+                    condition: &lucid_syntax::Expr,
+                    then_branch: &'a [lucid_syntax::Stmt],
+                    elif_branches: &'a [(lucid_syntax::Expr, Vec<lucid_syntax::Stmt>)],
+                    else_branch: Option<&'a Vec<lucid_syntax::Stmt>>,
+                ) -> Option<Option<&'a [lucid_syntax::Stmt]>> {
+                    match typed_match_static_truth(condition) {
+                        Some(true) => Some(Some(then_branch)),
+                        Some(false) => {
+                            for (condition, branch) in elif_branches {
+                                match typed_match_static_truth(condition) {
+                                    Some(true) => return Some(Some(branch.as_slice())),
+                                    Some(false) => continue,
+                                    None => return None,
+                                }
+                            }
+                            Some(else_branch.map(Vec::as_slice))
+                        }
+                        None => None,
+                    }
+                }
+                fn typed_match_noop_statement(statement: &lucid_syntax::Stmt) -> bool {
+                    matches!(statement, lucid_syntax::Stmt::Pass(_))
+                        || matches!(
+                            statement,
+                            lucid_syntax::Stmt::Expr(expr) if typed_match_pure_expr(expr)
+                        )
+                        || matches!(
+                            statement,
+                            lucid_syntax::Stmt::Assert { condition, .. }
+                                if typed_match_static_truth(condition) == Some(true)
+                        )
+                        || matches!(
+                            statement,
+                            lucid_syntax::Stmt::While {
+                                condition,
+                                ..
+                            } if typed_match_static_truth(condition) == Some(false)
+                        )
+                        || matches!(
+                            statement,
+                            lucid_syntax::Stmt::For {
+                                iterable,
+                                ..
+                            } if lucid_cir::is_const_empty_iterable(iterable)
+                        )
+                        || match statement {
+                            lucid_syntax::Stmt::If {
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch,
+                                ..
+                            } => match typed_match_selected_static_branch(
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch.as_ref(),
+                            ) {
+                                Some(Some(branch)) => branch.iter().all(typed_match_noop_statement),
+                                Some(None) => true,
+                                None => false,
+                            },
+                            _ => false,
+                        }
+                }
+                fn match_statements_result(
+                    statements: &[lucid_syntax::Stmt],
+                ) -> Option<&lucid_syntax::Expr> {
+                    let mut meaningful = statements
+                        .iter()
+                        .filter(|statement| !typed_match_noop_statement(statement));
+                    let first = meaningful.next()?;
+                    let second = meaningful.next();
+                    if meaningful.next().is_some() {
+                        return None;
+                    }
+                    match (first, second) {
+                        (
+                            lucid_syntax::Stmt::Return {
+                                value: Some(value), ..
+                            },
+                            None,
+                        ) => Some(value),
+                        (
+                            lucid_syntax::Stmt::Assignment {
+                                target: lucid_syntax::Expr::Ident { name, .. },
+                                value,
+                                ..
+                            },
+                            Some(lucid_syntax::Stmt::Return {
+                                value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                                ..
+                            }),
+                        )
+                        | (
+                            lucid_syntax::Stmt::VarDef {
+                                pattern: lucid_syntax::Pattern::Ident(name, _),
+                                value: Some(value),
+                                ..
+                            },
+                            Some(lucid_syntax::Stmt::Return {
+                                value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                                ..
+                            }),
+                        ) if name == returned => Some(value),
+                        (
+                            lucid_syntax::Stmt::If {
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch,
+                                ..
+                            },
+                            None,
+                        ) => {
+                            let selected = typed_match_selected_static_branch(
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch.as_ref(),
+                            )??;
+                            match_statements_result(selected)
+                        }
+                        _ => None,
+                    }
+                }
+                fn match_arm_result(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
+                    match_statements_result(&arm.body)
+                }
+                if arms.len() >= 3
+                    && arms.iter().all(|arm| arm.guard.is_none())
+                    && matches!(
+                        arms.last().map(|arm| &arm.pattern),
+                        Some(lucid_syntax::Pattern::Wildcard(_))
+                    )
+                    && arms[..arms.len() - 1]
+                        .iter()
+                        .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                    && arms.iter().all(|arm| match_arm_result(arm).is_some())
+                {
+                    let detail = arms[..arms.len() - 1]
+                        .iter()
+                        .map(|arm| match &arm.pattern {
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Int(value),
+                                _,
+                            ) => Ok(format!("i{value}")),
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Bool(value),
+                                _,
+                            ) => Ok(format!("b{value}")),
+                            _ => Err(Arc::from("unsupported match literal pattern")),
+                        })
+                        .collect::<Result<Vec<_>, Arc<str>>>()?
+                        .join(",");
+                    let mut children = vec![subject_id];
+                    let mut result_ids = Vec::with_capacity(arms.len());
+                    for arm in arms {
+                        let Some(value) = match_arm_result(arm) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let Some(id) = nodes
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == value.span())
+                            .map(|node| node.id)
+                        else {
+                            result_ids.clear();
+                            break;
+                        };
+                        result_ids.push(id);
+                    }
+                    if result_ids.len() == arms.len() {
+                        children.extend(result_ids);
+                        let id = u32::try_from(nodes.len())
+                            .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                        let Some(result) = match_arm_result(&arms[0]) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let ty = checker
+                            .type_of_expr(result)
+                            .map_err(|error| Arc::<str>::from(error.message))?
+                            .canonical();
+                        nodes.push(TypedExpr {
+                            id,
+                            type_id: TypeId::new(db, ty.canonical_string()),
+                            type_name: ty.canonical_string(),
+                            kind: "match-chain".into(),
+                            detail: Some(format!("literal-chain:{detail}")),
+                            children: Arc::from(children),
+                            literal: None,
+                            span: subject.span(),
+                        });
+                    }
+                }
+                if arms.len() >= 3
+                    && let Some(wildcard_index) = arms
+                        .iter()
+                        .position(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_)))
+                    && wildcard_index > 0
+                    && wildcard_index + 1 < arms.len()
+                    && arms[..=wildcard_index]
+                        .iter()
+                        .all(|arm| arm.guard.is_none())
+                    && arms[..wildcard_index]
+                        .iter()
+                        .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                    && arms[..=wildcard_index]
+                        .iter()
+                        .all(|arm| match_arm_result(arm).is_some())
+                {
+                    let detail = arms[..wildcard_index]
+                        .iter()
+                        .map(|arm| match &arm.pattern {
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Int(value),
+                                _,
+                            ) => Ok(format!("i{value}")),
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Bool(value),
+                                _,
+                            ) => Ok(format!("b{value}")),
+                            _ => Err(Arc::from("unsupported match literal pattern")),
+                        })
+                        .collect::<Result<Vec<_>, Arc<str>>>()?
+                        .join(",");
+                    let mut children = vec![subject_id];
+                    let mut result_ids = Vec::with_capacity(wildcard_index + 1);
+                    for arm in &arms[..=wildcard_index] {
+                        let Some(value) = match_arm_result(arm) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let Some(id) = nodes
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == value.span())
+                            .map(|node| node.id)
+                        else {
+                            result_ids.clear();
+                            break;
+                        };
+                        result_ids.push(id);
+                    }
+                    if result_ids.len() == wildcard_index + 1 {
+                        children.extend(result_ids);
+                        let id = u32::try_from(nodes.len())
+                            .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                        let Some(result) = match_arm_result(&arms[0]) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let ty = checker
+                            .type_of_expr(result)
+                            .map_err(|error| Arc::<str>::from(error.message))?
+                            .canonical();
+                        nodes.push(TypedExpr {
+                            id,
+                            type_id: TypeId::new(db, ty.canonical_string()),
+                            type_name: ty.canonical_string(),
+                            kind: "match-chain".into(),
+                            detail: Some(format!("literal-chain:{detail}")),
+                            children: Arc::from(children),
+                            literal: None,
+                            span: subject.span(),
+                        });
+                    }
+                }
+                let optional_value_arms =
+                    if !arms.is_empty() && arms.iter().all(|arm| arm.guard.is_none()) {
+                        if let Some(wildcard_index) = arms.iter().position(|arm| {
+                            matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+                        }) {
+                            if arms[wildcard_index]
+                                .body
+                                .iter()
+                                .all(typed_match_noop_statement)
+                            {
+                                Some(&arms[..wildcard_index])
+                            } else {
+                                None
+                            }
+                        } else if arms
+                            .iter()
+                            .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                        {
+                            Some(arms.as_slice())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                if let Some(value_arms) = optional_value_arms.filter(|value_arms| {
+                    !value_arms.is_empty()
+                        && value_arms
+                            .iter()
+                            .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                        && value_arms.iter().all(|arm| match_arm_result(arm).is_some())
+                }) {
+                    let detail = value_arms
+                        .iter()
+                        .map(|arm| match &arm.pattern {
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Int(value),
+                                _,
+                            ) => Ok(format!("i{value}")),
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Bool(value),
+                                _,
+                            ) => Ok(format!("b{value}")),
+                            _ => Err(Arc::from("unsupported match literal pattern")),
+                        })
+                        .collect::<Result<Vec<_>, Arc<str>>>()?
+                        .join(",");
+                    let mut children = vec![subject_id];
+                    let mut result_ids = Vec::with_capacity(value_arms.len());
+                    for arm in value_arms {
+                        let Some(value) = match_arm_result(arm) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let Some(id) = nodes
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == value.span())
+                            .map(|node| node.id)
+                        else {
+                            result_ids.clear();
+                            break;
+                        };
+                        result_ids.push(id);
+                    }
+                    if result_ids.len() == value_arms.len() {
+                        children.extend(result_ids);
+                        let id = u32::try_from(nodes.len())
+                            .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                        let Some(result) = match_arm_result(&value_arms[0]) else {
+                            return Err(Arc::from("unsupported match result"));
+                        };
+                        let ty = checker
+                            .type_of_expr(result)
+                            .map_err(|error| Arc::<str>::from(error.message))?
+                            .canonical();
+                        nodes.push(TypedExpr {
+                            id,
+                            type_id: TypeId::new(db, ty.canonical_string()),
+                            type_name: ty.canonical_string(),
+                            kind: "optional-match-chain".into(),
+                            detail: Some(format!("literal-chain:{detail}")),
+                            children: Arc::from(children),
+                            literal: None,
+                            span: subject.span(),
+                        });
+                    }
+                }
+                let void_arms = if !arms.is_empty() && arms.iter().all(|arm| arm.guard.is_none()) {
+                    if let Some(wildcard_index) = arms
+                        .iter()
+                        .position(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_)))
+                    {
+                        if arms[wildcard_index]
+                            .body
+                            .iter()
+                            .all(typed_match_noop_statement)
+                        {
+                            Some(&arms[..wildcard_index])
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(arms.as_slice())
+                    }
+                } else {
+                    None
+                };
+                if let Some(void_arms) = void_arms.filter(|void_arms| {
+                    !void_arms.is_empty()
+                        && void_arms
+                            .iter()
+                            .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                        && void_arms.iter().all(|arm| {
+                            let Some((last, prefix)) = arm.body.split_last() else {
+                                return false;
+                            };
+                            prefix.iter().all(typed_match_noop_statement)
+                                && matches!(last, lucid_syntax::Stmt::Return { value: None, .. })
+                                || arm.body.iter().all(typed_match_noop_statement)
+                        })
+                }) {
+                    let detail = void_arms
+                        .iter()
+                        .map(|arm| match &arm.pattern {
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Int(value),
+                                _,
+                            ) => Ok(format!("i{value}")),
+                            lucid_syntax::Pattern::Literal(
+                                lucid_syntax::LiteralValue::Bool(value),
+                                _,
+                            ) => Ok(format!("b{value}")),
+                            _ => Err(Arc::from("unsupported match literal pattern")),
+                        })
+                        .collect::<Result<Vec<_>, Arc<str>>>()?
+                        .join(",");
+                    let id = u32::try_from(nodes.len())
+                        .map_err(|_| Arc::<str>::from("too many expressions"))?;
+                    nodes.push(TypedExpr {
+                        id,
+                        type_id: TypeId::new(db, "none"),
+                        type_name: "none".into(),
+                        kind: "void-match-chain".into(),
+                        detail: Some(format!("literal-chain:{detail}")),
+                        children: Arc::from([subject_id]),
+                        literal: None,
+                        span: subject.span(),
+                    });
+                }
+            }
+            Stmt::Try {
+                body,
+                handlers,
+                finally_body,
+                ..
+            } => {
+                let collect_scoped = |base: &lucid_checker::TypeChecker,
+                                      body: &[lucid_syntax::Stmt],
+                                      nodes: &mut Vec<TypedExpr<'db>>|
+                 -> Result<(), Arc<str>> {
+                    let mut scoped = base.clone();
+                    for statement in body {
+                        scoped
+                            .check_statement(statement)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        collect_typed_body(db, &scoped, std::slice::from_ref(statement), nodes)?;
+                    }
+                    Ok(())
+                };
+                collect_scoped(checker, body, nodes)?;
+                for handler in handlers {
+                    let mut handler_checker = checker.clone();
+                    if let Some(name) = &handler.name {
+                        let handler_type = checker
+                            .resolve_type_expr(&handler.exception_type)
+                            .map_err(|error| Arc::<str>::from(error.message))?;
+                        handler_checker.env.variables.insert(
+                            name.clone(),
+                            (handler_type, lucid_syntax::MutabilityView::Mutable),
+                        );
+                    }
+                    collect_scoped(&handler_checker, &handler.body, nodes)?;
+                }
+                if let Some(body) = finally_body {
+                    collect_scoped(checker, body, nodes)?;
+                }
+            }
+            Stmt::Return {
+                value: Some(value), ..
+            }
+            | Stmt::Raise {
+                exception: value, ..
+            }
+            | Stmt::Yield { value, .. }
+            | Stmt::Expr(value) => {
+                collect_typed_exprs(db, checker, value, nodes)?;
+            }
+            Stmt::Assert {
+                condition, message, ..
+            } => {
+                collect_typed_exprs(db, checker, condition, nodes)?;
+                if let Some(message) = message {
+                    collect_typed_exprs(db, checker, message, nodes)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[salsa::tracked]
+pub fn typed_module<'db>(
+    db: &'db dyn Db,
+    file: SourceFile,
+) -> Result<Arc<TypedModule<'db>>, Arc<str>> {
+    let module = parse_ast(db, file).as_ref().map_err(Arc::clone)?;
+    let mut checker = lucid_checker::TypeChecker::new();
+    checker
+        .check_module(module)
+        .map_err(|error| Arc::<str>::from(error.message))?;
+    let mut initializers = Vec::new();
+    let mut expressions = Vec::new();
+    for statement in &module.statements {
+        let (name, value) = match statement {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } => (name, value),
+            _ => continue,
+        };
+        let ty = checker
+            .type_of_expr(value)
+            .map_err(|error| Arc::<str>::from(error.message))?
+            .canonical();
+        let Some(symbol) = resolve_top_level(db, file, name.clone()) else {
+            continue;
+        };
+        let expression = collect_typed_exprs(db, &checker, value, &mut expressions)?;
+        initializers.push(TypedInitializer {
+            symbol: *symbol,
+            type_id: TypeId::new(db, ty.canonical_string()),
+            type_name: ty.canonical_string(),
+            expression,
+            span: value.span(),
+        });
+    }
+    let mut functions = Vec::new();
+    let mut seen_function_symbols = std::collections::HashSet::new();
+    for statement in &module.statements {
+        let lucid_syntax::Stmt::Function(function) = statement else {
+            continue;
+        };
+        let Some(signature) = checker.env.functions.get(&function.name) else {
+            continue;
+        };
+        let lucid_checker::Type::Function {
+            params,
+            return_type,
+        } = signature.canonical()
+        else {
+            continue;
+        };
+        let Some(symbol) = resolve_top_level(db, file, function.name.clone()) else {
+            continue;
+        };
+        if !seen_function_symbols.insert(*symbol) {
+            continue;
+        }
+        let parameter_types = params
+            .iter()
+            .map(|ty| TypeId::new(db, ty.canonical_string()))
+            .collect::<Vec<_>>();
+        let parameter_names = function
+            .params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<Vec<_>>();
+        let required_parameters = function
+            .params
+            .iter()
+            .map(|param| {
+                param.default.is_none()
+                    && !param.is_variadic_positional
+                    && !param.is_variadic_keyword
+                    && !param.is_gather
+            })
+            .collect::<Vec<_>>();
+        let return_type = TypeId::new(db, return_type.canonical_string());
+        let overload_types = checker
+            .env
+            .function_overloads
+            .get(&function.name)
+            .cloned()
+            .unwrap_or_else(|| vec![signature.clone()])
+            .into_iter()
+            .map(|ty| TypeId::new(db, ty.canonical().canonical_string()))
+            .collect::<Vec<_>>();
+        let mut body_expressions = Vec::new();
+        let mut body_checker = checker.clone();
+        let body_return_type = match signature.canonical() {
+            lucid_checker::Type::Function { return_type, .. }
+                if matches!(return_type.as_ref(), lucid_checker::Type::None) =>
+            {
+                lucid_checker::Type::TypeVar("Any".into())
+            }
+            lucid_checker::Type::Function { return_type, .. } => return_type.as_ref().clone(),
+            _ => lucid_checker::Type::TypeVar("Any".into()),
+        };
+        if let lucid_checker::Type::Function { params, .. } = signature.canonical() {
+            for (param, ty) in function.params.iter().zip(params.iter()) {
+                if let Some(default) = &param.default {
+                    collect_typed_exprs(db, &body_checker, default, &mut body_expressions)?;
+                }
+                body_checker.env.variables.insert(
+                    param.name.clone(),
+                    (ty.clone(), lucid_syntax::MutabilityView::Mutable),
+                );
+                if let Some(pattern) = &param.pattern {
+                    body_checker.bind_match_pattern_types(pattern, ty);
+                }
+            }
+        }
+        body_checker.env.current_return_type = Some(body_return_type);
+        for statement in &function.body {
+            if let lucid_syntax::Stmt::Function(nested) = statement {
+                let params = nested
+                    .params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .type_annotation
+                            .as_ref()
+                            .map(|annotation| body_checker.resolve_type_expr(annotation))
+                            .transpose()
+                            .map(|ty| ty.unwrap_or(lucid_checker::Type::TypeVar("Any".into())))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| Arc::<str>::from(error.message))?;
+                let return_type = nested
+                    .return_type
+                    .as_ref()
+                    .map(|annotation| body_checker.resolve_type_expr(annotation))
+                    .transpose()
+                    .map_err(|error| Arc::<str>::from(error.message))?
+                    .unwrap_or(lucid_checker::Type::TypeVar("Any".into()));
+                body_checker.env.variables.insert(
+                    nested.name.clone(),
+                    (
+                        lucid_checker::Type::Function {
+                            params,
+                            return_type: Box::new(return_type),
+                        },
+                        lucid_syntax::MutabilityView::Immutable,
+                    ),
+                );
+            }
+        }
+        // Seed the body checker with local bindings before collecting the
+        // expression graph.  The regular module check already validates the
+        // body, but this clone must replay statement effects (for example a
+        // local assignment) so later name nodes have a typed environment.
+        if !function.is_dispatch {
+            for statement in &function.body {
+                body_checker
+                    .check_statement(statement)
+                    .map_err(|error| Arc::<str>::from(error.message))?;
+            }
+        }
+        collect_typed_body(db, &body_checker, &function.body, &mut body_expressions)?;
+        functions.push(TypedFunction {
+            symbol: *symbol,
+            is_dispatch: function.is_dispatch,
+            is_async: function.is_async,
+            parameter_names: Arc::from(parameter_names),
+            required_parameters: Arc::from(required_parameters),
+            parameter_types: Arc::from(parameter_types),
+            return_type,
+            overload_types: Arc::from(overload_types),
+            body_expressions: Arc::from(body_expressions),
+            span: function.span,
+        });
+    }
+    Ok(Arc::new(TypedModule {
+        resolved: resolved_module(db, file).clone(),
+        initializers: Arc::from(initializers),
+        functions: Arc::from(functions),
+        expressions: Arc::from(expressions),
+        checked: true,
+    }))
+}
+
+/// Lower the straight-line top-level initializer sequence through the shared
+/// CIR boundary. Control-flow and unsupported statements remain explicit
+/// lowering errors rather than silently executing a partial module.
+#[salsa::tracked]
+pub fn lower_module(db: &dyn Db, file: SourceFile) -> Result<Arc<lucid_cir::Function>, Arc<str>> {
+    // Keep lowering behind the semantic boundary. A backend must never be
+    // able to execute an expression that the checker rejected.
+    let typed = typed_module(db, file).as_ref().map_err(Arc::clone)?;
+    // Prefer the typed-HIR graph whenever every initializer belongs to the
+    // currently supported primitive CIR subset. Unsupported graph nodes fall
+    // through to the existing statement lowerer, which gives callers an
+    // explicit LowerError while the remaining HIR/CIR coverage is built out.
+    if !typed.initializers.is_empty() {
+        let nodes = typed
+            .expressions
+            .iter()
+            .map(|node| lucid_cir::TypedExprNode {
+                id: node.id,
+                kind: node.kind.clone(),
+                detail: node.detail.clone(),
+                children: node.children.to_vec(),
+                literal: node.literal,
+            })
+            .collect::<Vec<_>>();
+        let roots = typed
+            .initializers
+            .iter()
+            .map(|initializer| initializer.expression)
+            .collect::<Vec<_>>();
+        if let Ok(function) = lucid_cir::Function::from_typed_initializers(&nodes, &roots) {
+            return Ok(Arc::new(function));
+        }
+    }
+    let module = parse_ast(db, file).as_ref().map_err(Arc::clone)?;
+    lucid_cir::Function::from_module(module)
+        .map(Arc::new)
+        .map_err(|error| {
+            Arc::from(match error {
+                lucid_cir::LowerError::NoLowerableAssignment => {
+                    "module has no top-level assignment to lower"
+                }
+                lucid_cir::LowerError::UnsupportedExpression => {
+                    "unsupported expression for CIR lowering"
+                }
+            })
+        })
+}
+
+/// Lower a checked function body through the typed-HIR/CIR boundary.  The
+/// The initial slice accepts primitive expression returns, void bodies,
+/// statically foldable return branches, and straight-line local bindings.
+/// Dynamic statement control flow remains an explicit lowering error until its
+/// full typed-CIR representation is added.
+#[salsa::tracked]
+pub fn lower_function_body(
+    db: &dyn Db,
+    file: SourceFile,
+    function_name: String,
+) -> Result<Arc<lucid_cir::Function>, Arc<str>> {
+    let module = parse_ast(db, file).as_ref().map_err(Arc::clone)?;
+    let Some(source_function) = module
+        .statements
+        .iter()
+        .find_map(|statement| match statement {
+            lucid_syntax::Stmt::Function(candidate) if candidate.name == function_name => {
+                Some(candidate)
+            }
+            _ => None,
+        })
+    else {
+        return Err(Arc::from("function not found"));
+    };
+    let typed = typed_module(db, file).as_ref().map_err(Arc::clone)?;
+    let function = typed
+        .functions
+        .iter()
+        .find(|function| function.symbol.name(db).as_str() == function_name)
+        .ok_or_else(|| Arc::<str>::from("function not found"))?;
+    if function.is_dispatch && function.overload_types.len() != 1 {
+        return Err(Arc::from(
+            "dispatch overload set bodies require a selected overload for CIR lowering",
+        ));
+    }
+    fn branch_noop_statement(statement: &lucid_syntax::Stmt) -> bool {
+        matches!(statement, lucid_syntax::Stmt::Pass(_))
+            || matches!(
+                statement,
+                lucid_syntax::Stmt::Assert { condition, .. }
+                    if static_truth(condition) == Some(true)
+            )
+            || matches!(
+                statement,
+                lucid_syntax::Stmt::While {
+                    condition,
+                    ..
+                } if static_truth(condition) == Some(false)
+            )
+            || matches!(
+                statement,
+                lucid_syntax::Stmt::For {
+                    iterable,
+                    ..
+                } if lucid_cir::is_const_empty_iterable(iterable)
+            )
+            || match statement {
+                lucid_syntax::Stmt::If {
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch,
+                    ..
+                } => match static_branch_selection(
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch.as_ref(),
+                ) {
+                    StaticBranch::Selected(branch) => branch.iter().all(branch_noop_statement),
+                    StaticBranch::Empty => true,
+                    StaticBranch::Unknown => false,
+                },
+                _ => false,
+            }
+    }
+    let branch_is_single_void = |branch: &[lucid_syntax::Stmt]| {
+        let Some((last, prefix)) = branch.split_last() else {
+            return false;
+        };
+        prefix.iter().all(branch_noop_statement)
+            && matches!(last, lucid_syntax::Stmt::Return { value: None, .. })
+            || branch.iter().all(branch_noop_statement)
+    };
+    // Route the canonical parameter-backed induction loop through CIR before
+    // considering the older linear/function-body adapters. This emits a real
+    // back-edge and header Phi; it never unrolls or executes the AST.
+    if !function.is_async
+        && source_function.body.iter().any(|statement| {
+            matches!(
+                statement,
+                lucid_syntax::Stmt::While { .. } | lucid_syntax::Stmt::For { .. }
+            )
+        })
+    {
+        let loop_module = lucid_syntax::Module {
+            statements: source_function.body.clone(),
+            span: source_function.span,
+        };
+        if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+            &loop_module,
+            &function.parameter_names,
+        ) {
+            return Ok(Arc::new(lowered));
+        }
+    }
+    // Straight-line bindings followed by void completion have no value root,
+    // but their initializers still belong in CIR. Reuse the verified linear
+    // statement lowerer so parameter reads and binding dependencies are
+    // preserved while the final terminator remains `Return(None)`.
+    if !function.is_async
+        && matches!(
+            source_function.body.last(),
+            Some(lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_))
+        )
+        && source_function.body[..source_function.body.len().saturating_sub(1)]
+            .iter()
+            .all(|statement| {
+                matches!(
+                    statement,
+                    lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(_, _),
+                        value: Some(_),
+                        ..
+                    } | lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { .. },
+                        ..
+                    } | lucid_syntax::Stmt::Pass(_)
+                )
+            })
+    {
+        let module = lucid_syntax::Module {
+            statements: source_function.body.clone(),
+            span: source_function.span,
+        };
+        if let Ok(mut lowered) =
+            lucid_cir::Function::from_module_linear_with_params(&module, &function.parameter_names)
+        {
+            if matches!(
+                source_function.body.last(),
+                Some(lucid_syntax::Stmt::Pass(_))
+            ) {
+                if let Some(block) = lowered.blocks.last_mut() {
+                    block.terminator = lucid_cir::Terminator::Return(None);
+                }
+                lowered
+                    .verify()
+                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+            }
+            return Ok(Arc::new(lowered));
+        }
+    }
+    // Straight-line augmented assignment is already supported by the shared
+    // linear CIR builder. Route it there before the typed-local adapter, whose
+    // local binding map records initializer expressions but not read-modify-
+    // write updates yet.
+    fn statement_contains_augassign(statement: &lucid_syntax::Stmt) -> bool {
+        match statement {
+            lucid_syntax::Stmt::AugAssign { .. } => true,
+            lucid_syntax::Stmt::If {
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => {
+                then_branch.iter().any(statement_contains_augassign)
+                    || elif_branches
+                        .iter()
+                        .any(|(_, branch)| branch.iter().any(statement_contains_augassign))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|branch| branch.iter().any(statement_contains_augassign))
+            }
+            _ => false,
+        }
+    }
+    if !function.is_async
+        && matches!(
+            source_function.body.last(),
+            Some(lucid_syntax::Stmt::Return { .. } | lucid_syntax::Stmt::Pass(_))
+        )
+        && source_function
+            .body
+            .iter()
+            .any(statement_contains_augassign)
+    {
+        let module = lucid_syntax::Module {
+            statements: source_function.body.clone(),
+            span: source_function.span,
+        };
+        if let Ok(mut lowered) =
+            lucid_cir::Function::from_module_linear_with_params(&module, &function.parameter_names)
+        {
+            if matches!(
+                source_function.body.last(),
+                Some(lucid_syntax::Stmt::Pass(_))
+            ) {
+                if let Some(block) = lowered.blocks.last_mut() {
+                    block.terminator = lucid_cir::Terminator::Return(None);
+                }
+                lowered
+                    .verify()
+                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+            }
+            return Ok(Arc::new(lowered));
+        }
+    }
+    // Constant literal loops can use the same verified linear CIR statement
+    // lowerer as module initializers. This keeps ordered unrolling and local
+    // rebinding semantics identical without inventing a second function-loop
+    // representation; positional parameters are seeded as CIR `Param`s.
+    if !function.is_async
+        && source_function.body.iter().any(|statement| {
+            matches!(
+                statement,
+                lucid_syntax::Stmt::For { iterable, .. }
+                    if matches!(
+                        iterable,
+                        lucid_syntax::Expr::List { elements, .. }
+                            | lucid_syntax::Expr::Set { elements, .. }
+                            if !elements.is_empty()
+                    ) || matches!(
+                        iterable,
+                        lucid_syntax::Expr::Dict { entries, .. }
+                            if !entries.is_empty()
+                    )
+            ) || matches!(
+                statement,
+                lucid_syntax::Stmt::For { iterable, .. }
+                    if lucid_cir::const_range_values(iterable)
+                        .is_some_and(|values| !values.is_empty())
+            )
+        })
+    {
+        let module = lucid_syntax::Module {
+            statements: source_function.body.clone(),
+            span: source_function.span,
+        };
+        if let Ok(lowered) =
+            lucid_cir::Function::from_module_linear_with_params(&module, &function.parameter_names)
+        {
+            return Ok(Arc::new(lowered));
+        }
+    }
+    // Lower the primitive exhaustive match shape through the same checked
+    // conditional CIR builder. Restricting the subject to a name avoids
+    // evaluating an effectful expression once per arm; richer patterns stay
+    // an explicit unsupported lowering until CIR carries pattern coverage.
+    if !function.is_async
+        && let [lucid_syntax::Stmt::Match { subject, arms, .. }] = source_function.body.as_slice()
+        && matches!(
+            subject,
+            lucid_syntax::Expr::Ident { .. }
+                | lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(_)
+                        | lucid_syntax::LiteralValue::BigInt(_)
+                        | lucid_syntax::LiteralValue::Bool(_)
+                        | lucid_syntax::LiteralValue::Float(_)
+                        | lucid_syntax::LiteralValue::Complex(_)
+                        | lucid_syntax::LiteralValue::Str(_)
+                        | lucid_syntax::LiteralValue::Bytes(_)
+                        | lucid_syntax::LiteralValue::None
+                        | lucid_syntax::LiteralValue::Ellipsis,
+                    ..
+                }
+        )
+    {
+        if let Some(root) = function.body_expressions.iter().rev().find(|node| {
+            matches!(
+                node.kind.as_str(),
+                "match" | "match-chain" | "optional-match-chain" | "void-match-chain"
+            ) && node.span == subject.span()
+        }) {
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            if let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                &nodes,
+                root.id,
+                &function.parameter_names,
+            ) {
+                return Ok(Arc::new(lowered));
+            }
+        }
+        let parameter_index = match subject {
+            lucid_syntax::Expr::Ident { name, .. } => function
+                .parameter_names
+                .iter()
+                .position(|parameter| parameter == name),
+            _ => None,
+        };
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum PrimitiveMatchLiteral<'a> {
+            Int(i64),
+            BigInt(&'a str),
+            Bool(bool),
+            Float(u64),
+            Complex(u64),
+            Str(&'a str),
+            Bytes(&'a [u8]),
+            None,
+            Ellipsis,
+        }
+        fn primitive_literal(expr: &lucid_syntax::Expr) -> Option<PrimitiveMatchLiteral<'_>> {
+            match expr {
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Int(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Int(*value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::BigInt(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::BigInt(value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bool(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Bool(*value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Float(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Float(value.to_bits())),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Complex(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Complex(value.to_bits())),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Str(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Str(value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Bytes(value),
+                    ..
+                } => Some(PrimitiveMatchLiteral::Bytes(value)),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::None,
+                    ..
+                } => Some(PrimitiveMatchLiteral::None),
+                lucid_syntax::Expr::Literal {
+                    value: lucid_syntax::LiteralValue::Ellipsis,
+                    ..
+                } => Some(PrimitiveMatchLiteral::Ellipsis),
+                _ => None,
+            }
+        }
+        let cir_typed_literal = |expr: &lucid_syntax::Expr| match expr {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(lucid_cir::TypedLiteral::Int(*value)),
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Bool(value),
+                ..
+            } => Some(lucid_cir::TypedLiteral::Bool(*value)),
+            _ => None,
+        };
+        fn match_statement_value(statements: &[lucid_syntax::Stmt]) -> Option<&lucid_syntax::Expr> {
+            let mut meaningful = statements
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement));
+            let first = meaningful.next()?;
+            let second = meaningful.next();
+            if meaningful.next().is_some() {
+                return None;
+            }
+            match (first, second) {
+                (
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                    None,
+                ) => Some(value),
+                (
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    },
+                    Some(lucid_syntax::Stmt::Return {
+                        value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                        ..
+                    }),
+                )
+                | (
+                    lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    },
+                    Some(lucid_syntax::Stmt::Return {
+                        value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                        ..
+                    }),
+                ) if name == returned => Some(value),
+                (
+                    lucid_syntax::Stmt::If {
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch,
+                        ..
+                    },
+                    None,
+                ) => match static_branch_selection(
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch.as_ref(),
+                ) {
+                    StaticBranch::Selected(branch) => match_statement_value(branch),
+                    StaticBranch::Empty | StaticBranch::Unknown => None,
+                },
+                _ => None,
+            }
+        }
+        fn match_arm_value(arm: &lucid_syntax::MatchArm) -> Option<&lucid_syntax::Expr> {
+            match_statement_value(&arm.body)
+        }
+        type MatchLocalBinding = (String, lucid_syntax::Span);
+        type MatchPrefix = (Vec<lucid_syntax::Span>, Vec<MatchLocalBinding>);
+        type MatchValueWithBindings<'a> = (&'a lucid_syntax::Expr, MatchPrefix);
+        fn match_statement_value_with_bindings(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Result<Option<MatchValueWithBindings<'_>>, Arc<str>> {
+            fn collect<'a>(
+                statements: &'a [lucid_syntax::Stmt],
+                ordered_roots: &mut Vec<lucid_syntax::Span>,
+                bindings: &mut Vec<MatchLocalBinding>,
+            ) -> Result<Option<&'a lucid_syntax::Expr>, Arc<str>> {
+                for (index, statement) in statements.iter().enumerate() {
+                    if branch_noop_statement(statement) {
+                        continue;
+                    }
+                    match statement {
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        } => {
+                            return if statements[index + 1..].iter().all(branch_noop_statement) {
+                                Ok(Some(value))
+                            } else {
+                                Ok(None)
+                            };
+                        }
+                        lucid_syntax::Stmt::Return { value: None, .. } => return Ok(None),
+                        lucid_syntax::Stmt::Assignment {
+                            target: lucid_syntax::Expr::Ident { name, .. },
+                            value,
+                            ..
+                        }
+                        | lucid_syntax::Stmt::VarDef {
+                            pattern: lucid_syntax::Pattern::Ident(name, _),
+                            value: Some(value),
+                            ..
+                        } => {
+                            bindings.push((name.clone(), value.span()));
+                            ordered_roots.push(value.span());
+                        }
+                        lucid_syntax::Stmt::Expr(expr) => ordered_roots.push(expr.span()),
+                        lucid_syntax::Stmt::If {
+                            condition,
+                            then_branch,
+                            elif_branches,
+                            else_branch,
+                            ..
+                        } => match static_branch_selection(
+                            condition,
+                            then_branch,
+                            elif_branches,
+                            else_branch.as_ref(),
+                        ) {
+                            StaticBranch::Selected(branch) => {
+                                return collect(branch, ordered_roots, bindings);
+                            }
+                            StaticBranch::Empty => continue,
+                            StaticBranch::Unknown => return Ok(None),
+                        },
+                        _ => return Ok(None),
+                    }
+                }
+                Ok(None)
+            }
+            let mut bindings = Vec::new();
+            let mut ordered_roots = Vec::new();
+            let value = collect(statements, &mut ordered_roots, &mut bindings)?;
+            Ok(value.map(|value| (value, (ordered_roots, bindings))))
+        }
+        fn match_arm_value_with_bindings(
+            arm: &lucid_syntax::MatchArm,
+        ) -> Result<Option<MatchValueWithBindings<'_>>, Arc<str>> {
+            match_statement_value_with_bindings(&arm.body)
+        }
+        fn match_statements_are_void(statements: &[lucid_syntax::Stmt]) -> bool {
+            let Some((last, prefix)) = statements.split_last() else {
+                return true;
+            };
+            if prefix.iter().all(branch_noop_statement)
+                && matches!(last, lucid_syntax::Stmt::Return { value: None, .. })
+            {
+                return true;
+            }
+            if statements.iter().all(branch_noop_statement) {
+                return true;
+            }
+            let mut meaningful = statements
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement));
+            let Some(lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            }) = meaningful.next()
+            else {
+                return false;
+            };
+            if meaningful.next().is_some() {
+                return false;
+            }
+            match static_branch_selection(
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch.as_ref(),
+            ) {
+                StaticBranch::Selected(branch) => match_statements_are_void(branch),
+                StaticBranch::Empty => true,
+                StaticBranch::Unknown => false,
+            }
+        }
+        fn match_arm_is_void(arm: &lucid_syntax::MatchArm) -> bool {
+            match_statements_are_void(&arm.body)
+        }
+        fn match_arm_void_bindings(
+            arm: &lucid_syntax::MatchArm,
+        ) -> Result<Option<MatchPrefix>, Arc<str>> {
+            let statements = arm.body.as_slice();
+            let setup = match statements.split_last() {
+                Some((lucid_syntax::Stmt::Return { value: None, .. }, prefix))
+                | Some((lucid_syntax::Stmt::Pass(_), prefix)) => prefix,
+                Some((_, _)) => statements,
+                None => return Ok(Some((Vec::new(), Vec::new()))),
+            };
+            let mut bindings = Vec::new();
+            let mut ordered_roots = Vec::new();
+            fn collect_match_void_binding(
+                statement: &lucid_syntax::Stmt,
+                ordered_roots: &mut Vec<lucid_syntax::Span>,
+                bindings: &mut Vec<(String, lucid_syntax::Span)>,
+            ) -> Result<bool, Arc<str>> {
+                if branch_noop_statement(statement) {
+                    return Ok(true);
+                }
+                let (name, value) = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name, value),
+                    lucid_syntax::Stmt::Expr(expr) => {
+                        ordered_roots.push(expr.span());
+                        return Ok(true);
+                    }
+                    lucid_syntax::Stmt::Return { value: None, .. } => return Ok(true),
+                    lucid_syntax::Stmt::If {
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch,
+                        ..
+                    } => {
+                        return match static_branch_selection(
+                            condition,
+                            then_branch,
+                            elif_branches,
+                            else_branch.as_ref(),
+                        ) {
+                            StaticBranch::Selected(branch) => {
+                                for statement in branch {
+                                    if !collect_match_void_binding(
+                                        statement,
+                                        ordered_roots,
+                                        bindings,
+                                    )? {
+                                        return Ok(false);
+                                    }
+                                }
+                                Ok(true)
+                            }
+                            StaticBranch::Empty => Ok(true),
+                            StaticBranch::Unknown => Ok(false),
+                        };
+                    }
+                    _ => return Ok(false),
+                };
+                bindings.push((name.clone(), value.span()));
+                ordered_roots.push(value.span());
+                Ok(true)
+            }
+            for statement in setup {
+                if !collect_match_void_binding(statement, &mut ordered_roots, &mut bindings)? {
+                    return Ok(None);
+                }
+            }
+            Ok(Some((ordered_roots, bindings)))
+        }
+        let lower_match_bindings_to_void = |ordered_root_spans: &[lucid_syntax::Span],
+                                            bindings: &[(String, lucid_syntax::Span)]|
+         -> Result<Arc<lucid_cir::Function>, Arc<str>> {
+            if ordered_root_spans.is_empty() {
+                let function = lucid_cir::Function {
+                    entry: lucid_cir::BlockId(0),
+                    blocks: vec![lucid_cir::Block {
+                        id: lucid_cir::BlockId(0),
+                        instructions: function
+                            .parameter_names
+                            .iter()
+                            .enumerate()
+                            .map(|(index, _)| lucid_cir::Instruction::Param {
+                                result: lucid_cir::ValueId(index as u32),
+                                index: index as u32,
+                            })
+                            .collect(),
+                        terminator: lucid_cir::Terminator::Return(None),
+                    }],
+                };
+                function
+                    .verify()
+                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+                return Ok(Arc::new(function));
+            }
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            let local_bindings = bindings
+                .iter()
+                .map(|(name, span)| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| (name.clone(), node.id))
+                        .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let ordered_roots = ordered_root_spans
+                .iter()
+                .map(|span| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| node.id)
+                        .ok_or_else(|| {
+                            Arc::<str>::from("prefix expression has no typed expression")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let root_id = ordered_roots
+                .last()
+                .copied()
+                .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
+            let prefix_roots = ordered_roots
+                .iter()
+                .take(ordered_roots.len().saturating_sub(1))
+                .copied()
+                .collect::<Vec<_>>();
+            let mut lowered = lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+                &nodes,
+                &prefix_roots,
+                root_id,
+                &function.parameter_names,
+                &local_bindings,
+            )
+            .map_err(|_| Arc::<str>::from("unsupported constant match expression"))?;
+            if let Some(block) = lowered.blocks.last_mut() {
+                block.terminator = lucid_cir::Terminator::Return(None);
+            }
+            lowered
+                .verify()
+                .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+            Ok(Arc::new(lowered))
+        };
+        fn pattern_literal(pattern: &lucid_syntax::Pattern) -> Option<PrimitiveMatchLiteral<'_>> {
+            match pattern {
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Int(value), _) => {
+                    Some(PrimitiveMatchLiteral::Int(*value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::BigInt(value), _) => {
+                    Some(PrimitiveMatchLiteral::BigInt(value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bool(value), _) => {
+                    Some(PrimitiveMatchLiteral::Bool(*value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Float(value), _) => {
+                    Some(PrimitiveMatchLiteral::Float(value.to_bits()))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Complex(value), _) => {
+                    Some(PrimitiveMatchLiteral::Complex(value.to_bits()))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Str(value), _) => {
+                    Some(PrimitiveMatchLiteral::Str(value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Bytes(value), _) => {
+                    Some(PrimitiveMatchLiteral::Bytes(value))
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::None, _) => {
+                    Some(PrimitiveMatchLiteral::None)
+                }
+                lucid_syntax::Pattern::Literal(lucid_syntax::LiteralValue::Ellipsis, _) => {
+                    Some(PrimitiveMatchLiteral::Ellipsis)
+                }
+                _ => None,
+            }
+        }
+        fn match_contains_explicit_return(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements.iter().any(|statement| match statement {
+                lucid_syntax::Stmt::Return { .. } => true,
+                lucid_syntax::Stmt::If {
+                    then_branch,
+                    elif_branches,
+                    else_branch,
+                    ..
+                } => {
+                    match_contains_explicit_return(then_branch)
+                        || elif_branches
+                            .iter()
+                            .any(|(_, branch)| match_contains_explicit_return(branch))
+                        || else_branch
+                            .as_deref()
+                            .is_some_and(match_contains_explicit_return)
+                }
+                _ => false,
+            })
+        }
+        fn normalize_static_match_statements(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Vec<lucid_syntax::Stmt> {
+            let mut normalized = Vec::new();
+            for statement in statements {
+                match statement {
+                    lucid_syntax::Stmt::If {
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch,
+                        ..
+                    } => match static_truth(condition) {
+                        Some(true) => {
+                            normalized.extend(normalize_static_match_statements(then_branch))
+                        }
+                        Some(false) => {
+                            let mut selected = None;
+                            let mut unknown = false;
+                            for (elif_condition, branch) in elif_branches {
+                                match static_truth(elif_condition) {
+                                    Some(true) => {
+                                        selected = Some(branch.as_slice());
+                                        break;
+                                    }
+                                    Some(false) => {}
+                                    None => {
+                                        unknown = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if unknown {
+                                normalized.push(statement.clone());
+                            } else if let Some(branch) = selected.or(else_branch.as_deref()) {
+                                normalized.extend(normalize_static_match_statements(branch));
+                            }
+                        }
+                        None => normalized.push(statement.clone()),
+                    },
+                    _ => normalized.push(statement.clone()),
+                }
+            }
+            normalized
+        }
+        let constant_selected_arm = primitive_literal(subject).and_then(|subject_literal| {
+            let mut selected = None;
+            for arm in arms {
+                let arm_matches = matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+                    || pattern_literal(&arm.pattern) == Some(subject_literal);
+                if arm_matches {
+                    if let Some(guard) = arm.guard.as_ref() {
+                        match static_truth(guard) {
+                            Some(false) => continue,
+                            Some(true) => {
+                                selected = Some(arm);
+                                break;
+                            }
+                            None => return None,
+                        }
+                    } else {
+                        selected = Some(arm);
+                        break;
+                    }
+                }
+                pattern_literal(&arm.pattern)?;
+            }
+            selected
+        });
+        if let Some(selected_arm) = constant_selected_arm {
+            let selected_statements = normalize_static_match_statements(&selected_arm.body);
+            if let Some((value, (ordered_root_spans, bindings))) =
+                match_arm_value_with_bindings(selected_arm)?
+            {
+                let nodes = function
+                    .body_expressions
+                    .iter()
+                    .map(|node| lucid_cir::TypedExprNode {
+                        id: node.id,
+                        kind: node.kind.clone(),
+                        detail: node.detail.clone(),
+                        children: node.children.to_vec(),
+                        literal: node.literal,
+                    })
+                    .collect::<Vec<_>>();
+                let local_bindings = bindings
+                    .iter()
+                    .map(|(name, span)| {
+                        function
+                            .body_expressions
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == *span)
+                            .map(|node| (name.clone(), node.id))
+                            .ok_or_else(|| {
+                                Arc::<str>::from("local binding has no typed expression")
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let prefix_roots = ordered_root_spans
+                    .iter()
+                    .map(|span| {
+                        function
+                            .body_expressions
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == *span)
+                            .map(|node| node.id)
+                            .ok_or_else(|| {
+                                Arc::<str>::from("prefix expression has no typed expression")
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(root) = function
+                    .body_expressions
+                    .iter()
+                    .rev()
+                    .find(|node| node.span == value.span())
+                    && let Ok(lowered) =
+                        lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+                            &nodes,
+                            &prefix_roots,
+                            root.id,
+                            &function.parameter_names,
+                            &local_bindings,
+                        )
+                {
+                    return Ok(Arc::new(lowered));
+                }
+                return Err(Arc::from("unsupported constant match expression"));
+            }
+            if match_contains_explicit_return(&selected_statements) {
+                let selected_module = lucid_syntax::Module {
+                    statements: selected_statements,
+                    span: source_function.span,
+                };
+                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                    &selected_module,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(lowered));
+                }
+            }
+            if match_arm_is_void(selected_arm) {
+                return lower_match_bindings_to_void(&[], &[]);
+            }
+            if let Some((ordered_roots, bindings)) = match_arm_void_bindings(selected_arm)? {
+                return lower_match_bindings_to_void(&ordered_roots, &bindings);
+            }
+            return Err(Arc::from("unsupported constant match expression"));
+        }
+        if !arms.is_empty()
+            && arms.iter().all(|arm| {
+                arm.guard
+                    .as_ref()
+                    .is_some_and(|guard| static_truth(guard) == Some(false))
+            })
+        {
+            return lower_match_bindings_to_void(&[], &[]);
+        }
+        if let Some((live_index, live_arm)) = arms.iter().enumerate().find(|(_, arm)| {
+            arm.guard
+                .as_ref()
+                .is_none_or(|guard| static_truth(guard) != Some(false))
+        }) && live_index > 0
+            && arms[..live_index].iter().all(|arm| {
+                arm.guard
+                    .as_ref()
+                    .is_some_and(|guard| static_truth(guard) == Some(false))
+            })
+            && matches!(live_arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+            && live_arm.guard.is_none()
+        {
+            if let Some(value) = match_arm_value(live_arm) {
+                let nodes = function
+                    .body_expressions
+                    .iter()
+                    .map(|node| lucid_cir::TypedExprNode {
+                        id: node.id,
+                        kind: node.kind.clone(),
+                        detail: node.detail.clone(),
+                        children: node.children.to_vec(),
+                        literal: node.literal,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(root) = function
+                    .body_expressions
+                    .iter()
+                    .rev()
+                    .find(|node| node.span == value.span())
+                    && let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                        &nodes,
+                        root.id,
+                        &function.parameter_names,
+                    )
+                {
+                    return Ok(Arc::new(lowered));
+                }
+                return Err(Arc::from(
+                    "unsupported static-dead leading match expression",
+                ));
+            }
+            if match_arm_is_void(live_arm) {
+                return lower_match_bindings_to_void(&[], &[]);
+            }
+            if let Some((ordered_roots, bindings)) = match_arm_void_bindings(live_arm)? {
+                return lower_match_bindings_to_void(&ordered_roots, &bindings);
+            }
+        }
+        let arm_condition = |arm: &lucid_syntax::MatchArm| match &arm.pattern {
+            lucid_syntax::Pattern::Literal(
+                literal
+                @ (lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_)),
+                span,
+            ) => {
+                let pattern_test = lucid_syntax::Expr::Binary {
+                    op: lucid_syntax::BinaryOp::Eq,
+                    left: Box::new(subject.clone()),
+                    right: Box::new(lucid_syntax::Expr::Literal {
+                        value: literal.clone(),
+                        span: *span,
+                    }),
+                    span: *span,
+                };
+                Some(match &arm.guard {
+                    Some(guard) if static_truth(guard) == Some(true) => pattern_test,
+                    Some(guard) if static_truth(guard) == Some(false) => {
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bool(false),
+                            span: guard.span(),
+                        }
+                    }
+                    Some(guard) => lucid_syntax::Expr::Binary {
+                        op: lucid_syntax::BinaryOp::And,
+                        left: Box::new(pattern_test),
+                        right: Box::new(guard.clone()),
+                        span: guard.span(),
+                    },
+                    None => pattern_test,
+                })
+            }
+            lucid_syntax::Pattern::Wildcard(_) => match &arm.guard {
+                Some(guard) if static_truth(guard) == Some(true) => None,
+                Some(guard) if static_truth(guard) == Some(false) => {
+                    Some(lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Bool(false),
+                        span: guard.span(),
+                    })
+                }
+                other => other.clone(),
+            },
+            _ => None,
+        };
+        if arms.len() >= 2
+            && arms.iter().all(|arm| {
+                matches!(
+                    arm.pattern,
+                    lucid_syntax::Pattern::Literal(
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                        _
+                    ) | lucid_syntax::Pattern::Wildcard(_)
+                )
+            })
+        {
+            let mut conditional_arms = Vec::new();
+            let mut fallback_arm = None;
+            for arm in arms {
+                if let Some(condition) = arm_condition(arm) {
+                    conditional_arms.push((condition, arm.body.clone()));
+                } else {
+                    fallback_arm = Some(arm.body.clone());
+                    break;
+                }
+            }
+            if let Some(((condition, then_branch), elif_source)) = conditional_arms.split_first() {
+                let lowered_match = lucid_syntax::Module {
+                    statements: vec![lucid_syntax::Stmt::If {
+                        condition: condition.clone(),
+                        then_branch: then_branch.clone(),
+                        elif_branches: elif_source.to_vec(),
+                        else_branch: fallback_arm,
+                        span: source_function.span,
+                    }],
+                    span: source_function.span,
+                };
+                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                    &lowered_match,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(lowered));
+                }
+                if let Some(lowered) = lower_outer_elif_nested_dynamic_local_branch(
+                    &lowered_match.statements,
+                    &function.parameter_names,
+                    function.is_async,
+                    "unsupported match-normalized nested dynamic local branch",
+                )? {
+                    return Ok(lowered);
+                }
+                if let Some(lowered) = lower_initial_nested_dynamic_local_branch(
+                    &lowered_match.statements,
+                    &function.parameter_names,
+                    function.is_async,
+                    "unsupported match-normalized initial nested dynamic local branch",
+                )? {
+                    return Ok(lowered);
+                }
+                if let Some(lowered) = lower_else_nested_dynamic_local_branch(
+                    &lowered_match.statements,
+                    &function.parameter_names,
+                    function.is_async,
+                    "unsupported match-normalized else nested dynamic local branch",
+                )? {
+                    return Ok(lowered);
+                }
+            }
+        }
+        if arms.iter().any(|arm| arm.guard.is_some())
+            && arms.iter().all(|arm| {
+                matches!(
+                    arm.pattern,
+                    lucid_syntax::Pattern::Literal(
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                        _
+                    ) | lucid_syntax::Pattern::Wildcard(_)
+                ) && match_arm_value(arm).is_some()
+            })
+        {
+            let mut conditions = Vec::new();
+            let mut values = Vec::new();
+            let mut else_value = None;
+            for arm in arms {
+                let Some(value) = match_arm_value(arm) else {
+                    return Err(Arc::from("unsupported guarded match arm"));
+                };
+                if let Some(condition) = arm_condition(arm) {
+                    if static_truth(&condition) == Some(false) {
+                        continue;
+                    }
+                    conditions.push(condition);
+                    values.push(value);
+                } else {
+                    else_value = Some(value);
+                    break;
+                }
+            }
+            if let Some((first_condition, elif_conditions)) = conditions.split_first()
+                && let Some((first_value, elif_values)) = values.split_first()
+            {
+                let elif_pairs = elif_conditions
+                    .iter()
+                    .zip(elif_values.iter())
+                    .map(|(condition, value)| (condition, *value))
+                    .collect::<Vec<_>>();
+                if let Some(else_value) = else_value {
+                    if elif_pairs.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_direct(
+                            first_condition,
+                            first_value,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported guarded match expression"));
+                    }
+                    return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                        first_condition,
+                        first_value,
+                        &elif_pairs,
+                        else_value,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported guarded match chain"));
+                }
+                if elif_pairs.is_empty() {
+                    return lucid_cir::Function::from_parameterized_if_optional(
+                        first_condition,
+                        first_value,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported optional guarded match expression"));
+                }
+                return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                    first_condition,
+                    first_value,
+                    &elif_pairs,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported optional guarded match chain"));
+            }
+        }
+        if arms.len() >= 2
+            && arms.iter().all(|arm| {
+                matches!(
+                    arm.pattern,
+                    lucid_syntax::Pattern::Literal(
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                        _
+                    ) | lucid_syntax::Pattern::Wildcard(_)
+                ) && (match_arm_value(arm).is_some() || match_arm_is_void(arm))
+            })
+        {
+            let mut conditions = Vec::new();
+            let mut returns = Vec::new();
+            let mut fallback_return = None;
+            for arm in arms {
+                let arm_return = match_arm_value(arm)
+                    .map(Some)
+                    .or_else(|| match_arm_is_void(arm).then_some(None::<&lucid_syntax::Expr>));
+                let Some(arm_return) = arm_return else {
+                    return Err(Arc::from("unsupported mixed match arm"));
+                };
+                if let Some(condition) = arm_condition(arm) {
+                    if static_truth(&condition) == Some(false) {
+                        continue;
+                    }
+                    conditions.push(condition);
+                    returns.push(arm_return);
+                } else {
+                    fallback_return = Some(arm_return);
+                    break;
+                }
+            }
+            if let Some((first_condition, elif_conditions)) = conditions.split_first()
+                && let Some((first_return, elif_returns)) = returns.split_first()
+                && !elif_conditions.is_empty()
+            {
+                let elif_pairs = elif_conditions
+                    .iter()
+                    .zip(elif_returns.iter())
+                    .map(|(condition, value)| (condition, *value))
+                    .collect::<Vec<_>>();
+                return lucid_cir::Function::from_parameterized_if_elif_mixed_return_chain(
+                    first_condition,
+                    *first_return,
+                    &elif_pairs,
+                    fallback_return.flatten(),
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported mixed match chain"));
+            } else if let Some((first_condition, [])) = conditions.split_first()
+                && let Some((first_return, [])) = returns.split_first()
+            {
+                match (*first_return, fallback_return.flatten()) {
+                    (Some(first_value), Some(fallback_value)) => {
+                        return lucid_cir::Function::from_parameterized_if_direct(
+                            first_condition,
+                            first_value,
+                            fallback_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported mixed match expression"));
+                    }
+                    (Some(first_value), None) => {
+                        return lucid_cir::Function::from_parameterized_if_optional(
+                            first_condition,
+                            first_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported mixed optional match expression"));
+                    }
+                    (None, Some(fallback_value)) => {
+                        let inverted = lucid_syntax::Expr::Unary {
+                            op: lucid_syntax::UnaryOp::Not,
+                            expr: Box::new(first_condition.clone()),
+                            span: first_condition.span(),
+                        };
+                        return lucid_cir::Function::from_parameterized_if_optional(
+                            &inverted,
+                            fallback_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported mixed inverse match expression"));
+                    }
+                    (None, None) => {
+                        return lucid_cir::Function::from_parameterized_if_void(
+                            first_condition,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported mixed void match expression"));
+                    }
+                }
+            }
+        }
+        if let Some(wildcard_index) = arms.iter().position(|arm| {
+            matches!(arm.pattern, lucid_syntax::Pattern::Wildcard(_)) && arm.guard.is_none()
+        }) && wildcard_index > 0
+            && arms[..wildcard_index]
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+        {
+            let wildcard_arm = &arms[wildcard_index];
+            if let Some(wildcard_value) = match_arm_value(wildcard_arm) {
+                let explicit_values = arms[..wildcard_index]
+                    .iter()
+                    .map(match_arm_value)
+                    .collect::<Option<Vec<_>>>();
+                if let Some(explicit_values) = explicit_values {
+                    let conditions = arms[..wildcard_index]
+                        .iter()
+                        .map(arm_condition)
+                        .collect::<Option<Vec<_>>>();
+                    if let Some(conditions) = conditions
+                        && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                        && let Some((first_value, elif_values)) = explicit_values.split_first()
+                    {
+                        let elif_pairs = elif_conditions
+                            .iter()
+                            .zip(elif_values.iter())
+                            .map(|(condition, value)| (condition, *value))
+                            .collect::<Vec<_>>();
+                        if elif_pairs.is_empty() {
+                            return lucid_cir::Function::from_parameterized_if_direct(
+                                first_condition,
+                                first_value,
+                                wildcard_value,
+                                &function.parameter_names,
+                            )
+                            .map(Arc::new)
+                            .map_err(|_| {
+                                Arc::from("unsupported middle wildcard match expression")
+                            });
+                        }
+                        return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                            first_condition,
+                            first_value,
+                            &elif_pairs,
+                            wildcard_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported middle wildcard match chain"));
+                    }
+                }
+            } else if match_arm_is_void(wildcard_arm)
+                && arms[..wildcard_index].iter().all(match_arm_is_void)
+            {
+                let conditions = arms[..wildcard_index]
+                    .iter()
+                    .map(arm_condition)
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                {
+                    if elif_conditions.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_void(
+                            first_condition,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| {
+                            Arc::from("unsupported middle wildcard void match expression")
+                        });
+                    }
+                    return lucid_cir::Function::from_parameterized_if_elif_void_chain(
+                        first_condition,
+                        &elif_conditions.iter().collect::<Vec<_>>(),
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported middle wildcard void match chain"));
+                }
+            }
+        }
+        if arms.len() >= 3
+            && let Some(parameter_index) = parameter_index
+            && arms[..arms.len() - 1]
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+            && matches!(
+                arms.last().map(|arm| &arm.pattern),
+                Some(lucid_syntax::Pattern::Wildcard(_))
+            )
+        {
+            let explicit = arms[..arms.len() - 1]
+                .iter()
+                .map(|arm| {
+                    let lucid_syntax::Pattern::Literal(pattern, _) = &arm.pattern else {
+                        return None;
+                    };
+                    let pattern = match pattern {
+                        lucid_syntax::LiteralValue::Int(value) => {
+                            lucid_cir::TypedLiteral::Int(*value)
+                        }
+                        lucid_syntax::LiteralValue::Bool(value) => {
+                            lucid_cir::TypedLiteral::Bool(*value)
+                        }
+                        _ => return None,
+                    };
+                    Some((pattern, cir_typed_literal(match_arm_value(arm)?)?))
+                })
+                .collect::<Option<Vec<_>>>();
+            let wildcard = arms
+                .last()
+                .and_then(|arm| cir_typed_literal(match_arm_value(arm)?));
+            if let (Some(explicit), Some(wildcard)) = (explicit, wildcard) {
+                return lucid_cir::Function::from_parameterized_literal_match(
+                    function.parameter_names.len(),
+                    parameter_index,
+                    &explicit,
+                    wildcard,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported literal match for function CIR lowering"));
+            }
+        }
+        if arms.len() >= 3
+            && arms[..arms.len() - 1]
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+            && matches!(
+                arms.last().map(|arm| &arm.pattern),
+                Some(lucid_syntax::Pattern::Wildcard(_))
+            )
+        {
+            let explicit_values = arms[..arms.len() - 1]
+                .iter()
+                .map(match_arm_value)
+                .collect::<Option<Vec<_>>>();
+            let wildcard_value = arms.last().and_then(match_arm_value);
+            if let (Some(explicit_values), Some(wildcard_value)) = (explicit_values, wildcard_value)
+            {
+                let conditions = arms[..arms.len() - 1]
+                    .iter()
+                    .map(|arm| {
+                        let lucid_syntax::Pattern::Literal(literal, span) = &arm.pattern else {
+                            return None;
+                        };
+                        match literal {
+                            lucid_syntax::LiteralValue::Int(_)
+                            | lucid_syntax::LiteralValue::Bool(_) => {
+                                Some(lucid_syntax::Expr::Binary {
+                                    op: lucid_syntax::BinaryOp::Eq,
+                                    left: Box::new(subject.clone()),
+                                    right: Box::new(lucid_syntax::Expr::Literal {
+                                        value: literal.clone(),
+                                        span: *span,
+                                    }),
+                                    span: *span,
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                    && let Some((first_value, elif_values)) = explicit_values.split_first()
+                {
+                    let elif_pairs = elif_conditions
+                        .iter()
+                        .zip(elif_values.iter())
+                        .map(|(condition, value)| (condition, *value))
+                        .collect::<Vec<_>>();
+                    return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                        first_condition,
+                        first_value,
+                        &elif_pairs,
+                        wildcard_value,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported multi-arm match expression"));
+                }
+            }
+        }
+        if !arms.is_empty()
+            && arms
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+        {
+            let values = arms.iter().map(match_arm_value).collect::<Option<Vec<_>>>();
+            if let Some(values) = values {
+                let conditions = arms
+                    .iter()
+                    .map(|arm| {
+                        let lucid_syntax::Pattern::Literal(literal, span) = &arm.pattern else {
+                            return None;
+                        };
+                        match literal {
+                            lucid_syntax::LiteralValue::Int(_)
+                            | lucid_syntax::LiteralValue::Bool(_) => {
+                                Some(lucid_syntax::Expr::Binary {
+                                    op: lucid_syntax::BinaryOp::Eq,
+                                    left: Box::new(subject.clone()),
+                                    right: Box::new(lucid_syntax::Expr::Literal {
+                                        value: literal.clone(),
+                                        span: *span,
+                                    }),
+                                    span: *span,
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                    && let Some((first_value, elif_values)) = values.split_first()
+                {
+                    if elif_conditions.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_optional(
+                            first_condition,
+                            first_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported optional match expression"));
+                    }
+                    let elif_pairs = elif_conditions
+                        .iter()
+                        .zip(elif_values.iter())
+                        .map(|(condition, value)| (condition, *value))
+                        .collect::<Vec<_>>();
+                    return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                        first_condition,
+                        first_value,
+                        &elif_pairs,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported optional match chain"));
+                }
+            }
+        }
+        if arms.len() >= 2
+            && arms[..arms.len() - 1]
+                .iter()
+                .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+            && matches!(
+                arms.last().map(|arm| &arm.pattern),
+                Some(lucid_syntax::Pattern::Wildcard(_))
+            )
+            && arms.last().is_some_and(match_arm_is_void)
+        {
+            let values = arms[..arms.len() - 1]
+                .iter()
+                .map(match_arm_value)
+                .collect::<Option<Vec<_>>>();
+            if let Some(values) = values {
+                let conditions = arms[..arms.len() - 1]
+                    .iter()
+                    .map(|arm| {
+                        let lucid_syntax::Pattern::Literal(literal, span) = &arm.pattern else {
+                            return None;
+                        };
+                        match literal {
+                            lucid_syntax::LiteralValue::Int(_)
+                            | lucid_syntax::LiteralValue::Bool(_) => {
+                                Some(lucid_syntax::Expr::Binary {
+                                    op: lucid_syntax::BinaryOp::Eq,
+                                    left: Box::new(subject.clone()),
+                                    right: Box::new(lucid_syntax::Expr::Literal {
+                                        value: literal.clone(),
+                                        span: *span,
+                                    }),
+                                    span: *span,
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                    && let Some((first_value, elif_values)) = values.split_first()
+                {
+                    if elif_conditions.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_optional(
+                            first_condition,
+                            first_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported pass fallback match expression"));
+                    }
+                    let elif_pairs = elif_conditions
+                        .iter()
+                        .zip(elif_values.iter())
+                        .map(|(condition, value)| (condition, *value))
+                        .collect::<Vec<_>>();
+                    return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                        first_condition,
+                        first_value,
+                        &elif_pairs,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported pass fallback match chain"));
+                }
+            }
+        }
+        if arms.iter().any(|arm| arm.guard.is_some())
+            && arms.iter().all(|arm| {
+                matches!(
+                    arm.pattern,
+                    lucid_syntax::Pattern::Literal(
+                        lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_),
+                        _
+                    ) | lucid_syntax::Pattern::Wildcard(_)
+                ) && match_arm_is_void(arm)
+            })
+        {
+            let mut conditions = Vec::new();
+            for arm in arms {
+                if let Some(condition) = arm_condition(arm) {
+                    if static_truth(&condition) == Some(false) {
+                        continue;
+                    }
+                    conditions.push(condition);
+                } else {
+                    break;
+                }
+            }
+            if let Some((first_condition, elif_conditions)) = conditions.split_first() {
+                if elif_conditions.is_empty() {
+                    return lucid_cir::Function::from_parameterized_if_void(
+                        first_condition,
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported guarded void match expression"));
+                }
+                return lucid_cir::Function::from_parameterized_if_elif_void_chain(
+                    first_condition,
+                    &elif_conditions.iter().collect::<Vec<_>>(),
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported guarded void match chain"));
+            }
+        }
+        if !arms.is_empty() {
+            let explicit_end = if matches!(
+                arms.last().map(|arm| &arm.pattern),
+                Some(lucid_syntax::Pattern::Wildcard(_))
+            ) {
+                arms.len() - 1
+            } else {
+                arms.len()
+            };
+            if explicit_end > 0
+                && arms[..explicit_end]
+                    .iter()
+                    .all(|arm| matches!(arm.pattern, lucid_syntax::Pattern::Literal(_, _)))
+                && arms.iter().all(match_arm_is_void)
+            {
+                let conditions = arms[..explicit_end]
+                    .iter()
+                    .map(|arm| {
+                        let lucid_syntax::Pattern::Literal(literal, span) = &arm.pattern else {
+                            return None;
+                        };
+                        match literal {
+                            lucid_syntax::LiteralValue::Int(_)
+                            | lucid_syntax::LiteralValue::Bool(_) => {
+                                Some(lucid_syntax::Expr::Binary {
+                                    op: lucid_syntax::BinaryOp::Eq,
+                                    left: Box::new(subject.clone()),
+                                    right: Box::new(lucid_syntax::Expr::Literal {
+                                        value: literal.clone(),
+                                        span: *span,
+                                    }),
+                                    span: *span,
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(conditions) = conditions
+                    && let Some((first_condition, elif_conditions)) = conditions.split_first()
+                {
+                    if elif_conditions.is_empty() {
+                        return lucid_cir::Function::from_parameterized_if_void(
+                            first_condition,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported void match expression"));
+                    }
+                    return lucid_cir::Function::from_parameterized_if_elif_void_chain(
+                        first_condition,
+                        &elif_conditions.iter().collect::<Vec<_>>(),
+                        &function.parameter_names,
+                    )
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported void match chain"));
+                }
+            }
+        }
+        if let Some(first_arm) = arms.first()
+            && matches!(first_arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+        {
+            if let Some(guard) = first_arm.guard.as_ref()
+                && static_truth(guard) != Some(true)
+                && let Some(next_arm) = arms.get(1)
+                && matches!(next_arm.pattern, lucid_syntax::Pattern::Wildcard(_))
+                && next_arm.guard.is_none()
+            {
+                fn guarded_match_expr_has_identifier(expr: &lucid_syntax::Expr) -> bool {
+                    match expr {
+                        lucid_syntax::Expr::Ident { .. } => true,
+                        lucid_syntax::Expr::Unary { expr, .. } => {
+                            guarded_match_expr_has_identifier(expr)
+                        }
+                        lucid_syntax::Expr::Binary { left, right, .. } => {
+                            guarded_match_expr_has_identifier(left)
+                                || guarded_match_expr_has_identifier(right)
+                        }
+                        _ => false,
+                    }
+                }
+                fn guarded_match_expr_has_division(expr: &lucid_syntax::Expr) -> bool {
+                    match expr {
+                        lucid_syntax::Expr::Unary { expr, .. } => {
+                            guarded_match_expr_has_division(expr)
+                        }
+                        lucid_syntax::Expr::Binary {
+                            left, right, op, ..
+                        } => {
+                            matches!(
+                                op,
+                                lucid_syntax::BinaryOp::Div
+                                    | lucid_syntax::BinaryOp::FloorDiv
+                                    | lucid_syntax::BinaryOp::Mod
+                            ) || guarded_match_expr_has_division(left)
+                                || guarded_match_expr_has_division(right)
+                        }
+                        _ => false,
+                    }
+                }
+                fn guarded_match_assignment_value_for_name<'a>(
+                    statements: &'a [lucid_syntax::Stmt],
+                    expected_name: &str,
+                ) -> Option<&'a lucid_syntax::Expr> {
+                    let mut meaningful = statements
+                        .iter()
+                        .filter(|statement| !branch_noop_statement(statement));
+                    let statement = meaningful.next()?;
+                    if meaningful.next().is_some() {
+                        return None;
+                    }
+                    match statement {
+                        lucid_syntax::Stmt::Assignment {
+                            target: lucid_syntax::Expr::Ident { name, .. },
+                            value,
+                            ..
+                        }
+                        | lucid_syntax::Stmt::VarDef {
+                            pattern: lucid_syntax::Pattern::Ident(name, _),
+                            value: Some(value),
+                            ..
+                        } if name == expected_name => Some(value),
+                        _ => None,
+                    }
+                }
+                let guarded_and_expr =
+                    |left: &lucid_syntax::Expr, right: &lucid_syntax::Expr| -> lucid_syntax::Expr {
+                        lucid_syntax::Expr::Binary {
+                            op: lucid_syntax::BinaryOp::And,
+                            left: Box::new(left.clone()),
+                            right: Box::new(right.clone()),
+                            span: right.span(),
+                        }
+                    };
+                if guarded_match_expr_has_identifier(guard)
+                    && !guarded_match_expr_has_division(guard)
+                    && let Some(else_value) = match_arm_value(next_arm)
+                {
+                    let meaningful_then = first_arm
+                        .body
+                        .iter()
+                        .filter(|statement| !branch_noop_statement(statement))
+                        .collect::<Vec<_>>();
+                    if let [
+                        lucid_syntax::Stmt::Assignment {
+                            target: lucid_syntax::Expr::Ident { name, .. },
+                            value: initial_value,
+                            ..
+                        }
+                        | lucid_syntax::Stmt::VarDef {
+                            pattern: lucid_syntax::Pattern::Ident(name, _),
+                            value: Some(initial_value),
+                            ..
+                        },
+                        lucid_syntax::Stmt::If {
+                            condition: inner_condition,
+                            then_branch: inner_then,
+                            elif_branches: inner_elifs,
+                            else_branch: inner_else,
+                            ..
+                        },
+                        lucid_syntax::Stmt::Return {
+                            value:
+                                Some(lucid_syntax::Expr::Ident {
+                                    name: returned_name,
+                                    ..
+                                }),
+                            ..
+                        },
+                    ] = meaningful_then.as_slice()
+                        && name == returned_name
+                        && static_truth(inner_condition).is_none()
+                        && guarded_match_expr_has_identifier(inner_condition)
+                        && !guarded_match_expr_has_division(inner_condition)
+                        && inner_elifs.iter().all(|(elif_condition, _)| {
+                            static_truth(elif_condition).is_none()
+                                && guarded_match_expr_has_identifier(elif_condition)
+                                && !guarded_match_expr_has_division(elif_condition)
+                        })
+                        && let Some(inner_then_value) =
+                            guarded_match_assignment_value_for_name(inner_then, name)
+                    {
+                        let Some(inner_elif_values) = inner_elifs
+                            .iter()
+                            .map(|(elif_condition, branch)| {
+                                guarded_match_assignment_value_for_name(branch, name)
+                                    .map(|value| (guarded_and_expr(guard, elif_condition), value))
+                            })
+                            .collect::<Option<Vec<_>>>()
+                        else {
+                            return Err(Arc::from("unsupported guarded wildcard match arm"));
+                        };
+                        let combined_condition = guarded_and_expr(guard, inner_condition);
+                        let inner_fallback = match inner_else.as_deref() {
+                            Some(branch) => {
+                                let Some(value) =
+                                    guarded_match_assignment_value_for_name(branch, name)
+                                else {
+                                    return Err(Arc::from(
+                                        "unsupported guarded wildcard match arm",
+                                    ));
+                                };
+                                value
+                            }
+                            None => initial_value,
+                        };
+                        let mut elif_values = inner_elif_values
+                            .iter()
+                            .map(|(condition, value)| (condition, *value))
+                            .collect::<Vec<_>>();
+                        elif_values.push((guard, inner_fallback));
+                        return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                            &combined_condition,
+                            inner_then_value,
+                            &elif_values,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                        .map(Arc::new)
+                        .map_err(|_| Arc::from("unsupported guarded wildcard match arm"));
+                    }
+                }
+            }
+            if first_arm
+                .guard
+                .as_ref()
+                .is_none_or(|guard| static_truth(guard) == Some(true))
+            {
+                let selected_statements = normalize_static_match_statements(&first_arm.body);
+                if match_contains_explicit_return(&selected_statements) {
+                    let selected_module = lucid_syntax::Module {
+                        statements: selected_statements,
+                        span: source_function.span,
+                    };
+                    if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                        &selected_module,
+                        &function.parameter_names,
+                    ) {
+                        return Ok(Arc::new(lowered));
+                    }
+                }
+            }
+            if let Some(value) = match_arm_value(first_arm) {
+                let nodes = function
+                    .body_expressions
+                    .iter()
+                    .map(|node| lucid_cir::TypedExprNode {
+                        id: node.id,
+                        kind: node.kind.clone(),
+                        detail: node.detail.clone(),
+                        children: node.children.to_vec(),
+                        literal: node.literal,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(root) = function
+                    .body_expressions
+                    .iter()
+                    .rev()
+                    .find(|node| node.span == value.span())
+                    && let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+                        &nodes,
+                        root.id,
+                        &function.parameter_names,
+                    )
+                {
+                    return Ok(Arc::new(lowered));
+                }
+                return Err(Arc::from("unsupported leading wildcard match expression"));
+            }
+            if match_arm_is_void(first_arm) {
+                return lower_match_bindings_to_void(&[], &[]);
+            }
+            if let Some((ordered_roots, bindings)) = match_arm_void_bindings(first_arm)? {
+                return lower_match_bindings_to_void(&ordered_roots, &bindings);
+            }
+        }
+        if arms.len() != 2 {
+            return Err(Arc::from(
+                "unsupported match shape for function CIR lowering",
+            ));
+        }
+        let (literal_arm, wildcard_arm) = match (&arms[0].pattern, &arms[1].pattern) {
+            (lucid_syntax::Pattern::Literal(_, _), lucid_syntax::Pattern::Wildcard(_)) => {
+                (&arms[0], &arms[1])
+            }
+            (lucid_syntax::Pattern::Wildcard(_), lucid_syntax::Pattern::Literal(_, _)) => {
+                (&arms[1], &arms[0])
+            }
+            _ => {
+                return Err(Arc::from(
+                    "match function requires a literal and wildcard arm",
+                ));
+            }
+        };
+        let lucid_syntax::Pattern::Literal(literal, span) = &literal_arm.pattern else {
+            return Err(Arc::from("unsupported match literal pattern"));
+        };
+        let condition = lucid_syntax::Expr::Binary {
+            op: lucid_syntax::BinaryOp::Eq,
+            left: Box::new(subject.clone()),
+            right: Box::new(lucid_syntax::Expr::Literal {
+                value: literal.clone(),
+                span: *span,
+            }),
+            span: *span,
+        };
+        let match_condition = arm_condition(literal_arm).unwrap_or_else(|| condition.clone());
+        fn match_expr_has_identifier(expr: &lucid_syntax::Expr) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { .. } => true,
+                lucid_syntax::Expr::Unary { expr, .. } => match_expr_has_identifier(expr),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    match_expr_has_identifier(left) || match_expr_has_identifier(right)
+                }
+                _ => false,
+            }
+        }
+        fn match_expr_has_division(expr: &lucid_syntax::Expr) -> bool {
+            match expr {
+                lucid_syntax::Expr::Unary { expr, .. } => match_expr_has_division(expr),
+                lucid_syntax::Expr::Binary {
+                    left, right, op, ..
+                } => {
+                    matches!(
+                        op,
+                        lucid_syntax::BinaryOp::Div
+                            | lucid_syntax::BinaryOp::FloorDiv
+                            | lucid_syntax::BinaryOp::Mod
+                    ) || match_expr_has_division(left)
+                        || match_expr_has_division(right)
+                }
+                _ => false,
+            }
+        }
+        fn match_assignment_value_for_name<'a>(
+            statements: &'a [lucid_syntax::Stmt],
+            expected_name: &str,
+        ) -> Option<&'a lucid_syntax::Expr> {
+            let mut meaningful = statements
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement));
+            let statement = meaningful.next()?;
+            if meaningful.next().is_some() {
+                return None;
+            }
+            match statement {
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(value),
+                    ..
+                } if name == expected_name => Some(value),
+                _ => None,
+            }
+        }
+        let match_and_expr =
+            |left: &lucid_syntax::Expr, right: &lucid_syntax::Expr| lucid_syntax::Expr::Binary {
+                op: lucid_syntax::BinaryOp::And,
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+                span: right.span(),
+            };
+        if static_truth(&match_condition).is_none()
+            && match_expr_has_identifier(&match_condition)
+            && !match_expr_has_division(&match_condition)
+            && let Some(else_value) = match_arm_value(wildcard_arm)
+        {
+            let meaningful_then = literal_arm
+                .body
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement))
+                .collect::<Vec<_>>();
+            if let [
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value: initial_value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(initial_value),
+                    ..
+                },
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+                lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: returned_name,
+                            ..
+                        }),
+                    ..
+                },
+            ] = meaningful_then.as_slice()
+                && name == returned_name
+                && static_truth(inner_condition).is_none()
+                && match_expr_has_identifier(inner_condition)
+                && !match_expr_has_division(inner_condition)
+                && inner_elifs.iter().all(|(elif_condition, _)| {
+                    static_truth(elif_condition).is_none()
+                        && match_expr_has_identifier(elif_condition)
+                        && !match_expr_has_division(elif_condition)
+                })
+                && let Some(inner_then_value) = match_assignment_value_for_name(inner_then, name)
+            {
+                let Some(inner_elif_values) = inner_elifs
+                    .iter()
+                    .map(|(elif_condition, branch)| {
+                        match_assignment_value_for_name(branch, name)
+                            .map(|value| (match_and_expr(&match_condition, elif_condition), value))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Err(Arc::from("unsupported nested match local elif branch"));
+                };
+                let combined_condition = match_and_expr(&match_condition, inner_condition);
+                let inner_fallback = match inner_else.as_deref() {
+                    Some(branch) => {
+                        let Some(value) = match_assignment_value_for_name(branch, name) else {
+                            return Err(Arc::from("unsupported nested match local elif branch"));
+                        };
+                        value
+                    }
+                    None => initial_value,
+                };
+                let mut elif_values = inner_elif_values
+                    .iter()
+                    .map(|(condition, value)| (condition, *value))
+                    .collect::<Vec<_>>();
+                elif_values.push((&match_condition, inner_fallback));
+                return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    &combined_condition,
+                    inner_then_value,
+                    &elif_values,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported nested match local elif branch"));
+            }
+        }
+        if static_truth(&match_condition).is_none()
+            && match_expr_has_identifier(&match_condition)
+            && !match_expr_has_division(&match_condition)
+            && let Some(literal_value) = match_arm_value(literal_arm)
+        {
+            let wildcard_condition = lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Not,
+                expr: Box::new(match_condition.clone()),
+                span: match_condition.span(),
+            };
+            let meaningful_wildcard = wildcard_arm
+                .body
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement))
+                .collect::<Vec<_>>();
+            if let [
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value: initial_value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(initial_value),
+                    ..
+                },
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+                lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: returned_name,
+                            ..
+                        }),
+                    ..
+                },
+            ] = meaningful_wildcard.as_slice()
+                && name == returned_name
+                && static_truth(inner_condition).is_none()
+                && match_expr_has_identifier(inner_condition)
+                && !match_expr_has_division(inner_condition)
+                && inner_elifs.iter().all(|(elif_condition, _)| {
+                    static_truth(elif_condition).is_none()
+                        && match_expr_has_identifier(elif_condition)
+                        && !match_expr_has_division(elif_condition)
+                })
+                && let Some(inner_then_value) = match_assignment_value_for_name(inner_then, name)
+            {
+                let Some(inner_elif_values) = inner_elifs
+                    .iter()
+                    .map(|(elif_condition, branch)| {
+                        match_assignment_value_for_name(branch, name).map(|value| {
+                            (match_and_expr(&wildcard_condition, elif_condition), value)
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Err(Arc::from("unsupported nested wildcard match local branch"));
+                };
+                let combined_condition = match_and_expr(&wildcard_condition, inner_condition);
+                let inner_fallback = match inner_else.as_deref() {
+                    Some(branch) => {
+                        let Some(value) = match_assignment_value_for_name(branch, name) else {
+                            return Err(Arc::from(
+                                "unsupported nested wildcard match local branch",
+                            ));
+                        };
+                        value
+                    }
+                    None => initial_value,
+                };
+                let mut elif_values = inner_elif_values
+                    .iter()
+                    .map(|(condition, value)| (condition, *value))
+                    .collect::<Vec<_>>();
+                elif_values.push((&wildcard_condition, inner_fallback));
+                return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    &combined_condition,
+                    inner_then_value,
+                    &elif_values,
+                    literal_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported nested wildcard match local branch"));
+            }
+        }
+        let Some(then_value) = match_arm_value(literal_arm) else {
+            return Err(Arc::from("unsupported match arm for function CIR lowering"));
+        };
+        let Some(else_value) = match_arm_value(wildcard_arm) else {
+            return Err(Arc::from("unsupported match arm for function CIR lowering"));
+        };
+        return lucid_cir::Function::from_parameterized_if(
+            &match_condition,
+            then_value,
+            else_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported match expression for function CIR lowering"));
+    }
+    // Prefer the typed expression graph for a complete conditional expression
+    // or a statement-level `if` whose arms return directly. The collector
+    // records both forms as one post-order `if` node, so lowering does not
+    // reconstruct control flow from syntax.
+    // This keeps the common dynamic-return shape on the same CST → HIR → CIR
+    // path as constant expressions; the AST below remains only a temporary
+    // adapter for statement forms that have not reached typed CIR yet.
+    if !function.is_async
+        && let [lucid_syntax::Stmt::If { span, .. }] = source_function.body.as_slice()
+        && let Some(root) = function
+            .body_expressions
+            .iter()
+            .rev()
+            .find(|node| node.kind == "if" && node.span == *span)
+    {
+        let nodes = function
+            .body_expressions
+            .iter()
+            .map(|node| lucid_cir::TypedExprNode {
+                id: node.id,
+                kind: node.kind.clone(),
+                detail: node.detail.clone(),
+                children: node.children.to_vec(),
+                literal: node.literal,
+            })
+            .collect::<Vec<_>>();
+        if let Ok(lowered) = lucid_cir::Function::from_typed_function_body(
+            &nodes,
+            root.id,
+            &function.parameter_names,
+        ) {
+            return Ok(Arc::new(lowered));
+        }
+    }
+    // A dynamic conditional with one direct return per arm is already a
+    // complete CIR diamond. Lower it before the constant-branch path so this
+    // query does not fall back to the legacy AST evaluator.
+    fn has_identifier(expr: &lucid_syntax::Expr) -> bool {
+        match expr {
+            lucid_syntax::Expr::Ident { .. } => true,
+            lucid_syntax::Expr::Unary { expr, .. } => has_identifier(expr),
+            lucid_syntax::Expr::Binary { left, right, .. } => {
+                has_identifier(left) || has_identifier(right)
+            }
+            _ => false,
+        }
+    }
+    fn has_division(expr: &lucid_syntax::Expr) -> bool {
+        match expr {
+            lucid_syntax::Expr::Unary { expr, .. } => has_division(expr),
+            lucid_syntax::Expr::Binary {
+                left, right, op, ..
+            } => {
+                matches!(
+                    op,
+                    lucid_syntax::BinaryOp::Div
+                        | lucid_syntax::BinaryOp::FloorDiv
+                        | lucid_syntax::BinaryOp::Mod
+                ) || has_division(left)
+                    || has_division(right)
+            }
+            _ => false,
+        }
+    }
+    fn single_value_return(branch: &[lucid_syntax::Stmt]) -> Option<&lucid_syntax::Expr> {
+        let mut meaningful = branch
+            .iter()
+            .filter(|statement| !branch_noop_statement(statement));
+        let first = meaningful.next()?;
+        let second = meaningful.next();
+        if meaningful.next().is_some() {
+            return None;
+        }
+        match (first, second) {
+            (
+                lucid_syntax::Stmt::Return {
+                    value: Some(value), ..
+                },
+                None,
+            ) => Some(value),
+            (
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name: assigned, .. },
+                    value,
+                    ..
+                },
+                Some(lucid_syntax::Stmt::Return {
+                    value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                    ..
+                }),
+            )
+            | (
+                lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(assigned, _),
+                    value: Some(value),
+                    ..
+                },
+                Some(lucid_syntax::Stmt::Return {
+                    value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+                    ..
+                }),
+            ) if assigned == returned => Some(value),
+            _ => None,
+        }
+    }
+    fn single_return_expr(branch: &[lucid_syntax::Stmt]) -> Option<Option<&lucid_syntax::Expr>> {
+        if let Some(value) = single_value_return(branch) {
+            return Some(Some(value));
+        }
+        let (last, prefix) = branch.split_last()?;
+        (prefix.iter().all(branch_noop_statement)
+            && matches!(last, lucid_syntax::Stmt::Return { value: None, .. })
+            || branch.iter().all(branch_noop_statement))
+        .then_some(None)
+    }
+    fn assignment_value_for_name(
+        statements: &[lucid_syntax::Stmt],
+        expected_name: &str,
+        current_value: &lucid_syntax::Expr,
+    ) -> Option<lucid_syntax::Expr> {
+        let mut meaningful = statements
+            .iter()
+            .filter(|statement| !branch_noop_statement(statement));
+        let statement = meaningful.next()?;
+        if meaningful.next().is_some() {
+            return None;
+        }
+        match statement {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } if name == expected_name => Some(value.clone()),
+            lucid_syntax::Stmt::AugAssign {
+                target: target @ lucid_syntax::Expr::Ident { name, .. },
+                op,
+                value,
+                span,
+            } if name == expected_name => Some(lucid_syntax::Expr::Binary {
+                op: op.clone(),
+                left: Box::new(current_value.clone()),
+                right: Box::new(value.clone()),
+                span: *span,
+            }),
+            _ => None,
+        }
+    }
+    fn and_expr(left: &lucid_syntax::Expr, right: &lucid_syntax::Expr) -> lucid_syntax::Expr {
+        lucid_syntax::Expr::Binary {
+            op: lucid_syntax::BinaryOp::And,
+            left: Box::new(left.clone()),
+            right: Box::new(right.clone()),
+            span: right.span(),
+        }
+    }
+    fn contains_explicit_return(statements: &[lucid_syntax::Stmt]) -> bool {
+        statements.iter().any(|statement| match statement {
+            lucid_syntax::Stmt::Return { .. } => true,
+            lucid_syntax::Stmt::If {
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => {
+                contains_explicit_return(then_branch)
+                    || elif_branches
+                        .iter()
+                        .any(|(_, branch)| contains_explicit_return(branch))
+                    || else_branch.as_deref().is_some_and(contains_explicit_return)
+            }
+            _ => false,
+        })
+    }
+    fn normalize_static_statement_selection(
+        statements: &[lucid_syntax::Stmt],
+    ) -> Vec<lucid_syntax::Stmt> {
+        let mut normalized = Vec::new();
+        for statement in statements {
+            match statement {
+                lucid_syntax::Stmt::If {
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch,
+                    ..
+                } => match static_truth(condition) {
+                    Some(true) => {
+                        normalized.extend(normalize_static_statement_selection(then_branch))
+                    }
+                    Some(false) => {
+                        let mut selected = None;
+                        let mut unknown = false;
+                        for (elif_condition, branch) in elif_branches {
+                            match static_truth(elif_condition) {
+                                Some(true) => {
+                                    selected = Some(branch.as_slice());
+                                    break;
+                                }
+                                Some(false) => {}
+                                None => {
+                                    unknown = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if unknown {
+                            normalized.push(statement.clone());
+                        } else if let Some(branch) = selected.or(else_branch.as_deref()) {
+                            normalized.extend(normalize_static_statement_selection(branch));
+                        }
+                    }
+                    None => normalized.push(statement.clone()),
+                },
+                _ => normalized.push(statement.clone()),
+            }
+        }
+        normalized
+    }
+    fn lower_outer_elif_nested_dynamic_local_branch(
+        body: &[lucid_syntax::Stmt],
+        parameter_names: &[String],
+        is_async: bool,
+        error: &'static str,
+    ) -> Result<Option<Arc<lucid_cir::Function>>, Arc<str>> {
+        if let [
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch: Some(else_branch),
+                ..
+            },
+        ] = body
+            && static_truth(condition).is_none()
+            && has_identifier(condition)
+            && !has_division(condition)
+            && !elif_branches.is_empty()
+            && let Some(then_value) = single_value_return(then_branch)
+            && let Some(else_value) = single_value_return(else_branch)
+        {
+            let mut found_nested = false;
+            let mut elif_conditions = Vec::new();
+            let mut elif_values: Vec<lucid_syntax::Expr> = Vec::new();
+            for (elif_condition, elif_branch) in elif_branches {
+                if static_truth(elif_condition).is_some()
+                    || !has_identifier(elif_condition)
+                    || has_division(elif_condition)
+                {
+                    return Ok(None);
+                }
+                if let Some(value) = single_value_return(elif_branch) {
+                    elif_conditions.push(elif_condition.clone());
+                    elif_values.push(value.clone());
+                    continue;
+                }
+                if found_nested {
+                    return Ok(None);
+                }
+                let meaningful_elif = elif_branch
+                    .iter()
+                    .filter(|statement| !branch_noop_statement(statement))
+                    .collect::<Vec<_>>();
+                if let [
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value: initial_value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(initial_value),
+                        ..
+                    },
+                    lucid_syntax::Stmt::If {
+                        condition: inner_condition,
+                        then_branch: inner_then,
+                        elif_branches: inner_elifs,
+                        else_branch: inner_else,
+                        ..
+                    },
+                    lucid_syntax::Stmt::Return {
+                        value:
+                            Some(lucid_syntax::Expr::Ident {
+                                name: returned_name,
+                                ..
+                            }),
+                        ..
+                    },
+                ] = meaningful_elif.as_slice()
+                    && name == returned_name
+                    && static_truth(inner_condition).is_none()
+                    && has_identifier(inner_condition)
+                    && !has_division(inner_condition)
+                    && inner_elifs.iter().all(|(inner_elif_condition, _)| {
+                        static_truth(inner_elif_condition).is_none()
+                            && has_identifier(inner_elif_condition)
+                            && !has_division(inner_elif_condition)
+                    })
+                    && let Some(inner_then_value) =
+                        assignment_value_for_name(inner_then, name, initial_value)
+                {
+                    found_nested = true;
+                    elif_conditions.push(and_expr(elif_condition, inner_condition));
+                    elif_values.push(inner_then_value);
+                    for (inner_elif_condition, branch) in inner_elifs {
+                        let Some(value) = assignment_value_for_name(branch, name, initial_value)
+                        else {
+                            return Err(Arc::from(error));
+                        };
+                        elif_conditions.push(and_expr(elif_condition, inner_elif_condition));
+                        elif_values.push(value);
+                    }
+                    let inner_fallback = match inner_else.as_deref() {
+                        Some(branch) => {
+                            let Some(value) =
+                                assignment_value_for_name(branch, name, initial_value)
+                            else {
+                                return Err(Arc::from(error));
+                            };
+                            value
+                        }
+                        None => initial_value.clone(),
+                    };
+                    elif_conditions.push(elif_condition.clone());
+                    elif_values.push(inner_fallback);
+                    continue;
+                }
+                return Ok(None);
+            }
+            if found_nested {
+                if is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let elif_pairs = elif_conditions
+                    .iter()
+                    .zip(elif_values.iter())
+                    .collect::<Vec<_>>();
+                return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    condition,
+                    then_value,
+                    &elif_pairs,
+                    else_value,
+                    parameter_names,
+                )
+                .map(Arc::new)
+                .map(Some)
+                .map_err(|_| Arc::from(error));
+            }
+        }
+        Ok(None)
+    }
+    fn lower_initial_nested_dynamic_local_branch(
+        body: &[lucid_syntax::Stmt],
+        parameter_names: &[String],
+        is_async: bool,
+        error: &'static str,
+    ) -> Result<Option<Arc<lucid_cir::Function>>, Arc<str>> {
+        if let [
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch: Some(else_branch),
+                ..
+            },
+        ] = body
+            && static_truth(condition).is_none()
+            && has_identifier(condition)
+            && !has_division(condition)
+            && elif_branches.iter().all(|(elif_condition, _)| {
+                static_truth(elif_condition).is_none()
+                    && has_identifier(elif_condition)
+                    && !has_division(elif_condition)
+            })
+            && let Some(else_value) = single_value_return(else_branch)
+            && let Some(outer_elif_values) = elif_branches
+                .iter()
+                .map(|(elif_condition, branch)| {
+                    single_value_return(branch).map(|value| (elif_condition, value))
+                })
+                .collect::<Option<Vec<_>>>()
+        {
+            let meaningful_then = then_branch
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement))
+                .collect::<Vec<_>>();
+            if let [
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value: initial_value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(initial_value),
+                    ..
+                },
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+                lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: returned_name,
+                            ..
+                        }),
+                    ..
+                },
+            ] = meaningful_then.as_slice()
+                && name == returned_name
+                && static_truth(inner_condition).is_none()
+                && has_identifier(inner_condition)
+                && !has_division(inner_condition)
+                && inner_elifs.iter().all(|(elif_condition, _)| {
+                    static_truth(elif_condition).is_none()
+                        && has_identifier(elif_condition)
+                        && !has_division(elif_condition)
+                })
+                && let Some(inner_then_value) =
+                    assignment_value_for_name(inner_then, name, initial_value)
+            {
+                let Some(inner_elif_values) = inner_elifs
+                    .iter()
+                    .map(|(elif_condition, branch)| {
+                        assignment_value_for_name(branch, name, initial_value)
+                            .map(|value| (and_expr(condition, elif_condition), value))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Err(Arc::from(error));
+                };
+                let combined_condition = and_expr(condition, inner_condition);
+                let inner_fallback = match inner_else.as_deref() {
+                    Some(branch) => {
+                        let Some(value) = assignment_value_for_name(branch, name, initial_value)
+                        else {
+                            return Err(Arc::from(error));
+                        };
+                        value
+                    }
+                    None => initial_value.clone(),
+                };
+                let mut elif_values = inner_elif_values
+                    .iter()
+                    .map(|(condition, value)| (condition, value))
+                    .collect::<Vec<_>>();
+                elif_values.push((condition, &inner_fallback));
+                elif_values.extend(
+                    outer_elif_values
+                        .iter()
+                        .map(|(elif_condition, value)| (*elif_condition, *value)),
+                );
+                if is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    &combined_condition,
+                    &inner_then_value,
+                    &elif_values,
+                    else_value,
+                    parameter_names,
+                )
+                .map(Arc::new)
+                .map(Some)
+                .map_err(|_| Arc::from(error));
+            }
+        }
+        Ok(None)
+    }
+    fn lower_else_nested_dynamic_local_branch(
+        body: &[lucid_syntax::Stmt],
+        parameter_names: &[String],
+        is_async: bool,
+        error: &'static str,
+    ) -> Result<Option<Arc<lucid_cir::Function>>, Arc<str>> {
+        if let [
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch: Some(else_branch),
+                ..
+            },
+        ] = body
+            && static_truth(condition).is_none()
+            && has_identifier(condition)
+            && !has_division(condition)
+            && elif_branches.iter().all(|(elif_condition, _)| {
+                static_truth(elif_condition).is_none()
+                    && has_identifier(elif_condition)
+                    && !has_division(elif_condition)
+            })
+            && let Some(then_value) = single_value_return(then_branch)
+            && let Some(outer_elif_values) = elif_branches
+                .iter()
+                .map(|(elif_condition, branch)| {
+                    single_value_return(branch).map(|value| (elif_condition, value))
+                })
+                .collect::<Option<Vec<_>>>()
+        {
+            let meaningful_else = else_branch
+                .iter()
+                .filter(|statement| !branch_noop_statement(statement))
+                .collect::<Vec<_>>();
+            if let [
+                lucid_syntax::Stmt::Assignment {
+                    target: lucid_syntax::Expr::Ident { name, .. },
+                    value: initial_value,
+                    ..
+                }
+                | lucid_syntax::Stmt::VarDef {
+                    pattern: lucid_syntax::Pattern::Ident(name, _),
+                    value: Some(initial_value),
+                    ..
+                },
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+                lucid_syntax::Stmt::Return {
+                    value:
+                        Some(lucid_syntax::Expr::Ident {
+                            name: returned_name,
+                            ..
+                        }),
+                    ..
+                },
+            ] = meaningful_else.as_slice()
+                && name == returned_name
+                && static_truth(inner_condition).is_none()
+                && has_identifier(inner_condition)
+                && !has_division(inner_condition)
+                && inner_elifs.iter().all(|(elif_condition, _)| {
+                    static_truth(elif_condition).is_none()
+                        && has_identifier(elif_condition)
+                        && !has_division(elif_condition)
+                })
+                && let Some(inner_then_value) =
+                    assignment_value_for_name(inner_then, name, initial_value)
+            {
+                let Some(inner_elif_values) = inner_elifs
+                    .iter()
+                    .map(|(elif_condition, branch)| {
+                        assignment_value_for_name(branch, name, initial_value)
+                            .map(|value| (elif_condition.clone(), value))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Err(Arc::from(error));
+                };
+                let inner_fallback = match inner_else.as_deref() {
+                    Some(branch) => {
+                        let Some(value) = assignment_value_for_name(branch, name, initial_value)
+                        else {
+                            return Err(Arc::from(error));
+                        };
+                        value
+                    }
+                    None => initial_value.clone(),
+                };
+                let mut elif_conditions =
+                    Vec::with_capacity(outer_elif_values.len() + inner_elifs.len() + 1);
+                let mut elif_values =
+                    Vec::with_capacity(outer_elif_values.len() + inner_elifs.len() + 1);
+                for (elif_condition, value) in outer_elif_values {
+                    elif_conditions.push(elif_condition.clone());
+                    elif_values.push(value.clone());
+                }
+                elif_conditions.push(inner_condition.clone());
+                elif_values.push(inner_then_value);
+                for (inner_elif_condition, value) in inner_elif_values {
+                    elif_conditions.push(inner_elif_condition);
+                    elif_values.push(value);
+                }
+                if is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let elif_pairs = elif_conditions
+                    .iter()
+                    .zip(elif_values.iter())
+                    .collect::<Vec<_>>();
+                return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    condition,
+                    then_value,
+                    &elif_pairs,
+                    &inner_fallback,
+                    parameter_names,
+                )
+                .map(Arc::new)
+                .map(Some)
+                .map_err(|_| Arc::from(error));
+            }
+        }
+        Ok(None)
+    }
+    fn lower_fallthrough_nested_dynamic_local_branch(
+        body: &[lucid_syntax::Stmt],
+        parameter_names: &[String],
+        is_async: bool,
+        error: &'static str,
+    ) -> Result<Option<Arc<lucid_cir::Function>>, Arc<str>> {
+        if let [
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch: None,
+                span,
+            },
+            fallthrough @ ..,
+        ] = body
+            && !fallthrough.is_empty()
+        {
+            let lowered_body = [lucid_syntax::Stmt::If {
+                condition: condition.clone(),
+                then_branch: then_branch.clone(),
+                elif_branches: elif_branches.clone(),
+                else_branch: Some(fallthrough.to_vec()),
+                span: *span,
+            }];
+            return lower_else_nested_dynamic_local_branch(
+                &lowered_body,
+                parameter_names,
+                is_async,
+                error,
+            );
+        }
+        Ok(None)
+    }
+    fn match_arm_condition(
+        subject: &lucid_syntax::Expr,
+        arm: &lucid_syntax::MatchArm,
+    ) -> Option<lucid_syntax::Expr> {
+        match &arm.pattern {
+            lucid_syntax::Pattern::Literal(
+                literal
+                @ (lucid_syntax::LiteralValue::Int(_) | lucid_syntax::LiteralValue::Bool(_)),
+                span,
+            ) => {
+                let pattern_test = lucid_syntax::Expr::Binary {
+                    op: lucid_syntax::BinaryOp::Eq,
+                    left: Box::new(subject.clone()),
+                    right: Box::new(lucid_syntax::Expr::Literal {
+                        value: literal.clone(),
+                        span: *span,
+                    }),
+                    span: *span,
+                };
+                Some(match &arm.guard {
+                    Some(guard) if static_truth(guard) == Some(true) => pattern_test,
+                    Some(guard) if static_truth(guard) == Some(false) => {
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::Bool(false),
+                            span: guard.span(),
+                        }
+                    }
+                    Some(guard) => lucid_syntax::Expr::Binary {
+                        op: lucid_syntax::BinaryOp::And,
+                        left: Box::new(pattern_test),
+                        right: Box::new(guard.clone()),
+                        span: guard.span(),
+                    },
+                    None => pattern_test,
+                })
+            }
+            lucid_syntax::Pattern::Wildcard(_) => match &arm.guard {
+                Some(guard) if static_truth(guard) == Some(true) => None,
+                Some(guard) if static_truth(guard) == Some(false) => {
+                    Some(lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Bool(false),
+                        span: guard.span(),
+                    })
+                }
+                other => other.clone(),
+            },
+            _ => None,
+        }
+    }
+    fn lower_match_fallthrough_nested_dynamic_local_branch(
+        body: &[lucid_syntax::Stmt],
+        parameter_names: &[String],
+        is_async: bool,
+        error: &'static str,
+    ) -> Result<Option<Arc<lucid_cir::Function>>, Arc<str>> {
+        if let [
+            lucid_syntax::Stmt::Match {
+                subject,
+                arms,
+                span,
+                ..
+            },
+            fallthrough @ ..,
+        ] = body
+            && !arms.is_empty()
+            && !fallthrough.is_empty()
+        {
+            let mut conditional_arms = Vec::new();
+            for arm in arms {
+                let Some(condition) = match_arm_condition(subject, arm) else {
+                    return Ok(None);
+                };
+                conditional_arms.push((condition, arm.body.clone()));
+            }
+            if let Some(((condition, then_branch), elif_source)) = conditional_arms.split_first() {
+                let lowered_body = [lucid_syntax::Stmt::If {
+                    condition: condition.clone(),
+                    then_branch: then_branch.clone(),
+                    elif_branches: elif_source.to_vec(),
+                    else_branch: Some(fallthrough.to_vec()),
+                    span: *span,
+                }];
+                return lower_else_nested_dynamic_local_branch(
+                    &lowered_body,
+                    parameter_names,
+                    is_async,
+                    error,
+                );
+            }
+        }
+        Ok(None)
+    }
+    if let Some(lowered) = lower_outer_elif_nested_dynamic_local_branch(
+        source_function.body.as_slice(),
+        &function.parameter_names,
+        function.is_async,
+        "unsupported nested dynamic local elif guard branch",
+    )? {
+        return Ok(lowered);
+    }
+    if let Some(lowered) = lower_initial_nested_dynamic_local_branch(
+        source_function.body.as_slice(),
+        &function.parameter_names,
+        function.is_async,
+        "unsupported nested dynamic local branch",
+    )? {
+        return Ok(lowered);
+    }
+    if let Some(lowered) = lower_else_nested_dynamic_local_branch(
+        source_function.body.as_slice(),
+        &function.parameter_names,
+        function.is_async,
+        "unsupported nested dynamic local else branch",
+    )? {
+        return Ok(lowered);
+    }
+    if let Some(lowered) = lower_fallthrough_nested_dynamic_local_branch(
+        source_function.body.as_slice(),
+        &function.parameter_names,
+        function.is_async,
+        "unsupported fallthrough nested dynamic local branch",
+    )? {
+        return Ok(lowered);
+    }
+    if let Some(lowered) = lower_match_fallthrough_nested_dynamic_local_branch(
+        source_function.body.as_slice(),
+        &function.parameter_names,
+        function.is_async,
+        "unsupported match fallthrough nested dynamic local branch",
+    )? {
+        return Ok(lowered);
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: fallback, ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let Some(then_return) = single_return_expr(then_branch)
+        && let Some(elif_returns) = elif_branches
+            .iter()
+            .map(|(elif_condition, branch)| {
+                single_return_expr(branch).map(|value| (elif_condition, value))
+            })
+            .collect::<Option<Vec<_>>>()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_mixed_return_chain(
+            condition,
+            then_return,
+            &elif_returns,
+            fallback.as_ref(),
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported mixed guard return chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+    {
+        let selected_branch = match static_truth(condition) {
+            Some(true) => Some(then_branch.as_slice()),
+            Some(false) => {
+                let mut selected = None;
+                let mut unknown = false;
+                for (elif_condition, branch) in elif_branches {
+                    match static_truth(elif_condition) {
+                        Some(true) => {
+                            selected = Some(branch.as_slice());
+                            break;
+                        }
+                        Some(false) => {}
+                        None => {
+                            unknown = true;
+                            break;
+                        }
+                    }
+                }
+                if unknown {
+                    None
+                } else {
+                    selected.or(else_branch.as_deref())
+                }
+            }
+            None => None,
+        };
+        if let Some(selected_branch) = selected_branch {
+            let selected_statements = normalize_static_statement_selection(selected_branch);
+            if contains_explicit_return(&selected_statements) {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let selected_module = lucid_syntax::Module {
+                    statements: selected_statements,
+                    span: source_function.span,
+                };
+                if let Ok(lowered) = lucid_cir::Function::from_module_linear_with_params(
+                    &selected_module,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(lowered));
+                }
+            }
+        }
+        if let Some(
+            [
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+            ],
+        ) = selected_branch
+            && !inner_elifs.is_empty()
+            && static_truth(inner_condition).is_none()
+            && has_identifier(inner_condition)
+        {
+            let mut elif_values = Vec::new();
+            let mut selected_value_fallback = inner_else.as_deref();
+            let mut unsupported_elif = false;
+            for (elif_condition, elif_branch) in inner_elifs {
+                match static_truth(elif_condition) {
+                    Some(false) => continue,
+                    Some(true) => {
+                        selected_value_fallback = Some(elif_branch.as_slice());
+                        break;
+                    }
+                    None => {
+                        if !has_identifier(elif_condition) {
+                            unsupported_elif = true;
+                            break;
+                        }
+                        let Some(elif_value) = single_value_return(elif_branch) else {
+                            unsupported_elif = true;
+                            break;
+                        };
+                        elif_values.push((elif_condition, elif_value));
+                    }
+                }
+            }
+            if !unsupported_elif && let Some(then_value) = single_value_return(inner_then) {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let lowered = match selected_value_fallback {
+                    Some(else_branch) => {
+                        if let Some(else_value) = single_value_return(else_branch) {
+                            if elif_values.is_empty() {
+                                lucid_cir::Function::from_parameterized_if_direct(
+                                    inner_condition,
+                                    then_value,
+                                    else_value,
+                                    &function.parameter_names,
+                                )
+                            } else {
+                                lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                                    inner_condition,
+                                    then_value,
+                                    &elif_values,
+                                    else_value,
+                                    &function.parameter_names,
+                                )
+                            }
+                        } else if branch_is_single_void(else_branch) {
+                            if elif_values.is_empty() {
+                                lucid_cir::Function::from_parameterized_if_optional(
+                                    inner_condition,
+                                    then_value,
+                                    &function.parameter_names,
+                                )
+                            } else {
+                                lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                                    inner_condition,
+                                    then_value,
+                                    &elif_values,
+                                    &function.parameter_names,
+                                )
+                            }
+                        } else {
+                            Err(lucid_cir::LowerError::UnsupportedExpression)
+                        }
+                    }
+                    None => {
+                        if elif_values.is_empty() {
+                            lucid_cir::Function::from_parameterized_if_optional(
+                                inner_condition,
+                                then_value,
+                                &function.parameter_names,
+                            )
+                        } else {
+                            lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                                inner_condition,
+                                then_value,
+                                &elif_values,
+                                &function.parameter_names,
+                            )
+                        }
+                    }
+                };
+                return lowered
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported selected nested dynamic elif branch"));
+            }
+            let mut elif_conditions = Vec::new();
+            let mut selected_void_fallback = inner_else.as_deref();
+            let mut unsupported_void_elif = false;
+            for (elif_condition, elif_branch) in inner_elifs {
+                match static_truth(elif_condition) {
+                    Some(false) => continue,
+                    Some(true) => {
+                        selected_void_fallback = Some(elif_branch.as_slice());
+                        break;
+                    }
+                    None => {
+                        if !has_identifier(elif_condition) || !branch_is_single_void(elif_branch) {
+                            unsupported_void_elif = true;
+                            break;
+                        }
+                        elif_conditions.push(elif_condition);
+                    }
+                }
+            }
+            if !unsupported_void_elif
+                && branch_is_single_void(inner_then)
+                && selected_void_fallback.is_none_or(branch_is_single_void)
+            {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let lowered = if elif_conditions.is_empty() {
+                    lucid_cir::Function::from_parameterized_if_void(
+                        inner_condition,
+                        &function.parameter_names,
+                    )
+                } else {
+                    lucid_cir::Function::from_parameterized_if_elif_void_chain(
+                        inner_condition,
+                        &elif_conditions,
+                        &function.parameter_names,
+                    )
+                };
+                return lowered.map(Arc::new).map_err(|_| {
+                    Arc::from("unsupported selected nested dynamic void elif branch")
+                });
+            }
+        }
+        if let Some(
+            [
+                lucid_syntax::Stmt::If {
+                    condition: inner_condition,
+                    then_branch: inner_then,
+                    elif_branches: inner_elifs,
+                    else_branch: inner_else,
+                    ..
+                },
+            ],
+        ) = selected_branch
+            && inner_elifs.is_empty()
+            && static_truth(inner_condition).is_none()
+            && has_identifier(inner_condition)
+        {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            if let Some(then_value) = single_value_return(inner_then) {
+                let lowered = match inner_else.as_deref() {
+                    Some(else_branch) => {
+                        if let Some(else_value) = single_value_return(else_branch) {
+                            lucid_cir::Function::from_parameterized_if_direct(
+                                inner_condition,
+                                then_value,
+                                else_value,
+                                &function.parameter_names,
+                            )
+                        } else if branch_is_single_void(else_branch) {
+                            lucid_cir::Function::from_parameterized_if_optional(
+                                inner_condition,
+                                then_value,
+                                &function.parameter_names,
+                            )
+                        } else {
+                            Err(lucid_cir::LowerError::UnsupportedExpression)
+                        }
+                    }
+                    None => lucid_cir::Function::from_parameterized_if_optional(
+                        inner_condition,
+                        then_value,
+                        &function.parameter_names,
+                    ),
+                };
+                return lowered
+                    .map(Arc::new)
+                    .map_err(|_| Arc::from("unsupported selected nested dynamic branch"));
+            }
+            if branch_is_single_void(inner_then)
+                && inner_else
+                    .as_ref()
+                    .is_none_or(|branch| branch_is_single_void(branch))
+            {
+                return lucid_cir::Function::from_parameterized_if_void(
+                    inner_condition,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported selected nested dynamic void branch"));
+            }
+            if let Some(else_branch) = inner_else.as_deref()
+                && branch_is_single_void(inner_then)
+                && let Some(else_value) = single_value_return(else_branch)
+            {
+                let inverted = lucid_syntax::Expr::Unary {
+                    op: lucid_syntax::UnaryOp::Not,
+                    expr: Box::new(inner_condition.clone()),
+                    span: inner_condition.span(),
+                };
+                return lucid_cir::Function::from_parameterized_if_optional(
+                    &inverted,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported selected nested mixed branch"));
+            }
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::Return {
+            value:
+                Some(lucid_syntax::Expr::IfExpr {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let lower = if has_division(then_branch) || has_division(else_branch) {
+            lucid_cir::Function::from_parameterized_if_direct(
+                condition,
+                then_branch,
+                else_branch,
+                &function.parameter_names,
+            )
+        } else {
+            lucid_cir::Function::from_parameterized_if(
+                condition,
+                then_branch,
+                else_branch,
+                &function.parameter_names,
+            )
+        };
+        return lower
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported conditional return expression"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(fallback_value),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        if let Some(then_value) = single_value_return(then_branch) {
+            let lower = if has_division(then_value) || has_division(fallback_value) {
+                lucid_cir::Function::from_parameterized_if_direct(
+                    condition,
+                    then_value,
+                    fallback_value,
+                    &function.parameter_names,
+                )
+            } else {
+                lucid_cir::Function::from_parameterized_if(
+                    condition,
+                    then_value,
+                    fallback_value,
+                    &function.parameter_names,
+                )
+            };
+            return lower
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported dynamic guard return"));
+        }
+        if branch_is_single_void(then_branch) {
+            let inverted = lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Not,
+                expr: Box::new(condition.clone()),
+                span: condition.span(),
+            };
+            return lucid_cir::Function::from_parameterized_if_optional(
+                &inverted,
+                fallback_value,
+                &function.parameter_names,
+            )
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported mixed guard return"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return { value: None, .. },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && let Some(then_value) = single_value_return(then_branch)
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_optional(
+            condition,
+            then_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional guard return"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(fallback_value),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let Some(then_value) = single_value_return(then_branch)
+        && let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(elif_condition, branch)| {
+                single_value_return(branch).map(|value| (elif_condition, value))
+            })
+            .collect::<Option<Vec<_>>>()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+            condition,
+            then_value,
+            &elif_values,
+            fallback_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic guard elif return"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return { value: None, .. },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let Some(then_value) = single_value_return(then_branch)
+        && let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(elif_condition, branch)| {
+                single_value_return(branch).map(|value| (elif_condition, value))
+            })
+            .collect::<Option<Vec<_>>>()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+            condition,
+            then_value,
+            &elif_values,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional guard elif return"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return { value: None, .. },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && branch_is_single_void(then_branch)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(elif_condition, branch)| {
+                single_value_return(branch).map(|value| (elif_condition, value))
+            })
+            .collect::<Option<Vec<_>>>()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_void_elif_optional_chain(
+            condition,
+            &elif_values,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional void guard with value elif return"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return { value: None, .. },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && let Some(then_value) = single_value_return(then_branch)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && elif_branches
+            .iter()
+            .all(|(_, branch)| branch_is_single_void(branch))
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let elif_conditions = elif_branches
+            .iter()
+            .map(|(elif_condition, _)| elif_condition)
+            .collect::<Vec<_>>();
+        return lucid_cir::Function::from_parameterized_if_elif_voids_optional(
+            condition,
+            then_value,
+            &elif_conditions,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional value guard with void elif return"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(fallback_value),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && branch_is_single_void(then_branch)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && elif_branches
+            .iter()
+            .all(|(_, branch)| branch_is_single_void(branch))
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let elif_conditions = elif_branches
+            .iter()
+            .map(|(elif_condition, _)| elif_condition)
+            .collect::<Vec<_>>();
+        return lucid_cir::Function::from_parameterized_if_elif_voids_value_fallback(
+            condition,
+            &elif_conditions,
+            fallback_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported void guard chain with value fallback"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(fallback_value),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && branch_is_single_void(then_branch)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(elif_condition, branch)| {
+                single_value_return(branch).map(|value| (elif_condition, value))
+            })
+            .collect::<Option<Vec<_>>>()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_void_elif_chain_direct(
+            condition,
+            &elif_values,
+            fallback_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported mixed guard elif return"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(fallback_value),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && let Some(then_value) = single_value_return(then_branch)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && elif_branches
+            .iter()
+            .all(|(_, branch)| branch_is_single_void(branch))
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let elif_conditions = elif_branches
+            .iter()
+            .map(|(elif_condition, _)| elif_condition)
+            .collect::<Vec<_>>();
+        return lucid_cir::Function::from_parameterized_if_elif_voids_else_direct(
+            condition,
+            then_value,
+            &elif_conditions,
+            fallback_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported value guard with void elif return"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+        && !elif_branches.is_empty()
+        && elif_branches.iter().all(|(elif_condition, branch)| {
+            static_truth(elif_condition).is_some()
+                && matches!(
+                    branch.as_slice(),
+                    [lucid_syntax::Stmt::Return { value: Some(_), .. }]
+                )
+        })
+    {
+        let selected_elif = elif_branches.iter().find_map(|(elif_condition, branch)| {
+            if static_truth(elif_condition) == Some(true) {
+                match branch.as_slice() {
+                    [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        },
+                    ] => Some(value),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        if selected_elif.is_none() && else_branch.is_none() {
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            let find_id = |span: lucid_syntax::Span| {
+                function
+                    .body_expressions
+                    .iter()
+                    .find(|node| node.span == span)
+                    .map(|node| node.id)
+            };
+            if let (Some(condition_id), Some(then_id)) =
+                (find_id(condition.span()), find_id(then_value.span()))
+                && let Ok(lowered) = lucid_cir::Function::from_typed_statement_if_optional(
+                    &nodes,
+                    condition_id,
+                    then_id,
+                    &function.parameter_names,
+                    &[],
+                )
+            {
+                return Ok(Arc::new(lowered));
+            }
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            return lucid_cir::Function::from_parameterized_if_optional(
+                condition,
+                then_value,
+                &function.parameter_names,
+            )
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported dynamic elif fall-through"));
+        }
+        let else_value = match selected_elif.or(match else_branch.as_deref() {
+            Some(
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ],
+            ) => Some(value),
+            _ => None,
+        }) {
+            Some(value) => value,
+            None => return Err(Arc::from("unsupported static elif fall-through")),
+        };
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let lower = if has_division(then_value) || has_division(else_value) {
+            lucid_cir::Function::from_parameterized_if_direct(
+                condition,
+                then_value,
+                else_value,
+                &function.parameter_names,
+            )
+        } else {
+            lucid_cir::Function::from_parameterized_if(
+                condition,
+                then_value,
+                else_value,
+                &function.parameter_names,
+            )
+        };
+        return lower
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported dynamic elif branch"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition) == Some(false)
+        && !elif_branches.is_empty()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(condition, branch)| match branch.as_slice() {
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] => Some((condition, value)),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        && let Some(((first_condition, first_value), tail_values)) = elif_values.split_first()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let lowered = match else_branch.as_deref() {
+            Some(
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(else_value),
+                        ..
+                    },
+                ],
+            ) => {
+                if tail_values.is_empty() {
+                    lucid_cir::Function::from_parameterized_if_direct(
+                        first_condition,
+                        first_value,
+                        else_value,
+                        &function.parameter_names,
+                    )
+                } else {
+                    lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                        first_condition,
+                        first_value,
+                        tail_values,
+                        else_value,
+                        &function.parameter_names,
+                    )
+                }
+            }
+            None => {
+                if tail_values.is_empty() {
+                    lucid_cir::Function::from_parameterized_if_optional(
+                        first_condition,
+                        first_value,
+                        &function.parameter_names,
+                    )
+                } else {
+                    lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                        first_condition,
+                        first_value,
+                        tail_values,
+                        &function.parameter_names,
+                    )
+                }
+            }
+            _ => Err(lucid_cir::LowerError::UnsupportedExpression),
+        };
+        return lowered
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported false-leading return elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition) == Some(false)
+        && let [(elif_condition, elif_branch)] = elif_branches.as_slice()
+        && static_truth(elif_condition).is_none()
+        && has_identifier(elif_condition)
+        && branch_is_single_void(elif_branch)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(else_value),
+                ..
+            },
+        ] = else_branch.as_slice()
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let inverted = lucid_syntax::Expr::Unary {
+            op: lucid_syntax::UnaryOp::Not,
+            expr: Box::new(elif_condition.clone()),
+            span: elif_condition.span(),
+        };
+        return lucid_cir::Function::from_parameterized_if_optional(
+            &inverted,
+            else_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported false-leading mixed elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        if let (Some((then_name, then_value)), Some((else_name, else_value))) =
+            (assigned_value(then_branch), assigned_value(else_branch))
+            && then_name == returned
+            && else_name == returned
+        {
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            let find_id = |span: lucid_syntax::Span| {
+                function
+                    .body_expressions
+                    .iter()
+                    .find(|node| node.span == span)
+                    .map(|node| node.id)
+            };
+            if let (Some(condition_id), Some(then_id), Some(else_id)) = (
+                find_id(condition.span()),
+                find_id(then_value.span()),
+                find_id(else_value.span()),
+            ) && let Ok(lowered) = lucid_cir::Function::from_typed_statement_if(
+                &nodes,
+                condition_id,
+                then_id,
+                else_id,
+                &function.parameter_names,
+                &[],
+            ) {
+                return Ok(Arc::new(lowered));
+            }
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let lower = if has_division(then_value) || has_division(else_value) {
+                lucid_cir::Function::from_parameterized_if_direct(
+                    condition,
+                    then_value,
+                    else_value,
+                    &function.parameter_names,
+                )
+            } else {
+                lucid_cir::Function::from_parameterized_if(
+                    condition,
+                    then_value,
+                    else_value,
+                    &function.parameter_names,
+                )
+            };
+            return lower
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported dynamic local branch"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        if let (Some((then_name, then_value)), Some((else_name, else_value))) =
+            (assigned_value(then_branch), assigned_value(else_branch))
+            && then_name == returned
+            && else_name == returned
+            && let Some(elif_values) = elif_branches
+                .iter()
+                .map(|(condition, branch)| {
+                    assigned_value(branch)
+                        .and_then(|(name, value)| (name == returned).then_some((condition, value)))
+                })
+                .collect::<Option<Vec<_>>>()
+        {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                condition,
+                then_value,
+                &elif_values,
+                else_value,
+                &function.parameter_names,
+            )
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported dynamic local elif chain"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition) == Some(false)
+        && !elif_branches.is_empty()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        let Some((else_name, else_value)) = assigned_value(else_branch) else {
+            return Err(Arc::from("unsupported false-leading local elif chain"));
+        };
+        if else_name == returned
+            && let Some(elif_values) = elif_branches
+                .iter()
+                .map(|(condition, branch)| {
+                    assigned_value(branch)
+                        .and_then(|(name, value)| (name == returned).then_some((condition, value)))
+                })
+                .collect::<Option<Vec<_>>>()
+            && let Some(((first_condition, first_value), tail_values)) = elif_values.split_first()
+        {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let lowered = if tail_values.is_empty() {
+                lucid_cir::Function::from_parameterized_if_direct(
+                    first_condition,
+                    first_value,
+                    else_value,
+                    &function.parameter_names,
+                )
+            } else {
+                lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                    first_condition,
+                    first_value,
+                    tail_values,
+                    else_value,
+                    &function.parameter_names,
+                )
+            };
+            return lowered
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported false-leading local elif chain"));
+        }
+    }
+    if let [
+        initial,
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        fn pass_only(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements
+                .iter()
+                .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
+        }
+        fn mentions_name(expr: &lucid_syntax::Expr, target: &str) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => name == target,
+                lucid_syntax::Expr::Unary { expr, .. } => mentions_name(expr, target),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    mentions_name(left, target) || mentions_name(right, target)
+                }
+                lucid_syntax::Expr::IfExpr {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    mentions_name(condition, target)
+                        || mentions_name(then_branch, target)
+                        || mentions_name(else_branch, target)
+                }
+                _ => false,
+            }
+        }
+        let initial_binding = match initial {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } if name == returned && !mentions_name(value, returned) => {
+                Some((name.as_str(), value))
+            }
+            _ => None,
+        };
+        if let Some((initial_name, initial_value)) = initial_binding {
+            let then_is_pass = pass_only(then_branch);
+            let then_value = match assigned_value(then_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if then_is_pass => None,
+                _ => None,
+            };
+            let else_is_pass = pass_only(else_branch);
+            let else_value = match assigned_value(else_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if else_is_pass => None,
+                _ => None,
+            };
+            if (then_value.is_some() || then_is_pass) && (else_value.is_some() || else_is_pass) {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                return lucid_cir::Function::from_parameterized_initialized_if_direct(
+                    initial_name,
+                    initial_value,
+                    condition,
+                    then_value,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported initialized local else conditional"));
+            }
+        }
+    }
+    if let [
+        initial,
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        fn pass_only(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements
+                .iter()
+                .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
+        }
+        fn mentions_name(expr: &lucid_syntax::Expr, target: &str) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => name == target,
+                lucid_syntax::Expr::Unary { expr, .. } => mentions_name(expr, target),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    mentions_name(left, target) || mentions_name(right, target)
+                }
+                lucid_syntax::Expr::IfExpr {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    mentions_name(condition, target)
+                        || mentions_name(then_branch, target)
+                        || mentions_name(else_branch, target)
+                }
+                _ => false,
+            }
+        }
+        let initial_binding = match initial {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } if name == returned && !mentions_name(value, returned) => {
+                Some((name.as_str(), value))
+            }
+            _ => None,
+        };
+        if let Some((initial_name, initial_value)) = initial_binding {
+            let then_is_pass = pass_only(then_branch);
+            let then_value = match assigned_value(then_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if then_is_pass => None,
+                _ => None,
+            };
+            let else_is_pass = pass_only(else_branch);
+            let else_value = match assigned_value(else_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if else_is_pass => None,
+                _ => None,
+            };
+            if (then_value.is_some() || then_is_pass)
+                && (else_value.is_some() || else_is_pass)
+                && let Some(elif_values) = elif_branches
+                    .iter()
+                    .map(|(condition, branch)| match assigned_value(branch) {
+                        Some((name, value))
+                            if name == returned && !mentions_name(value, returned) =>
+                        {
+                            Some((condition, Some(value)))
+                        }
+                        None if pass_only(branch) => Some((condition, None)),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+            {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                return lucid_cir::Function::from_parameterized_initialized_if_elif_chain_direct(
+                    initial_name,
+                    initial_value,
+                    condition,
+                    then_value,
+                    &elif_values,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported initialized local else elif chain"));
+            }
+        }
+    }
+    if let [
+        initial,
+        lucid_syntax::Stmt::If {
+            condition,
+            elif_branches,
+            else_branch,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && static_truth(condition) == Some(false)
+        && !elif_branches.is_empty()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        fn pass_only(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements
+                .iter()
+                .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
+        }
+        fn mentions_name(expr: &lucid_syntax::Expr, target: &str) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => name == target,
+                lucid_syntax::Expr::Unary { expr, .. } => mentions_name(expr, target),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    mentions_name(left, target) || mentions_name(right, target)
+                }
+                lucid_syntax::Expr::IfExpr {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    mentions_name(condition, target)
+                        || mentions_name(then_branch, target)
+                        || mentions_name(else_branch, target)
+                }
+                _ => false,
+            }
+        }
+        let initial_binding = match initial {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } if name == returned && !mentions_name(value, returned) => {
+                Some((name.as_str(), value))
+            }
+            _ => None,
+        };
+        if let Some((initial_name, initial_value)) = initial_binding {
+            let else_value = match else_branch.as_deref() {
+                Some(else_branch) => match assigned_value(else_branch) {
+                    Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                        Some(Some(value))
+                    }
+                    None if pass_only(else_branch) => Some(None),
+                    _ => None,
+                },
+                None => Some(None),
+            };
+            if let Some(else_value) = else_value
+                && let Some(elif_values) = elif_branches
+                    .iter()
+                    .map(|(condition, branch)| match assigned_value(branch) {
+                        Some((name, value))
+                            if name == returned && !mentions_name(value, returned) =>
+                        {
+                            Some((condition, Some(value)))
+                        }
+                        None if pass_only(branch) => Some((condition, None)),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+                && let Some(((first_condition, first_value), tail_values)) =
+                    elif_values.split_first()
+            {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                return lucid_cir::Function::from_parameterized_initialized_if_elif_chain_direct(
+                    initial_name,
+                    initial_value,
+                    first_condition,
+                    *first_value,
+                    tail_values,
+                    else_value,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported false-leading initialized local elif chain"));
+            }
+        }
+    }
+    if let [
+        initial,
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: None,
+            elif_branches,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        fn pass_only(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements
+                .iter()
+                .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
+        }
+        fn mentions_name(expr: &lucid_syntax::Expr, target: &str) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => name == target,
+                lucid_syntax::Expr::Unary { expr, .. } => mentions_name(expr, target),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    mentions_name(left, target) || mentions_name(right, target)
+                }
+                lucid_syntax::Expr::IfExpr {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    mentions_name(condition, target)
+                        || mentions_name(then_branch, target)
+                        || mentions_name(else_branch, target)
+                }
+                _ => false,
+            }
+        }
+        let initial_binding = match initial {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } if name == returned && !mentions_name(value, returned) => {
+                Some((name.as_str(), value))
+            }
+            _ => None,
+        };
+        if let Some((initial_name, initial_value)) = initial_binding {
+            let then_is_pass = pass_only(then_branch);
+            let then_value = match assigned_value(then_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if then_is_pass => None,
+                _ => None,
+            };
+            if (then_value.is_some() || then_is_pass)
+                && let Some(elif_values) = elif_branches
+                    .iter()
+                    .map(|(condition, branch)| match assigned_value(branch) {
+                        Some((name, value))
+                            if name == returned && !mentions_name(value, returned) =>
+                        {
+                            Some((condition, Some(value)))
+                        }
+                        None if pass_only(branch) => Some((condition, None)),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+            {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                return lucid_cir::Function::from_parameterized_initialized_if_elif_chain_direct(
+                    initial_name,
+                    initial_value,
+                    condition,
+                    then_value,
+                    &elif_values,
+                    None,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported initialized local elif chain"));
+            }
+        }
+    }
+    if let [
+        initial,
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: None,
+            elif_branches,
+            ..
+        },
+        lucid_syntax::Stmt::Return {
+            value: Some(lucid_syntax::Expr::Ident { name: returned, .. }),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+    {
+        fn assigned_value(
+            statements: &[lucid_syntax::Stmt],
+        ) -> Option<(&str, &lucid_syntax::Expr)> {
+            let mut assignment = None;
+            for statement in statements {
+                if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+                    continue;
+                }
+                let value = match statement {
+                    lucid_syntax::Stmt::Assignment {
+                        target: lucid_syntax::Expr::Ident { name, .. },
+                        value,
+                        ..
+                    }
+                    | lucid_syntax::Stmt::VarDef {
+                        pattern: lucid_syntax::Pattern::Ident(name, _),
+                        value: Some(value),
+                        ..
+                    } => (name.as_str(), value),
+                    _ => return None,
+                };
+                if assignment.replace(value).is_some() {
+                    return None;
+                }
+            }
+            assignment
+        }
+        fn mentions_name(expr: &lucid_syntax::Expr, target: &str) -> bool {
+            match expr {
+                lucid_syntax::Expr::Ident { name, .. } => name == target,
+                lucid_syntax::Expr::Unary { expr, .. } => mentions_name(expr, target),
+                lucid_syntax::Expr::Binary { left, right, .. } => {
+                    mentions_name(left, target) || mentions_name(right, target)
+                }
+                lucid_syntax::Expr::IfExpr {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    mentions_name(condition, target)
+                        || mentions_name(then_branch, target)
+                        || mentions_name(else_branch, target)
+                }
+                _ => false,
+            }
+        }
+        fn pass_only(statements: &[lucid_syntax::Stmt]) -> bool {
+            statements
+                .iter()
+                .all(|statement| matches!(statement, lucid_syntax::Stmt::Pass(_)))
+        }
+        let initial_binding = match initial {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } if name == returned && !mentions_name(value, returned) => {
+                Some((name.as_str(), value))
+            }
+            _ => None,
+        };
+        if let Some((initial_name, initial_value)) = initial_binding {
+            let then_is_pass = pass_only(then_branch);
+            let then_value = match assigned_value(then_branch) {
+                Some((name, value)) if name == returned && !mentions_name(value, returned) => {
+                    Some(value)
+                }
+                None if then_is_pass => None,
+                _ => None,
+            };
+            if then_value.is_some() || then_is_pass {
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                return lucid_cir::Function::from_parameterized_initialized_if_direct(
+                    initial_name,
+                    initial_value,
+                    condition,
+                    then_value,
+                    None,
+                    &function.parameter_names,
+                )
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported initialized local conditional"));
+            }
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && branch_is_single_void(else_branch)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+    {
+        let nodes = function
+            .body_expressions
+            .iter()
+            .map(|node| lucid_cir::TypedExprNode {
+                id: node.id,
+                kind: node.kind.clone(),
+                detail: node.detail.clone(),
+                children: node.children.to_vec(),
+                literal: node.literal,
+            })
+            .collect::<Vec<_>>();
+        let find_id = |span: lucid_syntax::Span| {
+            function
+                .body_expressions
+                .iter()
+                .find(|node| node.span == span)
+                .map(|node| node.id)
+        };
+        if let (Some(condition_id), Some(then_id)) =
+            (find_id(condition.span()), find_id(then_value.span()))
+            && let Ok(lowered) = lucid_cir::Function::from_typed_statement_if_optional(
+                &nodes,
+                condition_id,
+                then_id,
+                &function.parameter_names,
+                &[],
+            )
+        {
+            return Ok(Arc::new(lowered));
+        }
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_optional(
+            condition,
+            then_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic pass branch"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && let (
+            [
+                lucid_syntax::Stmt::Return {
+                    value: Some(then_value),
+                    ..
+                },
+            ],
+            [
+                lucid_syntax::Stmt::Return {
+                    value: Some(else_value),
+                    ..
+                },
+            ],
+        ) = (then_branch.as_slice(), else_branch.as_slice())
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        let lower = if has_division(then_value) || has_division(else_value) {
+            lucid_cir::Function::from_parameterized_if_direct(
+                condition,
+                then_value,
+                else_value,
+                &function.parameter_names,
+            )
+        } else {
+            lucid_cir::Function::from_parameterized_if(
+                condition,
+                then_value,
+                else_value,
+                &function.parameter_names,
+            )
+        };
+        return lower
+            .map(Arc::new)
+            .map_err(|_| Arc::from("unsupported dynamic function branch"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: None,
+            elif_branches,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+    {
+        let nodes = function
+            .body_expressions
+            .iter()
+            .map(|node| lucid_cir::TypedExprNode {
+                id: node.id,
+                kind: node.kind.clone(),
+                detail: node.detail.clone(),
+                children: node.children.to_vec(),
+                literal: node.literal,
+            })
+            .collect::<Vec<_>>();
+        let find_id = |span: lucid_syntax::Span| {
+            function
+                .body_expressions
+                .iter()
+                .find(|node| node.span == span)
+                .map(|node| node.id)
+        };
+        if let (Some(condition_id), Some(then_id)) =
+            (find_id(condition.span()), find_id(then_value.span()))
+            && let Ok(lowered) = lucid_cir::Function::from_typed_statement_if_optional(
+                &nodes,
+                condition_id,
+                then_id,
+                &function.parameter_names,
+                &[],
+            )
+        {
+            return Ok(Arc::new(lowered));
+        }
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_optional(
+            condition,
+            then_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional dynamic branch"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+            elif_branches,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && branch_is_single_void(then_branch)
+        && else_branch
+            .as_ref()
+            .is_none_or(|branch| branch_is_single_void(branch))
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_void(
+            condition,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional dynamic void branch"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && branch_is_single_void(then_branch)
+        && else_branch
+            .as_ref()
+            .is_none_or(|branch| branch_is_single_void(branch))
+    {
+        let Some(elif_conditions) = elif_branches
+            .iter()
+            .map(|(condition, branch)| branch_is_single_void(branch).then_some(condition))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Err(Arc::from("unsupported optional dynamic void elif chain"));
+        };
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_void_chain(
+            condition,
+            &elif_conditions,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported optional dynamic void elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            elif_branches,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && branch_is_single_void(then_branch)
+        && branch_is_single_void(else_branch)
+    {
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_void(
+            condition,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic void branch"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && branch_is_single_void(then_branch)
+        && branch_is_single_void(else_branch)
+    {
+        let Some(elif_conditions) = elif_branches
+            .iter()
+            .map(|(condition, branch)| branch_is_single_void(branch).then_some(condition))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Err(Arc::from("unsupported dynamic void elif chain"));
+        };
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_void_chain(
+            condition,
+            &elif_conditions,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic void elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && branch_is_single_void(then_branch)
+        && else_branch
+            .as_ref()
+            .is_none_or(|branch| branch_is_single_void(branch))
+    {
+        let mut dynamic_conditions = Vec::new();
+        let mut saw_static_false = false;
+        let mut unsupported = false;
+        for (elif_condition, branch) in elif_branches {
+            if !branch_is_single_void(branch) {
+                unsupported = true;
+                break;
+            }
+            match static_truth(elif_condition) {
+                Some(false) => saw_static_false = true,
+                Some(true) => break,
+                None => {
+                    if !has_identifier(elif_condition) {
+                        unsupported = true;
+                        break;
+                    }
+                    dynamic_conditions.push(elif_condition);
+                }
+            }
+        }
+        if saw_static_false && !unsupported {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let lowered = if dynamic_conditions.is_empty() {
+                lucid_cir::Function::from_parameterized_if_void(
+                    condition,
+                    &function.parameter_names,
+                )
+            } else {
+                lucid_cir::Function::from_parameterized_if_elif_void_chain(
+                    condition,
+                    &dynamic_conditions,
+                    &function.parameter_names,
+                )
+            };
+            return lowered
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported mixed dynamic void elif chain"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && has_identifier(condition)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+    {
+        let mut dynamic_elifs = Vec::new();
+        let mut unsupported = false;
+        for (elif_condition, branch) in elif_branches {
+            match static_truth(elif_condition) {
+                Some(false) => continue,
+                Some(true) | None => {
+                    let [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(value), ..
+                        },
+                    ] = branch.as_slice()
+                    else {
+                        unsupported = true;
+                        break;
+                    };
+                    if static_truth(elif_condition).is_none() {
+                        if !has_identifier(elif_condition) {
+                            unsupported = true;
+                            break;
+                        }
+                        dynamic_elifs.push((elif_condition, value));
+                    } else {
+                        if function.is_async {
+                            return Err(Arc::from(
+                                "async function bodies are not yet supported by CIR lowering",
+                            ));
+                        }
+                        let lowered = if dynamic_elifs.is_empty() {
+                            lucid_cir::Function::from_parameterized_if_direct(
+                                condition,
+                                then_value,
+                                value,
+                                &function.parameter_names,
+                            )
+                        } else {
+                            lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                                condition,
+                                then_value,
+                                &dynamic_elifs,
+                                value,
+                                &function.parameter_names,
+                            )
+                        };
+                        return lowered
+                            .map(Arc::new)
+                            .map_err(|_| Arc::from("unsupported mixed static elif branch"));
+                    }
+                }
+            }
+        }
+        if !unsupported && dynamic_elifs.len() < elif_branches.len() {
+            if function.is_async {
+                return Err(Arc::from(
+                    "async function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let lowered = match else_branch.as_deref() {
+                Some(
+                    [
+                        lucid_syntax::Stmt::Return {
+                            value: Some(else_value),
+                            ..
+                        },
+                    ],
+                ) => {
+                    if dynamic_elifs.is_empty() {
+                        lucid_cir::Function::from_parameterized_if(
+                            condition,
+                            then_value,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                    } else {
+                        lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+                            condition,
+                            then_value,
+                            &dynamic_elifs,
+                            else_value,
+                            &function.parameter_names,
+                        )
+                    }
+                }
+                None => {
+                    if dynamic_elifs.is_empty() {
+                        lucid_cir::Function::from_parameterized_if_optional(
+                            condition,
+                            then_value,
+                            &function.parameter_names,
+                        )
+                    } else {
+                        lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+                            condition,
+                            then_value,
+                            &dynamic_elifs,
+                            &function.parameter_names,
+                        )
+                    }
+                }
+                _ => Err(lucid_cir::LowerError::UnsupportedExpression),
+            };
+            return lowered
+                .map(Arc::new)
+                .map_err(|_| Arc::from("unsupported mixed dynamic elif chain"));
+        }
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: None,
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+    {
+        let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(condition, branch)| match branch.as_slice() {
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] => Some((condition, value)),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Err(Arc::from("unsupported dynamic optional elif chain"));
+        };
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+            condition,
+            then_value,
+            &elif_values,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic optional elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && branch_is_single_void(else_branch)
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+    {
+        let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(condition, branch)| match branch.as_slice() {
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] => Some((condition, value)),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Err(Arc::from("unsupported dynamic pass elif chain"));
+        };
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_optional_chain(
+            condition,
+            then_value,
+            &elif_values,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic pass elif chain"));
+    }
+    if let [
+        lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch: Some(else_branch),
+            ..
+        },
+    ] = source_function.body.as_slice()
+        && !elif_branches.is_empty()
+        && static_truth(condition).is_none()
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| static_truth(elif_condition).is_none())
+        && has_identifier(condition)
+        && elif_branches
+            .iter()
+            .all(|(elif_condition, _)| has_identifier(elif_condition))
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(then_value),
+                ..
+            },
+        ] = then_branch.as_slice()
+        && let [
+            lucid_syntax::Stmt::Return {
+                value: Some(else_value),
+                ..
+            },
+        ] = else_branch.as_slice()
+    {
+        let Some(elif_values) = elif_branches
+            .iter()
+            .map(|(condition, branch)| match branch.as_slice() {
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ] => Some((condition, value)),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Err(Arc::from("unsupported dynamic elif chain"));
+        };
+        if function.is_async {
+            return Err(Arc::from(
+                "async function bodies are not yet supported by CIR lowering",
+            ));
+        }
+        return lucid_cir::Function::from_parameterized_if_elif_chain_direct(
+            condition,
+            then_value,
+            &elif_values,
+            else_value,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported dynamic elif chain"));
+    }
+    if matches!(
+        source_function.body.as_slice(),
+        [lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)]
+    ) {
+        let function = lucid_cir::Function {
+            entry: lucid_cir::BlockId(0),
+            blocks: vec![lucid_cir::Block {
+                id: lucid_cir::BlockId(0),
+                // Materialize unused parameters so the CIR still carries the
+                // source-level calling convention into native codegen.
+                instructions: function
+                    .parameter_names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| lucid_cir::Instruction::Param {
+                        result: lucid_cir::ValueId(index as u32),
+                        index: index as u32,
+                    })
+                    .collect(),
+                terminator: lucid_cir::Terminator::Return(None),
+            }],
+        };
+        function
+            .verify()
+            .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+        return Ok(Arc::new(function));
+    }
+    fn static_int(expr: &lucid_syntax::Expr) -> Option<i64> {
+        match expr {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(*value),
+            lucid_syntax::Expr::Unary { op, expr, .. } => match op {
+                lucid_syntax::UnaryOp::Neg => static_int(expr)?.checked_neg(),
+                lucid_syntax::UnaryOp::Pos => static_int(expr),
+                lucid_syntax::UnaryOp::Invert => Some(!static_int(expr)?),
+                _ => None,
+            },
+            lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } => {
+                let (left, right) = (static_int(left)?, static_int(right)?);
+                match op {
+                    lucid_syntax::BinaryOp::Add => left.checked_add(right),
+                    lucid_syntax::BinaryOp::Sub => left.checked_sub(right),
+                    lucid_syntax::BinaryOp::Mul => left.checked_mul(right),
+                    lucid_syntax::BinaryOp::Pow => u32::try_from(right)
+                        .ok()
+                        .and_then(|exponent| left.checked_pow(exponent)),
+                    lucid_syntax::BinaryOp::Div => left.checked_div(right),
+                    lucid_syntax::BinaryOp::FloorDiv => {
+                        let quotient = left.checked_div(right)?;
+                        let remainder = left.checked_rem(right)?;
+                        if remainder != 0 && (left < 0) != (right < 0) {
+                            quotient.checked_sub(1)
+                        } else {
+                            Some(quotient)
+                        }
+                    }
+                    lucid_syntax::BinaryOp::Mod => {
+                        let remainder = left.checked_rem(right)?;
+                        if remainder != 0 && (left < 0) != (right < 0) {
+                            remainder.checked_add(right)
+                        } else {
+                            Some(remainder)
+                        }
+                    }
+                    lucid_syntax::BinaryOp::BitAnd => Some(left & right),
+                    lucid_syntax::BinaryOp::BitOr => Some(left | right),
+                    lucid_syntax::BinaryOp::BitXor => Some(left ^ right),
+                    lucid_syntax::BinaryOp::Shl => left.checked_shl(u32::try_from(right).ok()?),
+                    lucid_syntax::BinaryOp::Shr => left.checked_shr(u32::try_from(right).ok()?),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn static_big_int(expr: &lucid_syntax::Expr) -> Option<num_bigint::BigInt> {
+        use num_bigint::BigInt;
+        match expr {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::BigInt(value),
+                ..
+            } => {
+                let value = value.trim();
+                let negative = value.starts_with('-');
+                let digits = value.trim_start_matches(['+', '-']).replace('_', "");
+                let (digits, radix) = if let Some(digits) = digits
+                    .strip_prefix("0x")
+                    .or_else(|| digits.strip_prefix("0X"))
+                {
+                    (digits, 16)
+                } else if let Some(digits) = digits
+                    .strip_prefix("0o")
+                    .or_else(|| digits.strip_prefix("0O"))
+                {
+                    (digits, 8)
+                } else if let Some(digits) = digits
+                    .strip_prefix("0b")
+                    .or_else(|| digits.strip_prefix("0B"))
+                {
+                    (digits, 2)
+                } else {
+                    (digits.as_str(), 10)
+                };
+                let value = BigInt::parse_bytes(digits.as_bytes(), radix)?;
+                Some(if negative { -value } else { value })
+            }
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(BigInt::from(*value)),
+            lucid_syntax::Expr::Unary { op, expr, .. } => {
+                let value = static_big_int(expr)?;
+                match op {
+                    lucid_syntax::UnaryOp::Neg => Some(-value),
+                    lucid_syntax::UnaryOp::Pos => Some(value),
+                    lucid_syntax::UnaryOp::Invert => Some(!value),
+                    _ => None,
+                }
+            }
+            lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } => {
+                let (left, right) = (static_big_int(left)?, static_big_int(right)?);
+                match op {
+                    lucid_syntax::BinaryOp::Add => Some(left + right),
+                    lucid_syntax::BinaryOp::Sub => Some(left - right),
+                    lucid_syntax::BinaryOp::Mul => Some(left * right),
+                    lucid_syntax::BinaryOp::BitAnd => Some(left & right),
+                    lucid_syntax::BinaryOp::BitOr => Some(left | right),
+                    lucid_syntax::BinaryOp::BitXor => Some(left ^ right),
+                    lucid_syntax::BinaryOp::Shl => {
+                        u32::try_from(&right).ok().map(|shift| left << shift)
+                    }
+                    lucid_syntax::BinaryOp::Shr => {
+                        u32::try_from(&right).ok().map(|shift| left >> shift)
+                    }
+                    lucid_syntax::BinaryOp::Pow => u32::try_from(&right)
+                        .ok()
+                        .map(|exponent| left.pow(exponent)),
+                    lucid_syntax::BinaryOp::Div => {
+                        if right == 0.into() {
+                            None
+                        } else {
+                            Some(left / right)
+                        }
+                    }
+                    lucid_syntax::BinaryOp::FloorDiv => {
+                        if right == 0.into() {
+                            None
+                        } else {
+                            let quotient = &left / &right;
+                            let remainder = &left % &right;
+                            if remainder != 0.into() && (left < 0.into()) != (right < 0.into()) {
+                                Some(quotient - 1)
+                            } else {
+                                Some(quotient)
+                            }
+                        }
+                    }
+                    lucid_syntax::BinaryOp::Mod => {
+                        if right == 0.into() {
+                            None
+                        } else {
+                            let remainder = &left % &right;
+                            if remainder != 0.into() && (left < 0.into()) != (right < 0.into()) {
+                                Some(remainder + right)
+                            } else {
+                                Some(remainder)
+                            }
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn static_truth(expr: &lucid_syntax::Expr) -> Option<bool> {
+        match expr {
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Bool(value),
+                ..
+            } => Some(*value),
+            lucid_syntax::Expr::Literal {
+                value: lucid_syntax::LiteralValue::Int(value),
+                ..
+            } => Some(*value != 0),
+            lucid_syntax::Expr::Unary {
+                op: lucid_syntax::UnaryOp::Not,
+                expr,
+                ..
+            } => static_truth(expr).map(|value| !value),
+            lucid_syntax::Expr::Binary {
+                op: lucid_syntax::BinaryOp::And,
+                left,
+                right,
+                ..
+            } => match static_truth(left) {
+                Some(false) => Some(false),
+                Some(true) => static_truth(right),
+                None => None,
+            },
+            lucid_syntax::Expr::Binary {
+                op: lucid_syntax::BinaryOp::Or,
+                left,
+                right,
+                ..
+            } => match static_truth(left) {
+                Some(true) => Some(true),
+                Some(false) => static_truth(right),
+                None => None,
+            },
+            lucid_syntax::Expr::Binary {
+                op, left, right, ..
+            } => {
+                let equality = |op: &lucid_syntax::BinaryOp, equal: bool| match op {
+                    lucid_syntax::BinaryOp::Eq
+                    | lucid_syntax::BinaryOp::Identity
+                    | lucid_syntax::BinaryOp::Is => Some(equal),
+                    lucid_syntax::BinaryOp::NotEq
+                    | lucid_syntax::BinaryOp::NotIdentity
+                    | lucid_syntax::BinaryOp::IsNot => Some(!equal),
+                    _ => None,
+                };
+                if let (
+                    lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Bool(left),
+                        ..
+                    },
+                    lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Bool(right),
+                        ..
+                    },
+                ) = (left.as_ref(), right.as_ref())
+                {
+                    return equality(op, left == right);
+                }
+                if let (Some(left), Some(right)) = (static_big_int(left), static_big_int(right)) {
+                    return Some(match op {
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => left == right,
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => left != right,
+                        lucid_syntax::BinaryOp::Lt => left < right,
+                        lucid_syntax::BinaryOp::LtEq => left <= right,
+                        lucid_syntax::BinaryOp::Gt => left > right,
+                        lucid_syntax::BinaryOp::GtEq => left >= right,
+                        _ => return None,
+                    });
+                }
+                if let (
+                    lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Str(left),
+                        ..
+                    },
+                    lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Str(right),
+                        ..
+                    },
+                ) = (left.as_ref(), right.as_ref())
+                {
+                    return equality(op, left == right);
+                }
+                if let (
+                    lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Float(left),
+                        ..
+                    },
+                    lucid_syntax::Expr::Literal {
+                        value: lucid_syntax::LiteralValue::Float(right),
+                        ..
+                    },
+                ) = (left.as_ref(), right.as_ref())
+                {
+                    return Some(match op {
+                        lucid_syntax::BinaryOp::Eq
+                        | lucid_syntax::BinaryOp::Identity
+                        | lucid_syntax::BinaryOp::Is => left == right,
+                        lucid_syntax::BinaryOp::NotEq
+                        | lucid_syntax::BinaryOp::NotIdentity
+                        | lucid_syntax::BinaryOp::IsNot => left != right,
+                        lucid_syntax::BinaryOp::Lt => left < right,
+                        lucid_syntax::BinaryOp::LtEq => left <= right,
+                        lucid_syntax::BinaryOp::Gt => left > right,
+                        lucid_syntax::BinaryOp::GtEq => left >= right,
+                        _ => return None,
+                    });
+                }
+                if matches!(
+                    (left.as_ref(), right.as_ref()),
+                    (
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::None,
+                            ..
+                        },
+                        lucid_syntax::Expr::Literal {
+                            value: lucid_syntax::LiteralValue::None,
+                            ..
+                        }
+                    )
+                ) {
+                    return equality(op, true);
+                }
+                let (left, right) = (static_int(left)?, static_int(right)?);
+                Some(match op {
+                    lucid_syntax::BinaryOp::Eq
+                    | lucid_syntax::BinaryOp::Identity
+                    | lucid_syntax::BinaryOp::Is => left == right,
+                    lucid_syntax::BinaryOp::NotEq
+                    | lucid_syntax::BinaryOp::NotIdentity
+                    | lucid_syntax::BinaryOp::IsNot => left != right,
+                    lucid_syntax::BinaryOp::Lt => left < right,
+                    lucid_syntax::BinaryOp::LtEq => left <= right,
+                    lucid_syntax::BinaryOp::Gt => left > right,
+                    lucid_syntax::BinaryOp::GtEq => left >= right,
+                    _ => return None,
+                })
+            }
+            _ => None,
+        }
+    }
+    fn selected_return_span(
+        condition: &lucid_syntax::Expr,
+        then_branch: &[lucid_syntax::Stmt],
+        elif_branches: &[(lucid_syntax::Expr, Vec<lucid_syntax::Stmt>)],
+        else_branch: Option<&Vec<lucid_syntax::Stmt>>,
+    ) -> Option<lucid_syntax::Span> {
+        let mut selected = if static_truth(condition) == Some(true) {
+            Some(then_branch)
+        } else {
+            None
+        };
+        if selected.is_none() && static_truth(condition) == Some(false) {
+            for (condition, body) in elif_branches {
+                match static_truth(condition) {
+                    Some(true) => {
+                        selected = Some(body.as_slice());
+                        break;
+                    }
+                    Some(false) => continue,
+                    None => return None,
+                }
+            }
+            if selected.is_none() {
+                selected = else_branch.map(Vec::as_slice);
+            }
+        }
+        match selected {
+            Some(
+                [
+                    lucid_syntax::Stmt::Return {
+                        value: Some(value), ..
+                    },
+                ],
+            ) => Some(value.span()),
+            _ => None,
+        }
+    }
+    enum StaticBranch<'a> {
+        Selected(&'a [lucid_syntax::Stmt]),
+        Empty,
+        Unknown,
+    }
+    fn static_branch_selection<'a>(
+        condition: &lucid_syntax::Expr,
+        then_branch: &'a [lucid_syntax::Stmt],
+        elif_branches: &'a [(lucid_syntax::Expr, Vec<lucid_syntax::Stmt>)],
+        else_branch: Option<&'a Vec<lucid_syntax::Stmt>>,
+    ) -> StaticBranch<'a> {
+        match static_truth(condition) {
+            Some(true) => StaticBranch::Selected(then_branch),
+            Some(false) => {
+                for (condition, branch) in elif_branches {
+                    match static_truth(condition) {
+                        Some(true) => return StaticBranch::Selected(branch),
+                        Some(false) => continue,
+                        None => return StaticBranch::Unknown,
+                    }
+                }
+                else_branch.map_or(StaticBranch::Empty, |branch| {
+                    StaticBranch::Selected(branch.as_slice())
+                })
+            }
+            None => StaticBranch::Unknown,
+        }
+    }
+    fn collect_pre_return_binding(
+        statement: &lucid_syntax::Stmt,
+        bindings: &mut Vec<(String, lucid_syntax::Span)>,
+        ordered_roots: &mut Vec<lucid_syntax::Span>,
+    ) -> Result<(), Arc<str>> {
+        if let lucid_syntax::Stmt::Expr(expr) = statement {
+            ordered_roots.push(expr.span());
+            return Ok(());
+        }
+        if matches!(statement, lucid_syntax::Stmt::Pass(_)) {
+            return Ok(());
+        }
+        if let lucid_syntax::Stmt::Assert { condition, .. } = statement
+            && static_truth(condition) == Some(true)
+        {
+            return Ok(());
+        }
+        if let lucid_syntax::Stmt::While { condition, .. } = statement
+            && static_truth(condition) == Some(false)
+        {
+            return Ok(());
+        }
+        if let lucid_syntax::Stmt::For { iterable, .. } = statement
+            && lucid_cir::is_const_empty_iterable(iterable)
+        {
+            return Ok(());
+        }
+        if let lucid_syntax::Stmt::If {
+            condition,
+            then_branch,
+            elif_branches,
+            else_branch,
+            ..
+        } = statement
+        {
+            match static_branch_selection(
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch.as_ref(),
+            ) {
+                StaticBranch::Selected(branch) => {
+                    for statement in branch {
+                        collect_pre_return_binding(statement, bindings, ordered_roots)?;
+                    }
+                    return Ok(());
+                }
+                StaticBranch::Empty => return Ok(()),
+                StaticBranch::Unknown => {}
+            }
+        }
+        let (name, value) = match statement {
+            lucid_syntax::Stmt::Assignment {
+                target: lucid_syntax::Expr::Ident { name, .. },
+                value,
+                ..
+            }
+            | lucid_syntax::Stmt::VarDef {
+                pattern: lucid_syntax::Pattern::Ident(name, _),
+                value: Some(value),
+                ..
+            } => (name, value),
+            _ => {
+                return Err(Arc::from(
+                    "multi-statement function bodies are not yet supported by CIR lowering",
+                ));
+            }
+        };
+        bindings.push((name.clone(), value.span()));
+        ordered_roots.push(value.span());
+        Ok(())
+    }
+    enum StaticReturn {
+        Value(lucid_syntax::Span),
+        Void,
+    }
+    fn collect_static_branch_return(
+        branch: &[lucid_syntax::Stmt],
+        bindings: &mut Vec<(String, lucid_syntax::Span)>,
+        ordered_roots: &mut Vec<lucid_syntax::Span>,
+    ) -> Result<StaticReturn, Arc<str>> {
+        let Some((last, prefix)) = branch.split_last() else {
+            return Ok(StaticReturn::Void);
+        };
+        for statement in prefix {
+            collect_pre_return_binding(statement, bindings, ordered_roots)?;
+        }
+        match last {
+            lucid_syntax::Stmt::Return {
+                value: Some(value), ..
+            } => Ok(StaticReturn::Value(value.span())),
+            lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_) => {
+                Ok(StaticReturn::Void)
+            }
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => match static_branch_selection(
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch.as_ref(),
+            ) {
+                StaticBranch::Selected(branch) => {
+                    collect_static_branch_return(branch, bindings, ordered_roots)
+                }
+                StaticBranch::Empty => Ok(StaticReturn::Void),
+                StaticBranch::Unknown => Err(Arc::from(
+                    "constant function branch has no lowerable return",
+                )),
+            },
+            _ => {
+                collect_pre_return_binding(last, bindings, ordered_roots)?;
+                Ok(StaticReturn::Void)
+            }
+        }
+    }
+    // A single expression return is the common case.  A constant statement
+    // branch with one return per selected arm can also be folded here.  A
+    // sequence of simple
+    // local definitions/assignments followed by `return name` is also SSA-
+    // representable: each name resolves to its latest defining expression.
+    let void_function = || {
+        let function = lucid_cir::Function {
+            entry: lucid_cir::BlockId(0),
+            blocks: vec![lucid_cir::Block {
+                id: lucid_cir::BlockId(0),
+                instructions: function
+                    .parameter_names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| lucid_cir::Instruction::Param {
+                        result: lucid_cir::ValueId(index as u32),
+                        index: index as u32,
+                    })
+                    .collect(),
+                terminator: lucid_cir::Terminator::Return(None),
+            }],
+        };
+        function
+            .verify()
+            .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+        Ok(Arc::new(function))
+    };
+    let lower_prefix_to_void =
+        |ordered_root_spans: &[lucid_syntax::Span],
+         local_specs: &[(String, lucid_syntax::Span)]| {
+            if ordered_root_spans.is_empty() {
+                return void_function();
+            }
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            let local_bindings = local_specs
+                .iter()
+                .map(|(name, span)| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| (name.clone(), node.id))
+                        .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let ordered_roots = ordered_root_spans
+                .iter()
+                .map(|span| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| node.id)
+                        .ok_or_else(|| {
+                            Arc::<str>::from("prefix expression has no typed expression")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let root_id = ordered_roots
+                .last()
+                .copied()
+                .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
+            let prefix_roots = ordered_roots
+                .iter()
+                .take(ordered_roots.len().saturating_sub(1))
+                .copied()
+                .collect::<Vec<_>>();
+            let mut lowered = lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+                &nodes,
+                &prefix_roots,
+                root_id,
+                &function.parameter_names,
+                &local_bindings,
+            )
+            .map_err(|_| Arc::<str>::from("unsupported expression before bare return"))?;
+            if let Some(block) = lowered.blocks.last_mut() {
+                block.terminator = lucid_cir::Terminator::Return(None);
+            }
+            lowered
+                .verify()
+                .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+            Ok(Arc::new(lowered))
+        };
+    let (root_span, ordered_root_spans, local_specs): (
+        lucid_syntax::Span,
+        Vec<lucid_syntax::Span>,
+        Vec<(String, lucid_syntax::Span)>,
+    ) = match source_function.body.as_slice() {
+        [
+            lucid_syntax::Stmt::Return {
+                value: Some(value), ..
+            },
+        ] => (value.span(), Vec::new(), Vec::new()),
+        [lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)] => {
+            return void_function();
+        }
+        [
+            lucid_syntax::Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            },
+        ] => {
+            if let Some(span) =
+                selected_return_span(condition, then_branch, elif_branches, else_branch.as_ref())
+            {
+                (span, Vec::new(), Vec::new())
+            } else {
+                match static_branch_selection(
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch.as_ref(),
+                ) {
+                    StaticBranch::Selected([lucid_syntax::Stmt::Pass(_)]) | StaticBranch::Empty => {
+                        return void_function();
+                    }
+                    StaticBranch::Selected(branch) => {
+                        let mut bindings = Vec::new();
+                        let mut ordered_roots = Vec::new();
+                        match collect_static_branch_return(
+                            branch,
+                            &mut bindings,
+                            &mut ordered_roots,
+                        )? {
+                            StaticReturn::Value(span) => (span, ordered_roots, bindings),
+                            StaticReturn::Void => {
+                                return lower_prefix_to_void(&ordered_roots, &bindings);
+                            }
+                        }
+                    }
+                    StaticBranch::Unknown => {
+                        if function.is_async {
+                            return Err(Arc::from(
+                                "async function bodies are not yet supported by CIR lowering",
+                            ));
+                        }
+                        let module = lucid_syntax::Module {
+                            statements: source_function.body.clone(),
+                            span: source_function.span,
+                        };
+                        if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                            &module,
+                            &function.parameter_names,
+                        ) {
+                            return Ok(Arc::new(function));
+                        }
+                        return Err(Arc::from(
+                            "constant function branch has no lowerable return",
+                        ));
+                    }
+                }
+            }
+        }
+        statements if statements.len() >= 2 => {
+            let Some(last) = statements.last() else {
+                return Err(Arc::from(
+                    "multi-statement function bodies are not yet supported by CIR lowering",
+                ));
+            };
+            if !matches!(
+                last,
+                lucid_syntax::Stmt::Return { .. } | lucid_syntax::Stmt::Pass(_)
+            ) {
+                if let lucid_syntax::Stmt::If {
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch: Some(else_branch),
+                    ..
+                } = last
+                    && static_truth(condition).is_none()
+                    && has_identifier(condition)
+                    && elif_branches.iter().all(|(elif_condition, branch)| {
+                        static_truth(elif_condition).is_none()
+                            && has_identifier(elif_condition)
+                            && single_return_expr(branch).is_some()
+                    })
+                    && let Some(then_return) = single_return_expr(then_branch)
+                    && let Some(else_return) = single_return_expr(else_branch)
+                {
+                    if function.is_async {
+                        return Err(Arc::from(
+                            "async function bodies are not yet supported by CIR lowering",
+                        ));
+                    }
+                    let mut local_specs = Vec::new();
+                    let mut ordered_roots = Vec::new();
+                    for statement in &statements[..statements.len() - 1] {
+                        collect_pre_return_binding(
+                            statement,
+                            &mut local_specs,
+                            &mut ordered_roots,
+                        )?;
+                    }
+                    if ordered_roots.len() != local_specs.len() {
+                        let module = lucid_syntax::Module {
+                            statements: source_function.body.clone(),
+                            span: source_function.span,
+                        };
+                        if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                            &module,
+                            &function.parameter_names,
+                        ) {
+                            return Ok(Arc::new(function));
+                        }
+                        return Err(Arc::from("unsupported setup guard return chain"));
+                    }
+                    let nodes = function
+                        .body_expressions
+                        .iter()
+                        .map(|node| lucid_cir::TypedExprNode {
+                            id: node.id,
+                            kind: node.kind.clone(),
+                            detail: node.detail.clone(),
+                            children: node.children.to_vec(),
+                            literal: node.literal,
+                        })
+                        .collect::<Vec<_>>();
+                    let find_id = |span: lucid_syntax::Span| {
+                        function
+                            .body_expressions
+                            .iter()
+                            .rev()
+                            .find(|node| node.span == span)
+                            .map(|node| node.id)
+                    };
+                    let local_bindings = local_specs
+                        .into_iter()
+                        .map(|(name, span)| {
+                            find_id(span).map(|id| (name, id)).ok_or_else(|| {
+                                Arc::<str>::from("local binding has no typed expression")
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if let Some(condition_id) = find_id(condition.span()) {
+                        let then_id = then_return
+                            .map(|value| {
+                                find_id(value.span()).ok_or_else(|| {
+                                    Arc::<str>::from("function has no lowerable expression")
+                                })
+                            })
+                            .transpose()?;
+                        let elif_ids = elif_branches
+                            .iter()
+                            .map(|(elif_condition, branch)| {
+                                let elif_return = single_return_expr(branch).ok_or_else(|| {
+                                    Arc::<str>::from("function has no lowerable expression")
+                                })?;
+                                let condition_id =
+                                    find_id(elif_condition.span()).ok_or_else(|| {
+                                        Arc::<str>::from("function has no lowerable expression")
+                                    })?;
+                                let value_id = elif_return
+                                    .map(|value| {
+                                        find_id(value.span()).ok_or_else(|| {
+                                            Arc::<str>::from("function has no lowerable expression")
+                                        })
+                                    })
+                                    .transpose()?;
+                                Ok((condition_id, value_id))
+                            })
+                            .collect::<Result<Vec<_>, Arc<str>>>()?;
+                        let else_id = else_return
+                            .map(|value| {
+                                find_id(value.span()).ok_or_else(|| {
+                                    Arc::<str>::from("function has no lowerable expression")
+                                })
+                            })
+                            .transpose()?;
+                        return match lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
+                                &nodes,
+                                condition_id,
+                                then_id,
+                                &elif_ids,
+                                else_id,
+                                &function.parameter_names,
+                                &local_bindings,
+                            ) {
+                                Ok(function) => Ok(Arc::new(function)),
+                                Err(_) => {
+                                    let module = lucid_syntax::Module {
+                                        statements: source_function.body.clone(),
+                                        span: source_function.span,
+                                    };
+                                    lucid_cir::Function::from_module_linear_with_params(
+                                        &module,
+                                        &function.parameter_names,
+                                    )
+                                    .map(Arc::new)
+                                    .map_err(|_| Arc::from("unsupported setup guard return chain"))
+                                }
+                            };
+                    }
+                    return Err(Arc::from("function has no lowerable expression"));
+                }
+                if function.is_async {
+                    return Err(Arc::from(
+                        "async function bodies are not yet supported by CIR lowering",
+                    ));
+                }
+                let module = lucid_syntax::Module {
+                    statements: source_function.body.clone(),
+                    span: source_function.span,
+                };
+                if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                    &module,
+                    &function.parameter_names,
+                ) {
+                    return Ok(Arc::new(function));
+                }
+                return Err(Arc::from(
+                    "multi-statement function bodies are not yet supported by CIR lowering",
+                ));
+            }
+            let mut bindings = Vec::new();
+            let mut ordered_roots = Vec::new();
+            for statement in &statements[..statements.len() - 1] {
+                if let Err(error) =
+                    collect_pre_return_binding(statement, &mut bindings, &mut ordered_roots)
+                {
+                    if let lucid_syntax::Stmt::Return {
+                        value: Some(fallback_value),
+                        ..
+                    } = last
+                        && let Some((
+                            lucid_syntax::Stmt::If {
+                                condition,
+                                then_branch,
+                                elif_branches,
+                                else_branch: None,
+                                ..
+                            },
+                            setup,
+                        )) = statements[..statements.len() - 1].split_last()
+                        && static_truth(condition).is_none()
+                        && has_identifier(condition)
+                        && elif_branches.iter().all(|(elif_condition, branch)| {
+                            static_truth(elif_condition).is_none()
+                                && has_identifier(elif_condition)
+                                && single_return_expr(branch).is_some()
+                        })
+                        && let Some(then_return) = single_return_expr(then_branch)
+                    {
+                        if function.is_async {
+                            return Err(Arc::from(
+                                "async function bodies are not yet supported by CIR lowering",
+                            ));
+                        }
+                        let mut local_specs = Vec::new();
+                        let mut setup_ordered_roots = Vec::new();
+                        for statement in setup {
+                            collect_pre_return_binding(
+                                statement,
+                                &mut local_specs,
+                                &mut setup_ordered_roots,
+                            )?;
+                        }
+                        if setup_ordered_roots.len() != local_specs.len() {
+                            let module = lucid_syntax::Module {
+                                statements: source_function.body.clone(),
+                                span: source_function.span,
+                            };
+                            if let Ok(function) =
+                                lucid_cir::Function::from_module_linear_with_params(
+                                    &module,
+                                    &function.parameter_names,
+                                )
+                            {
+                                return Ok(Arc::new(function));
+                            }
+                            return Err(Arc::from("unsupported setup guard return chain"));
+                        }
+                        let nodes = function
+                            .body_expressions
+                            .iter()
+                            .map(|node| lucid_cir::TypedExprNode {
+                                id: node.id,
+                                kind: node.kind.clone(),
+                                detail: node.detail.clone(),
+                                children: node.children.to_vec(),
+                                literal: node.literal,
+                            })
+                            .collect::<Vec<_>>();
+                        let find_id = |span: lucid_syntax::Span| {
+                            function
+                                .body_expressions
+                                .iter()
+                                .rev()
+                                .find(|node| node.span == span)
+                                .map(|node| node.id)
+                        };
+                        let local_bindings = local_specs
+                            .into_iter()
+                            .map(|(name, span)| {
+                                find_id(span).map(|id| (name, id)).ok_or_else(|| {
+                                    Arc::<str>::from("local binding has no typed expression")
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if let (Some(condition_id), Some(fallback_id)) =
+                            (find_id(condition.span()), find_id(fallback_value.span()))
+                        {
+                            let then_id = then_return
+                                .map(|value| {
+                                    find_id(value.span()).ok_or_else(|| {
+                                        Arc::<str>::from("function has no lowerable expression")
+                                    })
+                                })
+                                .transpose()?;
+                            let elif_ids = elif_branches
+                                .iter()
+                                .map(|(elif_condition, branch)| {
+                                    let elif_return =
+                                        single_return_expr(branch).ok_or_else(|| {
+                                            Arc::<str>::from("function has no lowerable expression")
+                                        })?;
+                                    let condition_id =
+                                        find_id(elif_condition.span()).ok_or_else(|| {
+                                            Arc::<str>::from("function has no lowerable expression")
+                                        })?;
+                                    let value_id = elif_return
+                                        .map(|value| {
+                                            find_id(value.span()).ok_or_else(|| {
+                                                Arc::<str>::from(
+                                                    "function has no lowerable expression",
+                                                )
+                                            })
+                                        })
+                                        .transpose()?;
+                                    Ok((condition_id, value_id))
+                                })
+                                .collect::<Result<Vec<_>, Arc<str>>>()?;
+                            return match lucid_cir::Function::from_typed_statement_if_elif_mixed_return_chain(
+                                    &nodes,
+                                    condition_id,
+                                    then_id,
+                                    &elif_ids,
+                                    Some(fallback_id),
+                                    &function.parameter_names,
+                                    &local_bindings,
+                                ) {
+                                    Ok(function) => Ok(Arc::new(function)),
+                                    Err(_) => {
+                                        let module = lucid_syntax::Module {
+                                            statements: source_function.body.clone(),
+                                            span: source_function.span,
+                                        };
+                                        lucid_cir::Function::from_module_linear_with_params(
+                                            &module,
+                                            &function.parameter_names,
+                                        )
+                                        .map(Arc::new)
+                                        .map_err(|_| {
+                                            Arc::from("unsupported setup guard return chain")
+                                        })
+                                    }
+                                };
+                        }
+                        return Err(Arc::from("function has no lowerable expression"));
+                    }
+                    let module = lucid_syntax::Module {
+                        statements: source_function.body.clone(),
+                        span: source_function.span,
+                    };
+                    if let Ok(function) = lucid_cir::Function::from_module_linear_with_params(
+                        &module,
+                        &function.parameter_names,
+                    ) {
+                        return Ok(Arc::new(function));
+                    }
+                    return Err(error);
+                }
+            }
+            if matches!(
+                last,
+                lucid_syntax::Stmt::Return { value: None, .. } | lucid_syntax::Stmt::Pass(_)
+            ) {
+                return lower_prefix_to_void(&ordered_roots, &bindings);
+            }
+            let lucid_syntax::Stmt::Return {
+                value: Some(value), ..
+            } = last
+            else {
+                return Err(Arc::from(
+                    "multi-statement function bodies are not yet supported by CIR lowering",
+                ));
+            };
+            (value.span(), ordered_roots, bindings)
+        }
+        _ => {
+            return Err(Arc::from(
+                "multi-statement function bodies are not yet supported by CIR lowering",
+            ));
+        }
+    };
+    if function.is_async {
+        return Err(Arc::from(
+            "async function bodies are not yet supported by CIR lowering",
+        ));
+    }
+    // A bare return may follow pure, primitive bindings.  Keep this on the
+    // same checked CIR boundary as value-returning straight-line bodies: the
+    // linear lowerer now clears the value channel for `return` without an
+    // expression, so an earlier temporary cannot accidentally become the
+    // function result.
+    if source_function.body.len() >= 2
+        && matches!(
+            source_function.body.last(),
+            Some(lucid_syntax::Stmt::Return { value: None, .. })
+        )
+    {
+        if !ordered_root_spans.is_empty() {
+            let nodes = function
+                .body_expressions
+                .iter()
+                .map(|node| lucid_cir::TypedExprNode {
+                    id: node.id,
+                    kind: node.kind.clone(),
+                    detail: node.detail.clone(),
+                    children: node.children.to_vec(),
+                    literal: node.literal,
+                })
+                .collect::<Vec<_>>();
+            let local_bindings = local_specs
+                .iter()
+                .map(|(name, span)| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| (name.clone(), node.id))
+                        .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let ordered_roots = ordered_root_spans
+                .iter()
+                .map(|span| {
+                    function
+                        .body_expressions
+                        .iter()
+                        .rev()
+                        .find(|node| node.span == *span)
+                        .map(|node| node.id)
+                        .ok_or_else(|| {
+                            Arc::<str>::from("prefix expression has no typed expression")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let root_id = ordered_roots
+                .last()
+                .copied()
+                .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
+            let prefix_roots = ordered_roots
+                .iter()
+                .take(ordered_roots.len().saturating_sub(1))
+                .copied()
+                .collect::<Vec<_>>();
+            if let Ok(mut lowered) =
+                lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+                    &nodes,
+                    &prefix_roots,
+                    root_id,
+                    &function.parameter_names,
+                    &local_bindings,
+                )
+            {
+                if let Some(block) = lowered.blocks.last_mut() {
+                    block.terminator = lucid_cir::Terminator::Return(None);
+                }
+                lowered
+                    .verify()
+                    .map_err(|_| Arc::<str>::from("invalid void function CIR"))?;
+                return Ok(Arc::new(lowered));
+            }
+        }
+        let module = lucid_syntax::Module {
+            statements: source_function.body.clone(),
+            span: source_function.span,
+        };
+        return lucid_cir::Function::from_module_linear_with_params(
+            &module,
+            &function.parameter_names,
+        )
+        .map(Arc::new)
+        .map_err(|_| Arc::from("unsupported expression before bare return"));
+    }
+    let root = function
+        .body_expressions
+        .iter()
+        .rev()
+        .find(|node| node.span == root_span)
+        .ok_or_else(|| Arc::<str>::from("function has no lowerable expression"))?;
+    let nodes = function
+        .body_expressions
+        .iter()
+        .map(|node| lucid_cir::TypedExprNode {
+            id: node.id,
+            kind: node.kind.clone(),
+            detail: node.detail.clone(),
+            children: node.children.to_vec(),
+            literal: node.literal,
+        })
+        .collect::<Vec<_>>();
+    let local_bindings = local_specs
+        .into_iter()
+        .map(|(name, span)| {
+            function
+                .body_expressions
+                .iter()
+                .rev()
+                .find(|node| node.span == span)
+                .map(|node| (name, node.id))
+                .ok_or_else(|| Arc::<str>::from("local binding has no typed expression"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let root_id = if root.kind == "name"
+        && function
+            .parameter_names
+            .iter()
+            .any(|name| root.detail.as_deref() == Some(name.as_str()))
+    {
+        local_bindings
+            .iter()
+            .rev()
+            .find(|(name, _)| root.detail.as_deref() == Some(name.as_str()))
+            .map(|(_, id)| *id)
+            .unwrap_or(root.id)
+    } else {
+        root.id
+    };
+    let prefix_roots = ordered_root_spans
+        .iter()
+        .map(|span| {
+            function
+                .body_expressions
+                .iter()
+                .rev()
+                .find(|node| node.span == *span)
+                .map(|node| node.id)
+                .ok_or_else(|| Arc::<str>::from("prefix expression has no typed expression"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    match lucid_cir::Function::from_typed_function_body_with_ordered_prefix(
+        &nodes,
+        &prefix_roots,
+        root_id,
+        &function.parameter_names,
+        &local_bindings,
+    ) {
+        Ok(function) => Ok(Arc::new(function)),
+        Err(typed_error) => {
+            let module = lucid_syntax::Module {
+                statements: source_function.body.clone(),
+                span: source_function.span,
+            };
+            lucid_cir::Function::from_module_linear_with_params(&module, &function.parameter_names)
+                .map(Arc::new)
+                .map_err(|_| match typed_error {
+                    lucid_cir::LowerError::NoLowerableAssignment => {
+                        Arc::from("function has no lowerable expression")
+                    }
+                    lucid_cir::LowerError::UnsupportedExpression => {
+                        Arc::from("unsupported expression for function CIR lowering")
+                    }
+                })
+        }
+    }
+}
+
+/// Compatibility name for callers that still use the prototype terminology.
+/// The tracked implementation is [`lower_module`]; this alias keeps one
+/// lowering query and therefore one memoized semantic boundary.
+#[salsa::tracked]
+pub fn lower_first_assignment(
+    db: &dyn Db,
+    file: SourceFile,
+) -> Result<Arc<lucid_cir::Function>, Arc<str>> {
+    lower_module(db, file).clone()
+}
+
+fn module_path(path: &str) -> String {
+    let path = path.strip_suffix(".lucid").unwrap_or(path);
+    let normalized = path.replace(['\\', '/'], ".");
+    if normalized == "__init__" {
+        return String::new();
+    }
+    normalized
+        .strip_suffix(".__init__")
+        .unwrap_or(&normalized)
+        .to_string()
+}
+
+fn import_path(file_path: &str, import: &str) -> String {
+    let leading = import.bytes().take_while(|byte| *byte == b'.').count();
+    if leading == 0 {
+        return import.to_string();
+    }
+    let current = module_path(file_path);
+    let mut parts = if current.is_empty() {
+        Vec::new()
+    } else {
+        current.split('.').collect::<Vec<_>>()
+    };
+    if !file_path.replace('\\', "/").ends_with("/__init__.lucid")
+        && !file_path.replace('\\', "/").ends_with("__init__.lucid")
+    {
+        parts.pop();
+    }
+    for _ in 1..leading {
+        parts.pop();
+    }
+    let suffix = &import[leading..];
+    if !suffix.is_empty() {
+        parts.extend(suffix.split('.'));
+    }
+    parts.join(".")
+}
+
+fn statement_span(statement: &lucid_syntax::Stmt) -> lucid_syntax::Span {
+    match statement {
+        lucid_syntax::Stmt::Module { span, .. }
+        | lucid_syntax::Stmt::ClassDef { span, .. }
+        | lucid_syntax::Stmt::TraitDef { span, .. }
+        | lucid_syntax::Stmt::ImplementDef { span, .. }
+        | lucid_syntax::Stmt::TypeAlias { span, .. }
+        | lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef { span, .. })
+        | lucid_syntax::Stmt::VarDef { span, .. }
+        | lucid_syntax::Stmt::With { span, .. }
+        | lucid_syntax::Stmt::Assignment { span, .. }
+        | lucid_syntax::Stmt::AugAssign { span, .. }
+        | lucid_syntax::Stmt::If { span, .. }
+        | lucid_syntax::Stmt::For { span, .. }
+        | lucid_syntax::Stmt::While { span, .. }
+        | lucid_syntax::Stmt::Match { span, .. }
+        | lucid_syntax::Stmt::Try { span, .. }
+        | lucid_syntax::Stmt::Return { span, .. }
+        | lucid_syntax::Stmt::Raise { span, .. }
+        | lucid_syntax::Stmt::Yield { span, .. }
+        | lucid_syntax::Stmt::Assert { span, .. }
+        | lucid_syntax::Stmt::Delete { span, .. }
+        | lucid_syntax::Stmt::Pass(span)
+        | lucid_syntax::Stmt::Import { span, .. }
+        | lucid_syntax::Stmt::FromImport { span, .. } => *span,
+        lucid_syntax::Stmt::Break(span) | lucid_syntax::Stmt::Continue(span) => *span,
+        lucid_syntax::Stmt::Expr(expr) => expr.span(),
+    }
+}
+
+/// Resolve an import against the project's source-file table.  Matching is
+/// deterministic and does not consult the host filesystem during checking.
+#[salsa::tracked]
+pub fn resolve_module(db: &dyn Db, project: Project, module: String) -> Option<SourceFile> {
+    project
+        .files(db)
+        .iter()
+        .copied()
+        .find(|file| module_path(file.path(db)) == module)
+}
+
+/// Resolve an absolute or relative import in the context of its importing
+/// file. Relative dots walk package segments from the file's module path.
+#[salsa::tracked]
+pub fn resolve_import(
+    db: &dyn Db,
+    project: Project,
+    file: SourceFile,
+    module: String,
+) -> Option<SourceFile> {
+    *resolve_module(db, project, import_path(file.path(db), &module))
+}
+
+/// Compute a deterministic dependency-first initialization order.
+#[salsa::tracked]
+pub fn module_order(db: &dyn Db, project: Project) -> Result<Arc<[SourceFile]>, Arc<str>> {
+    let mut files = project.files(db).to_vec();
+    files.sort_by(|left, right| left.path(db).cmp(right.path(db)));
+    let mut module_paths = std::collections::BTreeMap::<String, SourceFile>::new();
+    for &file in &files {
+        let path = module_path(file.path(db));
+        if let Some(previous) = module_paths.insert(path.clone(), file) {
+            return Err(Arc::from(format!(
+                "duplicate module path '{path}' (also declared by '{}')",
+                previous.path(db)
+            )));
+        }
+    }
+    let indices: HashMap<SourceFile, usize> = files
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, file)| (file, index))
+        .collect();
+    let mut state = vec![0u8; files.len()];
+    let mut order = Vec::with_capacity(files.len());
+
+    fn declaration_only(db: &dyn Db, file: SourceFile) -> bool {
+        let Ok(module) = parse_ast(db, file) else {
+            return false;
+        };
+        fn statement_is_declaration(statement: &lucid_syntax::Stmt) -> bool {
+            match statement {
+                lucid_syntax::Stmt::ClassDef { .. }
+                | lucid_syntax::Stmt::TraitDef { .. }
+                | lucid_syntax::Stmt::ImplementDef { .. }
+                | lucid_syntax::Stmt::TypeAlias { .. }
+                | lucid_syntax::Stmt::Function(_)
+                | lucid_syntax::Stmt::Import { .. }
+                | lucid_syntax::Stmt::FromImport { .. }
+                | lucid_syntax::Stmt::Pass(_)
+                | lucid_syntax::Stmt::Break(_)
+                | lucid_syntax::Stmt::Continue(_) => true,
+                // An uninitialized annotation reserves a name but performs
+                // no value initialization. Every other statement can read
+                // or mutate a value while the cycle is being initialized.
+                lucid_syntax::Stmt::VarDef { value: None, .. } => true,
+                _ => false,
+            }
+        }
+        module.statements.iter().all(statement_is_declaration)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn visit(
+        db: &dyn Db,
+        project: Project,
+        files: &[SourceFile],
+        indices: &HashMap<SourceFile, usize>,
+        state: &mut [u8],
+        order: &mut Vec<SourceFile>,
+        stack: &mut Vec<usize>,
+        index: usize,
+    ) -> Result<(), Arc<str>> {
+        if state[index] == 2 {
+            return Ok(());
+        }
+        if state[index] == 1 {
+            // Import cycles are safe when every module in the cycle only
+            // contributes declarations. Declarations are collected before
+            // initialization, so classes, traits, aliases, and
+            // functions can refer to one another without observing a value
+            // before its module runs. A top-level value/assignment/side
+            // effect still makes the cycle an initialization error.
+            let Some(start) = stack.iter().position(|entry| *entry == index) else {
+                return Err(Arc::from(format!(
+                    "cyclic module initialization involving '{}'",
+                    files[index].path(db)
+                )));
+            };
+            if stack[start..]
+                .iter()
+                .copied()
+                .all(|cycle_index| declaration_only(db, files[cycle_index]))
+            {
+                return Ok(());
+            }
+            return Err(Arc::from(format!(
+                "cyclic module initialization involving '{}'",
+                files[index].path(db)
+            )));
+        }
+        state[index] = 1;
+        stack.push(index);
+        for import in imports(db, files[index]).iter() {
+            if let Some(target) = resolve_import(db, project, files[index], import.clone())
+                && let Some(&target_index) = indices.get(target)
+            {
+                visit(
+                    db,
+                    project,
+                    files,
+                    indices,
+                    state,
+                    order,
+                    stack,
+                    target_index,
+                )?;
+            }
+        }
+        stack.pop();
+        state[index] = 2;
+        order.push(files[index]);
+        Ok(())
+    }
+
+    for index in 0..files.len() {
+        visit(
+            db,
+            project,
+            &files,
+            &indices,
+            &mut state,
+            &mut order,
+            &mut Vec::new(),
+            index,
+        )?;
+    }
+    Ok(Arc::from(order))
+}
+
+/// Return names visible from a file: all local declarations and the explicit
+/// bindings introduced by imports. A plain `import module` contributes only
+/// its module binding; exported declarations remain reachable through that
+/// module and are not injected into the unqualified namespace.
+#[salsa::tracked]
+pub fn visible_symbols<'db>(
+    db: &'db dyn Db,
+    project: Project,
+    file: SourceFile,
+) -> Arc<[Symbol<'db>]> {
+    let local_module = resolved_module(db, file);
+    let mut visible = local_module
+        .declarations
+        .iter()
+        .map(|decl| decl.symbol)
+        .collect::<Vec<_>>();
+    visible.extend(
+        imported_bindings(db, project, file)
+            .iter()
+            .map(|binding| binding.symbol),
+    );
+    visible.sort_by(|left, right| left.name(db).cmp(right.name(db)));
+    visible.dedup();
+    Arc::from(visible)
+}
+
+#[salsa::tracked]
+pub fn resolve_visible<'db>(
+    db: &'db dyn Db,
+    project: Project,
+    file: SourceFile,
+    name: String,
+) -> Option<Symbol<'db>> {
+    if let Some(local) = resolved_declarations(db, file)
+        .iter()
+        .find(|declaration| declaration.symbol.name(db).as_str() == name)
+    {
+        return Some(local.symbol);
+    }
+    if let Some(binding) = imported_bindings(db, project, file)
+        .iter()
+        .find(|binding| binding.local_name == name)
+    {
+        return Some(binding.symbol);
+    }
+    visible_symbols(db, project, file)
+        .iter()
+        .copied()
+        .find(|symbol| symbol.name(db).as_str() == name)
+}
+
+#[salsa::tracked]
+pub fn declaration_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Arc<str>]> {
+    let declarations = resolved_declarations(db, file);
+    let mut seen = std::collections::BTreeMap::new();
+    let mut errors = Vec::new();
+    for declaration in declarations.iter() {
+        let name = declaration.symbol.name(db);
+        if let Some(previous) = seen.get(name.as_str()) {
+            let dispatch_overload =
+                *previous && declaration.kind == DeclKind::Function && declaration.is_dispatch;
+            if dispatch_overload {
+                continue;
+            }
+            errors.push(Arc::<str>::from(format!(
+                "duplicate top-level declaration '{name}'"
+            )));
+        } else {
+            seen.insert(
+                name.to_string(),
+                declaration.kind == DeclKind::Function && declaration.is_dispatch,
+            );
+        }
+    }
+    Arc::from(errors)
+}
+
+#[salsa::tracked]
+pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
+    let mut diagnostics = Vec::new();
+    if let Err(error) = parse_ast(db, file).as_ref() {
+        // Preserve every independently recoverable grammar error. When a
+        // lexical error exists, suppress parser errors caused by the
+        // truncated token suffix and retain the lexical root span.
+        if let Ok((_, errors)) = lucid_syntax::parse_recovering(file.text(db)) {
+            let has_lexical_error = errors
+                .iter()
+                .any(|parse_error| parse_error.message.starts_with("lexer error:"));
+            let parse_errors = if has_lexical_error {
+                errors
+                    .into_iter()
+                    .filter(|parse_error| parse_error.message.starts_with("lexer error:"))
+                    .collect::<Vec<_>>()
+            } else {
+                errors
+            };
+            for parse_error in parse_errors {
+                diagnostics.push(Diagnostic {
+                    file,
+                    severity: Severity::Error,
+                    code: "E0001".into(),
+                    message: format!("Parse error: {}", parse_error.message),
+                    span: parse_error.span,
+                    related: Arc::from([]),
+                    fix: None,
+                });
+            }
+        }
+        if diagnostics.is_empty() {
+            diagnostics.push(Diagnostic {
+                file,
+                severity: Severity::Error,
+                code: "E0001".into(),
+                message: error.to_string(),
+                span: first_parse_error_span(db, file),
+                related: Arc::from([]),
+                fix: None,
+            });
+        }
+        return Arc::from(diagnostics);
+    }
+    let declarations = resolved_declarations(db, file);
+    let mut seen = std::collections::BTreeMap::new();
+    for declaration in declarations.iter() {
+        let name = declaration.symbol.name(db);
+        if let Some(previous) = seen.get(name.as_str()) {
+            let (previous_dispatch, previous_span) = *previous;
+            let dispatch_overload = previous_dispatch
+                && declaration.kind == DeclKind::Function
+                && declaration.is_dispatch;
+            if dispatch_overload {
+                continue;
+            }
+            diagnostics.push(Diagnostic {
+                file,
+                severity: Severity::Error,
+                code: "E0100".into(),
+                message: format!("duplicate top-level declaration '{name}'"),
+                span: declaration.span,
+                related: Arc::from([RelatedDiagnostic {
+                    file,
+                    message: "previous declaration is here".into(),
+                    span: previous_span,
+                }]),
+                fix: None,
+            });
+        } else {
+            seen.insert(
+                name.to_string(),
+                (
+                    declaration.kind == DeclKind::Function && declaration.is_dispatch,
+                    declaration.span,
+                ),
+            );
+        }
+    }
+    let module_result = parse_ast(db, file);
+    let Ok(module) = module_result else {
+        return Arc::from(diagnostics);
+    };
+    let mut checker = lucid_checker::TypeChecker::new();
+    if let Err(error) = checker.check_module(module) {
+        diagnostics.push(Diagnostic {
+            file,
+            severity: Severity::Error,
+            code: "E0200".into(),
+            message: error.message,
+            span: error.span,
+            related: Arc::from([]),
+            fix: None,
+        });
+    }
+    for warning in &checker.warnings {
+        diagnostics.push(Diagnostic {
+            file,
+            severity: Severity::Warning,
+            code: "W0200".into(),
+            message: warning.message.clone(),
+            span: warning.span,
+            related: Arc::from([]),
+            fix: None,
+        });
+    }
+    Arc::from(diagnostics)
+}
+
+/// Aggregate structured diagnostics for a complete project, including
+/// unresolved module edges.  This is the semantic diagnostic boundary used by
+/// editors and future build commands; string formatting is deferred to the
+/// presentation layer.
+#[salsa::tracked]
+pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
+    let mut diagnostics = Vec::new();
+    let order = match module_order(db, project).as_ref() {
+        Ok(order) => order.clone(),
+        Err(message) => {
+            if let Some(&file) = project
+                .files(db)
+                .iter()
+                .find(|file| message.contains(file.path(db).as_str()))
+                .or_else(|| project.files(db).first())
+            {
+                let span = parse_ast(db, file)
+                    .as_ref()
+                    .ok()
+                    .and_then(|module| module.statements.first().map(statement_span))
+                    .or_else(|| source_fallback_span(db, file))
+                    .unwrap_or_default();
+                diagnostics.push(Diagnostic {
+                    file,
+                    severity: Severity::Error,
+                    code: if message.starts_with("duplicate module path") {
+                        "E0303"
+                    } else {
+                        "E0301"
+                    }
+                    .into(),
+                    message: message.to_string(),
+                    span,
+                    related: Arc::from([]),
+                    fix: None,
+                });
+            }
+            return Arc::from(diagnostics);
+        }
+    };
+    for file in order.iter().copied() {
+        let file_diagnostics = file_diagnostics(db, file);
+        let private_import_error_spans = file_diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "E0200"
+                    && diagnostic.message.contains("cannot import private name")
+            })
+            .map(|diagnostic| diagnostic.span)
+            .collect::<std::collections::HashSet<_>>();
+        diagnostics.extend(file_diagnostics.iter().cloned());
+        for import in imports(db, file).iter() {
+            if is_builtin_module(import) {
+                continue;
+            }
+            if resolve_import(db, project, file, import.clone()).is_none() {
+                let span = parse_ast(db, file)
+                    .as_ref()
+                    .ok()
+                    .and_then(|module| {
+                        module.statements.iter().find_map(|statement| {
+                            let matches = match statement {
+                                lucid_syntax::Stmt::Import { module, .. }
+                                | lucid_syntax::Stmt::FromImport { module, .. } => module == import,
+                                _ => false,
+                            };
+                            matches.then(|| statement_span(statement))
+                        })
+                    })
+                    .unwrap_or_default();
+                diagnostics.push(Diagnostic {
+                    file,
+                    severity: Severity::Error,
+                    code: "E0300".into(),
+                    message: format!("unresolved module import '{import}'"),
+                    span,
+                    related: Arc::from([]),
+                    fix: None,
+                });
+            }
+        }
+        let Ok(module) = parse_ast(db, file) else {
+            continue;
+        };
+        let mut imported_names = std::collections::BTreeMap::<String, lucid_syntax::Span>::new();
+        for statement in &module.statements {
+            if let lucid_syntax::Stmt::Import { module, alias, .. } = statement {
+                let local_name = alias.clone().unwrap_or_else(|| {
+                    module
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(module)
+                        .trim_start_matches('.')
+                        .to_string()
+                });
+                let current_span = statement_span(statement);
+                if let Some(previous_span) = imported_names.get(&local_name).copied() {
+                    diagnostics.push(Diagnostic {
+                        file,
+                        severity: Severity::Error,
+                        code: "E0305".into(),
+                        message: format!("duplicate imported binding '{local_name}'"),
+                        span: current_span,
+                        related: Arc::from([RelatedDiagnostic {
+                            file,
+                            message: "previous import is here".into(),
+                            span: previous_span,
+                        }]),
+                        fix: None,
+                    });
+                } else {
+                    imported_names.insert(local_name.clone(), current_span);
+                }
+                continue;
+            }
+            let lucid_syntax::Stmt::FromImport {
+                module: module_name,
+                names,
+                ..
+            } = statement
+            else {
+                continue;
+            };
+            let Some(imported_file) = resolve_import(db, project, file, module_name.clone()) else {
+                continue;
+            };
+            let declarations = resolved_declarations(db, *imported_file);
+            for (name, alias) in names {
+                let local_name = alias.as_ref().unwrap_or(name);
+                let current_span = statement_span(statement);
+                if let Some(previous_span) = imported_names.get(local_name).copied() {
+                    diagnostics.push(Diagnostic {
+                        file,
+                        severity: Severity::Error,
+                        code: "E0305".into(),
+                        message: format!("duplicate imported binding '{local_name}'"),
+                        span: current_span,
+                        related: Arc::from([RelatedDiagnostic {
+                            file,
+                            message: "previous import is here".into(),
+                            span: previous_span,
+                        }]),
+                        fix: None,
+                    });
+                } else {
+                    imported_names.insert(local_name.clone(), current_span);
+                }
+                let exported = declarations
+                    .iter()
+                    .any(|decl| decl.exported && decl.symbol.name(db).as_str() == name);
+                if !exported {
+                    let span = statement_span(statement);
+                    if name.starts_with('_') && private_import_error_spans.contains(&span) {
+                        continue;
+                    }
+                    diagnostics.push(Diagnostic {
+                        file,
+                        severity: Severity::Error,
+                        code: "E0302".into(),
+                        message: format!("cannot import '{name}' from module '{module_name}'"),
+                        span,
+                        related: Arc::from([]),
+                        fix: None,
+                    });
+                }
+            }
+        }
+    }
+    Arc::from(diagnostics)
+}
+
+#[salsa::tracked]
+pub fn type_check_project(db: &dyn Db, project: Project) -> Arc<[Arc<str>]> {
+    let errors = project_diagnostics(db, project)
+        .iter()
+        .map(|diagnostic| Arc::<str>::from(format!("{}: {}", diagnostic.code, diagnostic.message)))
+        .collect::<Vec<_>>();
+    Arc::from(errors)
+}
+
+/// Resolve a module-level name to its interned declaration identity.
+#[salsa::tracked]
+pub fn resolve_top_level<'db>(
+    db: &'db dyn Db,
+    file: SourceFile,
+    name: String,
+) -> Option<Symbol<'db>> {
+    resolved_module(db, file)
+        .declarations
+        .iter()
+        .map(|declaration| declaration.symbol)
+        .find(|symbol| symbol.name(db).as_str() == name)
+}
+
+impl CompilerDatabase {
+    pub fn add_file(&mut self, path: impl Into<String>, text: impl Into<String>) -> SourceFile {
+        SourceFile::new(self, text.into(), path.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lucid_syntax::LucidLanguage;
+    use rowan::SyntaxNode;
+    use salsa::Setter;
+
+    #[test]
+    fn source_files_parse_incrementally_and_round_trip() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "x = 1  # keep\n");
+        {
+            let first = parse_file(&db, file);
+            let first_tree = SyntaxNode::<LucidLanguage>::new_root(first.as_ref().clone());
+            assert_eq!(first_tree.to_string(), "x = 1  # keep\n");
+        }
+        assert_eq!(*source_position(&db, file, 0), (1, 1));
+        assert_eq!(*source_position(&db, file, 10), (1, 11));
+        let unicode = db.add_file("unicode.lucid", "é = 1\nnext = 2\n");
+        assert_eq!(*source_position(&db, unicode, 1), (1, 1));
+        assert_eq!(*source_position(&db, unicode, 3), (1, 3));
+        assert_eq!(*source_offset(&db, unicode, 1, 1), 0);
+        assert_eq!(*source_offset(&db, unicode, 1, 2), 2);
+        assert_eq!(*source_offset(&db, unicode, 1, 99), 6);
+        assert_eq!(
+            *source_offset(&db, unicode, 99, 99),
+            unicode.text(&db).len() as u32
+        );
+        assert_eq!(
+            span_text(&db, unicode, lucid_syntax::Span::new(0, 2, 1, 1)).as_ref(),
+            "é"
+        );
+        assert_eq!(
+            span_text(&db, unicode, lucid_syntax::Span::new(1, 2, 1, 1)).as_ref(),
+            "é"
+        );
+        assert_eq!(
+            span_text(&db, unicode, lucid_syntax::Span::new(5, 1, 1, 1)).as_ref(),
+            ""
+        );
+        let crlf = db.add_file("crlf.lucid", "first\r\nsecond\n");
+        assert_eq!(*source_position(&db, crlf, 7), (2, 1));
+        assert_eq!(*source_offset(&db, crlf, 1, 99), 5);
+        assert_eq!(source_line(&db, crlf, 1).as_ref(), "first");
+        assert_eq!(source_line(&db, crlf, 2).as_ref(), "second");
+        assert_eq!(source_line(&db, crlf, 9).as_ref(), "");
+
+        file.set_text(&mut db).to("x = 2  # keep\n".into());
+        let second = parse_file(&db, file);
+        let second_tree = SyntaxNode::<LucidLanguage>::new_root(second.as_ref().clone());
+        assert_eq!(second_tree.to_string(), "x = 2  # keep\n");
+    }
+
+    #[test]
+    fn span_text_returns_empty_for_reversed_ranges() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value = 1\n");
+        assert_eq!(
+            span_text(&db, file, lucid_syntax::Span::new(8, 2, 1, 1)).as_ref(),
+            ""
+        );
+    }
+
+    #[test]
+    fn source_map_line_and_offset_round_trip_unicode_positions() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("unicode.lucid", "éx = 1\nnext = 2\n");
+        let line = source_line(&db, file, 1);
+        assert_eq!(line.as_ref(), "éx = 1");
+        let offset = *source_offset(&db, file, 1, 2);
+        assert_eq!(
+            span_text(
+                &db,
+                file,
+                lucid_syntax::Span::new(offset as usize, offset as usize + 1, 1, 2)
+            )
+            .as_ref(),
+            "x"
+        );
+        assert_eq!(*source_position(&db, file, offset), (1, 2));
+    }
+
+    #[test]
+    fn parse_error_span_fallback_uses_source_text() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("ok.lucid", "value = 1\n");
+        let span = first_parse_error_span(&db, file);
+        assert_ne!(span, lucid_syntax::Span::default());
+        assert_eq!(span_text(&db, file, span).as_ref(), "v");
+    }
+
+    #[test]
+    fn statement_span_covers_structural_statements() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "spans.lucid",
+            "def answer(value: int):\n    if value > 0:\n        value += 1\n        return value\n",
+        );
+        let module = parse_ast(&db, file)
+            .as_ref()
+            .expect("source should parse for statement span coverage");
+        let function_span = statement_span(&module.statements[0]);
+        assert_eq!(span_text(&db, file, function_span).as_ref(), "answer");
+        let lucid_syntax::Stmt::Function(function) = &module.statements[0] else {
+            panic!("expected function statement");
+        };
+        let lucid_syntax::Stmt::If {
+            then_branch,
+            span: if_span,
+            ..
+        } = &function.body[0]
+        else {
+            panic!("expected if statement");
+        };
+        assert_eq!(statement_span(&function.body[0]), *if_span);
+        assert_eq!(span_text(&db, file, *if_span).as_ref(), "if");
+        assert_eq!(
+            span_text(&db, file, statement_span(&then_branch[0])).as_ref(),
+            "value"
+        );
+        assert_eq!(
+            span_text(&db, file, statement_span(&then_branch[1])).as_ref(),
+            "return"
+        );
+    }
+
+    #[test]
+    fn strict_ast_query_caches_success_and_diagnostic() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value = 42\n");
+        assert!(parse_ast(&db, file).is_ok());
+
+        file.set_text(&mut db).to("value = `broken`\n".into());
+        let result = parse_ast(&db, file);
+        let error = result
+            .as_ref()
+            .expect_err("invalid source should retain a diagnostic");
+        assert!(error.contains("Lexer error"));
+    }
+
+    #[test]
+    fn typed_module_depends_on_resolved_hir_and_rechecks_changes() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value: int = 1\n");
+        let other = db.add_file("other.lucid", "answer: int = 2\n");
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        assert!(typed.checked);
+        assert_eq!(typed.resolved.file, file);
+        assert_eq!(typed.initializers.len(), 1);
+        assert_eq!(typed.initializers[0].symbol.name(&db), "value");
+        assert_eq!(*typed.initializers[0].symbol.file(&db), file);
+        assert_eq!(typed.initializers[0].type_name, "int");
+        assert_eq!(typed.initializers[0].type_id.canonical(&db), "int");
+        let type_id = typed.initializers[0].type_id;
+        let other_typed = typed_module(&db, other).as_ref().expect("valid module");
+        assert_eq!(type_id, other_typed.initializers[0].type_id);
+        file.set_text(&mut db).to("value: int = \"bad\"\n".into());
+        assert!(typed_module(&db, file).is_err());
+    }
+
+    #[test]
+    fn typed_module_exposes_postorder_expression_hir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value: int = 2 + 3 * 4\n");
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        assert_eq!(typed.expressions.len(), 5);
+        let root = typed.expressions.last().expect("root expression");
+        assert_eq!(root.kind, "binary");
+        assert_eq!(root.detail.as_deref(), Some("Add"));
+        assert_eq!(root.type_name, "int");
+        assert_eq!(root.children.as_ref(), &[0, 3]);
+        let multiplication = &typed.expressions[3];
+        assert_eq!(multiplication.detail.as_deref(), Some("Mul"));
+        assert_eq!(multiplication.children.as_ref(), &[1, 2]);
+        assert_eq!(typed.expressions[0].kind, "literal");
+    }
+
+    #[test]
+    fn typed_module_preserves_two_token_comparison_detail_and_span() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "comparisons.lucid",
+            "left: int = 1\nright: int = 2\nitems = [1, 2]\nidentity_check = left is not right\nmembership_check = left not in items\n",
+        );
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        let identity = typed
+            .expressions
+            .iter()
+            .find(|node| node.kind == "binary" && node.detail.as_deref() == Some("IsNot"))
+            .expect("typed HIR should preserve the is-not operator");
+        assert_eq!(
+            span_text(&db, file, identity.span).as_ref(),
+            "left is not right"
+        );
+        let membership = typed
+            .expressions
+            .iter()
+            .find(|node| node.kind == "binary" && node.detail.as_deref() == Some("NotIn"))
+            .expect("typed HIR should preserve the not-in operator");
+        assert_eq!(
+            span_text(&db, file, membership.span).as_ref(),
+            "left not in items"
+        );
+    }
+
+    #[test]
+    fn typed_module_exposes_interned_function_signature() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "main.lucid",
+            "def add(left: int, right: int = 1) -> int:\n    return left + right\n",
+        );
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        assert_eq!(typed.functions.len(), 1);
+        let function = &typed.functions[0];
+        assert_eq!(function.symbol.name(&db), "add");
+        assert_eq!(&*function.parameter_names, &["left", "right"]);
+        assert_eq!(&*function.required_parameters, &[true, false]);
+        assert_eq!(function.parameter_types.len(), 2);
+        assert_eq!(function.parameter_types[0].canonical(&db), "int");
+        assert_eq!(function.parameter_types[1].canonical(&db), "int");
+        assert_eq!(function.return_type.canonical(&db), "int");
+        assert_eq!(function.overload_types.len(), 1);
+        assert_eq!(function.body_expressions.len(), 4);
+        let body_root = function.body_expressions.last().expect("return expression");
+        assert_eq!(body_root.kind, "binary");
+        assert_eq!(body_root.type_name, "int");
+        assert_eq!(body_root.children.as_ref(), &[1, 2]);
+        assert_eq!(function.body_expressions[1].detail.as_deref(), Some("left"));
+    }
+
+    #[test]
+    fn typed_module_scopes_comprehension_targets_in_function_body() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "function-comprehension.lucid",
+            "def answer():\n    source_items = {1: 10, 2: 20}\n    comp = {key: value + 1 for key, value in source_items.items() if key == 2}\n    return comp[2]\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("comprehension targets should be scoped while collecting typed HIR");
+        let function = &typed.functions[0];
+        assert!(function.body_expressions.iter().any(|node| {
+            node.kind == "dict-comprehension"
+                && node.type_name
+                    == "class(dict;args=[int,int];parent=;traits=;fields=[];sealed=false)"
+                && node.children.len() == 4
+        }));
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("key") && node.type_name == "int")
+        );
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("value") && node.type_name == "int")
+        );
+    }
+
+    #[test]
+    fn typed_module_scopes_match_alias_and_subject_narrowing() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "match-alias-narrowing.lucid",
+            "def choose(flag: bool):\n    match flag as selected:\n        case true:\n            narrowed_flag = flag\n            narrowed_alias = selected\n            return 1\n        case _:\n            return 0\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("match arm body should collect with narrowed subject and alias types");
+        let function = &typed.functions[0];
+        assert!(function.body_expressions.iter().any(|node| {
+            node.detail.as_deref() == Some("flag") && node.type_name == "LiteralBool(true)"
+        }));
+        assert!(function.body_expressions.iter().any(|node| {
+            node.detail.as_deref() == Some("selected") && node.type_name == "LiteralBool(true)"
+        }));
+    }
+
+    #[test]
+    fn typed_module_scopes_parameter_patterns_in_function_body() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "parameter-pattern.lucid",
+            "class Pair:\n    left: int\n    right: int\n\ndef sum_pair(Pair(left, right): Pair):\n    return left + right\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("parameter patterns should be scoped while collecting typed HIR");
+        let function = typed
+            .functions
+            .iter()
+            .find(|function| function.symbol.name(&db) == "sum_pair")
+            .expect("sum_pair should be in typed module");
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("left") && node.type_name == "int")
+        );
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("right") && node.type_name == "int")
+        );
+    }
+
+    #[test]
+    fn typed_module_collects_parameter_defaults_before_parameter_scope() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "parameter-default-shadowing.lucid",
+            "value = true\n\ndef use_default(value: int = value):\n    return value\n",
+        );
+        let error = typed_module(&db, file)
+            .as_ref()
+            .expect_err("parameter default should see the global value, not the parameter");
+        assert!(error.contains("default value for parameter 'value'"));
+
+        let file = db.add_file(
+            "parameter-default-hir.lucid",
+            "class Base:\n    pass\nclass Child(Base):\n    pass\nvalue = Child()\n\ndef use_default(value: Base = value):\n    return value\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid default should collect from outer scope");
+        let function = typed
+            .functions
+            .iter()
+            .find(|function| function.symbol.name(&db) == "use_default")
+            .expect("use_default should be in typed module");
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("value")
+                    && node.type_name.contains("class(Child;"))
+        );
+    }
+
+    #[test]
+    fn typed_module_does_not_collect_plain_assignment_target_as_read() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "assignment-target-read.lucid",
+            "def answer():\n    value = 41\n    value = value + 1\n    return value\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid assignment body should collect typed HIR");
+        let function = typed
+            .functions
+            .iter()
+            .find(|function| function.symbol.name(&db) == "answer")
+            .expect("answer should be in typed module");
+        let value_reads = function
+            .body_expressions
+            .iter()
+            .filter(|node| node.detail.as_deref() == Some("value"))
+            .count();
+        assert_eq!(
+            value_reads, 2,
+            "only the augmented RHS and return should read the local binding"
+        );
+    }
+
+    #[test]
+    fn typed_module_exposes_inferred_function_return_signature() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "inferred-return.lucid",
+            "def answer():\n    value = 40 + 2\n    return value\n",
+        );
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        let function = &typed.functions[0];
+        assert_eq!(function.symbol.name(&db), "answer");
+        assert_eq!(function.return_type.canonical(&db), "int");
+
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("inferred-return function should lower");
+        assert_eq!(lowered.execute(), Ok(Some(42)));
+    }
+
+    #[test]
+    fn function_body_cir_preserves_unused_prefix_rhs_evaluation() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "unused-prefix-rhs.lucid",
+            "def answer():\n    unused = 1 // 0\n    return 42\n",
+        );
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("unused prefix RHS should still lower");
+        assert_eq!(
+            lowered.execute(),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+    }
+
+    #[test]
+    fn function_body_cir_preserves_unused_prefix_rhs_overflow() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "unused-prefix-rhs-overflow.lucid",
+            "def answer(value: int):\n    unused = value + 1\n    return 42\n",
+        );
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("unused prefix RHS should still lower");
+        assert_eq!(
+            lowered.execute_with_args(&[i64::MAX]),
+            Err(lucid_cir::ExecuteError::ArithmeticOverflow)
+        );
+        assert_eq!(lowered.execute_with_args(&[0]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn function_body_cir_preserves_discarded_prefix_expression_evaluation() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "discarded-prefix-expression.lucid",
+            "def answer():\n    1 // 0\n    return 42\n",
+        );
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("discarded prefix expression should still lower");
+        assert_eq!(
+            lowered.execute(),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+    }
+
+    #[test]
+    fn function_body_cir_preserves_discarded_prefix_arithmetic_overflow() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "discarded-prefix-overflow.lucid",
+            "def answer(value: int):\n    value + 1\n    return 42\n",
+        );
+        let lowered = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("discarded arithmetic prefix should still lower");
+        assert_eq!(
+            lowered.execute_with_args(&[i64::MAX]),
+            Err(lucid_cir::ExecuteError::ArithmeticOverflow)
+        );
+        assert_eq!(lowered.execute_with_args(&[0]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn typed_module_accepts_continue_in_for_function_body() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "for-continue.lucid",
+            "def drain(n: int, limit: int):\n    stop = limit\n    stride = -1\n    for item in range(n, stop, stride):\n        continue\n",
+        );
+        typed_module(&db, file)
+            .as_ref()
+            .expect("continue should type-check inside a for loop");
+    }
+
+    #[test]
+    fn typed_module_accepts_continue_in_while_function_body() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "while-continue.lucid",
+            "def drain(n: int):\n    while n > 0:\n        n -= 1\n        continue\n",
+        );
+        typed_module(&db, file)
+            .as_ref()
+            .expect("continue should type-check inside a while loop");
+    }
+
+    #[test]
+    fn typed_hir_retains_constant_loop_body_expressions() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "loop-hir.lucid",
+            "def sum():\n    total = 0\n    for i in [1, 2]:\n        total = total + i\n    return total\n",
+        );
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        let body = &typed.functions[0].body_expressions;
+        assert!(body.iter().any(|node| node.detail.as_deref() == Some("i")));
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("Add"))
+        );
+
+        let file = db.add_file(
+            "loop-local-hir.lucid",
+            "def sum():\n    total = 0\n    for i in [1, 2]:\n        next = i + 1\n        total = total + next\n    return total\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid local loop module");
+        let body = &typed.functions[0].body_expressions;
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("next"))
+        );
+        assert!(
+            body.iter()
+                .filter(|node| node.detail.as_deref() == Some("Add"))
+                .count()
+                >= 2
+        );
+
+        let file = db.add_file(
+            "loop-item-destructure-hir.lucid",
+            "def sum_items():\n    total = 0\n    source = {1: 10, 2: 20}\n    for key, value in source.items():\n        total = total + key + value\n    return total\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid item destructuring loop module");
+        let body = &typed.functions[0].body_expressions;
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("key") && node.type_name == "int")
+        );
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("value") && node.type_name == "int")
+        );
+
+        let file = db.add_file(
+            "while-local-hir.lucid",
+            "def sum(value: int):\n    while value > 0:\n        next = value - 1\n        value = next\n    return value\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid while module");
+        let body = &typed.functions[0].body_expressions;
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("next"))
+        );
+        assert!(
+            body.iter()
+                .filter(|node| node.detail.as_deref() == Some("Sub"))
+                .count()
+                >= 1
+        );
+
+        let file = db.add_file(
+            "while-pattern-hir.lucid",
+            "def probe(value: int):\n    while value > 0:\n        let pair = value - 1\n        value = pair\n    return value\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid while local module");
+        assert!(
+            typed.functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("pair"))
+        );
+
+        let file = db.add_file(
+            "if-local-hir.lucid",
+            "def choose(flag: bool):\n    if flag:\n        selected = 3\n        return selected\n    else:\n        fallback = 4\n        return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid branch-local module");
+        let body = &typed.functions[0].body_expressions;
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("selected"))
+        );
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("fallback"))
+        );
+        let file = db.add_file(
+            "match-local-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = 3\n            return selected\n        case _:\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid match-local module");
+        let body = &typed.functions[0].body_expressions;
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("selected"))
+        );
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("fallback"))
+        );
+        let file = db.add_file(
+            "match-direct-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 3\n        case _:\n            return 4\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid direct match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "match-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 3\n        case _:\n            value\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid no-op match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "match-assert-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true)\n            return 3\n        case _:\n            assert(true)\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid assert match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "match-dead-loop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            while false:\n                pass\n            return 3\n        case _:\n            while false:\n                pass\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid dead-loop match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "match-empty-for-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            for item in []:\n                pass\n            return 3\n        case _:\n            for item in []:\n                pass\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid empty-for match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "match-static-noop-if-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if false:\n                return 0\n            return 3\n        case _:\n            if true:\n                pass\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid static no-op branch match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "match-static-bool-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(not false)\n            return 3\n        case _:\n            while not true:\n                return 0\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid static-bool no-op match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "match-bool-expression-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true and not false)\n            return 3\n        case _:\n            while true and false:\n                return 0\n            fallback = 4\n            return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid bool-expression no-op match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "match-static-if-result-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if true:\n                return 3\n            else:\n                return 0\n        case _:\n            if false:\n                return 0\n            else:\n                fallback = 4\n                return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid static-if result match module");
+        assert!(typed.functions[0].body_expressions.iter().any(|node| {
+            node.kind == "match" && node.detail.as_deref() == Some("literal-int:1")
+        }));
+
+        let file = db.add_file(
+            "try-local-hir.lucid",
+            "def choose(value: int):\n    try:\n        selected = value + 1\n        return selected\n    except str as error:\n        observed = error\n        fallback = 0\n        return fallback\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("valid try-local module");
+        let body = &typed.functions[0].body_expressions;
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("selected"))
+        );
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("fallback"))
+        );
+        assert!(
+            body.iter()
+                .any(|node| node.detail.as_deref() == Some("error") && node.type_name == "str")
+        );
+    }
+
+    #[test]
+    fn typed_hir_scopes_with_target_bindings() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "with-target-hir.lucid",
+            "contextmanager def managed():\n    yield 10\n\ndef read():\n    with managed() as ctx:\n        return ctx\n",
+        );
+        let typed = typed_module(&db, file)
+            .as_ref()
+            .expect("with target should be visible in the managed body");
+        let function = typed
+            .functions
+            .iter()
+            .find(|function| function.symbol.name(&db).as_str() == "read")
+            .expect("read function");
+        assert!(
+            function
+                .body_expressions
+                .iter()
+                .any(|node| node.detail.as_deref() == Some("ctx"))
+        );
+    }
+
+    #[test]
+    fn typed_module_preserves_dispatch_overload_set() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "main.lucid",
+            "dispatch def show(value: int) -> int:\n    return value\n\ndispatch def show(value: str) -> int:\n    return 0\n",
+        );
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        assert_eq!(typed.functions.len(), 1);
+        assert!(typed.functions[0].is_dispatch);
+        assert!(!typed.functions[0].is_async);
+        assert_eq!(typed.functions[0].overload_types.len(), 2);
+        assert!(
+            typed.functions[0]
+                .overload_types
+                .iter()
+                .any(|id| id.canonical(&db).contains("int"))
+        );
+        assert!(
+            typed.functions[0]
+                .overload_types
+                .iter()
+                .any(|id| id.canonical(&db).contains("str"))
+        );
+    }
+
+    #[test]
+    fn database_lowers_assignment_through_shared_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value = 2 + 3 * 4\n");
+        let function = lower_module(&db, file)
+            .as_ref()
+            .expect("assignment should lower");
+        assert_eq!(function.execute(), Ok(Some(14)));
+        let file = db.add_file("branch.lucid", "if 1 < 2:\n    x = 4\nelse:\n    x = 9\n");
+        let function = lower_module(&db, file)
+            .as_ref()
+            .expect("branch should lower");
+        assert_eq!(function.execute(), Ok(Some(4)));
+        let file = db.add_file("empty.lucid", "pass\n");
+        let function = lower_module(&db, file)
+            .as_ref()
+            .expect("void module should lower");
+        assert_eq!(function.execute(), Ok(None));
+    }
+
+    #[test]
+    fn database_lowers_primitive_initializer_from_typed_hir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value = 2 + 3 * 4\n");
+        let typed = typed_module(&db, file).as_ref().expect("valid module");
+        assert_eq!(typed.initializers.len(), 1);
+        assert_eq!(typed.initializers[0].expression, 4);
+        let function = lower_module(&db, file)
+            .as_ref()
+            .expect("typed initializer should lower");
+        assert_eq!(function.execute(), Ok(Some(14)));
+
+        let file = db.add_file("conditional.lucid", "value = 11 if true else 22\n");
+        let function = lower_module(&db, file)
+            .as_ref()
+            .expect("constant conditional should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(11)));
+
+        let file = db.add_file("logical.lucid", "value = true or false\n");
+        let function = lower_module(&db, file)
+            .as_ref()
+            .expect("short-circuit initializer should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(1)));
+    }
+
+    #[test]
+    fn database_lowers_typed_membership_in_constant_aggregates() {
+        let mut db = CompilerDatabase::default();
+        for (source, present, missing) in [
+            (
+                "def answer(value: int):\n    return value in [1, 2, 3]\n",
+                2,
+                4,
+            ),
+            (
+                "def answer(value: int):\n    return value not in {1, 2, 3}\n",
+                4,
+                2,
+            ),
+            (
+                "def answer(value: int):\n    return value in (1, 2, 3)\n",
+                2,
+                4,
+            ),
+            (
+                "def answer(value: int):\n    return value in {1: 10, 2: 20}\n",
+                2,
+                10,
+            ),
+        ] {
+            let file = db.add_file("typed-membership.lucid", source);
+            let function = lower_function_body(&db, file, "answer".into())
+                .as_ref()
+                .expect("typed aggregate membership should lower");
+            assert_eq!(function.execute_with_args(&[present]), Ok(Some(1)));
+            assert_eq!(function.execute_with_args(&[missing]), Ok(Some(0)));
+        }
+    }
+
+    #[test]
+    fn database_lowers_primitive_function_body_from_typed_hir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "def answer():\n    return 6 * 7\n");
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("function body should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "dynamic.lucid",
+            "def choose(flag: int):\n    return 11 if flag else 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dynamic conditional should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "dynamic-abs.lucid",
+            "def magnitude(value: int):\n    return abs(value)\n",
+        );
+        let function = lower_function_body(&db, file, "magnitude".into())
+            .as_ref()
+            .expect("dynamic abs should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[-42]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[42]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "dynamic-nested-abs.lucid",
+            "def magnitude_plus_one(value: int):\n    return abs(value) + 1\n",
+        );
+        let function = lower_function_body(&db, file, "magnitude_plus_one".into())
+            .as_ref()
+            .expect("nested dynamic abs should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[-42]), Ok(Some(43)));
+        assert_eq!(function.execute_with_args(&[42]), Ok(Some(43)));
+
+        let file = db.add_file(
+            "dynamic-abs-comparison.lucid",
+            "def within_ten(value: int):\n    return abs(value) < 10\n",
+        );
+        let function = lower_function_body(&db, file, "within_ten".into())
+            .as_ref()
+            .expect("dynamic abs comparison should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[-9]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-10]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[9]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[10]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "dynamic-abs-sum.lucid",
+            "def total_magnitude(left: int, right: int):\n    return abs(left) + abs(right)\n",
+        );
+        let function = lower_function_body(&db, file, "total_magnitude".into())
+            .as_ref()
+            .expect("multiple dynamic abs calls should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[-10, 3]), Ok(Some(13)));
+        assert_eq!(function.execute_with_args(&[10, -3]), Ok(Some(13)));
+
+        let file = db.add_file(
+            "dynamic-min-max-sum.lucid",
+            "def spread_sum(left: int, right: int):\n    return min(left, right) + max(left, right) + 1\n",
+        );
+        let function = lower_function_body(&db, file, "spread_sum".into())
+            .as_ref()
+            .expect("nested dynamic min/max should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(34)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(56)));
+
+        let file = db.add_file(
+            "dynamic-aggregate-min-max.lucid",
+            "def aggregate_bounds(left: int, middle: int, right: int):\n    values = [left, middle, right]\n    return min(values) + max(values)\n",
+        );
+        let function = lower_function_body(&db, file, "aggregate_bounds".into())
+            .as_ref()
+            .expect("dynamic aggregate min/max should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[11, 22, 33]), Ok(Some(44)));
+        assert_eq!(function.execute_with_args(&[33, 11, 22]), Ok(Some(44)));
+        assert_eq!(function.execute_with_args(&[22, 33, 11]), Ok(Some(44)));
+
+        let file = db.add_file(
+            "constructor-aggregate-alias.lucid",
+            "def constructor_total():\n    values = list(range(5))\n    return len(values) + sum(values)\n",
+        );
+        let function = lower_function_body(&db, file, "constructor_total".into())
+            .as_ref()
+            .expect("constructor aggregate aliases should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute(), Ok(Some(15)));
+
+        let file = db.add_file(
+            "ordered-range-alias.lucid",
+            "def ordered_range_total():\n    forward = sorted(range(5))\n    backward = reversed(range(5))\n    return sum(forward) + sum(backward)\n",
+        );
+        let function = lower_function_body(&db, file, "ordered_range_total".into())
+            .as_ref()
+            .expect("sorted/reversed range aliases should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute(), Ok(Some(20)));
+
+        let file = db.add_file(
+            "dict-view-aggregate-alias.lucid",
+            "def dict_value_total(left: int, right: int):\n    mapping = {1: left, 2: right}\n    values = mapping.values()\n    return sum(values) + len(values)\n",
+        );
+        let function = lower_function_body(&db, file, "dict_value_total".into())
+            .as_ref()
+            .expect("dict view aggregate aliases should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[20, 22]), Ok(Some(44)));
+
+        let file = db.add_file(
+            "dict-items-copy.lucid",
+            "def dict_copy_value(left: int, right: int):\n    mapping = {1: left, 2: right}\n    copy = dict(mapping.items())\n    return copy[2]\n",
+        );
+        let function = lower_function_body(&db, file, "dict_copy_value".into())
+            .as_ref()
+            .expect("dict constructor from typed item views should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 1);
+        assert_eq!(function.execute_with_args(&[20, 22]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "dynamic-pow.lucid",
+            "def power(base: int, exponent: int):\n    return pow(base, exponent)\n",
+        );
+        let function = lower_function_body(&db, file, "power".into())
+            .as_ref()
+            .expect("dynamic pow should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[2, 10]), Ok(Some(1024)));
+        assert_eq!(
+            function.execute_with_args(&[2, -1]),
+            Err(lucid_cir::ExecuteError::NegativeExponent)
+        );
+
+        let file = db.add_file(
+            "static-modular-pow.lucid",
+            "def residue(base: int):\n    return pow(base, 10, 1000)\n",
+        );
+        let function = lower_function_body(&db, file, "residue".into())
+            .as_ref()
+            .expect("static modular pow should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(24)));
+        assert_eq!(function.execute_with_args(&[-2]), Ok(Some(24)));
+
+        let file = db.add_file(
+            "dynamic-min.lucid",
+            "def lower(left: int, right: int):\n    return min(left, right)\n",
+        );
+        let function = lower_function_body(&db, file, "lower".into())
+            .as_ref()
+            .expect("dynamic min should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "dynamic-variadic-min.lucid",
+            "def lowest(first: int, second: int, third: int):\n    return min(first, second, third)\n",
+        );
+        let function = lower_function_body(&db, file, "lowest".into())
+            .as_ref()
+            .expect("dynamic variadic min should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[11, 22, 33]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[33, 11, 22]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[33, 22, 11]), Ok(Some(11)));
+
+        let file = db.add_file(
+            "dynamic-max.lucid",
+            "def higher(left: int, right: int):\n    return max(left, right)\n",
+        );
+        let function = lower_function_body(&db, file, "higher".into())
+            .as_ref()
+            .expect("dynamic max should lower through typed HIR");
+        assert_eq!(function.blocks.len(), 4);
+        assert_eq!(function.execute_with_args(&[11, 22]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[33, 22]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "dynamic-variadic-max.lucid",
+            "def highest(first: int, second: int, third: int):\n    return max(first, second, third)\n",
+        );
+        let function = lower_function_body(&db, file, "highest".into())
+            .as_ref()
+            .expect("dynamic variadic max should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[11, 22, 33]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[33, 11, 22]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[33, 22, 11]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "nested-constant-min-max.lucid",
+            "def combined():\n    return min(30, 10, 20) + max(10, 20, 30)\n",
+        );
+        let function = lower_function_body(&db, file, "combined".into())
+            .as_ref()
+            .expect("nested constant-order min/max should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(40)));
+
+        let file = db.add_file(
+            "nested-local-constant-min-max.lucid",
+            "def combined():\n    high = 30\n    low = 10\n    middle = 20\n    return min(high, low, middle) + max(low, middle, high)\n",
+        );
+        let function = lower_function_body(&db, file, "combined".into())
+            .as_ref()
+            .expect("nested local constant min/max should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(40)));
+
+        let file = db.add_file(
+            "match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("literal match should lower through conditional CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "leading-wildcard-match.lucid",
+            "def choose(value: int):\n    match value:\n        case _:\n            return value + 100\n        case 1:\n            return 11\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("leading wildcard match should preserve arm order");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "guarded-literal-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if false:\n            return 11\n        case _:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded literal match should lower with guard in CIR");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "statically false guarded arm should be skipped before lowering"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "static-false-guarded-before-literal-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if false:\n            return 11\n        case 2:\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statically false guarded arm before literal should be skipped");
+        assert!(
+            !function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        lucid_cir::Instruction::ConstInt { value: 11, .. }
+                    )
+                })
+            }),
+            "dead guarded arm result should not appear in CIR"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "static-true-guarded-literal-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if true:\n            return 11\n        case _:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statically true guarded literal match should lower as unguarded");
+        assert!(
+            !function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, lucid_cir::Instruction::And { .. }))
+            }),
+            "statically true guarded arm should not emit guard conjunction"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "guarded-wildcard-match.lucid",
+            "def choose(value: int):\n    match value:\n        case _ if value > 0:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded wildcard match should lower as optional CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(None));
+
+        let file = db.add_file(
+            "guarded-mixed-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if value > 0:\n            return\n        case _:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded mixed value/void match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(99)));
+
+        let file = db.add_file(
+            "guarded-mixed-optional-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if value > 0:\n            return value + 10\n        case _:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded mixed optional match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+            "all-false-guarded-match.lucid",
+            "def choose(value: int):\n    match value:\n        case _ if false:\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("all-false guarded match should lower to no match");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "all-false guarded value match should not emit dead control flow"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(None));
+
+        let file = db.add_file(
+            "guarded-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case 1 if false:\n            return\n        case _:\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("statically false guarded void match should lower through fallback arm");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "statically false guarded void arm should be skipped before lowering"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "static-false-guarded-before-void-literal-match.lucid",
+            "def answer(value: int):\n    match value:\n        case 1 if false:\n            return\n        case 2:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("statically false guarded void arm before literal should be skipped");
+        assert!(
+            !function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        lucid_cir::Instruction::ConstBool { value: false, .. }
+                    )
+                })
+            }),
+            "dead guarded void condition should not appear in CIR"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "all-false-guarded-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case _ if false:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("all-false guarded void match should lower to no match");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "all-false guarded void match should not emit dead control flow"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "leading-wildcard-local-match.lucid",
+            "def choose(value: int):\n    match value:\n        case _:\n            selected = value + 100\n            return selected\n        case 1:\n            return 11\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("leading wildcard local match should preserve arm order");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "leading-wildcard-dynamic-local-match.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case _:\n            result = 0\n            if value > 0:\n                result = value + 10\n            return result\n        case 1:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("leading wildcard dynamic local match should route selected arm through CIR");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[7, -2]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "leading-guarded-wildcard-dynamic-local-match.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case _ if value > 0:\n            result = 0\n            if value > 10:\n                result = 100\n            elif value > 0:\n                result = value + 10\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded leading wildcard match should preserve guard before selected arm");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[7, -2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "match-noop-local-return.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true)\n            selected = 11\n            return selected\n        case _:\n            if false:\n                return 0\n            fallback = value + 100\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match local returns should ignore no-op setup");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "match-pure-expression-local-return.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            value + 1\n            selected = 11\n            return selected\n        case _:\n            value * 2\n            return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match local returns should ignore pure expression setup");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "match-static-if-local-return.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if true:\n                selected = 11\n                return selected\n            else:\n                return 0\n        case _:\n            if false:\n                return 0\n            else:\n                return value + 100\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match local returns should unwrap static conditionals");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "middle-wildcard-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return value + 100\n        case 2:\n            return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("middle wildcard match should make later arms unreachable");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("middle wildcard match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(102)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(107)));
+
+        let file = db.add_file(
+            "middle-wildcard-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            return\n        case _:\n            pass\n        case 2:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("middle wildcard void match should make later arms unreachable");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("middle wildcard void match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "void-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "match-noop-void.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            while false:\n                return value\n            return\n        case _:\n            for item in []:\n                return value\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("match void arms should ignore no-op setup");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "match-static-if-void.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            if true:\n                return\n            else:\n                return value\n        case _:\n            if false:\n                return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("match void arms should unwrap static conditionals");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "leading-wildcard-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case _:\n            return\n        case 1:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("leading wildcard void match should preserve arm order");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "leading-wildcard-setup-void-match.lucid",
+            "def answer(value: int):\n    match value:\n        case _:\n            temporary = value + 1\n            return\n        case 1:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("leading wildcard setup before void match should preserve selected setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "leading-wildcard-setup-fallthrough-match.lucid",
+            "def answer(value: int):\n    match value:\n        case _:\n            temporary = value + 1\n        case 1:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("leading wildcard setup-only match should preserve selected setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "match-local-cir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = 11\n            return selected\n        case _:\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match-local values should lower through typed CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "constant-subject-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case false:\n            return value * 10\n        case true:\n            selected = value + 10\n            return selected\n        case _:\n            return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant subject match should lower only the selected arm");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(17)));
+
+        let file = db.add_file(
+            "constant-subject-sequential-local-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true:\n            first = value + 1\n            second = first * 2\n            return second\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant subject selected arm should preserve sequential locals");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-subject-static-branch-local-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true:\n            first = value + 1\n            if true:\n                second = first * 2\n                return second\n            else:\n                return 1 // 0\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant subject selected static branch should preserve locals");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-subject-nested-dynamic-branch-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true:\n            if true:\n                result = 0\n                if value > 0:\n                    result = value + 10\n                return result\n            else:\n                return -2\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant selected match arm should route nested dynamic body through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "constant-subject-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject void match should lower only the selected arm");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-subject-pass-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            pass\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject pass match should lower only the selected arm");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-subject-setup-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject setup before void match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-noop-setup-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            assert(true)\n            if false:\n                return value\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject no-op setup before void match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-static-branch-setup-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            if true:\n                temporary = value + 1\n                return\n            else:\n                return value\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject static branch setup before void match should lower");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-pure-setup-void-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            value + 1\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject pure setup before void match should preserve bindings");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-setup-fallthrough-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            temporary = value + 1\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject setup-only match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-noop-setup-fallthrough-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            while false:\n                return value\n            temporary = value + 1\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject no-op setup-only match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-static-branch-setup-fallthrough-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            if true:\n                temporary = value + 1\n            else:\n                return value\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject static branch setup-only match should preserve setup");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-subject-effectful-fallthrough-match.lucid",
+            "def answer(value: int):\n    match true as flag:\n        case true:\n            str(value)\n        case _:\n            return value\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("effectful selected match setup must not be erased");
+        assert!(error.contains("unsupported"));
+
+        let file = db.add_file(
+            "constant-subject-discarded-error-match.lucid",
+            "def answer():\n    match true as flag:\n        case true:\n            1 // 0\n            return 42\n        case _:\n            return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected match discarded expression should lower before return");
+        assert_eq!(
+            function.execute(),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "constant-subject-discarded-error-void-match.lucid",
+            "def answer():\n    match true as flag:\n        case true:\n            1 // 0\n        case _:\n            return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected match discarded expression should lower before void fallthrough");
+        assert_eq!(
+            function.execute(),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "constant-subject-dead-invalid-match.lucid",
+            "def answer():\n    match true as flag:\n        case true:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant subject match must not evaluate dead fallback arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-string-subject-match.lucid",
+            "def choose():\n    match \"ready\" as state:\n        case \"ready\":\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant string subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-string-subject-fallback-match.lucid",
+            "def choose():\n    match \"ready\" as state:\n        case \"waiting\":\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant string subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-string-subject-void-match.lucid",
+            "def answer(value: int):\n    match \"ready\" as state:\n        case \"ready\":\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant string subject void match should fold to selected arm");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-none-subject-match.lucid",
+            "def choose():\n    match none as value:\n        case none:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant none subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-none-subject-fallback-match.lucid",
+            "def choose():\n    match none as value:\n        case 1:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant none subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-none-subject-void-match.lucid",
+            "def answer(value: int):\n    match none as state:\n        case none:\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant none subject void match should fold to selected arm");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-float-subject-match.lucid",
+            "def choose():\n    match 1.5 as value:\n        case 1.5:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant float subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-float-subject-fallback-match.lucid",
+            "def choose():\n    match 1.5 as value:\n        case 2.5:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant float subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-float-subject-void-match.lucid",
+            "def answer(value: int):\n    match 1.5 as state:\n        case 1.5:\n            temporary = value + 1\n            return\n        case _:\n            return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant float subject void match should fold to selected arm");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-bigint-subject-match.lucid",
+            "def choose():\n    match 0x8000000000000000 as value:\n        case 0x8000000000000000:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant bigint subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-subject-fallback-match.lucid",
+            "def choose():\n    match 0x8000000000000000 as value:\n        case 0x9000000000000000:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant bigint subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bytes-subject-match.lucid",
+            "def choose():\n    match b\"ok\" as value:\n        case b\"ok\":\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant bytes subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bytes-subject-fallback-match.lucid",
+            "def choose():\n    match b\"ok\" as value:\n        case b\"no\":\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant bytes subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-complex-subject-match.lucid",
+            "def choose():\n    match 1j as value:\n        case 1j:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant complex subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-complex-subject-fallback-match.lucid",
+            "def choose():\n    match 1j as value:\n        case 2j:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant complex subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-ellipsis-subject-match.lucid",
+            "def choose():\n    match ... as value:\n        case ...:\n            return 42\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant ellipsis subject match should fold to selected arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-ellipsis-subject-fallback-match.lucid",
+            "def choose():\n    match ... as value:\n        case none:\n            return 1 // 0\n        case _:\n            return 42\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("constant ellipsis subject mismatch should fold to wildcard arm");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "guarded-constant-subject-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true if value > 0:\n            return value + 10\n        case _:\n            return -value\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded constant subject match should keep the guard dynamic");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(Some(7)));
+
+        let file = db.add_file(
+            "static-true-guarded-constant-subject-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true if true:\n            return value + 10\n        case _:\n            return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statically true guarded constant subject should fold directly");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "statically true guarded constant subject should not emit dead fallback control flow"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(Some(3)));
+
+        let file = db.add_file(
+            "static-false-guarded-constant-subject-match.lucid",
+            "def choose(value: int):\n    match true as flag:\n        case true if false:\n            return 1 // 0\n        case _:\n            return -value\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statically false guarded constant subject arm should be skipped");
+        assert_eq!(
+            function.blocks.len(),
+            1,
+            "statically false guarded constant subject should not emit dead selected control flow"
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[-7]), Ok(Some(7)));
+
+        let file = db.add_file(
+            "multi-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case 2:\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "mixed-multi-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case 2:\n            return\n        case 3:\n            return 33\n        case _:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed value/void literal match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "mixed-middle-wildcard-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return\n        case 2:\n            return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed middle wildcard match should stop before later arms");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "mixed-two-arm-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed two-arm match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "mixed-two-arm-optional-match.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case _:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed optional two-arm match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "mixed-match-without-fallback.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case 2:\n            return\n        case 3:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed match without fallback should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "mixed-bool-match.lucid",
+            "def choose(flag: bool):\n    match flag:\n        case true:\n            return 11\n        case false:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed bool match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "mixed-bool-match-inverse.lucid",
+            "def choose(flag: bool):\n    match flag:\n        case true:\n            return\n        case false:\n            return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("inverse mixed bool match should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "multi-match-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 11\n        case 2:\n            value + 1\n            return 22\n        case _:\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with arithmetic setup should lower through CIR");
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-trivial-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            pass\n            return 11\n        case 2:\n            value\n            return 22\n        case _:\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with trivial no-op setup should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm trivial no-op match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-discarded-division-prefix.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return 11\n        case 2:\n            value % 0\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("literal match should preserve selected discarded division prefix");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(
+            function.execute_with_args(&[2]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-discarded-overflow-prefix.lucid",
+            "def choose(flag: int, value: int):\n    match flag:\n        case 1:\n            return 11\n        case 2:\n            value + 1\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("literal match should preserve selected discarded arithmetic prefix");
+        assert_eq!(function.execute_with_args(&[1, i64::MAX]), Ok(Some(11)));
+        assert_eq!(
+            function.execute_with_args(&[2, i64::MAX]),
+            Err(lucid_cir::ExecuteError::ArithmeticOverflow)
+        );
+        assert_eq!(function.execute_with_args(&[7, i64::MAX]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-assert-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true)\n            return 11\n        case 2:\n            assert(true)\n            return 22\n        case _:\n            assert(true)\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with assert setup should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm assert match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-dead-loop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            while false:\n                pass\n            return 11\n        case 2:\n            while false:\n                pass\n            return 22\n        case _:\n            while false:\n                pass\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with dead-loop setup should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm dead-loop match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-dead-loop-if-broken-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            while false:\n                pass\n            if_broken:\n                fallback = 100\n            return 11\n        case 2:\n            for item in []:\n                pass\n            if_broken:\n                fallback = 100\n            return 22\n        case _:\n            while false:\n                pass\n            if_broken:\n                fallback = 100\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with dead if_broken setup should lower");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm dead if_broken match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-empty-for-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            for item in []:\n                pass\n            return 11\n        case 2:\n            for item in []:\n                pass\n            return 22\n        case _:\n            for item in []:\n                pass\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with empty-for setup should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm empty-for match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-static-noop-if-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if false:\n                return 0\n            return 11\n        case 2:\n            if true:\n                pass\n            return 22\n        case _:\n            if false:\n                return 0\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with static no-op branches should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm static no-op branch match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-static-bool-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(not false)\n            return 11\n        case 2:\n            while not true:\n                return 0\n            return 22\n        case _:\n            assert(not false)\n            while not true:\n                return 0\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect(
+                "multi-arm literal match with static-bool no-op setup should lower through CIR",
+            );
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm static-bool no-op match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-bool-expression-noop-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            assert(true is true)\n            return 11\n        case 2:\n            while true and false:\n                return 0\n            return 22\n        case _:\n            assert(false is not true)\n            fallback = 33\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with bool-expression no-op setup should lower");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm bool-expression no-op match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "multi-match-static-if-result-hir.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            if true:\n                return 11\n            else:\n                return 0\n        case 2:\n            if false:\n                return 0\n            else:\n                return 22\n        case _:\n            if true:\n                fallback = 33\n                return fallback\n            else:\n                return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm literal match with static-if result should lower");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm static-if result match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "static-selected-dynamic-branch-body.lucid",
+            "def choose(value: int):\n    if true:\n        result = 0\n        if value > 0:\n            result = value + 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("static outer branch should route selected dynamic body through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "static-selected-nested-dynamic-branch-body.lucid",
+            "def choose(value: int):\n    if true:\n        if true:\n            result = 0\n            if value > 0:\n                result = value + 10\n            return result\n        else:\n            return -2\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested static selected dynamic body should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "multi-match-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return value + 10\n        case 2:\n            return value * 10\n        case _:\n            return -value\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm expression match should lower through a CIR ladder");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm expression match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
+
+        let file = db.add_file(
+            "guarded-match-local-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1 if value > 0:\n            selected = value + 10\n            return selected\n        case _:\n            fallback = -value\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded match with local arm bodies should lower through shared CFG");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
+
+        let file = db.add_file(
+            "bool-match-chain-expression.lucid",
+            "def choose(flag: bool):\n    match flag:\n        case true:\n            return 11\n        case false:\n            return 22\n        case _:\n            return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("bool literal match chain should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("bool literal match chain should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| {
+                    node.kind == "match-chain"
+                        && node.detail.as_deref() == Some("literal-chain:btrue,bfalse")
+                })
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "multi-match-local-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = value + 10\n            return selected\n        case 2:\n            doubled = value * 10\n            return doubled\n        case _:\n            fallback = -value\n            return fallback\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm local expression match should lower through a CIR ladder");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm local expression match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(Some(-7)));
+
+        let file = db.add_file(
+            "optional-match-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return value + 10\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("single-arm optional match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("single-arm optional match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "optional-match-chain-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = value + 10\n            return selected\n        case 2:\n            doubled = value * 10\n            return doubled\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm optional match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm optional match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "pass-fallback-match-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            return value + 10\n        case _:\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("pass fallback match should lower through optional CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("single-arm pass fallback match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "pass-fallback-match-chain-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = value + 10\n            return selected\n        case 2:\n            doubled = value * 10\n            return doubled\n        case _:\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multi-arm pass fallback match should lower through optional CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm pass fallback match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "middle-pass-fallback-match-chain-expression.lucid",
+            "def choose(value: int):\n    match value:\n        case 1:\n            selected = value + 10\n            return selected\n        case _:\n            pass\n        case 2:\n            return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("middle pass fallback match should lower through optional CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("middle pass fallback match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "optional-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "void-match-expression.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("single-arm void match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("single-arm void match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "void-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file(
+            "void-match-chain-expression.lucid",
+            "def answer(value: int):\n    match value:\n        case 1:\n            return\n        case 2:\n            return\n        case _:\n            pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("multi-arm void match should lower through CIR");
+        assert!(
+            typed_module(&db, file)
+                .as_ref()
+                .expect("multi-arm void match should type check")
+                .functions[0]
+                .body_expressions
+                .iter()
+                .any(|node| node.kind == "void-match-chain")
+        );
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+        assert_eq!(function.execute_with_args(&[7]), Ok(None));
+
+        let file = db.add_file("void.lucid", "def answer():\n    return\n");
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("bare return should lower to void CIR");
+        assert_eq!(function.execute(), Ok(None));
+
+        let file = db.add_file("pass.lucid", "def answer(value: int):\n    pass\n");
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pass should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "setup-before-pass.lucid",
+            "def answer(value: int):\n    temporary = value + 1\n    pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("setup before pass should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "augassign-before-pass.lucid",
+            "def answer(value: int):\n    temporary = value\n    temporary += 1\n    pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("augmented assignment before pass should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-branch.lucid",
+            "def answer():\n    if true:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant statement branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-elif.lucid",
+            "def answer():\n    if false:\n        return 0\n    elif true:\n        return 42\n    else:\n        return 9\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant elif branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-fallthrough.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant false branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-pass-branch.lucid",
+            "def answer(value: int):\n    if true:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant pass branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-else-pass-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant else pass branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-elif-pass-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    elif true:\n        pass\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant elif pass branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-bare-return-branch.lucid",
+            "def answer(value: int):\n    if true:\n        return\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant bare return branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-elif-bare-return-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    elif true:\n        return\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant elif bare return branch should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-else-bare-return-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    else:\n        assert(true)\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant else bare return branch with no-op prefix should lower to void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+
+        let file = db.add_file(
+            "constant-setup-before-bare-return-branch.lucid",
+            "def answer(value: int):\n    if true:\n        temporary = value + 1\n        return\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("setup before selected bare return should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-nested-setup-before-bare-return-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if true:\n            temporary = value + 1\n        return\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested setup before selected bare return should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-setup-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if true:\n        temporary = value + 1\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("setup-only selected branch should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-nested-setup-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if true:\n            temporary = value + 1\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested setup-only selected branch should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-elif-setup-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    elif true:\n        temporary = value + 1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("setup-only selected elif branch should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-else-setup-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    else:\n        temporary = value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("setup-only selected else branch should lower through void CIR");
+        assert_eq!(function.execute_with_args(&[42]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "constant-effectful-fallthrough-branch.lucid",
+            "def answer(value: int):\n    if true:\n        str(value)\n    else:\n        return value\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("effectful fallthrough setup must not be erased");
+        assert!(error.contains("unsupported expression"));
+
+        let file = db.add_file(
+            "dynamic-elif-pass-branch.lucid",
+            "def answer(value: int):\n    if false:\n        return value\n    elif value > 0:\n        pass\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dead leading mixed elif pass branch should lower through optional CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "constant-unary-branch.lucid",
+            "def answer():\n    if not false:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant unary branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-comparison-branch.lucid",
+            "def answer():\n    if 1 < 2:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant comparison branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-branch-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        selected = value + 1\n        return selected\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant branch locals before return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-elif-local-return.lucid",
+            "def answer(value: int):\n    if false:\n        return 0\n    elif true:\n        selected = value + 1\n        return selected\n    else:\n        return 9\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant elif locals before return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-else-local-return.lucid",
+            "def answer(value: int):\n    if false:\n        return 0\n    else:\n        selected = value + 1\n        return selected\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant else locals before return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-nested-branch-return.lucid",
+            "def answer(value: int):\n    if true:\n        if true:\n            return value + 1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested constant branch return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-nested-branch-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        selected = value + 1\n        if true:\n            return selected\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested constant branch locals before return should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            return value + 1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested branch return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-else-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            return value + 1\n        else:\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested branch else return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+                "dynamic-nested-branch-local-return.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 0:\n            selected = value + 1\n            return selected\n        else:\n            fallback = -value\n            return fallback\n    else:\n        return 0\n",
+            );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested branch local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-pass-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            pass\n            selected = value + 1\n            return selected\n        else:\n            pass\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested pass-padded local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-assert-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            assert(true)\n            selected = value + 1\n            return selected\n        else:\n            assert(true)\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested assert-padded local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-dead-loop-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            while false:\n                return 0\n            selected = value + 1\n            return selected\n        else:\n            for item in []:\n                return 0\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-loop local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-dead-loop-if-broken-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            while false:\n                return 0\n            if_broken:\n                selected = 100\n            selected = value + 1\n            return selected\n        else:\n            for item in []:\n                return 0\n            if_broken:\n                selected = 100\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-loop if_broken local returns should lower");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-branch-dead-if-local-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            if false:\n                return 0\n            selected = value + 1\n            return selected\n        else:\n            if true:\n                pass\n            return -value\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-if local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-nested-elif-branch-else-return.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 10:\n            return 100\n        elif value > 0:\n            return 1\n        else:\n            return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested elif branch else return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "dynamic-nested-elif-branch-fallthrough.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            return 1\n        elif value < 0:\n            return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested elif branch fallthrough should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+                "dynamic-nested-elif-static-selection.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 10:\n            return 100\n        elif false:\n            return 999\n        elif value > 0:\n            return 1\n        elif true:\n            return 2\n        else:\n            return -1\n    else:\n        return 0\n",
+            );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected nested elif static arms should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(Some(2)));
+
+        let file = db.add_file(
+                "dynamic-nested-elif-local-return.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 10:\n            selected: int = 100\n            return selected\n        elif value > 0:\n            selected = value\n            return selected\n        else:\n            selected = -value\n            return selected\n    else:\n        return 0\n",
+            );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested elif local returns should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+                "dynamic-nested-void-branch.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 0:\n            return\n        else:\n            pass\n    else:\n        return value\n",
+            );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-pass-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            pass\n            return\n        else:\n            pass\n            pass\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested pass-padded void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-assert-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            assert(true)\n            return\n        else:\n            assert(true)\n            pass\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested assert-padded void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-dead-loop-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            while false:\n                return value\n            return\n        else:\n            for item in []:\n                return value\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-loop void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-dead-loop-if-broken-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            while false:\n                return value\n            if_broken:\n                value = 100\n            return\n        else:\n            for item in []:\n                return value\n            if_broken:\n                value = 100\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-loop if_broken void branch should lower");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-dead-if-void-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 0:\n            if false:\n                return value\n            return\n        else:\n            if true:\n                pass\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested dead-if void branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "dynamic-nested-void-elif-branch.lucid",
+            "def answer(value: int):\n    if true:\n        if value > 10:\n            return\n        elif value > 0:\n            pass\n        else:\n            return\n    else:\n        return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested void elif branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+                "dynamic-nested-void-elif-fallthrough.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 10:\n            return\n        elif value > 0:\n            pass\n    else:\n        return value\n",
+            );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested void elif fallthrough should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+                "dynamic-nested-void-elif-static-selection.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 10:\n            return\n        elif false:\n            return value\n        elif value > 0:\n            pass\n        elif true:\n            return\n        else:\n            return value\n    else:\n        return value\n",
+            );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected nested void elif static arms should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+                "dynamic-nested-void-then-value-else.lucid",
+                "def answer(value: int):\n    if true:\n        if value > 0:\n            pass\n        else:\n            return -value\n    else:\n        return 0\n",
+            );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected dynamic nested void/value branch should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "constant-string-branch.lucid",
+            "def answer():\n    if \"lucid\" == \"lucid\":\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant string branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "short-circuit-branch.lucid",
+            "def answer(value: int):\n    if false and value > 0:\n        return 0\n    else:\n        return 42\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("short-circuit branch should fold without lowering its RHS");
+        assert_eq!(function.execute_with_args(&[99]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "short-circuit-or-branch.lucid",
+            "def answer(value: int):\n    if true or value > 0:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("short-circuit or branch should fold without lowering its RHS");
+        assert_eq!(function.execute_with_args(&[-99]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-arithmetic-branch.lucid",
+            "def answer():\n    if 1 + 1 < 3:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant arithmetic branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-division-branch.lucid",
+            "def answer():\n    if 8 // 2 == 4:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant division branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-negative-mod-branch.lucid",
+            "def answer():\n    if -5 % 2 == 1:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("negative modulo branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-branch.lucid",
+            "def answer():\n    if 123456789012345678901234567890 == 123456789012345678901234567890:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt comparison branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-negation-branch.lucid",
+            "def answer():\n    if -0x10000000000000000 == -18446744073709551616:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt negation branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-power-branch.lucid",
+            "def answer():\n    if 2 ** 100 == 1267650600228229401496703205376:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt power branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-mod-branch.lucid",
+            "def answer():\n    if 123456789012345678901 % 2 == 1:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt modulo branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-bitwise-branch.lucid",
+            "def answer():\n    if 0x10000000000000000 | 1 == 18446744073709551617:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt bitwise branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-floor-branch.lucid",
+            "def answer():\n    if -123456789012345678901 // 2 == -61728394506172839451:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt floor division branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-invert-branch.lucid",
+            "def answer():\n    if ~0x10000000000000000 == -18446744073709551617:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt invert branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-bigint-plus-branch.lucid",
+            "def answer():\n    if +0x10000000000000000 == 18446744073709551616:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt unary-plus branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-shift-branch.lucid",
+            "def answer():\n    if (1 << 2) == 4:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant shift branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-invert-branch.lucid",
+            "def answer():\n    if ~0 == -1:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant invert branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-power-branch.lucid",
+            "def answer():\n    if 2 ** 3 == 8:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("constant power branch should lower through typed HIR");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-power-overflow-branch.lucid",
+            "def answer():\n    if 2 ** 63 == 0:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("BigInt power should fold without i64 overflow");
+        assert_eq!(function.execute(), Ok(Some(0)));
+
+        let file = db.add_file(
+            "constant-invalid-division-branch.lucid",
+            "def answer():\n    if 1 // 0 == 0:\n        return 42\n    else:\n        return 0\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("division by zero must not be folded or trapped");
+        assert!(error.contains("constant function branch"));
+
+        let file = db.add_file(
+            "constant-unselected-invalid-else.lucid",
+            "def answer():\n    if true:\n        return 42\n    else:\n        return 1 // 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("unselected invalid else branch must not be evaluated");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-unselected-invalid-then.lucid",
+            "def answer():\n    if false:\n        return 1 // 0\n    else:\n        return 42\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("unselected invalid then branch must not be evaluated");
+        assert_eq!(function.execute(), Ok(Some(42)));
+
+        let file = db.add_file(
+            "parameterized.lucid",
+            "def answer(value: int):\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("parameterized body should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "parameterized-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return value + 1\n    else:\n        return -value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dynamic parameter conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "parameterized-conditional-division.lucid",
+            "def choose(flag: int, left: int, right: int):\n    if flag > 0:\n        return left / right\n    else:\n        return 7\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("conditional division should lower through direct CIR returns");
+        assert!(matches!(
+            function.blocks[1].terminator,
+            lucid_cir::Terminator::Return(Some(_))
+        ));
+
+        let file = db.add_file(
+            "parameterized-conditional-expression.lucid",
+            "def choose(value: int):\n    return value + 1 if value > 0 else -value\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("conditional return expression should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "parameterized-static-elif.lucid",
+            "def choose(value: int):\n    if value > 0:\n        return value + 1\n    elif true:\n        return 7\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dynamic condition with static elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(7)));
+
+        let file = db.add_file(
+            "parameterized-multiple-static-elif.lucid",
+            "def choose(value: int):\n    if value > 0:\n        return value + 1\n    elif false:\n        return 3\n    elif true:\n        return 7\n    else:\n        return 9\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multiple static elif branches should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(7)));
+
+        let file = db.add_file(
+            "parameterized-dynamic-elif.lucid",
+            "def choose(value: int):\n    if value > 0:\n        return 1\n    elif value < 0:\n        return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("single dynamic elif chain should lower through direct CIR branches");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-multiple-dynamic-elif.lucid",
+            "def choose(value: int):\n    if value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    elif value < 0:\n        return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("multiple dynamic elif branches should lower through a CIR ladder");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-final-dynamic-elif-assignments.lucid",
+            "def choose(value: int):\n    if value > 10:\n        high = 100\n    elif value > 0:\n        positive = 1\n    else:\n        fallback = 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("final dynamic elif assignment ladder should merge branch results");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-dynamic-if-continuation.lucid",
+            "def choose(value: int):\n    if value > 10:\n        result = 100\n    else:\n        result = 1\n    return result + 1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dynamic comparison diamond should lower before a suffix");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(101)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "parameterized-final-dynamic-elif-assignments-no-else.lucid",
+            "def choose(value: int):\n    fallback = 0\n    if value > 10:\n        high = 100\n    elif value > 0:\n        positive = 1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("final dynamic elif assignment ladder should merge initialized fallback");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-final-dynamic-elif-noop-fallback.lucid",
+            "def choose(first: bool, second: bool):\n    value = 40\n    if first:\n        pass\n    elif second:\n        value = 20\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("final dynamic elif no-op branch should preserve initialized fallback");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(Some(40)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(20)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(40)));
+
+        let file = db.add_file(
+            "parameterized-mixed-static-false-dynamic-elif.lucid",
+            "def choose(value: int):\n    if value > 10:\n        return 100\n    elif false:\n        return 999\n    elif value > 0:\n        return 1\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("static false elif inside dynamic return chain should be skipped");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-mixed-static-false-optional-elif.lucid",
+            "def choose(value: int):\n    if value > 0:\n        return 1\n    elif false:\n        return 999\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("static false optional elif inside dynamic return chain should be skipped");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-dead-leading-dynamic-elif.lucid",
+            "def choose(value: int):\n    if false:\n        return 0\n    elif value > 0:\n        return 1\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dead leading branch before dynamic elif returns should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-dead-leading-multiple-dynamic-elif.lucid",
+            "def choose(value: int):\n    if false:\n        return 0\n    elif value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dead leading branch before dynamic elif return chain should lower");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-dead-leading-optional-dynamic-elif.lucid",
+            "def choose(value: int):\n    if false:\n        return 0\n    elif value > 0:\n        return 1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dead leading branch before optional dynamic elif return should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-false-elif-fallthrough.lucid",
+            "def maybe(value: int):\n    if value > 0:\n        return value + 1\n    elif false:\n        return 7\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("false elif without else should lower to void fall-through");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-dynamic-elif-fallthrough.lucid",
+            "def maybe(value: int):\n    if value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    elif value < 0:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("dynamic elif chain without else should lower to optional CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-then-no-else-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        pass\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass then no-else elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-middle-no-else-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        pass\n    elif value < 0:\n        result = -1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass middle no-else elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-local-conditional.lucid",
+            "def choose(value: int):\n    if value > 0:\n        result = value + 1\n    else:\n        result = -value\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("branch-local assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "parameterized-local-pass-conditional.lucid",
+            "def choose(value: int):\n    if value > 0:\n        result = value + 1\n        pass\n    else:\n        pass\n        result = -value\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("pass around branch-local assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "parameterized-local-elif.lucid",
+            "def choose(value: int):\n    if value > 10:\n        result = 100\n    elif value > 0:\n        pass\n        result = 1\n    elif value < 0:\n        result = -1\n        pass\n    else:\n        result = 0\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("branch-local elif assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local elif assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-no-else-elif-division.lucid",
+            "def choose(seed: int, value: int, scale: int):\n    result = seed // scale\n    if value > 10:\n        result = seed + 100\n    elif value > 0:\n        result = seed + 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local no-else elif division should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 15, 2]), Ok(Some(110)));
+        assert_eq!(function.execute_with_args(&[10, 5, 2]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 2]), Ok(Some(5)));
+        assert_eq!(
+            function.execute_with_args(&[10, 0, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "parameterized-initialized-local-else-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    else:\n        result = -100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local else elif assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-100)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-else-elif-division.lucid",
+            "def choose(seed: int, value: int, scale: int):\n    result = seed // scale\n    if value > 10:\n        result = seed + 100\n    elif value > 0:\n        result = seed + 1\n    else:\n        result = seed - 100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local else elif division should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 15, 2]), Ok(Some(110)));
+        assert_eq!(function.execute_with_args(&[10, 5, 2]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 2]), Ok(Some(-90)));
+        assert_eq!(
+            function.execute_with_args(&[10, 15, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "parameterized-initialized-local-dead-leading-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if false:\n        result = 100\n    elif value > 0:\n        result = 1\n    else:\n        result = -100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized local dead leading elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-100)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-dead-leading-elif-division.lucid",
+            "def choose(seed: int, value: int, scale: int):\n    result = seed // scale\n    if false:\n        result = seed + 100\n    elif value > 0:\n        result = seed + 1\n    else:\n        result = seed - 100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized local dead leading elif division should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 5, 2]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, -5, 2]), Ok(Some(-90)));
+        assert_eq!(
+            function.execute_with_args(&[10, 5, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "parameterized-initialized-local-dead-leading-no-else-elif-division.lucid",
+            "def choose(seed: int, value: int, scale: int):\n    result = seed // scale\n    if false:\n        result = seed + 100\n    elif value > 0:\n        result = seed + 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect(
+                "initialized local dead leading no-else elif division should lower through CIR",
+            );
+        assert_eq!(function.execute_with_args(&[10, 5, 2]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, -5, 2]), Ok(Some(5)));
+        assert_eq!(
+            function.execute_with_args(&[10, -5, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "parameterized-initialized-local-dead-leading-pass-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if false:\n        result = 100\n    elif value > 10:\n        result = 10\n    elif value > 0:\n        pass\n    else:\n        result = -100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized local dead leading pass elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(10)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-100)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-then-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        pass\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    else:\n        result = -100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass then elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-100)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-middle-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        pass\n    elif value < 0:\n        result = -1\n    else:\n        result = -100\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass middle elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-100)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-else-elif.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 10:\n        result = 100\n    elif value > 0:\n        result = 1\n    elif value < 0:\n        result = -1\n    else:\n        pass\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass else elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-conditional.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 0:\n        result = 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-conditional-division.lucid",
+            "def choose(seed: int, flag: bool, scale: int):\n    result = seed // scale\n    if flag:\n        result = seed + 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local conditional division should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 2]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 2]), Ok(Some(5)));
+        assert_eq!(
+            function.execute_with_args(&[10, 1, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+        assert_eq!(
+            function.execute_with_args(&[10, 0, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "parameterized-initialized-local-else-conditional.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 0:\n        result = 1\n    else:\n        result = -1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local else assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-else-division.lucid",
+            "def choose(seed: int, flag: bool, scale: int):\n    result = seed // scale\n    if flag:\n        result = seed + 1\n    else:\n        result = seed + 2\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local division should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 2]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 2]), Ok(Some(12)));
+        assert_eq!(
+            function.execute_with_args(&[10, 1, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+        assert_eq!(
+            function.execute_with_args(&[10, 0, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-else-conditional.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 0:\n        result = 1\n    else:\n        pass\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass else should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-initialized-local-pass-then-conditional.lucid",
+            "def choose(value: int):\n    result = 0\n    if value > 0:\n        pass\n    else:\n        result = -1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initialized branch-local pass then should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "parameterized-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dynamic void conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-optional-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("optional dynamic void conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-optional-pass-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("optional dynamic pass conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-pass-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pass dynamic void conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-then-pass-void-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        pass\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("then-pass dynamic void conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-1]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        return\n    elif value > 0:\n        return\n    elif value < 0:\n        return\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dynamic void elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-optional-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        return\n    elif value > 0:\n        return\n    elif value < 0:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("optional dynamic void elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-pass-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        return\n    elif value > 0:\n        return\n    elif value < 0:\n        return\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pass dynamic void elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-static-false-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        return\n    elif false:\n        return\n    elif value > 0:\n        pass\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("static false void elif inside dynamic chain should be skipped");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-static-false-optional-void-elif.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return\n    elif false:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("static false optional void elif inside dynamic chain should be skipped");
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-mixed-pass-void-elif.lucid",
+            "def answer(value: int):\n    if value > 10:\n        pass\n    elif value > 0:\n        return\n    elif value < 0:\n        pass\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("mixed pass dynamic void elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(None));
+        assert_eq!(function.execute_with_args(&[5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-boolean-conditional.lucid",
+            "def answer(value: int):\n    if value > 0 and value < 10:\n        return 42\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("boolean parameter conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "parameterized-optional-conditional.lucid",
+            "def answer(value: int):\n    if value > 0:\n        return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("one-sided parameter conditional should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-pass-conditional.lucid",
+            "def maybe(value: int):\n    if value > 0:\n        return value + 1\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("pass branch should lower through the mixed result ABI");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-bare-return-conditional.lucid",
+            "def maybe(value: int):\n    if value > 0:\n        return value + 1\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("bare return branch should lower through the mixed result ABI");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+        assert_eq!(function.execute_with_args(&[-41]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-pass-elif.lucid",
+            "def maybe(value: int):\n    if value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    elif value < 0:\n        return -1\n    else:\n        pass\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("pass fallback after dynamic elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "parameterized-bare-return-elif.lucid",
+            "def maybe(value: int):\n    if value > 10:\n        return 100\n    elif value > 0:\n        return 1\n    elif value < 0:\n        return -1\n    else:\n        return\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("bare return fallback after dynamic elif chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "temporary.lucid",
+            "def answer(value: int):\n    doubled = value * 2\n    return doubled\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a temporary followed by return should lower through SSA");
+        assert_eq!(function.execute_with_args(&[21]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "declared-temporary.lucid",
+            "def answer(value: int):\n    doubled: int = value * 2\n    return doubled\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a declared temporary should lower through SSA");
+        assert_eq!(function.execute_with_args(&[21]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "reassigned-parameter.lucid",
+            "def answer(value: int):\n    value = value + 1\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a reassigned parameter should lower through SSA");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "chained-locals.lucid",
+            "def answer(value: int):\n    doubled = value * 2\n    result = doubled + 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("chained locals should lower through SSA");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "local-direct-return.lucid",
+            "def answer(value: int):\n    doubled = value * 2\n    return doubled + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a direct expression return should lower through typed SSA");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "pass-before-return.lucid",
+            "def answer(value: int):\n    pass\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pass before a return should lower through typed SSA");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "dead-if-before-return.lucid",
+            "def answer(value: int):\n    if false:\n        value = 0\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a statically dead if should be skipped during lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "selected-if-before-return.lucid",
+            "def answer(value: int):\n    if true:\n        result = value * 2\n    return result + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a statically selected if assignment should lower");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "selected-elif-before-return.lucid",
+            "def answer(value: int):\n    if false:\n        result = 0\n    elif true:\n        result = value * 2\n    return result + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a statically selected elif assignment should lower");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "selected-else-before-return.lucid",
+            "def answer(value: int):\n    if false:\n        result = 0\n    else:\n        result = value * 2\n    return result + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a statically selected else assignment should lower");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "selected-branch-locals-before-return.lucid",
+            "def answer(value: int):\n    if true:\n        doubled = value * 2\n        result = doubled + 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("multiple selected branch assignments should lower");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "nested-selected-branch-locals-before-return.lucid",
+            "def answer(value: int):\n    if true:\n        if true:\n            result = value * 2\n    return result + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested statically selected branch assignments should lower");
+        assert_eq!(function.execute_with_args(&[20]), Ok(Some(41)));
+
+        let file = db.add_file(
+            "dynamic-elif-before-return.lucid",
+            "def answer(value: int):\n    if false:\n        result = 0\n    elif value > 0:\n        result = 1\n    else:\n        result = 2\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dead leading branch before dynamic elif assignment should lower");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "dynamic-multiple-elif-before-return.lucid",
+            "def answer(value: int):\n    if false:\n        result = 0\n    elif value > 10:\n        result = 10\n    elif value > 0:\n        result = 1\n    else:\n        result = 2\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dead leading branch before dynamic elif assignment chain should lower");
+        assert_eq!(function.execute_with_args(&[15]), Ok(Some(10)));
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
+        assert_eq!(function.execute_with_args(&[-5]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "dead-while-before-return.lucid",
+            "def answer(value: int):\n    while false:\n        value = 0\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a statically dead while should be skipped during lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "empty-for-before-return.lucid",
+            "def answer(value: int):\n    for item in []:\n        value = 0\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("an empty for should be skipped during lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "empty-range-before-return.lucid",
+            "def answer(value: int):\n    for item in range(0):\n        value = 0\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("an empty range should be skipped during lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "constant-function-loop.lucid",
+            "def answer():\n    value = 0\n    for item in [1, 2, 3]:\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a parameter-free constant loop should lower through CIR");
+        assert_eq!(function.execute(), Ok(Some(6)));
+
+        let file = db.add_file(
+            "constant-function-set-loop.lucid",
+            "def answer():\n    value = 0\n    for item in {1, 2, 3}:\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a parameter-free constant set loop should lower through CIR");
+        assert_eq!(function.execute(), Ok(Some(6)));
+
+        let file = db.add_file(
+            "constant-function-dict-loop.lucid",
+            "def answer():\n    value = 0\n    for item in {1: 2, 3: 4}:\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a parameter-free constant dictionary loop should iterate keys");
+        assert_eq!(function.execute(), Ok(Some(4)));
+
+        let file = db.add_file(
+            "constant-function-range-loop.lucid",
+            "def answer():\n    value = 0\n    for item in range(1, 4):\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a parameter-free constant range should lower through CIR");
+        assert_eq!(function.execute(), Ok(Some(6)));
+
+        let file = db.add_file(
+            "parameterized-constant-loop.lucid",
+            "def answer(value: int):\n    for item in [1, 2]:\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("parameterized constant loops should seed CIR parameters");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(44)));
+
+        let file = db.add_file(
+            "parameterized-constant-range-loop.lucid",
+            "def answer(value: int):\n    for item in range(1, 4):\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("parameterized constant ranges should reuse CIR unrolling");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(47)));
+
+        let file = db.add_file(
+            "parameterized-arithmetic-range-loop.lucid",
+            "def answer(value: int):\n    for item in range(1 + 1, 2 * 3, 1 << 1):\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("arithmetic constant ranges should lower through the database");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(47)));
+
+        let file = db.add_file(
+            "parameterized-constant-set-loop.lucid",
+            "def answer(value: int):\n    for item in {1, 2, 3}:\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("parameterized constant sets should reuse CIR unrolling");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(47)));
+
+        let file = db.add_file(
+            "parameterized-constant-dict-loop.lucid",
+            "def answer(value: int):\n    for item in {1: 2, 3: 4}:\n        value = value + item\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("parameterized constant dictionaries should iterate keys");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(45)));
+
+        let file = db.add_file(
+            "empty-loop-if-broken.lucid",
+            "def answer(value: int):\n    for item in []:\n        value = 1\n    if_broken:\n        value = 2\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("empty loop if_broken should not run in function lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "false-while-if-broken.lucid",
+            "def answer(value: int):\n    while false:\n        value = 1\n    if_broken:\n        value = 2\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("statically false while if_broken should not run in function lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "true-assert-before-return.lucid",
+            "def answer(value: int):\n    assert(true)\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a statically true assertion should be skipped during lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "pure-discard-before-pass.lucid",
+            "def answer(value: int):\n    value + 1\n    pass\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a pure discarded expression before pass should lower before the void return");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "effectful-discard-before-pass.lucid",
+            "def answer(value: int):\n    str(value)\n    pass\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("effectful discarded expression before pass must not be erased");
+        assert!(error.contains("unsupported expression"));
+
+        let file = db.add_file(
+            "empty-descending-range-before-return.lucid",
+            "def answer(value: int):\n    for item in range(0, 1, -1):\n        value = 0\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("an empty descending range should be skipped during lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "local-rebinding-order.lucid",
+            "def answer():\n    x = 1\n    y = x + 1\n    x = 3\n    return y\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("local rebinding should preserve definition order");
+        assert_eq!(function.execute(), Ok(Some(2)));
+
+        let file = db.add_file("multi.lucid", "def answer():\n    1\n    return 2\n");
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pure discarded expressions should not block CIR lowering");
+        assert_eq!(function.execute(), Ok(Some(2)));
+    }
+
+    #[test]
+    fn database_lowers_sequential_function_bindings_from_typed_hir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "sequential.lucid",
+            "def answer(seed: int):\n    first = seed + 2\n    second = first * 3\n    return second - 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("sequential bindings should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(17)));
+    }
+
+    #[test]
+    fn database_lowers_pure_discarded_expression_before_return() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "pure-discarded.lucid",
+            "def answer(value: int):\n    value + 1\n    return value * 2\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pure discarded expression should lower through CIR");
+        assert_eq!(function.execute_with_args(&[21]), Ok(Some(42)));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+    }
+
+    #[test]
+    fn database_rejects_effectful_discarded_expression_before_return() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "effectful-discarded.lucid",
+            "def answer(value: int):\n    str(value)\n    return value * 2\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("effectful discarded expression must not be erased");
+        assert!(error.contains("unsupported expression"));
+    }
+
+    #[test]
+    fn database_accepts_pure_expression_in_selected_branch() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "pure-branch-expression.lucid",
+            "def answer(value: int):\n    if true:\n        value + 1\n    return value * 2\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("pure branch expression should be ignored safely");
+        assert_eq!(function.execute_with_args(&[21]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn database_accepts_proven_noops_in_selected_branch() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "selected-branch-noops.lucid",
+            "def answer(value: int):\n    if true:\n        assert(true)\n        while false:\n            value = 0\n        for item in []:\n            value = 0\n        if false:\n            value = 0\n        result = value + 1\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("proven no-op statements in a selected branch should not block CIR lowering");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn database_lowers_bindings_before_bare_return_as_void() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "bare-return-after-binding.lucid",
+            "def discard(value: int):\n    temporary = value + 1\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("pure bindings before a bare return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+
+        let file = db.add_file(
+            "bare-return-after-nested-static-binding.lucid",
+            "def discard(value: int):\n    if true:\n        if true:\n            temporary = value + 1\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("nested static bindings before a bare return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, lucid_cir::Instruction::Add { .. }))
+        );
+    }
+
+    #[test]
+    fn database_lowers_single_void_function_bodies() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("single-pass.lucid", "def discard():\n    pass\n");
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("a single pass statement should lower to a void CIR function");
+        assert_eq!(function.execute(), Ok(None));
+
+        let file = db.add_file("single-bare-return.lucid", "def discard():\n    return\n");
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("a single bare return should lower to a void CIR function");
+        assert_eq!(function.execute(), Ok(None));
+    }
+
+    #[test]
+    fn database_lowers_pure_discarded_expression_before_bare_return() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "pure-discarded-before-bare-return.lucid",
+            "def discard(value: int):\n    value + 1\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "discard".into())
+            .as_ref()
+            .expect("pure discarded expression before bare return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(None));
+        assert_eq!(
+            function.execute_with_args(&[i64::MAX]),
+            Err(lucid_cir::ExecuteError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn database_lowers_straight_line_augmented_assignment_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "straight-line-augassign.lucid",
+            "def answer(value: int):\n    total = value\n    total += 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("straight-line augmented assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "selected-branch-augassign.lucid",
+            "def answer(value: int):\n    total = value\n    if true:\n        total += 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("selected-branch augmented assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+
+        let file = db.add_file(
+            "nested-selected-branch-augassign.lucid",
+            "def answer(value: int):\n    total = value\n    if true:\n        if true:\n            total += 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("nested selected-branch augmented assignment should lower through CIR");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn database_lowers_statement_conditional_returns_from_typed_hir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "statement-if.lucid",
+            "def choose(flag: bool):\n    if flag:\n        return 11\n    else:\n        return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("statement conditional returns should lower through typed HIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "statement-dynamic-if-static-inner-if.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        if true:\n            return value + 1\n        else:\n            return -1\n    else:\n        return 0\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("dynamic outer if should not be replaced by nested static inner if");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(3)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(0)));
+        assert!(
+            function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator, lucid_cir::Terminator::Branch { .. })),
+            "outer dynamic guard must remain in CIR"
+        );
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = 0\n        if value > 0:\n            result = value + 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested dynamic local branch should lower through an explicit ladder");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-augassign-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = value\n        if value > 0:\n            result += 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested dynamic local augmented assignment branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(-2)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-nested-static-local-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = 0\n        if true:\n            result = value + 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested static local branch should lower inside dynamic outer branch");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-nested-static-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = 0\n            if true:\n                result = value + 10\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match arm nested static local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-branch-local-augassign-return.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = value\n        result += 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("branch local augmented assignment return should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(8)));
+        assert_eq!(function.execute_with_args(&[0, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-branch-local-augassign-return.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = value\n            result += 10\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match branch local augmented assignment return should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(8)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-nested-dynamic-local-augassign-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = value\n            if value > 0:\n                result += 10\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match arm nested dynamic local augmented assignment branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(-2)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-branch-with-outer-elif.lucid",
+            "def choose(flag: bool, tag: int, value: int):\n    if flag:\n        result = 0\n        if value > 0:\n            result = value + 10\n        return result\n    elif tag == 1:\n        return 100\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initial nested dynamic local branch with outer elif should lower");
+        assert_eq!(function.execute_with_args(&[1, 0, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, 0, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[0, 1, 2]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[0, 2, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-elif-branch-with-outer-elif.lucid",
+            "def choose(flag: bool, tag: int, value: int):\n    if flag:\n        result = 0\n        if value > 10:\n            result = value + 10\n        elif value > 0:\n            result = value\n        return result\n    elif tag == 1:\n        return 100\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initial nested dynamic local elif branch with outer elif should lower");
+        assert_eq!(function.execute_with_args(&[1, 0, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[1, 0, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1, 0, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[0, 1, 2]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[0, 2, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-initial-nested-dynamic-local-branch-with-later-arm.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = 0\n            if value > 0:\n                result = value + 10\n            return result\n        case 2:\n            return 200\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("initial match arm nested dynamic local branch with later arm should lower");
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-initial-nested-dynamic-local-elif-branch-with-later-arm.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = 0\n            if value > 10:\n                result = value + 10\n            elif value > 0:\n                result = value\n            return result\n        case 2:\n            return 200\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect(
+                "initial match arm nested dynamic local elif branch with later arm should lower",
+            );
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-else-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    if tag == 1:\n        return 100\n    elif tag == 2:\n        return 200\n    else:\n        result = 0\n        if value > 10:\n            result = value + 10\n        elif value > 0:\n            result = value\n        else:\n            result = -value\n        return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("else arm nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[3, -2]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "statement-fallthrough-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    if tag == 1:\n        return 100\n    elif tag == 2:\n        return 200\n    result = 0\n    if value > 10:\n        result = value + 10\n    elif value > 0:\n        result = value\n    else:\n        result = -value\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("fallthrough nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[3, -2]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "statement-match-fallthrough-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            return 100\n        case 2:\n            return 200\n    result = 0\n    if value > 10:\n        result = value + 10\n    elif value > 0:\n        result = value\n    else:\n        result = -value\n    return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match fallthrough nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[3, -2]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "statement-match-wildcard-else-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            return 100\n        case 2:\n            return 200\n        case _:\n            result = 0\n            if value > 10:\n                result = value + 10\n            elif value > 0:\n                result = value\n            else:\n                result = -value\n            return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("final wildcard nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[3, -2]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-elif-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = 0\n        if value > 10:\n            result = 100\n        elif value > 0:\n            result = value + 10\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested dynamic local elif branch should lower through an explicit ladder");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(0)));
+        assert_eq!(function.execute_with_args(&[0, 11]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-nested-dynamic-local-elif-else-branch.lucid",
+            "def choose(flag: bool, value: int):\n    if flag:\n        result = 0\n        if value > 10:\n            result = 100\n        elif value > 0:\n            result = value + 10\n        else:\n            result = -value\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("nested dynamic local elif else branch should lower through a ladder");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[0, 11]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-nested-dynamic-local-elif-else-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            result = 0\n            if value > 10:\n                result = 100\n            elif value > 0:\n                result = value + 10\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("match arm nested dynamic local elif else branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-guarded-match-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1 if value > 0:\n            result = 0\n            if value > 10:\n                result = 100\n            elif value > 0:\n                result = value + 10\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guarded literal match arm should gate nested local branch");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, -2]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-boolean-guarded-match-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int, limit: int):\n    match tag:\n        case 1 if value > 0 and value < limit:\n            result = 0\n            if value > 10:\n                result = 100\n            elif value > 0:\n                result = value + 10\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("boolean guarded literal match arm should gate nested local branch");
+        assert_eq!(function.execute_with_args(&[1, 11, 20]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[1, 2, 20]), Ok(Some(12)));
+        assert_eq!(function.execute_with_args(&[1, 20, 20]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[1, -2, 20]), Ok(Some(-1)));
+        assert_eq!(function.execute_with_args(&[2, 11, 20]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-match-wildcard-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            return 100\n        case _:\n            result = 0\n            if value > 10:\n                result = value + 10\n            elif value > 0:\n                result = value\n            else:\n                result = -value\n            return result\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("wildcard match arm nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[2, -2]), Ok(Some(2)));
+
+        let file = db.add_file(
+            "statement-elif-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    if tag == 1:\n        return 100\n    elif value > 0:\n        result = 0\n        if value > 10:\n            result = value + 10\n        elif value > 0:\n            result = value\n        else:\n            result = -value\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("outer elif nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[2, -2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-multi-elif-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    if tag == 1:\n        return 100\n    elif tag == 2:\n        return 200\n    elif value > 0:\n        result = 0\n        if value > 10:\n            result = value + 10\n        elif value > 0:\n            result = value\n        else:\n            result = -value\n        return result\n    else:\n        return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("later outer elif nested dynamic local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[3, -2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-multi-match-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            return 100\n        case _ if value > 0:\n            result = 0\n            if value > 10:\n                result = value + 10\n            elif value > 0:\n                result = value\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("middle guarded wildcard match arm with nested local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[2, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[2, -2]), Ok(Some(-1)));
+
+        let file = db.add_file(
+            "statement-multi-match-later-nested-dynamic-local-branch.lucid",
+            "def choose(tag: int, value: int):\n    match tag:\n        case 1:\n            return 100\n        case 2:\n            return 200\n        case _ if value > 0:\n            result = 0\n            if value > 10:\n                result = value + 10\n            elif value > 0:\n                result = value\n            else:\n                result = -value\n            return result\n        case _:\n            return -1\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("later guarded wildcard match arm with nested local branch should lower");
+        assert_eq!(function.execute_with_args(&[1, 11]), Ok(Some(100)));
+        assert_eq!(function.execute_with_args(&[2, 11]), Ok(Some(200)));
+        assert_eq!(function.execute_with_args(&[3, 11]), Ok(Some(21)));
+        assert_eq!(function.execute_with_args(&[3, 2]), Ok(Some(2)));
+        assert_eq!(function.execute_with_args(&[3, -2]), Ok(Some(-1)));
+    }
+
+    #[test]
+    fn database_lowers_guard_returns_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "guard-return.lucid",
+            "def choose(flag: bool):\n    if flag:\n        return 11\n    return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guard return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "setup-guard-return.lucid",
+            "def choose(seed: int, flag: bool):\n    base = seed + 1\n    if flag:\n        return base\n    return base * 2\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before guard return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "setup-guard-elif-return.lucid",
+            "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return base\n    elif second:\n        return base * 2\n    return base * 3\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before guard elif return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "setup-guard-elif-else-return.lucid",
+            "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return base\n    elif second:\n        return base * 2\n    else:\n        return base * 3\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before guard elif else return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[10, 0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "setup-guard-elif-else-division.lucid",
+            "def choose(seed: int, first: bool, second: bool, scale: int):\n    base = seed + 1\n    if first:\n        return base // scale\n    elif second:\n        return base * 2\n    else:\n        return base * 3\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before guard elif else division should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 0, 1, 0]), Ok(Some(22)));
+        assert_eq!(
+            function.execute_with_args(&[10, 1, 0, 0]),
+            Err(lucid_cir::ExecuteError::DivisionByZero)
+        );
+        assert_eq!(function.execute_with_args(&[10, 0, 0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "setup-mixed-guard-elif-return.lucid",
+            "def choose(seed: int, first: bool, second: bool):\n    base = seed + 1\n    if first:\n        return\n    elif second:\n        return base * 2\n    return base * 3\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("setup before mixed guard elif return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[10, 1, 0]), Ok(None));
+        assert_eq!(function.execute_with_args(&[10, 0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[10, 0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "void-guard-return.lucid",
+            "def choose(flag: bool):\n    if flag:\n        return\n    return 22\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("void guard return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0]), Ok(Some(22)));
+
+        let file = db.add_file(
+            "optional-guard-return.lucid",
+            "def maybe(flag: bool):\n    if flag:\n        return 11\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("explicit optional guard return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0]), Ok(None));
+
+        let file = db.add_file(
+            "guard-elif-return.lucid",
+            "def choose(first: bool, second: bool):\n    if first:\n        return 11\n    elif second:\n        return 22\n    return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("guard elif return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "optional-guard-elif-return.lucid",
+            "def maybe(first: bool, second: bool):\n    if first:\n        return 11\n    elif second:\n        return 22\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("explicit optional guard elif return should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(None));
+
+        let file = db.add_file(
+            "optional-value-guard-void-elif-return.lucid",
+            "def maybe(first: bool, second: bool):\n    if first:\n        return 11\n    elif second:\n        return\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("explicit optional value guard with void elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(None));
+
+        let file = db.add_file(
+            "optional-void-guard-value-elif-return.lucid",
+            "def maybe(first: bool, second: bool):\n    if first:\n        return\n    elif second:\n        return 22\n    return\n",
+        );
+        let function = lower_function_body(&db, file, "maybe".into())
+            .as_ref()
+            .expect("explicit optional void guard with value elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(None));
+
+        let file = db.add_file(
+            "void-guard-elif-return.lucid",
+            "def choose(first: bool, second: bool):\n    if first:\n        return\n    elif second:\n        return 22\n    return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("void guard with value elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(Some(22)));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "value-guard-void-elif-return.lucid",
+            "def choose(first: bool, second: bool):\n    if first:\n        return 11\n    elif second:\n        return\n    return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("value guard with void elif should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "void-guard-void-elif-value-fallback.lucid",
+            "def choose(first: bool, second: bool):\n    if first:\n        return\n    elif second:\n        return\n    return 33\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("void guard chain with value fallback should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0, 1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0, 0]), Ok(Some(33)));
+
+        let file = db.add_file(
+            "mixed-multi-guard-return.lucid",
+            "def choose(first: bool, second: bool, third: bool, fourth: bool):\n    if first:\n        return 11\n    elif second:\n        return\n    elif third:\n        return 33\n    elif fourth:\n        return\n    return 55\n",
+        );
+        let function = lower_function_body(&db, file, "choose".into())
+            .as_ref()
+            .expect("mixed multi-elif guard chain should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 0, 0, 0]), Ok(Some(11)));
+        assert_eq!(function.execute_with_args(&[0, 1, 0, 0]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0, 0, 1, 0]), Ok(Some(33)));
+        assert_eq!(function.execute_with_args(&[0, 0, 0, 1]), Ok(None));
+        assert_eq!(function.execute_with_args(&[0, 0, 0, 0]), Ok(Some(55)));
+    }
+
+    #[test]
+    fn database_lowers_unambiguous_dispatch_body_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "single-dispatch.lucid",
+            "dispatch def answer(value: int) -> int:\n    return value + 1\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("a single dispatch overload has an unambiguous body to lower");
+        assert_eq!(function.execute_with_args(&[41]), Ok(Some(42)));
+    }
+
+    #[test]
+    fn database_lowers_item_dict_comprehension_body_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "dict-comp.lucid",
+            "def answer():\n    source_items = {1: 10, 2: 20}\n    comp = {key: value + 1 for key, value in source_items.items()}\n    return comp[2]\n",
+        );
+        let function = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect("dict item comprehension body should lower through CIR");
+        assert_eq!(function.execute(), Ok(Some(21)));
+    }
+
+    #[test]
+    fn database_rejects_dispatch_overload_set_without_selected_candidate() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "dispatch-overloads.lucid",
+            "dispatch def answer(value: int) -> int:\n    return 1\n\ndispatch def answer(value: bool) -> int:\n    return 0\n",
+        );
+        let error = lower_function_body(&db, file, "answer".into())
+            .as_ref()
+            .expect_err("an overload set needs a selected candidate before CIR lowering");
+        assert!(error.contains("selected overload"));
+    }
+
+    #[test]
+    fn database_lowers_parameter_counted_while_through_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "counted-while.lucid",
+            "def countdown(n: int):\n    while n > 0:\n        n -= 1\n    return n\n",
+        );
+        let function = lower_function_body(&db, file, "countdown".into())
+            .as_ref()
+            .expect("counted while should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "counted-while-local.lucid",
+            "def countdown(n: int):\n    value = n\n    while value > 0:\n        value -= 1\n    return value\n",
+        );
+        let function = lower_function_body(&db, file, "countdown".into())
+            .as_ref()
+            .expect("local-init counted while should lower through CIR");
+        assert_eq!(function.execute_with_args(&[2]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "counted-while-conditional-accumulate.lucid",
+            "def sum_large(n: int, cutoff: int):\n    total = 0\n    while n > 0:\n        if n > cutoff:\n            total += n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "sum_large".into())
+            .as_ref()
+            .expect("counted while conditional accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(12)));
+
+        let file = db.add_file(
+            "counted-while-conditional-else-accumulate.lucid",
+            "def signed_sum(n: int, cutoff: int):\n    total = 0\n    while n > 0:\n        if n > cutoff:\n            total += n\n        else:\n            total -= n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "signed_sum".into())
+            .as_ref()
+            .expect("counted while conditional else accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(9)));
+
+        let file = db.add_file(
+            "counted-while-boolean-conditional-else-accumulate.lucid",
+            "def signed_window_sum(n: int, cutoff: int, high: int):\n    total = 0\n    while n > 0:\n        if n > cutoff and n < high:\n            total += n\n        else:\n            total -= n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "signed_window_sum".into())
+            .as_ref()
+            .expect("counted while boolean conditional else accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 1, 5]), Ok(Some(3)));
+
+        let file = db.add_file(
+            "counted-while-compound-conditional-else-accumulate.lucid",
+            "def signed_compound_sum(n: int, high: int, low: int):\n    total = 0\n    while n > 0:\n        if not false and n < high - 1 or n <= low:\n            total += n\n        else:\n            total -= n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "signed_compound_sum".into())
+            .as_ref()
+            .expect(
+                "counted while compound conditional else accumulation should lower through CIR",
+            );
+        assert_eq!(function.execute_with_args(&[5, 4, 1]), Ok(Some(-9)));
+
+        let file = db.add_file(
+            "counted-while-not-comparison-else-accumulate.lucid",
+            "def signed_not_sum(n: int, high: int, low: int):\n    total = 0\n    while n > 0:\n        if not n > high or n <= low:\n            total += n\n        else:\n            total -= n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "signed_not_sum".into())
+            .as_ref()
+            .expect("counted while not-comparison else accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 3, 1]), Ok(Some(-3)));
+
+        let file = db.add_file(
+            "counted-while-unused-constant-setup.lucid",
+            "def sum_down(n: int):\n    unused = 1 + 2\n    total = 0\n    while n > 0:\n        total += n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "sum_down".into())
+            .as_ref()
+            .expect("unused constant setup should not block counted while accumulation");
+        assert_eq!(function.execute_with_args(&[4]), Ok(Some(10)));
+
+        let file = db.add_file(
+            "counted-while-conditional-elif-accumulate.lucid",
+            "def tiered_sum(n: int, high: int, low: int):\n    total = 0\n    while n > 0:\n        if n > high:\n            total += n\n        elif n > low:\n            total += 1\n        else:\n            total -= n\n        n -= 1\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "tiered_sum".into())
+            .as_ref()
+            .expect("counted while conditional elif accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 3, 1]), Ok(Some(10)));
+
+        let file = db.add_file(
+            "range-accumulate.lucid",
+            "def sum_to(n: int):\n    total = 0\n    for i in range(n):\n        total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "sum_to".into())
+            .as_ref()
+            .expect("range accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let file = db.add_file(
+            "range-conditional-accumulate.lucid",
+            "def sum_positive(limit: int, cutoff: int):\n    total = 0\n    for i in range(limit):\n        if i > cutoff:\n            total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "sum_positive".into())
+            .as_ref()
+            .expect("range conditional accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(7)));
+
+        let file = db.add_file(
+            "range-conditional-else-accumulate.lucid",
+            "def signed_sum(limit: int, cutoff: int):\n    total = 0\n    for i in range(limit):\n        if i > cutoff:\n            total += i\n        else:\n            total -= i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "signed_sum".into())
+            .as_ref()
+            .expect("range conditional else accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 2]), Ok(Some(4)));
+
+        let file = db.add_file(
+            "range-conditional-elif-accumulate.lucid",
+            "def tiered_sum(limit: int, high: int, low: int):\n    total = 0\n    for i in range(limit):\n        if i > high:\n            total += i\n        elif i > low:\n            total += 1\n        else:\n            total -= i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "tiered_sum".into())
+            .as_ref()
+            .expect("range conditional elif accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[5, 3, 1]), Ok(Some(5)));
+
+        let file = db.add_file(
+            "range-boolean-guard-accumulate.lucid",
+            "def bounded_sum(limit: int, low: int, high: int):\n    total = 0\n    for i in range(limit):\n        if i > low and i < high:\n            total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "bounded_sum".into())
+            .as_ref()
+            .expect("range boolean-guard accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[6, 1, 5]), Ok(Some(9)));
+
+        let file = db.add_file(
+            "range-arithmetic-guard-accumulate.lucid",
+            "def shifted_sum(limit: int, high: int):\n    total = 0\n    for i in range(limit):\n        if i + 1 < high:\n            total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "shifted_sum".into())
+            .as_ref()
+            .expect("range arithmetic-guard accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[6, 5]), Ok(Some(6)));
+
+        let file = db.add_file(
+            "range-dynamic-step-guard-accumulate.lucid",
+            "def stepped_sum(start: int, stop: int, step: int, cutoff: int):\n    total = 0\n    for i in range(start, stop, step):\n        if i > cutoff:\n            total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "stepped_sum".into())
+            .as_ref()
+            .expect("range dynamic-step guarded accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[1, 8, 2, 3]), Ok(Some(12)));
+
+        let file = db.add_file(
+            "range-negative-dynamic-step-guard-accumulate.lucid",
+            "def descending_sum(start: int, stop: int, step: int, cutoff: int):\n    total = 0\n    for i in range(start, stop, -step):\n        if i < cutoff:\n            total += i\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "descending_sum".into())
+            .as_ref()
+            .expect("range negative dynamic-step guarded accumulation should lower through CIR");
+        assert_eq!(function.execute_with_args(&[8, 1, 2, 5]), Ok(Some(6)));
+
+        let file = db.add_file(
+            "counted-while-dead-if-broken.lucid",
+            "def countdown(n: int):\n    while n > 0:\n        n -= 1\n    if_broken:\n        n = 100\n    return n\n",
+        );
+        let function = lower_function_body(&db, file, "countdown".into())
+            .as_ref()
+            .expect("counted while should ignore unreachable if_broken");
+        assert_eq!(function.execute_with_args(&[3]), Ok(Some(0)));
+
+        let file = db.add_file(
+            "range-accumulate-dead-if-broken.lucid",
+            "def sum_to(n: int):\n    total = 0\n    for i in range(n):\n        total += i\n    if_broken:\n        total = 100\n    return total\n",
+        );
+        let function = lower_function_body(&db, file, "sum_to".into())
+            .as_ref()
+            .expect("range accumulation should ignore unreachable if_broken");
+        assert_eq!(function.execute_with_args(&[5]), Ok(Some(10)));
+
+        let file = db.add_file(
+            "void-counted-while.lucid",
+            "def drain(n: int):\n    while n > 0:\n        n -= 1\n",
+        );
+        let function = lower_function_body(&db, file, "drain".into())
+            .as_ref()
+            .expect("void counted while should lower through CIR");
+        assert_eq!(function.execute_with_args(&[2]), Ok(None));
+
+        let file = db.add_file(
+            "void-local-bound-counted-while.lucid",
+            "def drain(n: int, limit: int):\n    stop = limit\n    while n > stop:\n        n -= 1\n",
+        );
+        let function = lower_function_body(&db, file, "drain".into())
+            .as_ref()
+            .expect("void local-bound counted while should lower through CIR");
+        assert_eq!(function.execute_with_args(&[4, 2]), Ok(None));
+    }
+
+    #[test]
+    fn database_lowering_rejects_type_errors_before_cir() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value: int = \"wrong\"\n");
+        let error = lower_first_assignment(&db, file)
+            .as_ref()
+            .expect_err("invalid source must not lower");
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn top_level_symbols_are_interned_per_source_file() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "main.lucid",
+            "class Point:\n    x: int\ndef make():\n    return none\n",
+        );
+        let symbols = top_level_symbols(&db, file);
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].name(&db), "Point");
+        assert!(*symbols[0].file(&db) == file);
+        assert_eq!(symbols[1].name(&db), "make");
+    }
+
+    #[test]
+    fn type_check_query_tracks_source_changes() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value: int = 42\n");
+        assert!(type_check_file(&db, file).is_ok());
+
+        file.set_text(&mut db).to("value: int = \"wrong\"\n".into());
+        let error = type_check_file(&db, file)
+            .as_ref()
+            .expect_err("changed source should invalidate semantic result");
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn name_resolution_returns_stable_symbol_identity() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "class Point:\n    x: int\n");
+        let symbol = resolve_top_level(&db, file, "Point".into()).expect("Point should resolve");
+        assert_eq!(symbol.name(&db), "Point");
+        assert!(resolve_top_level(&db, file, "Missing".into()).is_none());
+
+        file.set_text(&mut db)
+            .to("class Other:\n    x: int\n".into());
+        assert!(resolve_top_level(&db, file, "Point".into()).is_none());
+        assert!(resolve_top_level(&db, file, "Other".into()).is_some());
+    }
+
+    #[test]
+    fn resolved_declarations_record_kind_and_visibility() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "main.lucid",
+            "class Point:\n    x: int\n\ndef helper():\n    return none\n",
+        );
+        let declarations = resolved_declarations(&db, file);
+        assert_eq!(declarations.len(), 2);
+        assert_eq!(declarations[0].kind, DeclKind::Class);
+        assert!(declarations[0].exported);
+        assert!(span_text(&db, file, declarations[0].span).starts_with("class Point:"));
+        assert_eq!(declarations[1].kind, DeclKind::Function);
+        assert!(!declarations[1].is_dispatch);
+        assert!(declarations[1].exported);
+        assert_eq!(
+            span_text(&db, file, declarations[1].span).as_ref(),
+            "helper"
+        );
+    }
+
+    #[test]
+    fn resolved_module_bundles_stable_declarations_and_imports() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value = 1\nimport support\n");
+        let module = resolved_module(&db, file);
+        assert_eq!(module.file, file);
+        assert_eq!(module.imports.as_ref(), &["support".to_string()]);
+        assert_eq!(module.declarations.len(), 1);
+        assert!(module.declarations[0].exported);
+        assert_eq!(module.declarations[0].symbol.name(&db), "value");
+    }
+
+    #[test]
+    fn module_imports_are_sorted_and_resolve_within_project() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file(
+            "main.lucid",
+            "import util.z\nimport util.a\nfrom util.z import Thing\n",
+        );
+        let util_a = db.add_file("util/a.lucid", "value = 1\n");
+        let util_z = db.add_file("util/z.lucid", "class Thing:\n    pass\n");
+        let project = Project::new(&db, vec![main, util_a, util_z]);
+        assert_eq!(imports(&db, main).as_ref(), &["util.a", "util.z"]);
+        assert!(resolve_module(&db, project, "util.z".into()).is_some_and(|file| file == util_z));
+        assert!(resolve_module(&db, project, "missing".into()).is_none());
+    }
+
+    #[test]
+    fn plain_import_aliases_resolve_as_module_bindings() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file("main.lucid", "import util.z as zmod\n");
+        let util = db.add_file("util/z.lucid", "value = 1\n");
+        let project = Project::new(&db, vec![main, util]);
+        let binding = resolve_visible(&db, project, main, "zmod".into()).expect("module alias");
+        assert_eq!(*binding.file(&db), util);
+        assert_eq!(binding.name(&db), "zmod");
+    }
+
+    #[test]
+    fn relative_imports_resolve_from_importing_file_package() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file("pkg/main.lucid", "from .reports import build\n");
+        let reports = db.add_file("pkg/reports.lucid", "build = 1\n");
+        let project = Project::new(&db, vec![main, reports]);
+        assert_eq!(
+            *resolve_import(&db, project, main, ".reports".into()),
+            Some(reports)
+        );
+        assert_eq!(
+            module_order(&db, project).as_ref().unwrap().as_ref(),
+            &[reports, main]
+        );
+    }
+
+    #[test]
+    fn package_initializers_resolve_as_package_modules() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file("main.lucid", "import pkg\n");
+        let package = db.add_file("pkg/__init__.lucid", "value = 1\n");
+        let project = Project::new(&db, vec![main, package]);
+        assert_eq!(*resolve_module(&db, project, "pkg".into()), Some(package));
+        assert_eq!(
+            module_order(&db, project).as_ref().unwrap().as_ref(),
+            &[package, main]
+        );
+    }
+
+    #[test]
+    fn relative_imports_inside_package_initializer_stay_in_package() {
+        let mut db = CompilerDatabase::default();
+        let init = db.add_file("pkg/__init__.lucid", "from .reports import build\n");
+        let reports = db.add_file("pkg/reports.lucid", "build = 1\n");
+        let project = Project::new(&db, vec![init, reports]);
+        assert_eq!(
+            *resolve_import(&db, project, init, ".reports".into()),
+            Some(reports)
+        );
+    }
+
+    #[test]
+    fn root_initializer_relative_imports_resolve_without_spurious_dot() {
+        let mut db = CompilerDatabase::default();
+        let init = db.add_file("__init__.lucid", "from .util import value\n");
+        let util = db.add_file("util.lucid", "value = 1\n");
+        let project = Project::new(&db, vec![init, util]);
+        assert_eq!(
+            *resolve_import(&db, project, init, ".util".into()),
+            Some(util)
+        );
+    }
+
+    #[test]
+    fn module_order_is_dependency_first_and_rejects_cycles() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file("main.lucid", "import lib\n");
+        let lib = db.add_file("lib.lucid", "value = 1\n");
+        let project = Project::new(&db, vec![main, lib]);
+        let order = module_order(&db, project)
+            .as_ref()
+            .expect("acyclic project should order");
+        assert_eq!(order.as_ref(), &[lib, main]);
+
+        let a = db.add_file("a.lucid", "import b\nvalue = 1\n");
+        let b = db.add_file("b.lucid", "import a\n");
+        let cyclic = Project::new(&db, vec![a, b]);
+        let error = module_order(&db, cyclic)
+            .as_ref()
+            .expect_err("cycle should be diagnosed");
+        assert!(error.contains("cyclic module initialization"));
+    }
+
+    #[test]
+    fn module_order_allows_declaration_only_cycles() {
+        let mut db = CompilerDatabase::default();
+        let a = db.add_file(
+            "decl_a.lucid",
+            "import decl_b\nclass A:\n    pass\ndef make_a():\n    return none\n",
+        );
+        let b = db.add_file(
+            "decl_b.lucid",
+            "import decl_a\ntrait B:\n    pass\ntype Alias = int\n",
+        );
+        let project = Project::new(&db, vec![a, b]);
+        let order = module_order(&db, project)
+            .as_ref()
+            .expect("declaration-only cycles should be safe");
+        assert_eq!(order.len(), 2);
+        assert!(order.contains(&a));
+        assert!(order.contains(&b));
+    }
+
+    #[test]
+    fn cycle_diagnostic_points_at_a_participating_module() {
+        let mut db = CompilerDatabase::default();
+        let a = db.add_file("a.lucid", "import b\nvalue = 1\n");
+        let b = db.add_file("b.lucid", "import a\nvalue = 2\n");
+        let project = Project::new(&db, vec![a, b]);
+        let diagnostics = project_diagnostics(&db, project);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0301")
+            .expect("cycle diagnostic");
+        assert!(diagnostic.file == a || diagnostic.file == b);
+        assert!(diagnostic.span.end > diagnostic.span.start);
+    }
+
+    #[test]
+    fn module_order_is_stable_for_independent_files() {
+        let mut db = CompilerDatabase::default();
+        let z = db.add_file("z.lucid", "z = 1\n");
+        let a = db.add_file("a.lucid", "a = 1\n");
+        let project = Project::new(&db, vec![z, a]);
+        let order = module_order(&db, project).as_ref().expect("order");
+        assert_eq!(order.as_ref(), &[a, z]);
+    }
+
+    #[test]
+    fn visibility_exposes_locals_and_imported_exports_only() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file("main.lucid", "import lib\nlocal = 1\n");
+        let lib = db.add_file(
+            "lib.lucid",
+            "class Public:\n    pass\nclass _Private:\n    pass\n",
+        );
+        let project = Project::new(&db, vec![main, lib]);
+        let names = visible_symbols(&db, project, main)
+            .iter()
+            .map(|symbol| symbol.name(&db).clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["lib", "local"]);
+        assert!(resolve_visible(&db, project, main, "lib".into()).is_some());
+        assert!(resolve_visible(&db, project, main, "Public".into()).is_none());
+        assert!(resolve_visible(&db, project, main, "local".into()).is_some());
+        assert!(resolve_visible(&db, project, main, "_Private".into()).is_none());
+    }
+
+    #[test]
+    fn imported_bindings_resolve_only_exported_names_and_preserve_aliases() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file(
+            "main.lucid",
+            "from support import value as answer, _private, missing\n",
+        );
+        let support = db.add_file("support.lucid", "value = 1\nother = 3\n_private = 2\n");
+        let project = Project::new(&db, vec![main, support]);
+        let bindings = imported_bindings(&db, project, main);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].local_name, "answer");
+        assert_eq!(bindings[0].symbol.name(&db), "value");
+        assert_eq!(
+            resolve_visible(&db, project, main, "answer".into())
+                .expect("alias should resolve")
+                .name(&db),
+            "value"
+        );
+        assert!(resolve_visible(&db, project, main, "_private".into()).is_none());
+        assert!(resolve_visible(&db, project, main, "other".into()).is_none());
+        let diagnostics = project_diagnostics(&db, project);
+        let missing_name = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0302")
+            .expect("missing imported name diagnostic");
+        assert!(missing_name.span.end > missing_name.span.start);
+    }
+
+    #[test]
+    fn local_declarations_take_precedence_over_import_aliases() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file(
+            "main.lucid",
+            "from support import value as answer\nanswer = 2\n",
+        );
+        let support = db.add_file("support.lucid", "value = 1\n");
+        let project = Project::new(&db, vec![main, support]);
+        let resolved = resolve_visible(&db, project, main, "answer".into()).expect("answer");
+        assert_eq!(*resolved.file(&db), main);
+    }
+
+    #[test]
+    fn project_type_check_aggregates_errors_in_dependency_order() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file("main.lucid", "import lib\nvalue: int = \"bad\"\n");
+        let lib = db.add_file("lib.lucid", "other: int = \"also bad\"\n");
+        let project = Project::new(&db, vec![main, lib]);
+        let errors = type_check_project(&db, project);
+        assert_eq!(errors.len(), 2);
+        assert!(!errors[0].is_empty());
+        assert!(!errors[1].is_empty());
+    }
+
+    #[test]
+    fn duplicate_top_level_declarations_are_diagnosed() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value = 1\nvalue = 2\n");
+        let diagnostics = declaration_diagnostics(&db, file);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains("duplicate"));
+    }
+
+    #[test]
+    fn dispatch_overloads_are_not_duplicate_declarations() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "main.lucid",
+            "dispatch def choose(value: int) -> int:\n    return value\ndispatch def choose(value: str) -> str:\n    return value\n",
+        );
+        let declarations = resolved_declarations(&db, file);
+        assert_eq!(declarations.len(), 2);
+        assert!(
+            declarations
+                .iter()
+                .all(|declaration| declaration.is_dispatch)
+        );
+        assert!(declaration_diagnostics(&db, file).is_empty());
+        assert!(
+            file_diagnostics(&db, file)
+                .iter()
+                .all(|diagnostic| diagnostic.code != "E0100")
+        );
+    }
+
+    #[test]
+    fn unmarked_variance_is_reported_as_a_warning() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "class Box[T]:\n    value: T\n");
+        let diagnostics = file_diagnostics(&db, file);
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "W0200")
+            .expect("unmarked variance warning");
+        assert_eq!(warning.severity, Severity::Warning);
+        assert!(warning.message.contains("has no variance marker"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error)
+        );
+    }
+
+    #[test]
+    fn structured_file_diagnostics_carry_codes_and_source_identity() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value: int = \"wrong\"\n");
+        let diagnostics = file_diagnostics(&db, file);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].file, file);
+        assert_eq!(diagnostics[0].code, "E0200");
+        assert_eq!(diagnostics[0].severity, Severity::Error);
+        assert!(diagnostics[0].span.end > diagnostics[0].span.start);
+    }
+
+    #[test]
+    fn duplicate_declaration_diagnostics_carry_related_span() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "value = 1\nvalue = 2\n");
+        let diagnostics = file_diagnostics(&db, file);
+        let duplicate = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0100")
+            .expect("duplicate declaration diagnostic");
+        assert_eq!(duplicate.related.len(), 1);
+        assert_eq!(duplicate.related[0].file, file);
+        assert_eq!(duplicate.related[0].message, "previous declaration is here");
+        assert_eq!(
+            span_text(&db, file, duplicate.related[0].span).as_ref(),
+            "value"
+        );
+        assert_eq!(duplicate.fix, None);
+    }
+
+    #[test]
+    fn project_diagnostics_include_parse_failures() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("broken.lucid", "value = `broken`\n");
+        let project = Project::new(&db, vec![file]);
+        let errors = type_check_project(&db, project);
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().all(|error| error.starts_with("E0001:")));
+    }
+
+    #[test]
+    fn syntax_diagnostics_point_at_lexical_error() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("broken.lucid", "value = `broken`\n");
+        let diagnostics = file_diagnostics(&db, file);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code == "E0001"
+                    && diagnostic.message.contains("lexer error")
+                    && diagnostic.span.end > diagnostic.span.start
+                    && diagnostic.span.line == 1)
+        );
+    }
+
+    #[test]
+    fn syntax_diagnostics_retain_independent_lexical_errors() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("broken.lucid", "first = $\nsecond = `\nthird = 3\n");
+        let diagnostics = file_diagnostics(&db, file);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code == "E0001"
+                    && diagnostic.message.contains("lexer error"))
+        );
+        assert_eq!(diagnostics[0].span.line, 1);
+        assert_eq!(diagnostics[1].span.line, 2);
+    }
+
+    #[test]
+    fn syntax_diagnostics_point_at_grammar_error() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("broken.lucid", "value =\nnext = 2\n");
+        let diagnostics = file_diagnostics(&db, file);
+        assert_eq!(diagnostics[0].code, "E0001");
+        assert!(diagnostics[0].span.end > diagnostics[0].span.start);
+        assert_eq!(diagnostics[0].span.line, 1);
+    }
+
+    #[test]
+    fn syntax_diagnostics_retain_all_recoverable_grammar_errors() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("broken.lucid", "first =\nsecond =\n");
+        let diagnostics = file_diagnostics(&db, file);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code == "E0001")
+        );
+        assert_eq!(diagnostics[0].span.line, 1);
+        assert_eq!(diagnostics[1].span.line, 2);
+    }
+
+    #[test]
+    fn syntax_diagnostics_do_not_leak_malformed_block_bodies() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("broken.lucid", "if :\n    leaked =\nkept = 2\n");
+        let diagnostics = file_diagnostics(&db, file);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "E0001");
+        assert_eq!(diagnostics[0].span.line, 1);
+        assert!(!diagnostics[0].message.contains("leaked"));
+    }
+
+    #[test]
+    fn project_diagnostics_report_unresolved_imports() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "import missing\nvalue = 1\n");
+        let project = Project::new(&db, vec![file]);
+        let diagnostics = project_diagnostics(&db, project);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E0300" && diagnostic.message.contains("missing")
+        }));
+        let unresolved = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0300")
+            .expect("unresolved import diagnostic");
+        assert!(unresolved.span.end > unresolved.span.start);
+        assert!(
+            type_check_project(&db, project)
+                .iter()
+                .any(|error| error.starts_with("E0300:"))
+        );
+    }
+
+    #[test]
+    fn project_diagnostics_ignore_builtin_imports() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file(
+            "main.lucid",
+            "import math\nimport sys\nimport iteration\nimport missing\n",
+        );
+        let project = Project::new(&db, vec![file]);
+        let diagnostics = project_diagnostics(&db, project);
+        let unresolved = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "E0300")
+            .collect::<Vec<_>>();
+        assert_eq!(unresolved.len(), 1);
+        assert!(unresolved[0].message.contains("missing"));
+    }
+
+    #[test]
+    fn project_diagnostics_reject_duplicate_module_paths() {
+        let mut db = CompilerDatabase::default();
+        let first = db.add_file("dup.lucid", "value = 1\n");
+        let second = db.add_file("dup.lucid", "value = 2\n");
+        let project = Project::new(&db, vec![first, second]);
+        let diagnostics = project_diagnostics(&db, project);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "E0303")
+        );
+        assert!(
+            module_order(&db, project)
+                .as_ref()
+                .expect_err("duplicate paths must invalidate module order")
+                .contains("duplicate module path")
+        );
+    }
+
+    #[test]
+    fn duplicate_module_diagnostic_uses_source_fallback_without_statements() {
+        let mut db = CompilerDatabase::default();
+        let first = db.add_file("dup.lucid", "   \n");
+        let second = db.add_file("dup.lucid", "   \n");
+        let project = Project::new(&db, vec![first, second]);
+        let diagnostics = project_diagnostics(&db, project);
+        let duplicate = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0303")
+            .expect("duplicate module diagnostic");
+        assert_ne!(duplicate.span, lucid_syntax::Span::default());
+        assert!(duplicate.span.end > duplicate.span.start);
+    }
+
+    #[test]
+    fn project_diagnostics_reject_duplicate_import_bindings() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file(
+            "main.lucid",
+            "from support import value as answer\nfrom support import other as answer\n",
+        );
+        let support = db.add_file("support.lucid", "value = 1\nother = 2\n");
+        let project = Project::new(&db, vec![main, support]);
+        let diagnostics = project_diagnostics(&db, project);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0305" && diagnostic.message.contains("answer"))
+            .expect("duplicate import binding diagnostic");
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].file, main);
+        assert_eq!(diagnostic.related[0].message, "previous import is here");
+        assert_eq!(
+            span_text(&db, main, diagnostic.related[0].span).as_ref(),
+            "from"
+        );
+    }
+
+    #[test]
+    fn project_diagnostics_reject_duplicate_plain_import_aliases() {
+        let mut db = CompilerDatabase::default();
+        let main = db.add_file("main.lucid", "import one as shared\nimport two as shared\n");
+        let one = db.add_file("one.lucid", "value = 1\n");
+        let two = db.add_file("two.lucid", "value = 2\n");
+        let project = Project::new(&db, vec![main, one, two]);
+        let diagnostics = project_diagnostics(&db, project);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "E0305")
+            .expect("duplicate plain import diagnostic");
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(
+            span_text(&db, main, diagnostic.related[0].span).as_ref(),
+            "import"
+        );
+    }
+}

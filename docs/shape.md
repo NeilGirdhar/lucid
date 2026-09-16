@@ -175,16 +175,21 @@ type ConcatAxis0[A: Shape, B: Shape] =
     error   # every axis but the concatenated one must match
 ```
 
-## Still open
+## Dispatch by shape
 
 Stacking `N` arrays along a new leading axis needs `N` itself as a
-literal type — the count of however many arrays were passed, not a
-dimension already written down anywhere. Nothing here reflects a
-gathered `***` argument count as a literal, so a `stack` built this
-way would need the caller to supply `N` explicitly rather than infer
-it from how many arguments they wrote.
+literal type—the count of however many arrays were passed, not a dimension
+already written down anywhere. The type-level `stack` operation accepts
+operand shapes directly, infers that count from the argument list, and checks
+ranks and dimensions before constructing the result shape.
 
-Dispatching a different implementation by rank or shape, rather than
-by an argument's runtime class, is also unresolved:
-[multiple dispatch](dispatch.md) resolves on runtime class, and shape
-is ordinarily a phantom type parameter, not part of it.
+Lucid does not dispatch by shape. [Multiple dispatch](dispatch.md) resolves
+on runtime class, and shape is a phantom type parameter of an array, not a
+separate runtime class. Two dispatch definitions whose parameters differ only
+by shape would therefore erase to the same runtime dispatch key, so the
+checker rejects them instead of picking one by declaration order.
+
+Shape-specific behavior belongs in ordinary generic functions whose signatures
+state the required shape relationship. The checker can then prove the call
+valid from the type-level shape operations above, while the generated function
+body stays one ordinary implementation.

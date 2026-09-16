@@ -193,7 +193,7 @@ other type expression, since a trait is not itself a callable value
 the way a class is:
 
 ```python
-list(fields(type Sized))[0]  # (name="__len__", obligation=True, doc=none, metadata={:})
+list(fields(type Sized))[0]  # (name="__len__", obligation=true, doc=none, metadata={:})
 ```
 The module form walks a module's own top-level, visible definitions —
 functions, classes, traits, and module-level bindings — the structured
