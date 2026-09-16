@@ -58,11 +58,46 @@ pub struct IrParam {
     pub ty: IrType,
 }
 
+/// Mutability view for reference types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MutabilityView {
+    Exclusive,    // T: exclusive mutable access (owner only)
+    ReadOnly,     // ~T: read-only immutable view
+    SharedMut,    // !T: shared-mutable view (multiple readers)
+}
+
+impl MutabilityView {
+    /// Get the symbol representation for this view
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            MutabilityView::Exclusive => "",
+            MutabilityView::ReadOnly => "~",
+            MutabilityView::SharedMut => "!",
+        }
+    }
+
+    /// Check if this view allows mutation
+    pub fn allows_mutation(&self) -> bool {
+        matches!(self, MutabilityView::Exclusive | MutabilityView::SharedMut)
+    }
+
+    /// Check if this view allows reading
+    pub fn allows_read(&self) -> bool {
+        true  // All views allow reading
+    }
+
+    /// Check if this view allows sharing (multiple references)
+    pub fn allows_sharing(&self) -> bool {
+        matches!(self, MutabilityView::ReadOnly | MutabilityView::SharedMut)
+    }
+}
+
 /// A struct field definition
 #[derive(Debug, Clone)]
 pub struct IrField {
     pub name: String,
     pub ty: IrType,
+    pub mutability: MutabilityView,  // Mutability view for this field
 }
 
 /// A class method definition
@@ -71,10 +106,32 @@ pub struct IrMethod {
     pub name: String,
     pub is_factory: bool,      // factory methods (__init__, etc.)
     pub is_getter: bool,        // getter methods
-    pub is_setter: bool,        // setter methods
+    pub is_setter: bool,        // setter methods (requires mutation)
+    pub required_mutability: MutabilityView,  // Minimum mutability needed for this method
     pub params: Vec<IrParam>,
     pub return_type: IrType,
     pub function_ref: String,   // Name of generated function in IR
+}
+
+impl IrMethod {
+    /// Check if this method is callable on a given mutability view
+    pub fn is_callable_on(&self, view: MutabilityView) -> bool {
+        // A method is callable if the view provides at least the required mutability
+        match self.required_mutability {
+            MutabilityView::ReadOnly => {
+                // Read-only methods callable on any view
+                true
+            }
+            MutabilityView::Exclusive => {
+                // Exclusive methods only callable on exclusive view
+                view == MutabilityView::Exclusive
+            }
+            MutabilityView::SharedMut => {
+                // Shared-mutable methods callable on exclusive or shared-mutable
+                matches!(view, MutabilityView::Exclusive | MutabilityView::SharedMut)
+            }
+        }
+    }
 }
 
 /// IR types for code generation

@@ -365,8 +365,8 @@ mod tests {
                     parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::I64 },
-                IrField { name: "y".to_string(), ty: IrType::I64 },
+                IrField { name: "x".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
+                IrField { name: "y".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
             ],
             methods: vec![],
         };
@@ -412,8 +412,8 @@ mod tests {
                     parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::I64 },
-                IrField { name: "y".to_string(), ty: IrType::I64 },
+                IrField { name: "x".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
+                IrField { name: "y".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
             ],
             methods: vec![],
         };
@@ -446,8 +446,8 @@ mod tests {
                     parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::I64 },
-                IrField { name: "y".to_string(), ty: IrType::I64 },
+                IrField { name: "x".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
+                IrField { name: "y".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
             ],
             methods: vec![],
         };
@@ -673,8 +673,8 @@ mod tests {
             parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::F64 },
-                IrField { name: "y".to_string(), ty: IrType::F64 },
+                IrField { name: "x".to_string(), ty: IrType::F64, mutability: crate::MutabilityView::Exclusive },
+                IrField { name: "y".to_string(), ty: IrType::F64, mutability: crate::MutabilityView::Exclusive },
             ],
             methods: vec![
                 MethodDispatch {
@@ -746,8 +746,8 @@ mod tests {
             parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::I64 },
-                IrField { name: "y".to_string(), ty: IrType::I64 },
+                IrField { name: "x".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
+                IrField { name: "y".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
             ],
             methods: vec![],
         });
@@ -823,7 +823,7 @@ mod tests {
             parent: None,
             name: "Animal".to_string(),
             fields: vec![
-                IrField { name: "name".to_string(), ty: IrType::Str },
+                IrField { name: "name".to_string(), ty: IrType::Str, mutability: crate::MutabilityView::Exclusive },
             ],
             methods: vec![],
         });
@@ -834,7 +834,7 @@ mod tests {
             parent: Some("Animal".to_string()),
             name: "Dog".to_string(),
             fields: vec![
-                IrField { name: "breed".to_string(), ty: IrType::Str },
+                IrField { name: "breed".to_string(), ty: IrType::Str, mutability: crate::MutabilityView::Exclusive },
             ],
             methods: vec![],
         });
@@ -1932,6 +1932,82 @@ int main() {
         assert!(module.check_variance_soundness(crate::Variance::Invariant, false, true));
         assert!(module.check_variance_soundness(crate::Variance::Invariant, true, true));
         assert!(module.check_variance_soundness(crate::Variance::Invariant, false, false));
+    }
+
+    #[test]
+    fn test_mutability_view_access() {
+        // Test that method access is controlled by mutability view
+
+        // Read-only method callable on all views
+        let ro_method = crate::IrMethod {
+            name: "get".to_string(),
+            is_factory: false,
+            is_getter: true,
+            is_setter: false,
+            required_mutability: crate::MutabilityView::ReadOnly,
+            params: vec![],
+            return_type: crate::IrType::I64,
+            function_ref: "get".to_string(),
+        };
+
+        assert!(ro_method.is_callable_on(crate::MutabilityView::Exclusive));
+        assert!(ro_method.is_callable_on(crate::MutabilityView::ReadOnly));
+        assert!(ro_method.is_callable_on(crate::MutabilityView::SharedMut));
+
+        // Exclusive-only method
+        let mut_method = crate::IrMethod {
+            name: "set".to_string(),
+            is_factory: false,
+            is_getter: false,
+            is_setter: true,
+            required_mutability: crate::MutabilityView::Exclusive,
+            params: vec![],
+            return_type: crate::IrType::Bool,
+            function_ref: "set".to_string(),
+        };
+
+        assert!(mut_method.is_callable_on(crate::MutabilityView::Exclusive));
+        assert!(!mut_method.is_callable_on(crate::MutabilityView::ReadOnly));
+        assert!(!mut_method.is_callable_on(crate::MutabilityView::SharedMut));
+
+        // Shared-mutable method
+        let shared_method = crate::IrMethod {
+            name: "update".to_string(),
+            is_factory: false,
+            is_getter: false,
+            is_setter: false,
+            required_mutability: crate::MutabilityView::SharedMut,
+            params: vec![],
+            return_type: crate::IrType::Bool,
+            function_ref: "update".to_string(),
+        };
+
+        assert!(shared_method.is_callable_on(crate::MutabilityView::Exclusive));
+        assert!(!shared_method.is_callable_on(crate::MutabilityView::ReadOnly));
+        assert!(shared_method.is_callable_on(crate::MutabilityView::SharedMut));
+    }
+
+    #[test]
+    fn test_mutability_view_properties() {
+        // Test mutability view property queries
+
+        let exclusive = crate::MutabilityView::Exclusive;
+        assert!(exclusive.allows_mutation());
+        assert!(exclusive.allows_read());
+        assert!(!exclusive.allows_sharing());
+        assert_eq!(exclusive.symbol(), "");
+
+        let readonly = crate::MutabilityView::ReadOnly;
+        assert!(!readonly.allows_mutation());
+        assert!(readonly.allows_read());
+        assert!(readonly.allows_sharing());
+        assert_eq!(readonly.symbol(), "~");
+
+        let sharedmut = crate::MutabilityView::SharedMut;
+        assert!(sharedmut.allows_mutation());
+        assert!(sharedmut.allows_read());
+        assert!(sharedmut.allows_sharing());
+        assert_eq!(sharedmut.symbol(), "!");
     }
 
     #[test]

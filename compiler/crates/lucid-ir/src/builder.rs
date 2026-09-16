@@ -706,6 +706,7 @@ impl IrBuilder {
                 ClassMember::Field(field_def) => {
                     let field_type = self.lucid_type_to_ir_type(Some(&field_def.type_annotation));
                     fields.push(crate::IrField {
+                        mutability: crate::MutabilityView::Exclusive,
                         name: field_def.name.clone(),
                         ty: field_type,
                     });
