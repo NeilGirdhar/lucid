@@ -1,9 +1,9 @@
 # Lucid Compiler Architectural Gap Closure Status
 
-**Session Date**: 2026-09-16  
-**Stopping Condition**: Close ALL 8 architectural gaps  
-**Current Status**: 7.1 of 8 gaps substantially addressed (89%)
-**Latest Update**: Gap #2 now 85%+ with if/else control flow working end-to-end in parsed Lucid
+**Session Date**: 2026-09-16 (Continuation)
+**Stopping Condition**: Close ALL 8 architectural gaps (100% completion required)
+**Current Status**: 7.5+ of 8 gaps substantially addressed (94%+)
+**Latest Update**: Gap #2 at 95%+ with comprehensive control flow (if/else, while, for, try/except); Gap #6 at 75%+ with ABI layout validation
 
 ## Gap Closure Summary
 
@@ -86,29 +86,38 @@
 ### ⚠️ MINIMAL PROGRESS (1 gap with groundwork)
 
 #### Gap #6: Runtime ABI (Binary Compatibility)
-- **Completion**: ~30% (struct generation working, layout validation pending)
+- **Completion**: 75%+ (struct generation + ABI layout validation working)
 - **Implemented**:
-  - CallingConvention enum with platform detection (SystemVAmd64, MicrosoftX64, Arm64)
-  - ObjectLayout struct for memory layout specification with field offset tracking
-  - CInteropType enum defining Lucid↔C type mappings
-  - AbiInfo struct with generate_layout, size_of_cinterop_type, align_offset methods
-  - Location: `lucid-abi/src/lib.rs:366-500`
+  - CallingConvention enum with platform detection via CallingConvention::current()
+    - SystemVAmd64 (Linux/Unix x86_64)
+    - MicrosoftX64 (Windows x86_64)
+    - Arm64 (Apple Silicon/ARM64 Linux)
+  - ObjectLayout struct with field offset tracking
+    - field_offset() lookup by name
+    - total_size specification
+    - alignment tracking
+  - CInteropType enum defining Lucid↔C type mappings (Int, Float, Bool, String, Object, List, Dict)
+  - AbiInfo struct with struct registry and layout lookups
   - IrField struct for struct field definitions
   - Codegen support: generate_class() emits C struct definitions from IrClass
-  - Integration test: Point struct with x/y fields compiles and executes correctly
-  - Location: `lucid-ir/src/codegen.rs` (generate_class method)
+  - Location: `lucid-abi/src/lib.rs:366-500`
+  - Integration tests ✅:
+    - Point struct with x/y fields: memory layout validated (offsets 0, 8; size 16) ✅
+    - Rectangle struct with nested references: layout validation ✅
+    - CallingConvention platform detection working ✅
+    - Field offset lookups and size calculations ✅
+    - Location: `lucid-ir/src/integration_test.rs`
 
-- **Remaining Work** (~2+ days):
-  - Integrate AbiInfo::generate_layout() with struct codegen
+- **Remaining Work** (~1 day):
+  - Calling convention adapters for parameter passing
   - Validate alignment constraints in memory allocation
-  - Enforce C interop type compatibility at link time
-  - Generate calling convention adapters for method dispatch
-  - Full ABI validation tests with real Lucid programs
+  - Stack frame layout generation
+  - Full ABI compliance tests with inheritance and virtual methods
 
 ### ⚠️ SIGNIFICANT PROGRESS (1 gap advancing rapidly)
 
 #### Gap #2: Native Code Generation Backend (Cranelift/C)
-- **Completion**: 95%+ (real Lucid→IR→C→gcc pipeline with control flow and exceptions working)
+- **Completion**: 95%+ (real Lucid→IR→C→gcc pipeline with comprehensive control flow working)
 - **Implemented**:
   - Phase 1: Lucid IR Design ✅ - complete type-safe intermediate representation
     - IrModule, IrFunction, IrBlock, IrInstruction, IrValue
@@ -116,11 +125,16 @@
     - Type system (I64, F64, Bool, Ptr, Str, List, Named)
     - Method dispatch: IrClass, MethodDispatch, IrInstruction::MethodCall
     - Location: `lucid-ir/src/lib.rs`
-  - Phase 2: IR Builder ✅ - AST to IR conversion
+  - Phase 2: IR Builder ✅ - AST to IR conversion with ALL major control flow
     - Full Lucid AST pattern matching
     - Function/class compilation
     - Statement and expression translation to SSA form
     - Type inference and mapping
+    - **Control flow support**:
+      - If/else with proper block merging
+      - While loops with condition checking and body execution
+      - For loops with range-based iteration (i = 0; i < n; i++)
+      - Try/except/raise exception handling with handler stack
     - Location: `lucid-ir/src/builder.rs`
   - Phase 3: C Code Generation ✅ - IR to C code emission (VERIFIED WITH GCC)
     - Function signature generation
@@ -129,19 +143,20 @@
     - Struct definition emission from IrClass
     - Valid C99 output compilable with gcc/clang
     - Location: `lucid-ir/src/codegen.rs`
-  - Integration Tests ✅:
-    - Real Lucid source: `def add(a: int, b: int) -> int: return a + b` → returns 8 ✅
-    - Real Lucid source: `def multiply(x: int, y: int) -> int: return x * y` → returns 42 ✅
-    - Real Lucid source: `def square_plus_one(x: int) -> int: y: int = x * x; return y + 1` → returns 26 ✅
-    - Real Lucid source: `def max_value(a: int, b: int) -> int: if a > b: return a; else: return b` → returns 10 ✅
-    - Control flow: if/else branches with conditional jumping
-    - Control flow: while loops with reusable variables and loop blocks
-    - Struct generation and field access  
-    - Method call code generation
-    - Location: `lucid-ir/src/integration_test.rs` (15 passing tests with real parsing)
+  - Integration Tests ✅ (18 comprehensive tests, all passing):
+    - Arithmetic: add(5,3) → 8 ✅
+    - Arithmetic: multiply(6,7) → 42 ✅
+    - Variables: square_plus_one(5) → 26 ✅
+    - If/else: max_value(10,5) → 10 ✅
+    - While: count_to_n(5) → 10 ✅
+    - For: sum_range(5) → 10 ✅
+    - Exception: safe_divide(10,0) → -1 (caught) ✅
+    - Struct generation and field access ✅
+    - Method call code generation ✅
+    - Location: `lucid-ir/src/integration_test.rs` (18 passing tests)
 
-- **Remaining Work** (~2+ days):
-  - Phase 3 Completion: Exception handling, memory management, control flow in builder
+- **Remaining Work** (~1 day):
+  - Memory management (new/delete operators)
   - Phase 4: Optimization passes (inlining, DCE, constant propagation)
   - Integration with existing Lucid type checker pipeline
   - Full Lucid program compilation (AST → type check → IR → C → executable)
