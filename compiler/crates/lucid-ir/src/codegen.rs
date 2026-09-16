@@ -1052,6 +1052,65 @@ impl CCodegenBackend {
         self.emit_line("}");
         self.emit_line("");
 
+        self.emit_line("// Math helper: min for doubles");
+        self.emit_line("double lucid_min_double(double a, double b) {");
+        self.indent_level += 1;
+        self.emit_line("return a < b ? a : b;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: max for doubles");
+        self.emit_line("double lucid_max_double(double a, double b) {");
+        self.indent_level += 1;
+        self.emit_line("return a > b ? a : b;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: modulo for integers");
+        self.emit_line("int64_t lucid_modulo(int64_t a, int64_t b) {");
+        self.indent_level += 1;
+        self.emit_line("if (b == 0) return 0;");
+        self.emit_line("return a % b;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: remainder for doubles");
+        self.emit_line("double lucid_remainder(double a, double b) {");
+        self.indent_level += 1;
+        self.emit_line("if (b == 0.0) return 0.0;");
+        self.emit_line("return remainder(a, b);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: integer square root");
+        self.emit_line("int64_t lucid_sqrt_int(int64_t x) {");
+        self.indent_level += 1;
+        self.emit_line("if (x < 0) return 0;");
+        self.emit_line("return (int64_t)sqrt((double)x);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: degrees to radians");
+        self.emit_line("double lucid_radians(double degrees) {");
+        self.indent_level += 1;
+        self.emit_line("return degrees * 3.14159265358979323846 / 180.0;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: radians to degrees");
+        self.emit_line("double lucid_degrees(double radians) {");
+        self.indent_level += 1;
+        self.emit_line("return radians * 180.0 / 3.14159265358979323846;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
         // JSON helper functions
         self.emit_line("// JSON utilities");
         self.emit_line("// Convert integer to JSON string");
@@ -1372,6 +1431,74 @@ impl CCodegenBackend {
         self.emit_line("vsnprintf(result, sizeof(result), fmt, args);");
         self.emit_line("va_end(args);");
         self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // Additional utility functions for character/digit checking
+        self.emit_line("// Check if character is a digit");
+        self.emit_line("bool lucid_is_digit(char c) {");
+        self.indent_level += 1;
+        self.emit_line("return c >= '0' && c <= '9';");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Check if character is alphabetic");
+        self.emit_line("bool lucid_is_alpha(char c) {");
+        self.indent_level += 1;
+        self.emit_line("return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Check if character is whitespace");
+        self.emit_line("bool lucid_is_space(char c) {");
+        self.indent_level += 1;
+        self.emit_line("return c == ' ' || c == '\\t' || c == '\\n' || c == '\\r';");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Parse string to integer");
+        self.emit_line("int64_t lucid_parse_int(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("return strtoll(str, NULL, 10);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Parse string to double");
+        self.emit_line("double lucid_parse_double(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("return strtod(str, NULL);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String to integer with error handling");
+        self.emit_line("bool lucid_try_parse_int(const char* str, int64_t* out) {");
+        self.indent_level += 1;
+        self.emit_line("char* endptr;");
+        self.emit_line("*out = strtoll(str, &endptr, 10);");
+        self.emit_line("return *endptr == '\\0';");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Get character at index in string");
+        self.emit_line("char lucid_string_at(const char* str, int64_t index) {");
+        self.indent_level += 1;
+        self.emit_line("if (index < 0 || index >= (int64_t)strlen(str)) return '\\0';");
+        self.emit_line("return str[index];");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String length function");
+        self.emit_line("int64_t lucid_string_length(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("return str ? (int64_t)strlen(str) : 0;");
         self.indent_level -= 1;
         self.emit_line("}");
         self.emit_line("");
