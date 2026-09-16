@@ -30,6 +30,9 @@ pub struct TypeParam {
     pub name: String,
     pub variance: Variance,
     pub bound: Option<TypeExpr>,
+    /// `T in (X, Y, ...)`: exactly one of these, chosen per use, never a
+    /// subtype of one and never their union.  Empty when unconstrained.
+    pub alternatives: Vec<TypeExpr>,
     /// `T = X`: the argument a use site gets when it names none.
     pub default: Option<TypeExpr>,
     pub is_higher_kinded: bool,

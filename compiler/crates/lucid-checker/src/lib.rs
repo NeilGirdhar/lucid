@@ -111,6 +111,58 @@ fn with_type_param_defaults(defaults: Option<&Vec<Option<Type>>>, mut args: Vec<
     args
 }
 
+/// Whether `argument` is exactly `alternative`, one member of a fixed set:
+/// the same class with the same arguments, never a subtype.
+fn is_fixed_set_member(argument: &Type, alternative: &Type) -> bool {
+    match (argument, alternative) {
+        (
+            Type::Class {
+                name: argument_name,
+                type_args: argument_args,
+                ..
+            },
+            Type::Class {
+                name: alternative_name,
+                type_args: alternative_args,
+                ..
+            },
+        ) => argument_name == alternative_name && argument_args == alternative_args,
+        _ => argument.canonical() == alternative.canonical(),
+    }
+}
+
+/// Reject a type argument that is not exactly one member of the parameter's
+/// fixed set.  `sets` is empty for a parameter with no such constraint.
+fn check_fixed_set_arguments(
+    owner: &str,
+    sets: Option<&Vec<Vec<Type>>>,
+    arguments: &[Type],
+    span: Span,
+) -> Result<(), TypeError> {
+    let Some(sets) = sets else {
+        return Ok(());
+    };
+    for (index, argument) in arguments.iter().enumerate() {
+        let Some(alternatives) = sets.get(index).filter(|set| !set.is_empty()) else {
+            continue;
+        };
+        if !alternatives
+            .iter()
+            .any(|alternative| is_fixed_set_member(argument, alternative))
+        {
+            return Err(TypeError {
+                message: format!(
+                    "type argument {} for '{}' must be exactly one of its fixed set of types",
+                    index + 1,
+                    owner
+                ),
+                span,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn trait_extends(source: &str, target: &str, env: &TypeEnvironment) -> bool {
     env.trait_bases
         .get(source)
@@ -1280,8 +1332,14 @@ pub struct TypeEnvironment {
     /// none.  A `Self` default stays the symbolic `TypeVar("Self")`.
     pub class_type_param_defaults: HashMap<String, Vec<Option<Type>>>,
     pub trait_type_param_defaults: HashMap<String, Vec<Option<Type>>>,
+    /// `T in (X, Y, ...)` fixed sets, in declaration order; empty where a
+    /// parameter has none.
+    pub class_type_param_alternatives: HashMap<String, Vec<Vec<Type>>>,
+    pub trait_type_param_alternatives: HashMap<String, Vec<Vec<Type>>>,
     /// Type-parameter bounds currently in scope while resolving annotations.
     pub type_var_bounds: HashMap<String, Type>,
+    /// Fixed sets, `T in (X, Y)`, of the type parameters currently in scope.
+    pub type_var_alternatives: HashMap<String, Vec<Type>>,
     pub obligations: HashMap<String, HashSet<String>>,
     pub final_obligations: HashMap<String, HashSet<String>>,
     pub sealed_subclasses: HashMap<String, Vec<String>>,
@@ -2017,6 +2075,7 @@ impl TypeChecker {
                 name: "T".into(),
                 variance: Variance::Invariant,
                 bound: None,
+                alternatives: Vec::new(),
                 default: None,
                 is_higher_kinded: false,
                 span: Span::default(),
@@ -2726,6 +2785,7 @@ impl TypeChecker {
                 let mut parent_class = None;
                 let mut traits = Vec::new();
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
                 let class_type_param_names = type_params
                     .iter()
                     .map(|param| param.name.clone())
@@ -2836,6 +2896,19 @@ impl TypeChecker {
                 self.env
                     .class_type_param_defaults
                     .insert(name.clone(), class_defaults);
+                let class_alternatives = type_params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .alternatives
+                            .iter()
+                            .map(|alternative| self.resolve_type_expr(alternative))
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.env
+                    .class_type_param_alternatives
+                    .insert(name.clone(), class_alternatives);
                 self.env.class_variance.insert(name.clone(), class_variance);
                 self.env
                     .class_type_params
@@ -3095,6 +3168,7 @@ impl TypeChecker {
 
                 self.env.classes.insert(name.clone(), class_type);
                 self.env.type_var_bounds = saved_type_var_bounds;
+                self.env.type_var_alternatives = saved_type_var_alternatives;
                 Ok(())
             }
             Stmt::TraitDef {
@@ -3105,6 +3179,7 @@ impl TypeChecker {
                 ..
             } => {
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
                 self.env.trait_type_params.insert(
                     name.clone(),
                     type_params.iter().map(|param| param.name.clone()).collect(),
@@ -3278,6 +3353,19 @@ impl TypeChecker {
                 self.env
                     .trait_type_param_defaults
                     .insert(name.clone(), trait_defaults);
+                let trait_alternatives = type_params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .alternatives
+                            .iter()
+                            .map(|alternative| self.resolve_type_expr(alternative))
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.env
+                    .trait_type_param_alternatives
+                    .insert(name.clone(), trait_alternatives);
                 let trait_type = Type::Trait {
                     name: name.clone(),
                     type_args: Vec::new(),
@@ -3288,6 +3376,7 @@ impl TypeChecker {
                     .variables
                     .insert(name.clone(), (trait_type, MutabilityView::ReadOnly));
                 self.env.type_var_bounds = saved_type_var_bounds;
+                self.env.type_var_alternatives = saved_type_var_alternatives;
                 Ok(())
             }
             Stmt::TypeAlias {
@@ -3297,6 +3386,7 @@ impl TypeChecker {
                 ..
             } => {
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
                 self.env.type_alias_params.insert(
                     name.clone(),
                     type_params.iter().map(|param| param.name.clone()).collect(),
@@ -3338,11 +3428,13 @@ impl TypeChecker {
                     }
                 }
                 self.env.type_var_bounds = saved_type_var_bounds;
+                self.env.type_var_alternatives = saved_type_var_alternatives;
                 Ok(())
             }
             Stmt::Function(func) => {
                 Self::reject_removed_decorators(func)?;
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
                 let function_type_bounds = func
                     .type_params
                     .iter()
@@ -3361,6 +3453,7 @@ impl TypeChecker {
                         bound.clone().unwrap_or(Type::TypeVar("Any".into())),
                     );
                 }
+                self.register_type_var_alternatives(&func.type_params)?;
                 if let Some((gather_index, gather)) = func
                     .params
                     .iter()
@@ -3538,6 +3631,7 @@ impl TypeChecker {
                         .collect(),
                 );
                 self.env.type_var_bounds = saved_type_var_bounds;
+                self.env.type_var_alternatives = saved_type_var_alternatives;
                 Ok(())
             }
             _ => Ok(()),
@@ -3710,6 +3804,45 @@ impl TypeChecker {
             ClassMember::Setter(setter) => Some((setter.name.as_str(), setter.span)),
             ClassMember::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
             ClassMember::Pass(_) | ClassMember::Ellipsis(_) => None,
+        }
+    }
+
+    /// Bring the fixed sets of `type_params` into scope for checking a body.
+    fn register_type_var_alternatives(&mut self, type_params: &[TypeParam]) -> Result<(), TypeError> {
+        for param in type_params {
+            if param.alternatives.is_empty() {
+                self.env.type_var_alternatives.remove(&param.name);
+                continue;
+            }
+            let alternatives = param
+                .alternatives
+                .iter()
+                .map(|alternative| self.resolve_type_expr(alternative))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.env
+                .type_var_alternatives
+                .insert(param.name.clone(), alternatives);
+        }
+        Ok(())
+    }
+
+    /// Whether `op` applied to two values of `ty` is defined, for checking
+    /// an operation on a parameter that ranges over a fixed set of types:
+    /// it is valid when it is valid for every member.
+    fn supports_self_operation(op: &BinaryOp, ty: &Type) -> bool {
+        let numeric = matches!(
+            ty,
+            Type::Int | Type::Float | Type::LiteralInt(_) | Type::LiteralFloat(_)
+        ) || matches!(ty, Type::Class { name, .. } if name == "complex");
+        match op {
+            BinaryOp::Add => {
+                numeric
+                    || matches!(ty, Type::Str | Type::LiteralStr(_))
+                    || matches!(ty, Type::Class { name, .. } if matches!(name.as_str(), "Bytes" | "ByteArray" | "list"))
+            }
+            BinaryOp::Sub => numeric || matches!(ty, Type::Class { name, .. } if name == "set"),
+            BinaryOp::Mul => numeric,
+            _ => false,
         }
     }
 
@@ -5541,6 +5674,7 @@ impl TypeChecker {
                 let saved_return = self.env.current_return_type.take();
                 let saved_class = self.env.current_class.take();
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
                 let mut class_vars = saved_vars.clone();
                 class_vars.insert(
                     "Self".into(),
@@ -5562,6 +5696,18 @@ impl TypeChecker {
                         self.env
                             .type_var_bounds
                             .insert(param, bound.unwrap_or(Type::TypeVar("Any".into())));
+                    }
+                }
+                if let (Some(params), Some(sets)) = (
+                    self.env.class_type_params.get(name).cloned(),
+                    self.env.class_type_param_alternatives.get(name).cloned(),
+                ) {
+                    for (param, set) in params.into_iter().zip(sets) {
+                        if set.is_empty() {
+                            self.env.type_var_alternatives.remove(&param);
+                        } else {
+                            self.env.type_var_alternatives.insert(param, set);
+                        }
                     }
                 }
                 let result: Result<(), TypeError> = (|| {
@@ -5622,6 +5768,7 @@ impl TypeChecker {
                 self.env.current_return_type = saved_return;
                 self.env.current_class = saved_class;
                 self.env.type_var_bounds = saved_type_var_bounds;
+                self.env.type_var_alternatives = saved_type_var_alternatives;
                 result.map_err(|mut error| {
                     if error.span == Span::default() {
                         error.span = *span;
@@ -5798,6 +5945,7 @@ impl TypeChecker {
                     return Err(TypeError { message: "yield is only valid in a contextmanager definition".into(), span: func.span });
                 }
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
+                let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
                 let function_type_bounds = func
                     .type_params
                     .iter()
@@ -5815,6 +5963,7 @@ impl TypeChecker {
                         .type_var_bounds
                         .insert(name, bound.unwrap_or(Type::TypeVar("Any".into())));
                 }
+                self.register_type_var_alternatives(&func.type_params)?;
                 let ret_type = if let Some(ref r) = func.return_type {
                     Some(self.resolve_type_expr(r)?)
                 } else {
@@ -5930,6 +6079,7 @@ impl TypeChecker {
                 self.narrowing_constraints = old_narrowing_constraints;
                 self.env.current_return_type = prev_ret;
                 self.env.type_var_bounds = saved_type_var_bounds;
+                self.env.type_var_alternatives = saved_type_var_alternatives;
                 Ok(())
             }
             Stmt::Return { value, span } => {
@@ -8871,6 +9021,29 @@ impl TypeChecker {
                         let returns_right_operand = matches!(op, BinaryOp::Mul)
                             && lt.is_subtype_of(&Type::Int, &self.env)
                             && matches!(&rt, Type::Class { name, .. } if matches!(name.as_str(), "list" | "Bytes"));
+                        let fixed_set_operands = match (&lt, &rt) {
+                            (Type::TypeVar(left_name), Type::TypeVar(right_name))
+                                if left_name == right_name =>
+                            {
+                                self.env.type_var_alternatives.get(left_name)
+                            }
+                            _ => None,
+                        };
+                        if let Some(alternatives) = fixed_set_operands {
+                            if alternatives
+                                .iter()
+                                .all(|alternative| Self::supports_self_operation(op, alternative))
+                            {
+                                return Ok(lt);
+                            }
+                            return Err(TypeError {
+                                message: format!(
+                                    "unsupported operands for {:?}: not every member of the fixed set for {:?} supports it",
+                                    op, lt
+                                ),
+                                span: left.span(),
+                            });
+                        }
                         if unknown(&lt) || unknown(&rt) {
                             Ok(Type::TypeVar("Any".into()))
                         } else if matches!(op, BinaryOp::Add) && lt == Type::Str && rt == Type::Str
@@ -10417,6 +10590,31 @@ impl TypeChecker {
                                 }
                                 for generic in generic_params {
                                     if let Some(argument_type) = substitutions.get(&generic.name) {
+                                        if !generic.alternatives.is_empty() {
+                                            let alternatives = generic
+                                                .alternatives
+                                                .iter()
+                                                .map(|alternative| {
+                                                    self.resolve_type_expr(alternative)
+                                                })
+                                                .collect::<Result<Vec<_>, _>>()?;
+                                            let inferred =
+                                                self.normalize_literal_types(argument_type);
+                                            if !alternatives.iter().any(|alternative| {
+                                                is_fixed_set_member(&inferred, alternative)
+                                            }) {
+                                                return Err(TypeError {
+                                                    message: format!(
+                                                        "type argument for '{}' is not one of the fixed set of types for '{}'",
+                                                        name, generic.name
+                                                    ),
+                                                    span: args
+                                                        .first()
+                                                        .map(|argument| argument.value.span())
+                                                        .unwrap_or_else(|| func.span()),
+                                                });
+                                            }
+                                        }
                                         if let Some(bound) = generic
                                             .bound
                                             .as_ref()
@@ -13141,6 +13339,12 @@ impl TypeChecker {
                                 self.env.class_type_param_defaults.get(other),
                                 resolved_args.clone(),
                             );
+                            check_fixed_set_arguments(
+                                other,
+                                self.env.class_type_param_alternatives.get(other),
+                                &resolved_args,
+                                texpr.span(),
+                            )?;
                             if other == "list" && resolved_args.is_empty() {
                                 let mut c_clone = c.clone();
                                 if let Type::Class {
@@ -13225,6 +13429,12 @@ impl TypeChecker {
                                 self.env.trait_type_param_defaults.get(other),
                                 resolved_args.clone(),
                             );
+                            check_fixed_set_arguments(
+                                other,
+                                self.env.trait_type_param_alternatives.get(other),
+                                &resolved_args,
+                                texpr.span(),
+                            )?;
                             if let Some(parameters) = self.env.trait_variance.get(other) {
                                 // A bare name leaves every parameter
                                 // unspecified; only a partial list is an
@@ -15829,6 +16039,32 @@ def reject(value: not int) -> none:
         assert!(err.message.contains("Self cannot bound a type parameter"), "{}", err.message);
         let err = check_source("class Bad[in out T: Self]:\n    pass\n").unwrap_err();
         assert!(err.message.contains("Self cannot bound a type parameter"), "{}", err.message);
+    }
+
+    #[test]
+    fn fixed_type_sets_pick_exactly_one_member() {
+        let concat = "def concat[T in (str, bytes)](a: T, b: T) -> T:\n    return a + b\n";
+        check_source(&format!("{concat}x = concat(\"x\", \"y\")\n")).unwrap();
+        check_source(&format!("{concat}x = concat(b\"x\", b\"y\")\n")).unwrap();
+        // Mismatched members share no single member of the set.
+        check_source(&format!("{concat}x = concat(\"x\", b\"y\")\n")).unwrap_err();
+        let err = check_source(&format!("{concat}x = concat(1, 2)\n")).unwrap_err();
+        assert!(err.message.contains("fixed set"), "{}", err.message);
+
+        let container = "class Container[in out T in (int, str)]:\n    value: T\n";
+        check_source(&format!("{container}def f(c: Container[int]) -> none:\n    pass\n")).unwrap();
+        check_source(&format!("{container}def f(c: Container[str]) -> none:\n    pass\n")).unwrap();
+        let err = check_source(&format!(
+            "{container}def f(c: Container[float]) -> none:\n    pass\n"
+        ))
+        .unwrap_err();
+        assert!(err.message.contains("fixed set"), "{}", err.message);
+        // A subtype of a member is not a member.
+        let err = check_source(&format!(
+            "{container}def f(c: Container[bool]) -> none:\n    pass\n"
+        ))
+        .unwrap_err();
+        assert!(err.message.contains("fixed set"), "{}", err.message);
     }
 
     #[test]

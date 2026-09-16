@@ -712,6 +712,29 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn fixed_type_sets_parse_after_the_name() {
+        let module =
+            parse("def concat[T in (str, bytes)](a: T, b: T) -> T:\n    return a + b\n").unwrap();
+        let Stmt::Function(FunctionDef { type_params, .. }) = &module.statements[0] else {
+            panic!("expected function definition");
+        };
+        assert!(type_params[0].bound.is_none());
+        assert_eq!(type_params[0].alternatives.len(), 2);
+
+        let module = parse("class Container[in out T in (int, str)]:\n    pass\n").unwrap();
+        let Stmt::ClassDef { type_params, .. } = &module.statements[0] else {
+            panic!("expected class definition");
+        };
+        assert_eq!(type_params[0].variance, Variance::Invariant);
+        assert_eq!(type_params[0].alternatives.len(), 2);
+
+        let error = parse("def one[T in (int)](a: T) -> T:\n    return a\n").unwrap_err();
+        assert!(error.contains("at least two members"), "{error}");
+        let error = parse("def both[T: Sized in (int, str)](a: T) -> T:\n    return a\n").unwrap_err();
+        assert!(error.contains("either a bound or a fixed set"), "{error}");
+    }
+
+    #[test]
     fn obsolete_variance_sigils_are_rejected() {
         for spelling in ["+K", "-K", "=K", "+=K", "-=K"] {
             assert!(

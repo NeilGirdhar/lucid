@@ -3453,6 +3453,33 @@ TokenKind::Public
             } else {
                 None
             };
+            let mut alternatives = Vec::new();
+            if self.match_tok(&TokenKind::In) {
+                if bound.is_some() {
+                    return Err(ParseError {
+                        message: format!(
+                            "type parameter '{name}' takes either a bound or a fixed set of types, not both"
+                        ),
+                        span: start,
+                    });
+                }
+                let set_start = self.expect(&TokenKind::LParen)?.span;
+                while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
+                    alternatives.push(self.parse_type_expr()?);
+                    if !self.match_tok(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&TokenKind::RParen)?;
+                if alternatives.len() < 2 {
+                    return Err(ParseError {
+                        message: format!(
+                            "a fixed set of types for '{name}' needs at least two members"
+                        ),
+                        span: set_start,
+                    });
+                }
+            }
             let default = if self.match_tok(&TokenKind::Eq) {
                 Some(self.parse_type_expr()?)
             } else {
@@ -3463,6 +3490,7 @@ TokenKind::Public
                 name,
                 variance,
                 bound,
+                alternatives,
                 default,
                 is_higher_kinded,
                 span: start,
