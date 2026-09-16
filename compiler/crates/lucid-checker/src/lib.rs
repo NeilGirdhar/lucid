@@ -11154,6 +11154,12 @@ impl TypeChecker {
                                     || argument.is_gather_spread
                             })
                         {
+                            let inference_parameter_names =
+                                called_member_params.clone().or_else(|| {
+                                    called_name.and_then(|name| {
+                                        self.env.function_param_names.get(name).cloned()
+                                    })
+                                });
                             let mut substitutions = HashMap::new();
                             let mut positional_index = 0usize;
                             for argument in args {
@@ -11161,7 +11167,7 @@ impl TypeChecker {
                                     .name
                                     .as_ref()
                                     .and_then(|argument_name| {
-                                        called_member_params.as_ref().and_then(|names| {
+                                        inference_parameter_names.as_ref().and_then(|names| {
                                             names.iter().position(|parameter_name| {
                                                 parameter_name == argument_name
                                             })
@@ -12101,17 +12107,52 @@ impl TypeChecker {
                     }
                 }
                 let field_order = self.class_constructor_field_names(&class_name);
-                if args.len() != field_order.len() {
+                let required = self
+                    .class_constructor_required_count(&class_name)
+                    .min(field_order.len());
+                if args.len() < required || args.len() > field_order.len() {
                     return Err(TypeError {
-                        message: format!(
-                            "construct for '{}' expects {} field value(s), got {}",
-                            class_name,
-                            field_order.len(),
-                            args.len()
-                        ),
+                        message: if required == field_order.len() {
+                            format!(
+                                "construct for '{}' expects {} field value(s), got {}",
+                                class_name,
+                                field_order.len(),
+                                args.len()
+                            )
+                        } else {
+                            format!(
+                                "construct for '{}' expects between {} and {} field value(s), got {}",
+                                class_name,
+                                required,
+                                field_order.len(),
+                                args.len()
+                            )
+                        },
                         span: *span,
                     });
                 }
+                // A generic class constructed without explicit type arguments
+                // infers them from the field values, the way a generic call
+                // infers its parameters from its arguments.
+                let class_params = self
+                    .env
+                    .class_type_params
+                    .get(&class_name)
+                    .cloned()
+                    .unwrap_or_default();
+                let infers_type_args = !class_params.is_empty()
+                    && matches!(&class_type, Type::Class { type_args, .. }
+                        if type_args.is_empty()
+                            || type_args.iter().zip(&class_params).all(|(arg, param)| {
+                                matches!(arg, Type::TypeVar(name) if name == param)
+                            }));
+                let generic_names = class_params.iter().cloned().collect::<HashSet<_>>();
+                let mut substitutions: HashMap<String, Type> = HashMap::new();
+                let field_label = if construct_class.is_empty() {
+                    "construct field"
+                } else {
+                    "constructor field"
+                };
                 for (index, argument) in args.iter().enumerate() {
                     let field_name = argument
                         .name
@@ -12126,20 +12167,70 @@ impl TypeChecker {
                             span: argument.span,
                         });
                     };
+                    let argument_type = self.type_of_expr(&argument.value)?;
+                    if infers_type_args {
+                        let argument_type = self.normalize_literal_types(&argument_type);
+                        if let Type::TypeVar(param_name) = &field_type {
+                            if let Some(existing) = substitutions.get(param_name).cloned() {
+                                if existing != argument_type {
+                                    let widened = self.join_types(existing, argument_type.clone());
+                                    substitutions.insert(param_name.clone(), widened);
+                                    continue;
+                                }
+                            }
+                        }
+                        if !infer_type_arguments(
+                            &field_type,
+                            &argument_type,
+                            &generic_names,
+                            &mut substitutions,
+                        ) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "{field_label} '{}' expects {:?}, got {:?}",
+                                    field_name, field_type, argument_type
+                                ),
+                                span: argument.value.span(),
+                            });
+                        }
+                        let expected = substitute_type(&field_type, &substitutions);
+                        if !argument_type.is_subtype_of(&expected, &self.env) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "{field_label} '{}' expects {:?}, got {:?}",
+                                    field_name, expected, argument_type
+                                ),
+                                span: argument.value.span(),
+                            });
+                        }
+                        continue;
+                    }
                     let field_type = if let Type::Class { type_args, .. } = &class_type {
                         self.instantiate_class_member_type(&class_name, type_args, field_type)
                     } else {
                         field_type
                     };
-                    let argument_type = self.type_of_expr(&argument.value)?;
                     if !argument_type.is_subtype_of(&field_type, &self.env) {
                         return Err(TypeError {
                             message: format!(
-                                "construct field '{}' expects {:?}, got {:?}",
+                                "{field_label} '{}' expects {:?}, got {:?}",
                                 field_name, field_type, argument_type
                             ),
                             span: argument.value.span(),
                         });
+                    }
+                }
+                if infers_type_args {
+                    if let Type::Class { type_args, .. } = &mut class_type {
+                        *type_args = class_params
+                            .iter()
+                            .map(|param| {
+                                substitutions
+                                    .get(param)
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::TypeVar(param.clone()))
+                            })
+                            .collect();
                     }
                 }
                 Ok(class_type)
@@ -17030,7 +17121,7 @@ def reject(value: not int) -> none:
         let repeated = parse("def same[T](a: T, b: T) -> T:\n    return a\n").unwrap();
         let mut repeated_checker = TypeChecker::new();
         repeated_checker.check_module(&repeated).unwrap();
-        let conflict = repeated_checker
+        let widened = repeated_checker
             .type_of_expr(&Expr::Call {
                 func: Box::new(Expr::Ident {
                     name: "same".into(),
@@ -17062,8 +17153,11 @@ def reject(value: not int) -> none:
                 ],
                 span: Span::default(),
             })
-            .unwrap_err();
-        assert!(conflict.message.contains("conflicting type arguments"));
+            .unwrap();
+        // Arguments that disagree on an unconstrained parameter widen it to
+        // the narrowest type both fit; only a fixed set, `T in (...)`, makes
+        // the disagreement an error.
+        assert_eq!(widened, Type::make_union(vec![Type::Int, Type::Str]));
         let missing = repeated_checker
             .type_of_expr(&Expr::Call {
                 func: Box::new(Expr::Ident {
@@ -18666,7 +18760,7 @@ def reject(value: not int) -> none:
         TypeChecker::new()
             .check_module(
                 &parse(
-                    "trait Cache[K, V]:\n    def get_or_put(self, key: K, build: () -> V) -> V:\n        return build()\n\nclass MemoryCache[K, V](Cache[K, V]):\n    pass\n\ncache = MemoryCache[str, User]()\nuser: User = cache.get_or_put(\"ada\", def(): User())\n",
+                    "class User:\n    pass\n\ntrait Cache[in out K, in out V]:\n    def get_or_put(self, key: K, build: () -> V) -> V:\n        return build()\n\nclass MemoryCache[in out K, in out V](Cache[K, V]):\n    pass\n\ncache = MemoryCache[str, User]()\nuser: User = cache.get_or_put(\"ada\", def(): User())\n",
                 )
                 .unwrap(),
             )
