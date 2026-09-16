@@ -841,6 +841,8 @@ impl<'a> Lexer<'a> {
 
             // Lucid keywords
             "export" => TokenKind::Export,
+            "public" => TokenKind::Public,
+            "private" => TokenKind::Private,
             "factory" => TokenKind::Factory,
             "construct" => TokenKind::Construct,
             "getter" => TokenKind::Getter,

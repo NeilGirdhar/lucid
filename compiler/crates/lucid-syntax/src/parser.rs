@@ -77,6 +77,16 @@ impl Parser {
         while self.match_tok(&TokenKind::Newline) {}
     }
 
+    fn parse_visibility(&mut self) -> Option<Visibility> {
+        if self.match_tok(&TokenKind::Public) {
+            Some(Visibility::Public)
+        } else if self.match_tok(&TokenKind::Private) {
+            Some(Visibility::Private)
+        } else {
+            None
+        }
+    }
+
     pub fn parse_module(&mut self) -> Result<Module, ParseError> {
         self.skip_newlines();
         let start_span = self.peek().span;
@@ -186,6 +196,8 @@ impl Parser {
         matches!(
             kind,
             TokenKind::Export
+                | TokenKind::Public
+                | TokenKind::Private
                 | TokenKind::Class
                 | TokenKind::Sealed
                 | TokenKind::Final
@@ -552,6 +564,7 @@ impl Parser {
 
     fn parse_class_def(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
+        let visibility = self.parse_visibility();
         let mut is_sealed = false;
         let mut is_final = false;
 
@@ -656,6 +669,7 @@ impl Parser {
             body,
             is_sealed,
             is_final,
+            visibility,
             span: start.merge(end),
         })
     }
@@ -671,6 +685,7 @@ impl Parser {
             self.skip_newlines();
         }
 
+        let visibility = self.parse_visibility();
         let is_override = self.match_tok(&TokenKind::Override);
         let is_final = self.match_tok(&TokenKind::Final);
         let is_dispatch = self.match_tok(&TokenKind::Dispatch);
@@ -710,6 +725,7 @@ impl Parser {
                 type_annotation,
                 default,
                 is_final,
+                visibility,
                 doc: None,
                 span: start,
             }));
@@ -725,6 +741,7 @@ impl Parser {
                 name,
                 type_params,
                 value: TypeAliasValue::Direct(val),
+                visibility,
                 span: start,
             });
         }
@@ -805,6 +822,7 @@ impl Parser {
             func.is_async = is_async;
             func.is_override = is_override;
             func.is_final = is_final;
+            func.visibility = visibility;
             return Ok(ClassMember::ClassMethod(func));
         }
 
@@ -836,6 +854,7 @@ impl Parser {
             func.is_async = is_async;
             func.is_override = is_override;
             func.is_final = is_final;
+            func.visibility = visibility;
             return Ok(ClassMember::Method(func));
         }
 
@@ -879,6 +898,7 @@ impl Parser {
             type_annotation,
             default,
             is_final,
+            visibility,
             doc,
             span: start,
         }))
@@ -886,6 +906,7 @@ impl Parser {
 
     fn parse_interface_def(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
+        let visibility = self.parse_visibility();
         self.expect(&TokenKind::Interface)?;
         let name = self.expect_ident()?;
         let type_params = self.parse_optional_type_params()?;
@@ -924,12 +945,14 @@ impl Parser {
             type_params,
             bases,
             body,
+            visibility,
             span: start.merge(end),
         })
     }
 
     fn parse_interface_member(&mut self) -> Result<InterfaceMember, ParseError> {
         let start = self.peek().span;
+        let visibility = self.parse_visibility();
 
         if self.match_tok(&TokenKind::Pass) {
             let span = self.peek().span;
@@ -957,6 +980,7 @@ impl Parser {
             return Ok(InterfaceMember::GetterSig {
                 name,
                 return_type,
+                visibility,
                 span: start,
             });
         }
@@ -974,6 +998,7 @@ impl Parser {
             return Ok(InterfaceMember::SetterSig {
                 name,
                 param_type,
+                visibility,
                 span: start,
             });
         }
@@ -994,6 +1019,7 @@ impl Parser {
                 type_params,
                 params,
                 return_type,
+                visibility,
                 span: start,
             });
         }
@@ -1013,6 +1039,7 @@ impl Parser {
                 type_params,
                 params,
                 return_type,
+                visibility,
                 span: start,
             });
         }
@@ -1028,6 +1055,7 @@ impl Parser {
             return Ok(InterfaceMember::AssociatedTypeSig {
                 name,
                 bound,
+                visibility,
                 span: start,
             });
         }
@@ -1041,6 +1069,7 @@ impl Parser {
                 name,
                 type_annotation,
                 is_final: true,
+                visibility,
                 span: start,
             });
         }
@@ -1059,6 +1088,7 @@ impl Parser {
                 name,
                 type_annotation,
                 is_final: false,
+                visibility,
                 span: start,
             });
         }
@@ -1087,12 +1117,14 @@ impl Parser {
             type_params,
             params,
             return_type,
+            visibility,
             span: start,
         })
     }
 
     fn parse_trait_def(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
+        let visibility = self.parse_visibility();
         self.expect(&TokenKind::Trait)?;
         let name = self.expect_ident()?;
         let type_params = self.parse_optional_type_params()?;
@@ -1207,6 +1239,7 @@ impl Parser {
                     type_annotation,
                     default,
                     is_final,
+                    visibility: None,
                     doc: None,
                     span: f_start,
                 }));
@@ -1226,6 +1259,7 @@ impl Parser {
                     type_annotation,
                     default: None,
                     is_final: false,
+                    visibility: None,
                     doc: None,
                     span: f_start,
                 }));
@@ -1244,6 +1278,7 @@ impl Parser {
             type_params,
             bases,
             body,
+            visibility,
             span: start.merge(end),
         })
     }
@@ -1286,6 +1321,7 @@ impl Parser {
 
     fn parse_type_alias(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
+        let visibility = self.parse_visibility();
         self.expect(&TokenKind::Type)?;
         let name = self.expect_ident()?;
         let type_params = self.parse_optional_type_params()?;
@@ -1306,6 +1342,7 @@ impl Parser {
                     name,
                     type_params,
                     value: TypeAliasValue::Direct(TypeExpr::Wildcard(start_span)),
+                    visibility,
                     span: start,
                 });
             }
@@ -1349,6 +1386,7 @@ impl Parser {
                     subject: subjects,
                     arms,
                 },
+                visibility,
                 span: start,
             });
         }
@@ -1360,6 +1398,7 @@ impl Parser {
             name,
             type_params,
             value: TypeAliasValue::Direct(value_type),
+            visibility,
             span: start,
         })
     }
@@ -1369,11 +1408,13 @@ impl Parser {
         mut is_dispatch: bool,
         decorators: Vec<Expr>,
     ) -> Result<Stmt, ParseError> {
+        let visibility = self.parse_visibility();
         self.expect(&TokenKind::Def)?;
         if self.match_tok(&TokenKind::Dispatch) {
             is_dispatch = true;
         }
-        let func = self.parse_raw_function(is_dispatch, decorators)?;
+        let mut func = self.parse_raw_function(is_dispatch, decorators)?;
+        func.visibility = visibility;
         Ok(Stmt::Function(func))
     }
 
@@ -1451,6 +1492,7 @@ impl Parser {
             is_async: false,
             is_override: false,
             is_final: false,
+            visibility: None,
             decorators,
             span: start,
         })

@@ -1,9 +1,15 @@
 use crate::token::Span;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Visibility {
+    Public,
+    Private,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum MutabilityView {
     Mutable,   // T
-    ReadOnly,  // &T
+    ReadOnly,  // ~T
     Immutable, // !T
 }
 
@@ -384,6 +390,7 @@ pub struct FunctionDef {
     pub is_async: bool,
     pub is_override: bool,
     pub is_final: bool,
+    pub visibility: Option<Visibility>,
     pub decorators: Vec<Expr>,
     pub span: Span,
 }
@@ -420,6 +427,7 @@ pub struct FieldDef {
     pub type_annotation: TypeExpr,
     pub default: Option<Expr>,
     pub is_final: bool,
+    pub visibility: Option<Visibility>,
     pub doc: Option<String>,
     pub span: Span,
 }
@@ -437,6 +445,7 @@ pub enum ClassMember {
         name: String,
         type_params: Vec<TypeParam>,
         value: TypeAliasValue,
+        visibility: Option<Visibility>,
         span: Span,
     },
     Pass(Span),
@@ -450,16 +459,19 @@ pub enum InterfaceMember {
         type_params: Vec<TypeParam>,
         params: Vec<Param>,
         return_type: Option<TypeExpr>,
+        visibility: Option<Visibility>,
         span: Span,
     },
     GetterSig {
         name: String,
         return_type: Option<TypeExpr>,
+        visibility: Option<Visibility>,
         span: Span,
     },
     SetterSig {
         name: String,
         param_type: TypeExpr,
+        visibility: Option<Visibility>,
         span: Span,
     },
     ClassMethodSig {
@@ -467,6 +479,7 @@ pub enum InterfaceMember {
         type_params: Vec<TypeParam>,
         params: Vec<Param>,
         return_type: Option<TypeExpr>,
+        visibility: Option<Visibility>,
         span: Span,
     },
     FactorySig {
@@ -474,17 +487,20 @@ pub enum InterfaceMember {
         type_params: Vec<TypeParam>,
         params: Vec<Param>,
         return_type: Option<TypeExpr>,
+        visibility: Option<Visibility>,
         span: Span,
     },
     FieldSig {
         name: String,
         type_annotation: TypeExpr,
         is_final: bool,
+        visibility: Option<Visibility>,
         span: Span,
     },
     AssociatedTypeSig {
         name: String,
         bound: Option<TypeExpr>,
+        visibility: Option<Visibility>,
         span: Span,
     },
     Pass(Span),
@@ -528,6 +544,7 @@ pub enum Stmt {
         body: Vec<ClassMember>,
         is_sealed: bool,
         is_final: bool,
+        visibility: Option<Visibility>,
         span: Span,
     },
     InterfaceDef {
@@ -535,6 +552,7 @@ pub enum Stmt {
         type_params: Vec<TypeParam>,
         bases: Vec<TypeExpr>,
         body: Vec<InterfaceMember>,
+        visibility: Option<Visibility>,
         span: Span,
     },
     TraitDef {
@@ -542,6 +560,7 @@ pub enum Stmt {
         type_params: Vec<TypeParam>,
         bases: Vec<TypeExpr>,
         body: Vec<TraitMember>,
+        visibility: Option<Visibility>,
         span: Span,
     },
     ImplementDef {
@@ -554,6 +573,7 @@ pub enum Stmt {
         name: String,
         type_params: Vec<TypeParam>,
         value: TypeAliasValue,
+        visibility: Option<Visibility>,
         span: Span,
     },
     Function(FunctionDef),
