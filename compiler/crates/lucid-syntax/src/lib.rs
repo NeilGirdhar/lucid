@@ -682,6 +682,36 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn type_parameter_defaults_parse_after_the_bound() {
+        let module = parse("class Foo[in out T = int, out U: Animal = Dog]:\n    pass\n").unwrap();
+        let Stmt::ClassDef { type_params, .. } = &module.statements[0] else {
+            panic!("expected class definition");
+        };
+        assert!(matches!(
+            &type_params[0].default,
+            Some(TypeExpr::Named { name, .. }) if name == "int"
+        ));
+        assert!(type_params[0].bound.is_none());
+        assert!(matches!(
+            &type_params[1].bound,
+            Some(TypeExpr::Named { name, .. }) if name == "Animal"
+        ));
+        assert!(matches!(
+            &type_params[1].default,
+            Some(TypeExpr::Named { name, .. }) if name == "Dog"
+        ));
+
+        let module = parse("trait Managed[in out T = Self]:\n    def get(self) -> T\n").unwrap();
+        let Stmt::TraitDef { type_params, .. } = &module.statements[0] else {
+            panic!("expected trait definition");
+        };
+        assert!(matches!(
+            &type_params[0].default,
+            Some(TypeExpr::Named { name, .. }) if name == "Self"
+        ));
+    }
+
+    #[test]
     fn obsolete_variance_sigils_are_rejected() {
         for spelling in ["+K", "-K", "=K", "+=K", "-=K"] {
             assert!(

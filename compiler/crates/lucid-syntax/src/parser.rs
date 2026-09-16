@@ -3453,11 +3453,17 @@ TokenKind::Public
             } else {
                 None
             };
+            let default = if self.match_tok(&TokenKind::Eq) {
+                Some(self.parse_type_expr()?)
+            } else {
+                None
+            };
 
             params.push(TypeParam {
                 name,
                 variance,
                 bound,
+                default,
                 is_higher_kinded,
                 span: start,
             });

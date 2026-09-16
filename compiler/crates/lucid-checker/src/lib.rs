@@ -87,6 +87,30 @@ fn type_argument_conforms(
     }
 }
 
+/// Fill in trailing type arguments from `T = X` defaults.  A bare name is
+/// left unspecified unless every parameter has a default; a partial list is
+/// completed only when every omitted parameter has one.
+fn with_type_param_defaults(defaults: Option<&Vec<Option<Type>>>, mut args: Vec<Type>) -> Vec<Type> {
+    let Some(defaults) = defaults else {
+        return args;
+    };
+    if args.len() >= defaults.len() {
+        return args;
+    }
+    if args.is_empty() && !defaults.iter().all(Option::is_some) {
+        return args;
+    }
+    let Some(missing) = defaults[args.len()..]
+        .iter()
+        .map(Clone::clone)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return args;
+    };
+    args.extend(missing);
+    args
+}
+
 fn trait_extends(source: &str, target: &str, env: &TypeEnvironment) -> bool {
     env.trait_bases
         .get(source)
@@ -1252,6 +1276,10 @@ pub struct TypeEnvironment {
     pub trait_variance: HashMap<String, Vec<Variance>>,
     pub class_bounds: HashMap<String, Vec<Option<Type>>>,
     pub trait_bounds: HashMap<String, Vec<Option<Type>>>,
+    /// `T = X` defaults, in declaration order; `None` where a parameter has
+    /// none.  A `Self` default stays the symbolic `TypeVar("Self")`.
+    pub class_type_param_defaults: HashMap<String, Vec<Option<Type>>>,
+    pub trait_type_param_defaults: HashMap<String, Vec<Option<Type>>>,
     /// Type-parameter bounds currently in scope while resolving annotations.
     pub type_var_bounds: HashMap<String, Type>,
     pub obligations: HashMap<String, HashSet<String>>,
@@ -1989,6 +2017,7 @@ impl TypeChecker {
                 name: "T".into(),
                 variance: Variance::Invariant,
                 bound: None,
+                default: None,
                 is_higher_kinded: false,
                 span: Span::default(),
             }],
@@ -2783,6 +2812,7 @@ impl TypeChecker {
                     .iter()
                     .map(|param| param.name.clone())
                     .collect::<Vec<_>>();
+                Self::reject_self_bounds("class", type_params)?;
                 let class_bounds = type_params
                     .iter()
                     .map(|param| {
@@ -2793,6 +2823,19 @@ impl TypeChecker {
                             .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let class_defaults = type_params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .default
+                            .as_ref()
+                            .map(|default| self.resolve_type_param_default(default))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.env
+                    .class_type_param_defaults
+                    .insert(name.clone(), class_defaults);
                 self.env.class_variance.insert(name.clone(), class_variance);
                 self.env
                     .class_type_params
@@ -3209,6 +3252,7 @@ impl TypeChecker {
                         .map(|param| param.variance.clone())
                         .collect(),
                 );
+                Self::reject_self_bounds("trait", type_params)?;
                 self.env.trait_bounds.insert(
                     name.clone(),
                     type_params
@@ -3221,6 +3265,19 @@ impl TypeChecker {
                         })
                         .collect(),
                 );
+                let trait_defaults = type_params
+                    .iter()
+                    .map(|param| {
+                        param
+                            .default
+                            .as_ref()
+                            .map(|default| self.resolve_type_param_default(default))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.env
+                    .trait_type_param_defaults
+                    .insert(name.clone(), trait_defaults);
                 let trait_type = Type::Trait {
                     name: name.clone(),
                     type_args: Vec::new(),
@@ -3654,6 +3711,36 @@ impl TypeChecker {
             ClassMember::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
             ClassMember::Pass(_) | ClassMember::Ellipsis(_) => None,
         }
+    }
+
+    /// `Self` can be a type-parameter default but not a bound: a bound is
+    /// checked at specialization, where there is no receiver to resolve
+    /// `Self` against.
+    fn reject_self_bounds(kind: &str, type_params: &[TypeParam]) -> Result<(), TypeError> {
+        for param in type_params {
+            if matches!(
+                &param.bound,
+                Some(TypeExpr::Named { name, args, .. }) if name == "Self" && args.is_empty()
+            ) {
+                return Err(TypeError {
+                    message: format!(
+                        "Self cannot bound a type parameter of the {kind} it belongs to"
+                    ),
+                    span: param.span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// A default of `Self` stays symbolic until a member is looked up on a
+    /// receiver, the same way `Self` resolves everywhere else.
+    fn resolve_type_param_default(&mut self, default: &TypeExpr) -> Result<Type, TypeError> {
+        if matches!(default, TypeExpr::Named { name, args, .. } if name == "Self" && args.is_empty())
+        {
+            return Ok(Type::TypeVar("Self".into()));
+        }
+        self.resolve_type_expr(default)
     }
 
     /// A parameter written with no variance marker is checked as invariant
@@ -13050,6 +13137,10 @@ impl TypeChecker {
                             return Ok(alias.clone());
                         }
                         if let Some(c) = self.env.classes.get(other) {
+                            let resolved_args = with_type_param_defaults(
+                                self.env.class_type_param_defaults.get(other),
+                                resolved_args.clone(),
+                            );
                             if other == "list" && resolved_args.is_empty() {
                                 let mut c_clone = c.clone();
                                 if let Type::Class {
@@ -13130,6 +13221,10 @@ impl TypeChecker {
                             return Ok(c_clone);
                         }
                         if let Some(tr) = self.env.traits.get(other) {
+                            let resolved_args = with_type_param_defaults(
+                                self.env.trait_type_param_defaults.get(other),
+                                resolved_args.clone(),
+                            );
                             if let Some(parameters) = self.env.trait_variance.get(other) {
                                 // A bare name leaves every parameter
                                 // unspecified; only a partial list is an
@@ -15704,6 +15799,37 @@ def reject(value: not int) -> none:
     }
 
     const VIEW_VARIANCE_PRELUDE: &str = "class Animal:\n    pass\nclass Cat(Animal):\n    pass\nclass Box[in ~out T]:\n    value: T\n    def get(self: ~Self) -> T:\n        return self.value\n    def put(self, item: T) -> none:\n        self.value = item\nclass Sink[~in out T]:\n    value: T\n    def accept(self: ~Self, item: T) -> bool:\n        return true\n    def take(self) -> T:\n        return self.value\nclass Cell[in out T]:\n    value: T\n    def get(self: ~Self) -> T:\n        return self.value\n    def matches(self: ~Self, item: T) -> bool:\n        return true\n";
+
+    #[test]
+    fn type_parameter_defaults_fill_omitted_arguments() {
+        let prelude = "class Foo[in out T = int]:\n    value: T\nclass Pair[in out A, in out B = str]:\n    first: A\n    second: B\n";
+        check_source(&format!("{prelude}def f(x: Foo) -> none:\n    y: Foo[int] = x\n")).unwrap();
+        check_source(&format!("{prelude}def f(x: Foo) -> none:\n    y: Foo[str] = x\n"))
+            .unwrap_err();
+        check_source(&format!(
+            "{prelude}def g(x: Pair[int]) -> none:\n    y: Pair[int, str] = x\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def g(x: Pair[int]) -> none:\n    y: Pair[int, int] = x\n"
+        ))
+        .unwrap_err();
+        // A bare name whose parameters do not all have defaults stays
+        // unspecified rather than becoming an arity error.
+        check_source(&format!("{prelude}def h(x: Pair) -> none:\n    pass\n")).unwrap();
+    }
+
+    #[test]
+    fn self_is_a_valid_default_but_not_a_bound() {
+        check_source(
+            "trait Managed[in out T = Self]:\n    def resource(self) -> T\nclass Handle(Managed):\n    def resource(self) -> Self:\n        return self\n",
+        )
+        .unwrap();
+        let err = check_source("trait Bad[in out T: Self]:\n    pass\n").unwrap_err();
+        assert!(err.message.contains("Self cannot bound a type parameter"), "{}", err.message);
+        let err = check_source("class Bad[in out T: Self]:\n    pass\n").unwrap_err();
+        assert!(err.message.contains("Self cannot bound a type parameter"), "{}", err.message);
+    }
 
     #[test]
     fn unmarked_variance_warns_without_failing() {

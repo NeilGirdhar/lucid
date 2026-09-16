@@ -30,6 +30,8 @@ pub struct TypeParam {
     pub name: String,
     pub variance: Variance,
     pub bound: Option<TypeExpr>,
+    /// `T = X`: the argument a use site gets when it names none.
+    pub default: Option<TypeExpr>,
     pub is_higher_kinded: bool,
     pub span: Span,
 }
