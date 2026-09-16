@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub mod cranelift_backend;
 pub mod native_abi;
+pub mod source_map;
 pub use lucid_abi;
 
 /// Source map entry: maps generated code location to source location
