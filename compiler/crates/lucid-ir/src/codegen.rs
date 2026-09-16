@@ -107,6 +107,27 @@ impl CCodegenBackend {
             "{1} {0}_get(struct {0}* list, int64_t index) {{\n  if (index >= 0 && index < list->length) return list->items[index];\n  return ({1})0;\n}}",
             type_name, elem_type
         ));
+        self.emit_line("");
+
+        // Generate reverse function
+        self.emit_line(&format!(
+            "void {0}_reverse(struct {0}* list) {{\n  for (int64_t i = 0; i < list->length / 2; i++) {{\n    {1} temp = list->items[i];\n    list->items[i] = list->items[list->length - 1 - i];\n    list->items[list->length - 1 - i] = temp;\n  }}\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate first function
+        self.emit_line(&format!(
+            "{1} {0}_first(struct {0}* list) {{\n  if (list->length > 0) return list->items[0];\n  return ({1})0;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate last function
+        self.emit_line(&format!(
+            "{1} {0}_last(struct {0}* list) {{\n  if (list->length > 0) return list->items[list->length - 1];\n  return ({1})0;\n}}",
+            type_name, elem_type
+        ));
     }
 
     fn generate_specialized_dict(&mut self, spec: &crate::TypeSpecialization) {
@@ -674,7 +695,93 @@ impl CCodegenBackend {
         self.emit_line("#include <stdlib.h>");
         self.emit_line("#include <math.h>");
         self.emit_line("#include <string.h>");
+        self.emit_line("#include <ctype.h>");
         self.emit_line("typedef FILE* LucidFile;");  // File handle type
+        self.emit_line("");
+
+        // String helper functions
+        self.emit_line("// String trim (remove leading/trailing whitespace)");
+        self.emit_line("const char* lucid_string_trim(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("while (*str && isspace((unsigned char)*str)) str++;");
+        self.emit_line("const char* end = str + strlen(str) - 1;");
+        self.emit_line("while (end > str && isspace((unsigned char)*end)) end--;");
+        self.emit_line("static char result[4096];");
+        self.emit_line("strncpy(result, str, end - str + 1);");
+        self.emit_line("result[end - str + 1] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // String replace function
+        self.emit_line("// String replace (first occurrence)");
+        self.emit_line("const char* lucid_string_replace(const char* str, const char* from, const char* to) {");
+        self.indent_level += 1;
+        self.emit_line("char* pos = strstr((char*)str, from);");
+        self.emit_line("if (!pos) return str;");
+        self.emit_line("static char result[4096];");
+        self.emit_line("int len = pos - str;");
+        self.emit_line("strncpy(result, str, len);");
+        self.emit_line("strcpy(result + len, to);");
+        self.emit_line("strcpy(result + len + strlen(to), pos + strlen(from));");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // String contains function
+        self.emit_line("// String contains check");
+        self.emit_line("bool lucid_string_contains(const char* str, const char* substr) {");
+        self.indent_level += 1;
+        self.emit_line("return strstr(str, substr) != NULL;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // String starts_with function
+        self.emit_line("// String starts_with check");
+        self.emit_line("bool lucid_string_starts_with(const char* str, const char* prefix) {");
+        self.indent_level += 1;
+        self.emit_line("return strncmp(str, prefix, strlen(prefix)) == 0;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // String ends_with function
+        self.emit_line("// String ends_with check");
+        self.emit_line("bool lucid_string_ends_with(const char* str, const char* suffix) {");
+        self.indent_level += 1;
+        self.emit_line("int str_len = strlen(str);");
+        self.emit_line("int suffix_len = strlen(suffix);");
+        self.emit_line("if (suffix_len > str_len) return false;");
+        self.emit_line("return strcmp(str + str_len - suffix_len, suffix) == 0;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // String to_upper function
+        self.emit_line("// String to uppercase");
+        self.emit_line("const char* lucid_string_to_upper(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("for (int i = 0; str[i]; i++) result[i] = toupper(str[i]);");
+        self.emit_line("result[strlen(str)] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // String to_lower function
+        self.emit_line("// String to lowercase");
+        self.emit_line("const char* lucid_string_to_lower(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("for (int i = 0; str[i]; i++) result[i] = tolower(str[i]);");
+        self.emit_line("result[strlen(str)] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
     }
 
     fn emit_line(&mut self, line: &str) {

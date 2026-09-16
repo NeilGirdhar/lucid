@@ -1909,4 +1909,44 @@ int main() {
         assert_eq!(generic_param.bounds[0].trait_name, "Clone");
     }
 
+    #[test]
+    fn test_collection_algorithms_codegen() {
+        // Test that collection algorithms are generated (reverse, first, last)
+        let mut module = IrModule::new();
+
+        // Create List[i64] specialization
+        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify reverse, first, and last functions are generated
+        assert!(code.contains("List__i64___reverse"), "reverse should be generated");
+        assert!(code.contains("List__i64___first"), "first should be generated");
+        assert!(code.contains("List__i64___last"), "last should be generated");
+
+        // Verify the reverse implementation has proper swapping logic
+        assert!(code.contains("temp = list->items"), "reverse should have swap logic");
+    }
+
+    #[test]
+    fn test_string_helper_functions_generated() {
+        // Test that string helper functions are generated
+        let module = IrModule::new();
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify string helper functions are present
+        assert!(code.contains("lucid_string_trim"), "trim should be generated");
+        assert!(code.contains("lucid_string_replace"), "replace should be generated");
+        assert!(code.contains("lucid_string_contains"), "contains should be generated");
+        assert!(code.contains("lucid_string_starts_with"), "starts_with should be generated");
+        assert!(code.contains("lucid_string_ends_with"), "ends_with should be generated");
+        assert!(code.contains("lucid_string_to_upper"), "to_upper should be generated");
+        assert!(code.contains("lucid_string_to_lower"), "to_lower should be generated");
+    }
+
 }
