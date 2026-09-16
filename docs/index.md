@@ -91,8 +91,8 @@ runtime.**
 never has to mean "too small to use."**
 
 * generics carry real variance, not just erased type parameters
-    * `trait Cache[=K, =V]` — definition-site `+`/`-`/`=` variance,
-      not a call-site-only or fully erased scheme
+    * `trait Cache[in out K, in out V]` — definition-site `in`/`out`
+      variance, not a call-site-only or fully erased scheme
 * binary operators dispatch on both operand types
     * `a + b` picks an implementation from both operands' types at
       once — no `__radd__`, no `NotImplemented` negotiation
@@ -103,13 +103,13 @@ never has to mean "too small to use."**
 ## Example
 
 ```python
-trait Scorable[+K]:
+trait Scorable[in K]:
     def score(self, item: K) -> float
 
     def is_confident(self, item: K) -> bool:
         return self.score(item) >= 0.8
 
-class InferenceModel[+=K](Scorable[K]):
+class InferenceModel[in ~out K](Scorable[K]):
     weights: Tensor
     labels: list[K]
     _scores: dict[K, float]
@@ -126,11 +126,14 @@ class InferenceModel[+=K](Scorable[K]):
     getter label_count(self) -> int:
         return len(self.labels)
 
-def evaluate(model: ~InferenceModel[str], item: str) -> float:
+def evaluate(model: InferenceModel[str], item: str) -> float:
     return model.score(item)
 
 model: InferenceModel[str] = InferenceModel.from_checkpoint("model.bin", ["cat", "dog"])
 stable: !InferenceModel[str] = freeze(model)
+view: ~InferenceModel[str] = model
+view.label_count            # fine: a getter is read-only by construction
+view.score("cat")           # error: score mutates, view is read-only
 ```
 This example shows several core language mechanics in one place:
 

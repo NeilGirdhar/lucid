@@ -19,10 +19,10 @@ nav = [
   { "Types" = [
     { "Type vocabulary" = "types.md" },
     { "Operations" = "type-operations.md" },
-    { "Shapes" = "shape.md" },
     { "Casting" = "casting.md" },
     { "Mutability" = "mutability.md" },
     { "Generics" = "generics.md" },
+    { "Shapes" = "shape.md" },
   ] },
   { "Basic types" = [
     { "Numeric types" = "numeric-types.md" },
@@ -81,10 +81,13 @@ nav = [
     { "Builtins" = "builtins.md" },
     { "Removed builtins" = "removed-builtins.md" },
   ] },
-  { "Architecture" = "architecture.md" },
-  { "Compiler implementation plan" = "implementation-plan.md" },
-  { "Implementation handoff" = "handoff.md" },
   { "Rejected features" = "rejected-features.md" },
+  { "Implementation" = [
+    { "Architecture" = "architecture.md" },
+    { "Getting started" = "getting-started.md" },
+    { "Language tour" = "language-tour.md" },
+    { "Benchmarks" = "benchmarks.md" },
+  ] },
 ]
 
 [project.theme]
@@ -133,4 +136,4 @@ pymdownx.highlight.line_spans = "__span"
 pymdownx.highlight.pygments_lang_class = true
 pymdownx.inlinehilite = {}
 pymdownx.magiclink = {}
-pymdownx.superfences = {}
+pymdownx.superfences = { custom_fences = [ { name = "mermaid", class = "mermaid" } ] }

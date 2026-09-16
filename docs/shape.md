@@ -3,21 +3,21 @@
 A numeric array's shape — how many dimensions it has, and how large
 each one is — is exactly the kind of fact [Type vocabulary](types.md)
 already wants visible at the definition site, the same way mutability
-and variance are. `typing.Shape` and `typing.shape[...]` give it a
+and variance are. `typing.Shape` and `typing.Shape[...]` give it a
 type, and this covers the operations built on top of it: taking one
 apart, combining two, and checking the constraints an operation like
 reshape or matrix multiplication actually needs.
 
-## `typing.Shape` and `typing.shape[...]`
+## `typing.Shape` and `typing.Shape[...]`
 
-`typing.shape[2, 3, 4]` borrows its syntax from `Literal[1, 2, 3]` — a
+`typing.Shape[2, 3, 4]` borrows its syntax from `Literal[1, 2, 3]` — a
 builtin name, subscripted with however many type arguments the caller
 writes — but not its meaning. `Literal[1, 2, 3]` is a union: satisfied
-by any *one* of the three. `typing.shape[2, 3, 4]` is a product:
+by any *one* of the three. `typing.Shape[2, 3, 4]` is a product:
 satisfied only by exactly that sequence, in that order — the same
 fixed-arity, exact-match structure an anonymous record like
 `(x: int, y: int)` already has, just with positions instead of names.
-`typing.Shape` is the trait every `typing.shape[...]` instantiation
+`typing.Shape` is the trait every `typing.Shape[...]` instantiation
 satisfies.
 
 A position ordinarily holds a `Literal[int]`, but any position can
@@ -27,37 +27,37 @@ would sit in any other type expression:
 
 ```python
 def batch_normalize[Batch: int](
-    x: Array[Float32, typing.shape[Batch, 3, 224, 224]],
-) -> Array[Float32, typing.shape[Batch, 3, 224, 224]]:
+    x: Array[Float32, typing.Shape[Batch, 3, 224, 224]],
+) -> Array[Float32, typing.Shape[Batch, 3, 224, 224]]:
     ...
 ```
 An array that doesn't track its shape at all uses `none` instead of a
-`typing.shape[...]`, so one class covers both:
+`typing.Shape[...]`, so one class covers both:
 
 ```python
 class Array[D: DataType, S: typing.Shape | none]:
     ...
 
-checked: Array[Float32, typing.shape[2, 3, 4]]
+checked: Array[Float32, typing.Shape[2, 3, 4]]
 unchecked: Array[Float32, none]
 ```
 At runtime, a shape value is an ordinary `!list[int]` — hashable,
 immutable, exactly the sequence [Hashable sequences](collections.md#hashable-sequences)
-already recommends for this job. `typing.shape[...]` is the type such
+already recommends for this job. `typing.Shape[...]` is the type such
 a value can be checked against, the same relationship any other type
 has to its values; a concrete `![2, 3, 4]` satisfies
-`typing.shape[2, 3, 4]` the same way `(x=1, y=2)` satisfies
+`typing.Shape[2, 3, 4]` the same way `(x=1, y=2)` satisfies
 `(x: int, y: int)`.
 
-Everything from here on lives in the `typing.shape` module; the
-`typing.shape.` prefix is dropped from the definitions below the way
-`iteration.done`'s own definition, inside the `iteration` module,
-never writes `iteration.` either — only a caller from outside needs
-the qualified name.
+Everything from here on is a member of `typing.Shape` itself; the
+`typing.Shape.` qualifier is dropped from the definitions below,
+the same way a class's own methods never write the class's name in
+front of a call to another one of its own factories. Only a caller
+from outside needs the qualified name.
 
 ## Shape is a sequence
 
-Because `shape[...]` fixes both its length and its order, indexing,
+Because `Shape[...]` fixes both its length and its order, indexing,
 slicing, concatenation, and equality already mean exactly what they
 mean for any other sequence, extended into type position the same way
 [Arithmetic on literal types](type-operations.md#arithmetic-on-literal-types)
@@ -66,7 +66,7 @@ already extends `+`/`-`/`*` to a pair of `Literal[int]`:
 ```python
 type Get[S: Shape, I: int] = S[I]
 type DropAt[S: Shape, I: int] = S[:I] + S[I + 1:]
-type InsertAt[S: Shape, I: int, D: int] = S[:I] + shape[D] + S[I:]
+type InsertAt[S: Shape, I: int, D: int] = S[:I] + Shape[D] + S[I:]
 type Concat[A: Shape, B: Shape] = A + B
 type Reverse[S: Shape] = S[::-1]
 ```
@@ -80,7 +80,7 @@ up, as opposed to swapping two arbitrary indices — is the same
 slicing, just naming both ends directly instead of walking to them:
 
 ```python
-type SwapLast2[S: Shape] = S[:-2] + shape[S[-1], S[-2]]
+type SwapLast2[S: Shape] = S[:-2] + Shape[S[-1], S[-2]]
 ```
 
 ## Batch dimensions
@@ -122,9 +122,9 @@ behave as if they were `1`, contributing no constraint:
 
 ```python
 type BroadcastAligned[A: Shape, B: Shape] =
-    B if A == shape[] else
-    A if B == shape[] else
-    BroadcastAligned[A[:-1], B[:-1]] + shape[BroadcastDim[A[-1], B[-1]]]
+    B if A == Shape[] else
+    A if B == Shape[] else
+    BroadcastAligned[A[:-1], B[:-1]] + Shape[BroadcastDim[A[-1], B[-1]]]
 ```
 This resolves the same way `Reverse` and `Concat` do: a self-reference
 resolved lazily, the same as any other
@@ -139,7 +139,7 @@ dimensions — everything before the last two axes — to broadcast:
 
 ```python
 type MatmulShape[A: Shape, B: Shape] =
-    shape[*BroadcastAligned[A[:-2], B[:-2]], A[-2], B[-1]]
+    Shape[*BroadcastAligned[A[:-2], B[:-2]], A[-2], B[-1]]
     if A[-1] == B[-2] else
     error   # inner dimensions don't match
 ```
@@ -158,7 +158,7 @@ over a shape the same recursive way `BroadcastAligned` folds
 `BroadcastDim`:
 
 ```python
-type Product[S: Shape] = 1 if S == shape[] else S[0] * Product[S[1:]]
+type Product[S: Shape] = 1 if S == Shape[] else S[0] * Product[S[1:]]
 
 type Reshape[S: Shape, NewShape: Shape] =
     NewShape if Product[S] == Product[NewShape] else
@@ -170,7 +170,7 @@ has to match exactly, which is now an ordinary slice comparison:
 
 ```python
 type ConcatAxis0[A: Shape, B: Shape] =
-    shape[A[0] + B[0], *A[1:]]
+    Shape[A[0] + B[0], *A[1:]]
     if A[1:] == B[1:] else
     error   # every axis but the concatenated one must match
 ```

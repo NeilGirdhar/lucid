@@ -192,6 +192,81 @@ Checking merely *whether* a value is callable at all, with no
 signature claim attached, is a different question, and it already has
 an answer: the [`Callable` trait](types.md#the-callable-trait).
 
+## Value-parameter markers mirrored into generic parameter lists (basedpython)
+
+basedpython lets a generic parameter list use the same `/`, `*`,
+`*Args`, `**Kwargs` markers an ordinary `def` signature does, so a
+class can declare positional-only, keyword-only, and variadic *type*
+parameters the same way a function declares positional-only,
+keyword-only, and variadic *value* ones:
+
+```python
+class B[Positional, /, PositionalOrNamed, *Args, Named, **Kwargs]
+```
+The motivation is real: Python's own type-parameter syntax has no
+positional-only or keyword-only marker, and `**kwargs` has no type-level
+analogue at all, forcing `ParamSpec` to stand in for a job ordinary
+generics were never given the vocabulary to do directly. But Lucid
+already replaced the thing `ParamSpec` and `Concatenate` were for —
+[`Arguments`/`Parameters`](arguments.md) gather a signature's own
+shape into one ordinary generic class, and a bare, unparenthesized
+type parameter on a function type's left side already means "this
+whole parameter shape, not yet known"
+([Decorators](decorators.md)'s `timed` example: `f: P -> R`). Zoning
+that shape — its own positional-only prefix, its keyword-only tail,
+its variadic remainder — already lives inside `Parameters`'s own
+fields ([Parameters](parameters.md)'s `(c: int, /, a: int, int, ...,
+*, b: int, _: int, ...)`), not in the generic parameter list that
+binds `P`. Mirroring value-parameter zoning into type-parameter lists
+would be a second way to spell zoning Lucid already has one spelling
+for.
+
+The same reasoning covers the rest of the proposal, with one wrinkle.
+Forwarding a captured parameter shape (basedpython's `*P`/`**P`) is
+already `***args: P` on the gathering side and `f(***args)` on the
+spreading side, both demonstrated in `timed`. `Concatenate[int, P]`
+(prepending a fixed argument ahead of a forwarded shape) needs no
+dedicated type either — just `***` reused in type position the same
+way [Shape](shape.md) already reuses slicing there and
+[literal arithmetic](type-operations.md#arithmetic-on-literal-types)
+already reuses `+`/`-`/`*`: `***P` inside a function type's parameter
+list splices `P`'s captured shape in among fixed, concrete types:
+
+```python
+def prepend_context[P: Parameters, R](f: P -> R) -> (int, ***P) -> R:
+    def wrapper(ctx: int, ***args: P) -> R:
+        return f(***args)
+    return wrapper
+```
+The parameter list is already an ordinary sequence position, and
+`***P` already means "splice this shape in here" everywhere else it
+appears — no `Concatenate` needed to say the same thing a second way.
+
+Basedpython's `Fn.parameters`/`Fn.returns` attribute-style projection
+off a single callable-typed parameter is needed only if a signature is
+captured as one combined `Fn` to begin with — Lucid's own convention
+captures the same signature as two separate parameters, `P: Parameters`
+and `R`, from the start, so there is nothing later to project back
+apart.
+
+## `Overlapping[T]` (basedpython)
+
+basedpython lets a covariant class keep an otherwise-unsound input
+position by marking it `Overlapping[T]` instead of plain `T` — a
+promise that the argument merely overlaps with `T` rather than needs
+to be one, loosening the check just enough for a method like
+`__eq__(self, other: object)` to stay checkable on a covariant class
+without demanding a real `T` there.
+
+Lucid's own binary operators never go through a single covariant
+`self` reference in the first place — [Multiple dispatch](dispatch.md)
+resolves `__eq__`, and every other operator, from both operands'
+actual runtime classes at once, not by calling a virtual method
+through one side's own type. The problem `Overlapping[T]` patches — a
+covariant class needing an input position it can't safely give a
+real `T` — doesn't arise for the case it was built for, so Lucid has
+no occasion to adopt it.
+
 ## `and`/`or` as type operators (basedpython)
 
 basedpython accepts the keywords `or`/`and` in annotation

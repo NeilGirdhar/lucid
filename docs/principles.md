@@ -70,7 +70,7 @@ no marker keyword for either. See [Traits](traits.md) and
 Definition-site type relationships are checked and versioned; inferred
 variance can flip unintentionally, and a docstring's mutation promise
 isn't checked at all. Generic parameters carry definition-site variance
-with `+K`, `-K`, `=K`; mutable, read-only, and immutable views are
+with `out K`, `in K`, `in out K`; mutable, read-only, and immutable views are
 visible with `T`, `~T`, `!T`. See [Generics](generics.md),
 [Mutability](mutability.md), and
 [Modern type specification](type-specification.md).

@@ -1,10 +1,11 @@
 # Binary types
 
-`Bytes`, `ByteArray`, and `MemoryView` are capitalized for the same
-reason `Bytes`/`ByteArray` already are in [Builtins](builtins.md):
-Python's `bytes`, `bytearray`, and `memoryview` stay as the ordinary
-lowercase conversion calls, the way `int`/`float`/`str` already do for
-their own types, rather than becoming the type names themselves.
+`Bytes`, `ByteArray`, and `MemoryView` are ordinary classes, capitalized
+like any other, and constructed the same way any other class is —
+through their own default factory. Python spells the same three
+constructions `bytes(x)`, `bytearray(x)`, and `memoryview(x)`, separate
+lowercase functions distinct from the type names; Lucid has no second
+name to reach for, since `Bytes(x)` already is the construction call.
 
 `Bytes` is an immutable sequence of raw bytes; `ByteArray` is its
 mutable counterpart — the one built-in pair in Python where the
@@ -18,7 +19,7 @@ question than renaming them.
 
 ```python
 data: Bytes = b"hello"
-buffer: ByteArray = bytearray(b"hello")
+buffer: ByteArray = ByteArray(b"hello")
 buffer[0] = 72
 ```
 `MemoryView` is a view over an existing buffer without copying it —
@@ -27,7 +28,7 @@ protocol. Slicing a `MemoryView` produces another `MemoryView` over
 the same underlying storage, not a copy:
 
 ```python
-view: MemoryView = memoryview(buffer)
+view: MemoryView = MemoryView(buffer)
 window: MemoryView = view[2:5]  # still backed by buffer, no copy
 ```
 "Anything else that exposes the buffer protocol" is `Buffer`, the

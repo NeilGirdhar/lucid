@@ -24,7 +24,7 @@ def render(shape: Drawable & Serializable) -> bytes:
 handlers: list[HasName & HasId]
 ```
 `&` means only this — the read-only mutability view prefix used
-throughout [Mutability](mutability.md) (`~Self`, `~dict[K, +V]`) was
+throughout [Mutability](mutability.md) (`~Self`, `~dict[K, out V]`) was
 moved to `~` for exactly this reason, so `&` never has to carry two
 meanings at once.
 

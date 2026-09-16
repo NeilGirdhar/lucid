@@ -68,3 +68,8 @@ that decision:
 * `chr`, `ord` — not bare builtins; they move to `string.chr(...)`
   and `string.ord(...)`, the same specific-audience move `ascii`
   already makes
+* [`bytes`, `bytearray`, `memoryview`](binary-types.md) — not
+  separate conversion functions; `Bytes(x)`, `ByteArray(x)`, and
+  `MemoryView(x)` already construct through each type's own default
+  factory, the same way any other class is constructed, so there is
+  no second, lowercase name left to call instead

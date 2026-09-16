@@ -25,7 +25,7 @@ store, and report freshness; the same declaration can build higher-level
 behavior directly on those obligations:
 
 ```python
-trait Cache[=K, =V]:
+trait Cache[in out K, in out V]:
     def get(self: ~Self, key: K) -> V | none
     def put(self, key: K, value: V) -> none
     def is_fresh(self: ~Self, key: K) -> bool

@@ -54,21 +54,68 @@ exact class whose factory is running, assigns the supplied values to that
 class's declared fields in field order, and returns the fully initialized
 object.
 
-Factories are not inherited.
+Factories are not inherited, but a subclass factory can still build on
+a parent factory's own result directly: call it by name, spread the
+object it returns into `construct`, and add whatever the subclass
+adds.
 
-Every class has a generated `replace` factory. It works like Python's
-`__replace__` protocol: given an existing instance and any changed field
-values, it constructs a new instance of the same exact class with unchanged
-fields copied from the original object.
+```python
+class Point:
+    x: int
+    y: int
+
+    factory on_diagonal(cls, z: int):
+        return construct(z, z)
+
+class Point3D(Point):
+    z: int
+
+    factory on_diagonal(cls, z: int):
+        point = Point.on_diagonal(z)
+        return construct(***point, z)
+```
+`***point` spreads `Point`'s own fields positionally — [Spread](spread.md)
+already gives every class this for free — filling `x` and `y`, in
+that order; `Point3D`'s own trailing field, `z`, is the one
+positional slot `***point` never supplied, the same
+inherited-fields-first order [`Parameters`'s own construction](spread.md)
+already follows. No override rule is needed to combine them: `z`
+isn't replacing anything `***point` provided, it's filling the one
+field `Point` never had.
+
+Every class has a generated `replace` method, and it is not inherited
+either — a subclass gets its own `replace`, scoped to exactly its own
+declared fields, the same way it gets its own `__init__` rather than
+its parent's. `replace` works like Python's `__replace__` protocol:
+given any changed field values as keyword arguments, it builds a new
+instance of the same exact class with unchanged fields copied from
+`self`, and hands back an ordinary, mutable value — regardless of
+which view called it:
 
 ```python
 class Point:
     x: float
     y: float
 
-p = Point(1.0, 2.0)
-q = Point.replace(p, y=3.0)
+p: !Point = freeze(Point(1.0, 2.0))
+q: Point = p.replace(y=3.0)   # a fresh, ordinary Point, not !Point
 ```
+Not being inherited also means `replace` has no Liskov substitution
+obligation to satisfy. An *inherited* method has to behave compatibly
+across every subclass that relies on the inherited version, since
+callers see one shared contract; a generated, per-class `replace`
+never is that shared version — every class, subclasses included,
+already has its own, so there is nothing for a subclass's `replace`
+to stay substitutable for.
+
+`replace` only ever reads `self` to build the new object; it never
+writes to it, so it takes `self: ~Self`, callable through a mutable,
+read-only, or frozen view alike. This does not strain
+[freezing being deep](mutability.md#freezing-is-deep): that rule
+governs what a view exposes about the *original* object's own
+storage, and `replace` never exposes that storage — it constructs a
+brand new instance, as free to be ordinarily mutable as any other
+freshly constructed value.
 
 ## Constructor calls infer as `final`
 

@@ -53,15 +53,25 @@ example of `***` in practice; the mechanism itself doesn't need it.
 
 ### Statements → Traits and classes
 
-- `docs/for-and-while.md:122` — No del on fields (Classes)
+- `docs/for-and-while.md:150` — No del on fields (Classes)
 - `docs/match.md:54` — sealed class (Class inheritance)
+
+### Basic types → Statements
+
+`strings.md`'s "Strings are not sequences" section moved from Containers
+(after Statements) to Basic types (before it) — its `Iterable[str]`
+contrast and the `for ch in text: # error` example now lean on
+`Iterable` and `for` before [For and While](for-and-while.md) introduces
+either. This one's new, from today's nav move, not the original reorder.
+
+- `docs/strings.md:34,45,48,56,59,79,87`
 
 ## Low priority — light "see also" citations, likely fine as intentional forward pointers
 
 ### Statements → Functions
 
 - `docs/exceptions.md:4`, `docs/for-and-while.md:9` — Results
-- `docs/for-and-while.md:45` — Name-captured identifiers
+- `docs/for-and-while.md:54` — Name-captured identifiers
 - `docs/match.md:117` — Dispatch beyond operators
 - `docs/with.md:6` — Context managers
 
@@ -72,18 +82,16 @@ example of `***` in practice; the mechanism itself doesn't need it.
 - `docs/mutability.md:233` — Explicit overrides (Traits)
 - `docs/types.md:64` — Modern type specification (Overview)
 - `docs/types.md:95` — Anonymous class
-- `docs/types.md:255` — Constructor calls infer as final
+- `docs/types.md:280` — Constructor calls infer as final
 
 ### Types → Functions
 
 - `docs/generics.md:212` — Multiple dispatch
-- `docs/match-types.md:40` — Promotion
 - `docs/numeric-types.md:223` — Results
 
 ### Types → Statements / Expressions
 
-- `docs/match-types.md:8` — Exhaustive pattern matching
-- `docs/types.md:268` — Identity and instance checks
+- `docs/types.md:293` — Identity and instance checks
 
 ### Expressions → Statements / Functions / Traits and classes
 
@@ -102,13 +110,61 @@ example of `***` in practice; the mechanism itself doesn't need it.
 
 ### Miscellaneous single occurrences
 
-- `docs/collections.md:168` — Modern type specification (Overview)
+- `docs/collections.md:200` — Modern type specification (Overview)
 - `docs/decorators.md:28` — No __module__ or __qualname__ (project.yaml)
-- `docs/for-and-while.md:123` — No __delitem__ (Indexing)
+- `docs/for-and-while.md:151` — No __delitem__ (Indexing)
 - `docs/with.md:11` — Rejected features
 
 ## Not included
 
 `docs/principles.md` (Main ideas) is excluded — it's a survey of ideas
 elaborated everywhere else in the spec, so it forward-references
-almost every other document by design.
+almost every other document by design. The `Implementation` nav group
+(Architecture, Getting started, Language tour, Benchmarks) is also
+excluded — it documents the reference implementation, not the
+language, so the spec's own reading-order concerns don't apply to it.
+
+# Design and organization outline
+
+Broader outline of what this repo's documentation should eventually
+cover, beyond the language spec and the reference implementation docs
+already written. Merged in from a scratch outline; annotated with
+what's already done versus still open.
+
+- Design
+    - Motivation (what problem we're solving) — done, see
+      [Motivation](docs/index.md#motivation)
+    - Guiding principles (how we're solving it) — done, see
+      [Guiding principles](docs/index.md#guiding-principles)
+    - Major features — not written. A dedicated feature list/tour of
+      the language itself; [principles.md](docs/principles.md) surveys
+      *why* each choice was made, but nothing surveys *what* the
+      resulting feature set is, end to end, in one place.
+    - What we're not addressing — not written, and distinct from
+      [Rejected features](docs/rejected-features.md): that page covers
+      alternatives considered and rejected (a decision made), not
+      scope never attempted (no decision needed yet).
+
+- Components
+    - Compiler — done, see [Architecture](docs/architecture.md),
+      [Getting started](docs/getting-started.md), and
+      [Language tour](docs/language-tour.md)
+    - Packaging — not written. How a Lucid project is distributed or
+      published isn't covered; [Project configuration](docs/project-configuration.md)
+      and [project.yaml](docs/project-yaml.md)/[lucid.lock](docs/lucid-lock.md)
+      cover a project's own dependencies, not publishing one.
+    - Interop with Python or Rust — partially covered.
+      [Toll-free Python 3.13+ ABI bridging](docs/casting.md#toll-free-python-313-abi-bridging)
+      describes the intended design, but it's aspirational: the
+      reference implementation doesn't implement any CPython ABI
+      layer yet (confirmed — no `PyObject`/PEP 703/PEP 683 code
+      anywhere in `compiler/crates/`). Rust interop isn't addressed at
+      all.
+
+- Governance
+    - The people and the organizational structure — not written.
+    - Release cycle — partially covered.
+      [Zero-deprecation](docs/principles.md#zero-deprecation) states
+      the one-year deprecation cadence, but not how a release itself
+      gets cut, versioned, or announced.
+    - Governed by LLMs? — not written.

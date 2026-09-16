@@ -8,14 +8,13 @@
   (see also its
   [`bin`/`oct`/`hex` factories](strings.md#base-formatted-string-factories)),
   and [`Bytes`, `ByteArray`, and `MemoryView`](binary-types.md) — the
-  last three capitalized, unlike the others here, since
-  `bytes`/`bytearray`/`memoryview` stay the ordinary lowercase
-  conversion calls, not the type names. `bool`/`int`/`float`/`complex`/`str`
-  have no such split to force a second name, so they keep the one
-  spelling doing both jobs — the deeper consistency an all-caps
-  `Int`/`Str` would buy costs a human reader decades of `int`/`str`
-  habit to unlearn, for a distinction an LLM reader has no such habit
-  to notice in the first place
+  last three capitalized like any other class, and constructed the
+  same way any other class is, through their own default factory
+  (`Bytes(x)`), with no separate lowercase conversion function.
+  `bool`/`int`/`float`/`complex`/`str` stay lowercase instead — the
+  deeper consistency an all-caps `Int`/`Str` would buy costs a human
+  reader decades of `int`/`str` habit to unlearn, for a distinction
+  an LLM reader has no such habit to notice in the first place
 * Capability traits, the main ABC-equivalent nominal traits (see
   [No structural traits](traits.md#no-structural-traits)), listed in
   the order each is first defined:
@@ -48,7 +47,7 @@
   [`round`](numeric-types.md#capability-traits),
   [`len`](strings.md#strings-are-not-sequences) — kept, each
   dispatched through the capability trait that already covers it
-  (`SupportsAbs[+K]`, `SupportsRound[+K]`, `Sized`) rather than a
+  (`SupportsAbs[out K]`, `SupportsRound[out K]`, `Sized`) rather than a
   single hardcoded signature — `abs` returns `int` for an `int` and
   `float` for a `complex`, the type-level consequence of dispatching
   on the argument's own type instead of calling one fixed method.

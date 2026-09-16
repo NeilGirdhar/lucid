@@ -141,12 +141,27 @@
       .forEach(highlightBlock);
   }
 
-  document.addEventListener("DOMContentLoaded", highlightAll);
+  // Zensical bundles mermaid.js and gives a ```mermaid fence the "mermaid"
+  // class, but nothing in the bundle reliably calls mermaid.run() on a
+  // plain page load or an instant-navigation swap — the diagram is left
+  // as an empty <div class="mermaid">. Running it ourselves, on the same
+  // triggers used for highlighting, is a one-line fix.
+  function renderMermaid() {
+    if (!window.mermaid || !document.querySelector(".mermaid")) return;
+    window.mermaid.run();
+  }
+
+  function onContentReady() {
+    highlightAll();
+    renderMermaid();
+  }
+
+  document.addEventListener("DOMContentLoaded", onContentReady);
 
   // Zensical's instant-navigation swaps page content without a full
   // reload, so DOMContentLoaded alone would only fire once. Re-run
   // whenever new code blocks appear in the document.
-  new MutationObserver(highlightAll).observe(document.body, {
+  new MutationObserver(onContentReady).observe(document.body, {
     childList: true,
     subtree: true,
   });
