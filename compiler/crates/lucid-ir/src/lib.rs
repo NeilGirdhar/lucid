@@ -170,6 +170,15 @@ pub enum IrInstruction {
         from: IrValue,
         to_type: IrType,
     },
+    /// Memory allocation (malloc)
+    Malloc {
+        dest: String,
+        size: IrValue,
+    },
+    /// Memory deallocation (free)
+    Free {
+        addr: IrValue,
+    },
 }
 
 /// Values in IR (operands)

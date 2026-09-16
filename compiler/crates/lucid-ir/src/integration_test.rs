@@ -473,4 +473,38 @@ mod tests {
         assert_eq!(rect.field_offset("width"), Some(8));
         assert_eq!(rect.total_size, 16);
     }
+
+    #[test]
+    fn test_memory_allocation_and_deallocation() {
+        let mut module = IrModule::new();
+
+        let mut func = IrFunction::new(
+            "allocate_object".to_string(),
+            vec![],
+            IrType::Ptr,
+        );
+
+        // Allocate memory
+        func.blocks[0].add_instruction(IrInstruction::Malloc {
+            dest: "obj".to_string(),
+            size: IrValue::Int(64),
+        });
+
+        // Return the allocated pointer
+        func.blocks[0].set_terminator(IrTerminator::Return {
+            value: Some(IrValue::Var("obj".to_string())),
+        });
+
+        module.add_function(func);
+
+        let mut backend = CCodegenBackend::new();
+        let c = backend.generate(&module);
+
+        // Verify malloc call is in generated code
+        assert!(c.contains("malloc(64)"));
+
+        // Verify it compiles and runs
+        let full = format!("{}\n\nint main() {{\n  void* p = allocate_object();\n  if (p != NULL) {{\n    printf(\"1\\n\");\n    free(p);\n  }}\n  return 0;\n}}", c);
+        assert!(test_c_code(&full, "1\n"), "malloc should allocate memory");
+    }
 }

@@ -227,6 +227,25 @@ impl CCodegenBackend {
                     ));
                 }
             }
+            IrInstruction::Malloc { dest, size } => {
+                let size_code = self.value_to_c(size);
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "void* {} = malloc({});",
+                        dest, size_code
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "{} = malloc({});",
+                        dest, size_code
+                    ));
+                }
+            }
+            IrInstruction::Free { addr } => {
+                let addr_code = self.value_to_c(addr);
+                self.emit_line(&format!("free({});", addr_code));
+            }
         }
     }
 
