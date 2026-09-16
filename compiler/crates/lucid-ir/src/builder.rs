@@ -487,7 +487,7 @@ impl IrBuilder {
         }
     }
 
-    fn build_class(&mut self, name: &str, bases: &[TypeExpr], _body: &[ClassMember]) {
+    fn build_class(&mut self, name: &str, bases: &[TypeExpr], body: &[ClassMember]) {
         // Extract parent class (Lucid supports single inheritance)
         let parent = bases.first().and_then(|base| {
             if let TypeExpr::Named { name: parent_name, .. } = base {
@@ -497,12 +497,24 @@ impl IrBuilder {
             }
         });
 
-        // Create IrClass with parent tracking
+        // Extract fields from class members
+        let mut fields = Vec::new();
+        for member in body {
+            if let ClassMember::Field(field_def) = member {
+                let field_type = self.lucid_type_to_ir_type(Some(&field_def.type_annotation));
+                fields.push(crate::IrField {
+                    name: field_def.name.clone(),
+                    ty: field_type,
+                });
+            }
+        }
+
+        // Create IrClass with parent tracking and extracted fields
         let ir_class = crate::IrClass {
             name: name.to_string(),
             parent,
-            fields: Vec::new(),  // TODO: extract fields from body
-            methods: Vec::new(), // TODO: extract methods from body
+            fields,
+            methods: Vec::new(), // TODO: extract methods for vtable
         };
 
         self.module.add_class(ir_class);
