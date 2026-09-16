@@ -214,10 +214,19 @@ pub struct TraitBound {
     pub trait_name: String,           // e.g., "Clone"
 }
 
+/// Variance for generic type parameters
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Variance {
+    Covariant,      // +K: can pass subtype in output positions
+    Contravariant,  // -K: can pass supertype in input positions
+    Invariant,      // =K: exact type required
+}
+
 /// Generic type parameter with optional bounds
 #[derive(Debug, Clone)]
 pub struct GenericParam {
     pub name: String,                 // e.g., "T", "K", "V"
+    pub variance: Variance,           // Covariant (+), Contravariant (-), or Invariant (=)
     pub bounds: Vec<TraitBound>,      // e.g., [T: Clone, T: Copy]
 }
 
@@ -608,6 +617,54 @@ impl IrModule {
             }
         }
         true
+    }
+
+    /// Check if a type parameter's variance is sound in a given position
+    /// position_is_output: true if parameter appears in output (return type, result)
+    /// position_is_input: true if parameter appears in input (parameter, argument)
+    pub fn check_variance_soundness(&self, variance: Variance, position_is_output: bool, position_is_input: bool) -> bool {
+        match variance {
+            Variance::Covariant => {
+                // +K: produces values, cannot consume values
+                // Valid ONLY if not used in input positions
+                !position_is_input
+            }
+            Variance::Contravariant => {
+                // -K: consumes values, cannot produce values
+                // Valid ONLY if not used in output positions
+                !position_is_output
+            }
+            Variance::Invariant => {
+                // =K: can be anywhere, no restrictions
+                true
+            }
+        }
+    }
+
+    /// Check if a generic substitution respects variance rules
+    /// Returns true if declaring a subtype satisfies the type parameter's variance
+    pub fn type_is_valid_substitution(&self, param_variance: Variance, actual_type: &str, expected_type: &str) -> bool {
+        if actual_type == expected_type {
+            return true;
+        }
+
+        match param_variance {
+            Variance::Covariant => {
+                // +K: actual type can be a subtype of expected
+                // In this simple implementation, we treat direct equality as valid
+                // A full implementation would check inheritance hierarchy
+                actual_type == expected_type
+            }
+            Variance::Contravariant => {
+                // -K: actual type can be a supertype of expected
+                // For simplicity, require exact match
+                actual_type == expected_type
+            }
+            Variance::Invariant => {
+                // =K: must be exact type
+                actual_type == expected_type
+            }
+        }
     }
 
     /// Check if a match expression on a Result type is exhaustive

@@ -1896,6 +1896,7 @@ int main() {
         // Test that generic parameters can have trait bounds
         let generic_param = crate::GenericParam {
             name: "T".to_string(),
+            variance: crate::Variance::Invariant,
             bounds: vec![
                 crate::TraitBound {
                     type_param: "T".to_string(),
@@ -1907,6 +1908,46 @@ int main() {
         assert_eq!(generic_param.name, "T");
         assert_eq!(generic_param.bounds.len(), 1);
         assert_eq!(generic_param.bounds[0].trait_name, "Clone");
+    }
+
+    #[test]
+    fn test_variance_checking() {
+        // Test variance soundness checking
+        let module = IrModule::new();
+
+        // Covariant: valid in output position only
+        assert!(module.check_variance_soundness(crate::Variance::Covariant, true, false));
+        assert!(module.check_variance_soundness(crate::Variance::Covariant, false, false));
+        assert!(!module.check_variance_soundness(crate::Variance::Covariant, true, true));
+        assert!(!module.check_variance_soundness(crate::Variance::Covariant, false, true));
+
+        // Contravariant: valid in input position only
+        assert!(module.check_variance_soundness(crate::Variance::Contravariant, false, true));
+        assert!(module.check_variance_soundness(crate::Variance::Contravariant, false, false));
+        assert!(!module.check_variance_soundness(crate::Variance::Contravariant, true, true));
+        assert!(!module.check_variance_soundness(crate::Variance::Contravariant, true, false));
+
+        // Invariant: valid anywhere
+        assert!(module.check_variance_soundness(crate::Variance::Invariant, true, false));
+        assert!(module.check_variance_soundness(crate::Variance::Invariant, false, true));
+        assert!(module.check_variance_soundness(crate::Variance::Invariant, true, true));
+        assert!(module.check_variance_soundness(crate::Variance::Invariant, false, false));
+    }
+
+    #[test]
+    fn test_variance_substitution() {
+        // Test that type substitutions respect variance
+        let module = IrModule::new();
+
+        // Invariant requires exact match
+        assert!(module.type_is_valid_substitution(crate::Variance::Invariant, "i64", "i64"));
+        assert!(!module.type_is_valid_substitution(crate::Variance::Invariant, "f64", "i64"));
+
+        // Covariant allows compatible types (simplified: require exact for now)
+        assert!(module.type_is_valid_substitution(crate::Variance::Covariant, "i64", "i64"));
+
+        // Contravariant allows compatible types (simplified: require exact for now)
+        assert!(module.type_is_valid_substitution(crate::Variance::Contravariant, "i64", "i64"));
     }
 
     #[test]
