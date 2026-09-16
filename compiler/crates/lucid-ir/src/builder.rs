@@ -497,24 +497,38 @@ impl IrBuilder {
             }
         });
 
-        // Extract fields from class members
+        // Extract fields and methods from class members
         let mut fields = Vec::new();
+        let mut methods = Vec::new();
+
         for member in body {
-            if let ClassMember::Field(field_def) = member {
-                let field_type = self.lucid_type_to_ir_type(Some(&field_def.type_annotation));
-                fields.push(crate::IrField {
-                    name: field_def.name.clone(),
-                    ty: field_type,
-                });
+            match member {
+                ClassMember::Field(field_def) => {
+                    let field_type = self.lucid_type_to_ir_type(Some(&field_def.type_annotation));
+                    fields.push(crate::IrField {
+                        name: field_def.name.clone(),
+                        ty: field_type,
+                    });
+                }
+                ClassMember::Method(func_def) => {
+                    // Generate unique function name for this method
+                    let func_name = format!("{}_{}", name, func_def.name);
+                    methods.push(crate::MethodDispatch {
+                        class_name: name.to_string(),
+                        method_name: func_def.name.clone(),
+                        impl_function: func_name,
+                    });
+                }
+                _ => {} // Ignore other member types for now
             }
         }
 
-        // Create IrClass with parent tracking and extracted fields
+        // Create IrClass with parent tracking, extracted fields, and methods
         let ir_class = crate::IrClass {
             name: name.to_string(),
             parent,
             fields,
-            methods: Vec::new(), // TODO: extract methods for vtable
+            methods,
         };
 
         self.module.add_class(ir_class);
