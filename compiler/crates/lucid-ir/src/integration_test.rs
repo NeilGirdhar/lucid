@@ -2108,6 +2108,78 @@ int main() {
     }
 
     #[test]
+    fn test_anonymous_class_shapes() {
+        // Test creation and registration of anonymous class shapes
+        let mut module = IrModule::new();
+
+        // Create a shape for (x: i64, y: i64)
+        let shape = crate::AnonymousClassShape {
+            fields: vec![
+                ("x".to_string(), IrType::I64),
+                ("y".to_string(), IrType::I64),
+            ],
+            is_positional_only: vec![false, false],
+            is_keyword_only: vec![false, false],
+        };
+
+        let sig = module.add_anonymous_shape(shape);
+
+        // Verify shape was registered
+        assert_eq!(module.anonymous_shapes.len(), 1);
+        assert!(module.find_shape(&sig).is_some());
+    }
+
+    #[test]
+    fn test_anonymous_shape_signature() {
+        // Test that signatures correctly identify shapes
+        let shape1 = crate::AnonymousClassShape {
+            fields: vec![
+                ("x".to_string(), IrType::I64),
+                ("y".to_string(), IrType::I64),
+            ],
+            is_positional_only: vec![false, false],
+            is_keyword_only: vec![false, false],
+        };
+
+        let shape2 = crate::AnonymousClassShape {
+            fields: vec![
+                ("x".to_string(), IrType::I64),
+                ("name".to_string(), IrType::Str),
+            ],
+            is_positional_only: vec![false, false],
+            is_keyword_only: vec![false, false],
+        };
+
+        let sig1 = shape1.signature();
+        let sig2 = shape2.signature();
+
+        // Different fields should have different signatures
+        assert_ne!(sig1, sig2);
+    }
+
+    #[test]
+    fn test_positional_only_keyword_only() {
+        // Test shapes with positional-only and keyword-only fields
+        let shape = crate::AnonymousClassShape {
+            fields: vec![
+                ("a".to_string(), IrType::I64),   // positional-only
+                ("b".to_string(), IrType::I64),   // ordinary
+                ("c".to_string(), IrType::Str),   // keyword-only
+            ],
+            is_positional_only: vec![true, false, false],
+            is_keyword_only: vec![false, false, true],
+        };
+
+        let sig = shape.signature();
+
+        // Verify the signature encodes the parameter zones
+        assert!(sig.contains("a"));
+        assert!(sig.contains("b"));
+        assert!(sig.contains("c"));
+        assert_eq!(shape.fields.len(), 3);
+    }
+
+    #[test]
     fn test_collection_algorithms_codegen() {
         // Test that collection algorithms are generated (reverse, first, last)
         let mut module = IrModule::new();

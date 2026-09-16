@@ -14,6 +14,38 @@ mod integration_test;
 
 use std::collections::HashMap;
 
+/// Anonymous class shape (structural type, not named)
+/// Used for parameter bundles and Arguments/Parameters
+#[derive(Debug, Clone)]
+pub struct AnonymousClassShape {
+    pub fields: Vec<(String, IrType)>,  // (name, type) pairs
+    pub is_positional_only: Vec<bool>,  // Which fields are positional-only
+    pub is_keyword_only: Vec<bool>,     // Which fields are keyword-only
+}
+
+impl AnonymousClassShape {
+    /// Get the unique signature string for this shape
+    pub fn signature(&self) -> String {
+        let mut sig = String::from("(");
+        for (i, (name, ty)) in self.fields.iter().enumerate() {
+            if i > 0 {
+                sig.push_str(", ");
+            }
+            if self.is_positional_only.get(i).copied().unwrap_or(false) {
+                sig.push('/')
+            }
+            if self.is_keyword_only.get(i).copied().unwrap_or(false) {
+                sig.push('*')
+            }
+            sig.push_str(name);
+            sig.push(':');
+            sig.push_str(&format!("{:?}", ty));
+        }
+        sig.push(')');
+        sig
+    }
+}
+
 /// A Lucid IR module containing functions and type definitions
 #[derive(Debug, Clone)]
 pub struct IrModule {
@@ -27,6 +59,7 @@ pub struct IrModule {
     pub error_types: Vec<ErrorType>,
     pub iterator_traits: Vec<IteratorTrait>,  // Iterator support for collections
     pub operator_overloads: Vec<OperatorOverload>,  // Multiple dispatch for binary operators
+    pub anonymous_shapes: Vec<AnonymousClassShape>,  // Unnamed structured types for Arguments/Parameters
 }
 
 /// An IR function with control flow graph
@@ -603,6 +636,7 @@ impl IrModule {
             error_types: Vec::new(),
             iterator_traits: Vec::new(),
             operator_overloads: Vec::new(),
+            anonymous_shapes: Vec::new(),
         }
     }
 
@@ -663,6 +697,18 @@ impl IrModule {
             IrType::Named(n) => n.clone(),
             _ => "unknown".to_string(),
         }
+    }
+
+    /// Register an anonymous class shape (parameter bundle)
+    pub fn add_anonymous_shape(&mut self, shape: AnonymousClassShape) -> String {
+        let sig = shape.signature();
+        self.anonymous_shapes.push(shape);
+        sig
+    }
+
+    /// Find an anonymous shape by its signature
+    pub fn find_shape(&self, signature: &str) -> Option<&AnonymousClassShape> {
+        self.anonymous_shapes.iter().find(|s| s.signature() == signature)
     }
 
     /// Register a binary operator overload (multiple dispatch)
