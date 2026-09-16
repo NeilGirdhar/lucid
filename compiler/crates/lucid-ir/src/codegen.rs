@@ -206,6 +206,57 @@ impl CCodegenBackend {
             "{1} {0}_max(struct {0}* list) {{\n  if (list->length == 0) return 0;\n  {1} max_val = list->items[0];\n  for (int64_t i = 1; i < list->length; i++) {{\n    if (list->items[i] > max_val) max_val = list->items[i];\n  }}\n  return max_val;\n}}",
             type_name, elem_type
         ));
+        self.emit_line("");
+
+        // Generate flatten function (for nested lists - assumes elem_type contains list structure)
+        // This allows flattening List[List[T]] into List[T]
+        self.emit_line(&format!(
+            "struct {0} {0}_flatten(struct {0}* list) {{\n  struct {0} result = {0}_new();\n  for (int64_t i = 0; i < list->length; i++) {{\n    struct {0}* inner = (struct {0}*)list->items[i];\n    if (inner != NULL) {{\n      for (int64_t j = 0; j < inner->length; j++) {{\n        {0}_append(&result, inner->items[j]);\n      }}\n    }}\n  }}\n  return result;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate any method - checks if any element matches predicate
+        // For simplicity, this is a helper that works with equality
+        self.emit_line(&format!(
+            "bool {0}_any(struct {0}* list, {1} target) {{\n  for (int64_t i = 0; i < list->length; i++) {{\n    if (list->items[i] == target) return true;\n  }}\n  return false;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate all method - checks if all elements match a value
+        self.emit_line(&format!(
+            "bool {0}_all(struct {0}* list, {1} target) {{\n  if (list->length == 0) return false;\n  for (int64_t i = 0; i < list->length; i++) {{\n    if (list->items[i] != target) return false;\n  }}\n  return true;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate unique method - removes duplicate elements
+        self.emit_line(&format!(
+            "struct {0} {0}_unique(struct {0}* list) {{\n  struct {0} result = {0}_new();\n  for (int64_t i = 0; i < list->length; i++) {{\n    bool found = false;\n    for (int64_t j = 0; j < result.length; j++) {{\n      if (result.items[j] == list->items[i]) {{\n        found = true;\n        break;\n      }}\n    }}\n    if (!found) {{\n      {0}_append(&result, list->items[i]);\n    }}\n  }}\n  return result;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate take method - returns first n elements
+        self.emit_line(&format!(
+            "struct {0} {0}_take(struct {0}* list, int64_t n) {{\n  struct {0} result = {0}_new();\n  if (n < 0) return result;\n  for (int64_t i = 0; i < list->length && i < n; i++) {{\n    {0}_append(&result, list->items[i]);\n  }}\n  return result;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate drop method - skips first n elements
+        self.emit_line(&format!(
+            "struct {0} {0}_drop(struct {0}* list, int64_t n) {{\n  struct {0} result = {0}_new();\n  if (n < 0) n = 0;\n  for (int64_t i = n; i < list->length; i++) {{\n    {0}_append(&result, list->items[i]);\n  }}\n  return result;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate concat method - concatenates two lists
+        self.emit_line(&format!(
+            "struct {0} {0}_concat(struct {0}* list1, struct {0}* list2) {{\n  struct {0} result = {0}_new();\n  for (int64_t i = 0; i < list1->length; i++) {{\n    {0}_append(&result, list1->items[i]);\n  }}\n  for (int64_t i = 0; i < list2->length; i++) {{\n    {0}_append(&result, list2->items[i]);\n  }}\n  return result;\n}}",
+            type_name
+        ));
     }
 
     fn generate_specialized_dict(&mut self, spec: &crate::TypeSpecialization) {
@@ -298,6 +349,20 @@ impl CCodegenBackend {
         // Generate values function (returns array of values)
         self.emit_line(&format!(
             "{1}* {0}_values(struct {0}* dict) {{\n  {1}* values_array = malloc(dict->length * sizeof({1}));\n  for (int64_t i = 0; i < dict->length; i++) {{\n    values_array[i] = dict->values[i];\n  }}\n  return values_array;\n}}",
+            type_name, val_type
+        ));
+        self.emit_line("");
+
+        // Generate merge function (merges another dict into this one)
+        self.emit_line(&format!(
+            "void {0}_merge(struct {0}* dict1, struct {0}* dict2) {{\n  for (int64_t i = 0; i < dict2->length; i++) {{\n    {0}_set(dict1, dict2->keys[i], dict2->values[i]);\n  }}\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate has_value function (check if value exists)
+        self.emit_line(&format!(
+            "bool {0}_has_value(struct {0}* dict, {1} value) {{\n  for (int64_t i = 0; i < dict->length; i++) {{\n    if (dict->values[i] == value) return true;\n  }}\n  return false;\n}}",
             type_name, val_type
         ));
     }
@@ -823,6 +888,7 @@ impl CCodegenBackend {
         self.emit_line("#include <math.h>");
         self.emit_line("#include <string.h>");
         self.emit_line("#include <ctype.h>");
+        self.emit_line("#include <stdarg.h>");
         self.emit_line("typedef FILE* LucidFile;");  // File handle type
         self.emit_line("");
 
@@ -1219,6 +1285,93 @@ impl CCodegenBackend {
         self.indent_level -= 1;
         self.emit_line("}");
         self.emit_line("return -1;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // Additional string formatting functions
+        self.emit_line("// Left trim (remove leading whitespace)");
+        self.emit_line("const char* lucid_string_lstrip(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("while (*str && isspace((unsigned char)*str)) str++;");
+        self.emit_line("return str;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Right trim (remove trailing whitespace)");
+        self.emit_line("const char* lucid_string_rstrip(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("strcpy(result, str);");
+        self.emit_line("char* end = result + strlen(result) - 1;");
+        self.emit_line("while (end >= result && isspace((unsigned char)*end)) {");
+        self.indent_level += 1;
+        self.emit_line("*end = '\\0';");
+        self.emit_line("end--;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Center string in field of given width");
+        self.emit_line("const char* lucid_string_center(const char* str, int64_t width) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("int len = strlen(str);");
+        self.emit_line("if (len >= width) { strcpy(result, str); return result; }");
+        self.emit_line("int total_pad = width - len;");
+        self.emit_line("int left_pad = total_pad / 2;");
+        self.emit_line("int right_pad = total_pad - left_pad;");
+        self.emit_line("int pos = 0;");
+        self.emit_line("for (int i = 0; i < left_pad; i++) result[pos++] = ' ';");
+        self.emit_line("strcpy(result + pos, str);");
+        self.emit_line("pos += len;");
+        self.emit_line("for (int i = 0; i < right_pad; i++) result[pos++] = ' ';");
+        self.emit_line("result[pos] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Left justify string in field of given width");
+        self.emit_line("const char* lucid_string_ljust(const char* str, int64_t width) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("int len = strlen(str);");
+        self.emit_line("strcpy(result, str);");
+        self.emit_line("for (int i = len; i < width; i++) result[i] = ' ';");
+        self.emit_line("result[width] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Right justify string in field of given width");
+        self.emit_line("const char* lucid_string_rjust(const char* str, int64_t width) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("int len = strlen(str);");
+        self.emit_line("if (len >= width) { strcpy(result, str); return result; }");
+        self.emit_line("int pad = width - len;");
+        self.emit_line("for (int i = 0; i < pad; i++) result[i] = ' ';");
+        self.emit_line("strcpy(result + pad, str);");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String format - simple sprintf wrapper");
+        self.emit_line("const char* lucid_string_format(const char* fmt, ...) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("va_list args;");
+        self.emit_line("va_start(args, fmt);");
+        self.emit_line("vsnprintf(result, sizeof(result), fmt, args);");
+        self.emit_line("va_end(args);");
+        self.emit_line("return result;");
         self.indent_level -= 1;
         self.emit_line("}");
         self.emit_line("");

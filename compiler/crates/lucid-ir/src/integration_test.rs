@@ -2154,7 +2154,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create Dict[str, i64] specialization
-        let _specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
+        let specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2214,7 +2214,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create List[i64] specialization
-        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2236,7 +2236,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create List[i64] specialization
-        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2342,7 +2342,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create List[i64] specialization
-        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
