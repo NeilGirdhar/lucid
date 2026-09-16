@@ -3318,6 +3318,7 @@ impl Interpreter {
                                 declared
                             }
                         }
+                        Value::Record(fields) => fields.borrow().keys().cloned().collect(),
                         Value::Module { env, .. } => env.borrow().binding_order.clone(),
                         Value::ClassRef(class_name) => interp
                             .classes
@@ -3345,6 +3346,35 @@ impl Interpreter {
                     Ok(Value::List(Rc::new(RefCell::new(
                         names.into_iter().map(Value::Str).collect(),
                     ))))
+                }),
+            },
+        );
+        self.env.borrow_mut().set(
+            "asdict".into(),
+            Value::BuiltinFunction {
+                name: "asdict".into(),
+                func: Rc::new(|args: &[Value], _interp: &mut Interpreter| {
+                    if args.len() != 1 {
+                        return Err(RuntimeError {
+                            message: "asdict() takes exactly one argument".into(),
+                            span: Span::default(),
+                        });
+                    }
+                    match &args[0] {
+                        Value::Object { fields, .. } => {
+                            Ok(Value::Dict(Rc::new(RefCell::new(fields.borrow().clone()))))
+                        }
+                        Value::Record(fields) => {
+                            Ok(Value::Dict(Rc::new(RefCell::new(fields.borrow().clone()))))
+                        }
+                        other => Err(RuntimeError {
+                            message: format!(
+                                "asdict() argument must be a record or class instance, got {}",
+                                other.type_name()
+                            ),
+                            span: Span::default(),
+                        }),
+                    }
                 }),
             },
         );
@@ -12733,6 +12763,26 @@ s = sum(r)
                 Value::Str("zeta".into()),
             ])))
         );
+    }
+
+    #[test]
+    fn test_asdict_flattens_records_and_instances() {
+        let module = parse(
+            "class Point:\n    x: int\n    y: int\np = Point(x=1, y=2)\nfrom_instance = asdict(p)\ntype Point2D = (x: int, y: int)\norigin: Point2D = (x=3, y=4)\nfrom_record = asdict(origin)\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        let expect_dict = |value: Option<Value>, x: i64, y: i64| match value {
+            Some(Value::Dict(entries)) => {
+                let entries = entries.borrow();
+                assert_eq!(entries.get("x"), Some(&Value::Int(x)));
+                assert_eq!(entries.get("y"), Some(&Value::Int(y)));
+            }
+            other => panic!("expected a dict, got {other:?}"),
+        };
+        expect_dict(interp.env.borrow().get("from_instance"), 1, 2);
+        expect_dict(interp.env.borrow().get("from_record"), 3, 4);
     }
 
     #[test]

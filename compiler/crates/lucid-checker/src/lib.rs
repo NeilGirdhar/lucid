@@ -2569,6 +2569,30 @@ impl TypeChecker {
                 },
             ),
             (
+                "asdict",
+                1,
+                Some(1),
+                vec![any.clone()],
+                Type::Class {
+                    name: "dict".into(),
+                    type_args: vec![
+                        Type::Str,
+                        Type::Class {
+                            name: "object".into(),
+                            type_args: Vec::new(),
+                            parent: None,
+                            traits: Vec::new(),
+                            fields: HashMap::new(),
+                            is_sealed: false,
+                        },
+                    ],
+                    parent: None,
+                    traits: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                },
+            ),
+            (
                 "getattr",
                 2,
                 Some(3),
@@ -15575,6 +15599,16 @@ xs.extend(["bad"])
             "complex .real and .imag should work: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn asdict_flattens_record_and_class_instance() {
+        let module = parse(
+            "class Point:\n    x: int\n    y: int\np = Point(x=1, y=2)\nfrom_instance: dict[str, object] = asdict(p)\ntype Point2D = (x: int, y: int)\norigin: Point2D = (x=3, y=4)\nfrom_record: dict[str, object] = asdict(origin)\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&module).is_ok());
     }
 
     #[test]
