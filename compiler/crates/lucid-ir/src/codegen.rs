@@ -1343,6 +1343,50 @@ impl CCodegenBackend {
         self.emit_line("return true;");
         self.indent_level -= 1;
         self.emit_line("}");
+        self.emit_line("");
+
+        // Advanced math functions
+        self.emit_line("// Math: sign function");
+        self.emit_line("int64_t lucid_sign(int64_t x) {");
+        self.indent_level += 1;
+        self.emit_line("return (x > 0) - (x < 0);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math: clamp value");
+        self.emit_line("int64_t lucid_clamp(int64_t value, int64_t min, int64_t max) {");
+        self.indent_level += 1;
+        self.emit_line("if (value < min) return min;");
+        self.emit_line("if (value > max) return max;");
+        self.emit_line("return value;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math: gcd (greatest common divisor)");
+        self.emit_line("int64_t lucid_gcd(int64_t a, int64_t b) {");
+        self.indent_level += 1;
+        self.emit_line("a = a < 0 ? -a : a;");
+        self.emit_line("b = b < 0 ? -b : b;");
+        self.emit_line("while (b != 0) {");
+        self.indent_level += 1;
+        self.emit_line("int64_t temp = b;");
+        self.emit_line("b = a % b;");
+        self.emit_line("a = temp;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("return a;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math: lcm (least common multiple)");
+        self.emit_line("int64_t lucid_lcm(int64_t a, int64_t b) {");
+        self.indent_level += 1;
+        self.emit_line("return (a / lucid_gcd(a, b)) * b;");
+        self.indent_level -= 1;
+        self.emit_line("}");
     }
 
     fn emit_line(&mut self, line: &str) {
