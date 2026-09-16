@@ -8967,6 +8967,17 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
             fix: None,
         });
     }
+    for warning in &checker.warnings {
+        diagnostics.push(Diagnostic {
+            file,
+            severity: Severity::Warning,
+            code: "W0200".into(),
+            message: warning.message.clone(),
+            span: warning.span,
+            related: Arc::from([]),
+            fix: None,
+        });
+    }
     Arc::from(diagnostics)
 }
 
@@ -14491,6 +14502,24 @@ mod tests {
             file_diagnostics(&db, file)
                 .iter()
                 .all(|diagnostic| diagnostic.code != "E0100")
+        );
+    }
+
+    #[test]
+    fn unmarked_variance_is_reported_as_a_warning() {
+        let mut db = CompilerDatabase::default();
+        let file = db.add_file("main.lucid", "class Box[T]:\n    value: T\n");
+        let diagnostics = file_diagnostics(&db, file);
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "W0200")
+            .expect("unmarked variance warning");
+        assert_eq!(warning.severity, Severity::Warning);
+        assert!(warning.message.contains("has no variance marker"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error)
         );
     }
 

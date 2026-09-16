@@ -3432,7 +3432,7 @@ TokenKind::Public
             } else if self.match_tok(&TokenKind::Out) {
                 Variance::Covariant
             } else {
-                Variance::Invariant
+                Variance::Unmarked
             };
 
             let name = self.expect_ident()?;

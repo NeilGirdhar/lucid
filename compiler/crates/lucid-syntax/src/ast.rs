@@ -15,11 +15,14 @@ pub enum MutabilityView {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Variance {
-    Invariant,                 // in out K
-    Covariant,                 // out K
-    Contravariant,             // in K
-    ViewCovariant,             // in ~out K
-    ViewContravariant,         // ~in out K
+    Invariant,         // in out K
+    Covariant,         // out K
+    Contravariant,     // in K
+    ViewCovariant,     // in ~out K
+    ViewContravariant, // ~in out K
+    /// No marker written.  Checked as invariant; the checker warns so the
+    /// marker gets written into the source before the API is accepted.
+    Unmarked,
 }
 
 #[derive(Debug, Clone, PartialEq)]

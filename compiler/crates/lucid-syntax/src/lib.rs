@@ -649,6 +649,7 @@ def register(handler: class[Handler]) -> none:
             ("in out K", Variance::Invariant),
             ("in ~out K", Variance::ViewCovariant),
             ("~in out K", Variance::ViewContravariant),
+            ("K", Variance::Unmarked),
         ] {
             assert_eq!(
                 first_type_param_variance(&format!("class Box[{spelling}]:\n    pass\n")),

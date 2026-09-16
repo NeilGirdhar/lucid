@@ -1275,6 +1275,15 @@ pub struct TypeChecker {
     pub env: TypeEnvironment,
     // Maps attribute paths (e.g., "obj.field") to narrowed types (e.g., when "obj.field is None")
     narrowing_constraints: HashMap<String, Type>,
+    /// Advice that does not stop checking, such as a type parameter left
+    /// without a variance marker.
+    pub warnings: Vec<TypeWarning>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeWarning {
+    pub message: String,
+    pub span: Span,
 }
 
 impl Default for TypeChecker {
@@ -2470,6 +2479,7 @@ impl TypeChecker {
         Self {
             env,
             narrowing_constraints: HashMap::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -2764,6 +2774,7 @@ impl TypeChecker {
                         .push(name.clone());
                 }
 
+                self.warn_unmarked_variance("class", name, type_params);
                 let class_variance = type_params
                     .iter()
                     .map(|param| param.variance.clone())
@@ -3190,6 +3201,7 @@ impl TypeChecker {
                         TraitMember::Pass(_) | TraitMember::Ellipsis(_) => {}
                     }
                 }
+                self.warn_unmarked_variance("trait", name, type_params);
                 self.env.trait_variance.insert(
                     name.clone(),
                     type_params
@@ -3641,6 +3653,27 @@ impl TypeChecker {
             ClassMember::Setter(setter) => Some((setter.name.as_str(), setter.span)),
             ClassMember::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
             ClassMember::Pass(_) | ClassMember::Ellipsis(_) => None,
+        }
+    }
+
+    /// A parameter written with no variance marker is checked as invariant
+    /// and reported, so the marker gets written into the source rather than
+    /// inferred and silently changed by a later edit.
+    fn warn_unmarked_variance(&mut self, kind: &str, owner: &str, type_params: &[TypeParam]) {
+        for param in type_params {
+            if param.variance != Variance::Unmarked {
+                continue;
+            }
+            let warning = TypeWarning {
+                message: format!(
+                    "type parameter '{0}' of {kind} '{owner}' has no variance marker; write `out {0}`, `in {0}`, or `in out {0}`",
+                    param.name
+                ),
+                span: param.span,
+            };
+            if !self.warnings.contains(&warning) {
+                self.warnings.push(warning);
+            }
         }
     }
 
@@ -15671,6 +15704,25 @@ def reject(value: not int) -> none:
     }
 
     const VIEW_VARIANCE_PRELUDE: &str = "class Animal:\n    pass\nclass Cat(Animal):\n    pass\nclass Box[in ~out T]:\n    value: T\n    def get(self: ~Self) -> T:\n        return self.value\n    def put(self, item: T) -> none:\n        self.value = item\nclass Sink[~in out T]:\n    value: T\n    def accept(self: ~Self, item: T) -> bool:\n        return true\n    def take(self) -> T:\n        return self.value\nclass Cell[in out T]:\n    value: T\n    def get(self: ~Self) -> T:\n        return self.value\n    def matches(self: ~Self, item: T) -> bool:\n        return true\n";
+
+    #[test]
+    fn unmarked_variance_warns_without_failing() {
+        let module = parse(
+            "class Box[T]:\n    value: T\ntrait Source[K, out V]:\n    def get(self: ~Self, key: K) -> V\nclass Cell[in out T]:\n    value: T\ndef pick[T](t: T) -> T:\n    return t\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module).unwrap();
+        let messages = checker
+            .warnings
+            .iter()
+            .map(|warning| warning.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(messages[0].contains("type parameter 'T' of class 'Box' has no variance marker"));
+        assert!(messages[1].contains("type parameter 'K' of trait 'Source' has no variance marker"));
+        assert!(checker.warnings[0].span.line == 1);
+    }
 
     #[test]
     fn view_covariant_parameters_widen_only_through_views() {

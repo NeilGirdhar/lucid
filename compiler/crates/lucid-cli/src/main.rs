@@ -861,11 +861,13 @@ fn check_file(path_str: &str) {
         }
     };
     let diagnostics = lucid_db::project_diagnostics(&database, project);
+    if !diagnostics.is_empty() {
+        emit_project_diagnostics(&database, diagnostics);
+    }
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
     {
-        emit_project_diagnostics(&database, diagnostics);
         exit(1);
     }
     println!("✓ Type check passed: no errors found in {path_str}");
