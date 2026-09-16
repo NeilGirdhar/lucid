@@ -434,4 +434,43 @@ mod tests {
         let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", sum_range(5));\n  return 0;\n}}", c_code);
         assert!(test_c_code(&full_c, "10\n"), "sum_range(5) should return 10 (0+1+2+3+4)");
     }
+
+    #[test]
+    fn test_abi_struct_memory_layout_validation() {
+        use lucid_abi::{AbiInfo, ObjectLayout, CallingConvention};
+
+        // Create ABI info with current platform's calling convention
+        let cc = CallingConvention::current();
+        let mut abi = AbiInfo::new(cc, 8); // 8-byte pointers on 64-bit
+
+        // Create struct layout: class Point { x: int (offset 0), y: int (offset 8) }
+        let mut layout = ObjectLayout::new("Point".to_string(), 8);
+        layout.add_field("x".to_string(), 0);      // x at offset 0
+        layout.add_field("y".to_string(), 8);      // y at offset 8
+        layout.total_size = 16;
+        abi.add_layout(layout);
+
+        // Verify we can look up the layout
+        let point_layout = abi.layout("Point").expect("Point layout not found");
+        assert_eq!(point_layout.class_name, "Point");
+
+        // Verify field offsets
+        assert_eq!(point_layout.field_offset("x"), Some(0));
+        assert_eq!(point_layout.field_offset("y"), Some(8));
+
+        // Verify total size (16 bytes: 8 for x + 8 for y)
+        assert_eq!(point_layout.total_size, 16);
+
+        // Create another struct: Rectangle { topLeft: Point (offset 0, 8 bytes), width: int (offset 8, 8 bytes) }
+        let mut rect_layout = ObjectLayout::new("Rectangle".to_string(), 8);
+        rect_layout.add_field("topLeft".to_string(), 0);  // Point reference at offset 0
+        rect_layout.add_field("width".to_string(), 8);    // width at offset 8
+        rect_layout.total_size = 16;
+        abi.add_layout(rect_layout);
+
+        let rect = abi.layout("Rectangle").expect("Rectangle layout not found");
+        assert_eq!(rect.field_offset("topLeft"), Some(0));
+        assert_eq!(rect.field_offset("width"), Some(8));
+        assert_eq!(rect.total_size, 16);
+    }
 }
