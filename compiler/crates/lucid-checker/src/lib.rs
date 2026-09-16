@@ -2964,16 +2964,7 @@ impl TypeChecker {
                     .map(|param| param.name.clone())
                     .collect::<Vec<_>>();
                 Self::reject_self_bounds("class", type_params)?;
-                let class_bounds = type_params
-                    .iter()
-                    .map(|param| {
-                        param
-                            .bound
-                            .as_ref()
-                            .map(|bound| self.resolve_type_expr(bound))
-                            .transpose()
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let class_bounds = self.bind_type_params(type_params)?;
                 let class_defaults = type_params
                     .iter()
                     .map(|param| {
@@ -3153,14 +3144,15 @@ impl TypeChecker {
                     if let ClassMember::Method(method) | ClassMember::ClassMethod(method) = member {
                         Self::reject_removed_decorators(method)?;
                     }
-                    let (method_name, params, return_type, default_return, is_async) = match member
-                    {
+                    let (method_name, params, return_type, default_return, is_async, method_type_params) =
+                        match member {
                         ClassMember::Method(method) | ClassMember::ClassMethod(method) => (
                             &method.name,
                             &method.params,
                             method.return_type.as_ref(),
                             None,
                             method.is_async,
+                            &method.type_params,
                         ),
                         ClassMember::Factory(factory) => (
                             &factory.name,
@@ -3178,6 +3170,7 @@ impl TypeChecker {
                                 is_sealed: *is_final,
                             }),
                             false,
+                            &factory.type_params,
                         ),
                         ClassMember::Getter(getter) => {
                             let return_type = getter
@@ -3216,6 +3209,9 @@ impl TypeChecker {
                             receiver_view(receiver.type_annotation.as_ref()),
                         );
                     }
+                    let saved_member_type_var_bounds = self.env.type_var_bounds.clone();
+                    let saved_member_type_var_alternatives = self.env.type_var_alternatives.clone();
+                    self.bind_type_params(method_type_params)?;
                     let parameter_types = params
                         .iter()
                         .filter(|param| !matches!(param.name.as_str(), "self" | "cls"))
@@ -3245,6 +3241,8 @@ impl TypeChecker {
                             return_type: Box::new(return_type),
                         },
                     );
+                    self.env.type_var_bounds = saved_member_type_var_bounds;
+                    self.env.type_var_alternatives = saved_member_type_var_alternatives;
                     self.env.class_method_params.insert(
                         (name.clone(), method_name.clone()),
                         params.iter().map(|param| param.name.clone()).collect(),
@@ -3433,18 +3431,8 @@ impl TypeChecker {
                         .collect(),
                 );
                 Self::reject_self_bounds("trait", type_params)?;
-                self.env.trait_bounds.insert(
-                    name.clone(),
-                    type_params
-                        .iter()
-                        .map(|param| {
-                            param
-                                .bound
-                                .as_ref()
-                                .and_then(|bound| self.resolve_type_expr(bound).ok())
-                        })
-                        .collect(),
-                );
+                let trait_bounds = self.bind_type_params(type_params)?;
+                self.env.trait_bounds.insert(name.clone(), trait_bounds);
                 let trait_defaults = type_params
                     .iter()
                     .map(|param| {
@@ -3540,25 +3528,7 @@ impl TypeChecker {
                 Self::reject_removed_decorators(func)?;
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
                 let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
-                let function_type_bounds = func
-                    .type_params
-                    .iter()
-                    .map(|param| {
-                        param
-                            .bound
-                            .as_ref()
-                            .map(|bound| self.resolve_type_expr(bound))
-                            .transpose()
-                            .map(|bound| (param.name.clone(), bound))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                for (name, bound) in &function_type_bounds {
-                    self.env.type_var_bounds.insert(
-                        name.clone(),
-                        bound.clone().unwrap_or(Type::TypeVar("Any".into())),
-                    );
-                }
-                self.register_type_var_alternatives(&func.type_params)?;
+                self.bind_type_params(&func.type_params)?;
                 if let Some((gather_index, gather)) = func
                     .params
                     .iter()
@@ -3970,6 +3940,106 @@ impl TypeChecker {
                 "method '{attr}' requires an immutable receiver; a read-only view does not guarantee immutability"
             )),
             _ => None,
+        }
+    }
+
+    /// The first of `names` that `expr` mentions, if any.
+    fn type_expr_names_one_of<'a>(expr: &TypeExpr, names: &[&'a str]) -> Option<&'a str> {
+        match expr {
+            TypeExpr::Named { name, args, .. } => names
+                .iter()
+                .copied()
+                .find(|candidate| candidate == name)
+                .or_else(|| {
+                    args.iter()
+                        .find_map(|arg| Self::type_expr_names_one_of(arg, names))
+                }),
+            TypeExpr::Function {
+                params,
+                return_type,
+                ..
+            } => params
+                .iter()
+                .find_map(|param| Self::type_expr_names_one_of(param, names))
+                .or_else(|| Self::type_expr_names_one_of(return_type, names)),
+            TypeExpr::Record { fields, .. } => fields
+                .iter()
+                .find_map(|field| Self::type_expr_names_one_of(&field.type_expr, names)),
+            TypeExpr::Union { types, .. } => types
+                .iter()
+                .find_map(|part| Self::type_expr_names_one_of(part, names)),
+            TypeExpr::View { inner, .. }
+            | TypeExpr::Reification { inner, .. }
+            | TypeExpr::Projection { inner, .. }
+            | TypeExpr::Existential {
+                interface: inner, ..
+            } => Self::type_expr_names_one_of(inner, names),
+            TypeExpr::Match { subject, arms, .. } => subject
+                .iter()
+                .find_map(|part| Self::type_expr_names_one_of(part, names))
+                .or_else(|| {
+                    arms.iter().find_map(|(pattern, result)| {
+                        Self::type_expr_names_one_of(pattern, names)
+                            .or_else(|| Self::type_expr_names_one_of(result, names))
+                    })
+                }),
+            TypeExpr::Literal { .. } | TypeExpr::Wildcard(_) | TypeExpr::Never(_) => None,
+        }
+    }
+
+    /// Bring `type_params` into scope in declaration order, so a bound can
+    /// name a parameter that precedes it in the same list or one from an
+    /// enclosing list, and reject a bound that names a later parameter or
+    /// the parameter itself.  Returns each parameter's resolved bound.
+    fn bind_type_params(&mut self, type_params: &[TypeParam]) -> Result<Vec<Option<Type>>, TypeError> {
+        let mut bounds = Vec::new();
+        for (index, param) in type_params.iter().enumerate() {
+            let out_of_reach = type_params[index..]
+                .iter()
+                .map(|later| later.name.as_str())
+                .collect::<Vec<_>>();
+            if let Some(bound) = &param.bound {
+                if let Some(named) = Self::type_expr_names_one_of(bound, &out_of_reach) {
+                    return Err(TypeError {
+                        message: if named == param.name {
+                            format!(
+                                "type parameter '{}' is not in scope inside its own bound",
+                                param.name
+                            )
+                        } else {
+                            format!(
+                                "type parameter '{}' is not yet in scope in the bound of '{}'",
+                                named, param.name
+                            )
+                        },
+                        span: param.span,
+                    });
+                }
+            }
+            let bound = param
+                .bound
+                .as_ref()
+                .map(|bound| self.resolve_type_expr(bound))
+                .transpose()?;
+            self.env.type_var_bounds.insert(
+                param.name.clone(),
+                bound.clone().unwrap_or(Type::TypeVar("Any".into())),
+            );
+            bounds.push(bound);
+        }
+        self.register_type_var_alternatives(type_params)?;
+        Ok(bounds)
+    }
+
+    /// The narrowest type both `left` and `right` fit: whichever already
+    /// contains the other, otherwise their union.
+    fn join_types(&self, left: Type, right: Type) -> Type {
+        if left.is_subtype_of(&right, &self.env) {
+            right
+        } else if right.is_subtype_of(&left, &self.env) {
+            left
+        } else {
+            Type::make_union(vec![left, right])
         }
     }
 
@@ -6216,24 +6286,7 @@ impl TypeChecker {
                 }
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
                 let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
-                let function_type_bounds = func
-                    .type_params
-                    .iter()
-                    .map(|param| {
-                        param
-                            .bound
-                            .as_ref()
-                            .map(|bound| self.resolve_type_expr(bound))
-                            .transpose()
-                            .map(|bound| (param.name.clone(), bound))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                for (name, bound) in function_type_bounds {
-                    self.env
-                        .type_var_bounds
-                        .insert(name, bound.unwrap_or(Type::TypeVar("Any".into())));
-                }
-                self.register_type_var_alternatives(&func.type_params)?;
+                self.bind_type_params(&func.type_params)?;
                 let ret_type = if let Some(ref r) = func.return_type {
                     Some(self.resolve_type_expr(r)?)
                 } else {
@@ -7811,12 +7864,18 @@ impl TypeChecker {
                 span: func.span,
             });
         }
-        self.check_member_parts(
+        let saved_type_var_bounds = self.env.type_var_bounds.clone();
+        let saved_type_var_alternatives = self.env.type_var_alternatives.clone();
+        self.bind_type_params(&func.type_params)?;
+        let result = self.check_member_parts(
             &func.params,
             func.return_type.as_ref(),
             &func.body,
             func.span,
-        )
+        );
+        self.env.type_var_bounds = saved_type_var_bounds;
+        self.env.type_var_alternatives = saved_type_var_alternatives;
+        result
     }
 
     fn check_member_parts(
@@ -10877,6 +10936,28 @@ impl TypeChecker {
                                         continue;
                                     };
                                     let argument_type = self.type_of_expr(&argument.value)?;
+                                    // Arguments that disagree on a parameter with no
+                                    // fixed set widen it to the narrowest type both
+                                    // fit; the bound check below decides whether that
+                                    // is allowed.
+                                    if let Type::TypeVar(param_name) = parameter {
+                                        let widens = generic_params.iter().any(|generic| {
+                                            &generic.name == param_name
+                                                && generic.alternatives.is_empty()
+                                        });
+                                        if widens {
+                                            if let Some(existing) =
+                                                substitutions.get(param_name).cloned()
+                                            {
+                                                if existing != argument_type {
+                                                    let widened = self
+                                                        .join_types(existing, argument_type.clone());
+                                                    substitutions.insert(param_name.clone(), widened);
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
                                     if !infer_type_arguments(
                                         parameter,
                                         &argument_type,
@@ -10893,7 +10974,29 @@ impl TypeChecker {
                                     }
                                 }
                                 for generic in generic_params {
-                                    if let Some(argument_type) = substitutions.get(&generic.name) {
+                                    if let Some(argument_type) =
+                                        substitutions.get(&generic.name).cloned()
+                                    {
+                                        // `R: T` with `T` another parameter of the same
+                                        // call is a floor under `T`: `T` widens to fit
+                                        // `R` rather than `R` being checked in isolation.
+                                        if let Some(TypeExpr::Named {
+                                            name: floor,
+                                            args: floor_args,
+                                            ..
+                                        }) = generic.bound.as_ref()
+                                        {
+                                            if floor_args.is_empty() && generic_names.contains(floor) {
+                                                let widened = match substitutions.get(floor).cloned() {
+                                                    Some(current) => {
+                                                        self.join_types(current, argument_type.clone())
+                                                    }
+                                                    None => argument_type.clone(),
+                                                };
+                                                substitutions.insert(floor.clone(), widened);
+                                                continue;
+                                            }
+                                        }
                                         if !generic.alternatives.is_empty() {
                                             let alternatives = generic
                                                 .alternatives
@@ -10903,7 +11006,7 @@ impl TypeChecker {
                                                 })
                                                 .collect::<Result<Vec<_>, _>>()?;
                                             let inferred =
-                                                self.normalize_literal_types(argument_type);
+                                                self.normalize_literal_types(&argument_type);
                                             if !alternatives.iter().any(|alternative| {
                                                 is_fixed_set_member(&inferred, alternative)
                                             }) {
@@ -11073,6 +11176,27 @@ impl TypeChecker {
                                     continue;
                                 };
                                 let argument_type = self.type_of_expr(&argument.value)?;
+                                if let Type::TypeVar(param_name) = parameter {
+                                    let has_fixed_set = called_name
+                                        .and_then(|name| self.env.function_type_params.get(name))
+                                        .is_some_and(|generics| {
+                                            generics.iter().any(|generic| {
+                                                &generic.name == param_name
+                                                    && !generic.alternatives.is_empty()
+                                            })
+                                        });
+                                    if !has_fixed_set && generic_names.contains(param_name) {
+                                        if let Some(existing) = substitutions.get(param_name).cloned()
+                                        {
+                                            if existing != argument_type {
+                                                let widened =
+                                                    self.join_types(existing, argument_type.clone());
+                                                substitutions.insert(param_name.clone(), widened);
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
                                 if !infer_type_arguments(
                                     parameter,
                                     &argument_type,
@@ -16506,6 +16630,37 @@ def reject(value: not int) -> none:
         check_source(&format!(
             "{prelude}def f(buf: list[in Cat]) -> none:\n    plain: list[Cat] = buf\n"
         ))
+        .unwrap_err();
+    }
+
+    #[test]
+    fn bounds_may_name_earlier_type_parameters() {
+        check_source(
+            "class Animal:\n    pass\nclass Dog(Animal):\n    pass\ndef pick[T, R: T](t: T, r: R) -> T:\n    return t\nclass Owner[in out T]:\n    def narrow[U: T](self, u: U) -> T:\n        return u\ndef only_bound[T, R: T](r: R) -> T:\n    return r\n",
+        )
+        .unwrap();
+        let err = check_source("def f[S: T, T](s: S, t: T) -> S:\n    return s\n").unwrap_err();
+        assert!(err.message.contains("not yet in scope"), "{}", err.message);
+        let err = check_source("def g[T: list[T]](x: T) -> T:\n    return x\n").unwrap_err();
+        assert!(err.message.contains("its own bound"), "{}", err.message);
+    }
+
+    #[test]
+    fn disagreeing_arguments_widen_to_the_bound() {
+        check_source(
+            "def first[T: str | bytes](a: T, b: T) -> T:\n    return a\nx = first(\"x\", b\"y\")\n",
+        )
+        .unwrap();
+        check_source("def first[T: str](a: T, b: T) -> T:\n    return a\nx = first(\"x\", 1)\n")
+            .unwrap_err();
+        // `R: T` is a floor under `T`, so `T` widens to Animal.
+        check_source(
+            "class Animal:\n    pass\nclass Dog(Animal):\n    pass\ndef pick[T, R: T](t: T, r: R) -> T:\n    return t\nx: Animal = pick(Dog(), Animal())\n",
+        )
+        .unwrap();
+        check_source(
+            "class Animal:\n    pass\nclass Dog(Animal):\n    pass\ndef pick[T, R: T](t: T, r: R) -> T:\n    return t\nx: Dog = pick(Dog(), Animal())\n",
+        )
         .unwrap_err();
     }
 
