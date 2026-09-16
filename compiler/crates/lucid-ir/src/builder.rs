@@ -435,7 +435,21 @@ impl IrBuilder {
                 IrValue::Var(dest)
             }
             Expr::Call { func, args, .. } => {
-                if let Expr::Ident { name, .. } = &**func {
+                // Check if this is a method call: obj.method(args)
+                if let Expr::Attribute { value, attr, .. } = &**func {
+                    // This is a method call
+                    let receiver = self.expr_to_ir_value(value);
+                    let ir_args: Vec<IrValue> = args.iter().map(|arg| self.expr_to_ir_value(&arg.value)).collect();
+                    let dest = self.fresh_var("method_result");
+                    self.emit(IrInstruction::MethodCall {
+                        dest: Some(dest.clone()),
+                        receiver,
+                        method: attr.clone(),
+                        args: ir_args,
+                    });
+                    IrValue::Var(dest)
+                } else if let Expr::Ident { name, .. } = &**func {
+                    // Regular function call
                     let ir_args: Vec<IrValue> = args.iter().map(|arg| self.expr_to_ir_value(&arg.value)).collect();
                     let dest = self.fresh_var("call");
                     self.emit(IrInstruction::Call {

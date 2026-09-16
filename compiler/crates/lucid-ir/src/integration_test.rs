@@ -698,4 +698,32 @@ mod tests {
         let full = format!("{}\n\nint main() {{\n  printf(\"1\\n\");\n  return 0;\n}}", c);
         assert!(test_c_code(&full, "1\n"), "Instance creation codegen should compile");
     }
+
+    #[test]
+    fn test_method_call_ir_generation() {
+        // Verify that MethodCall IR instruction exists and is part of the IR
+        let mut module = IrModule::new();
+        let mut func = IrFunction::new(
+            "test".to_string(),
+            vec![],
+            IrType::I64,
+        );
+
+        // Manually create a MethodCall instruction
+        func.blocks[0].add_instruction(IrInstruction::MethodCall {
+            dest: Some("result".to_string()),
+            receiver: IrValue::Var("obj".to_string()),
+            method: "foo".to_string(),
+            args: vec![IrValue::Int(42)],
+        });
+
+        // Verify instruction was added
+        assert_eq!(func.blocks[0].instructions.len(), 1);
+        assert!(matches!(
+            &func.blocks[0].instructions[0],
+            IrInstruction::MethodCall { dest, method, .. }
+            if dest.as_ref().map_or(false, |d| d == "result") && method == "foo"
+        ));
+    }
+
 }
