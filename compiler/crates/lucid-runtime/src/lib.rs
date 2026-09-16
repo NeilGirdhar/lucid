@@ -9351,7 +9351,55 @@ impl Interpreter {
                 }
                 Ok(Value::Set(Rc::new(RefCell::new(set_vals))))
             }
-            Expr::Construct { class_name, args, span: _ } => {
+            Expr::Construct {
+                class_name,
+                args,
+                span,
+            } => {
+                // A named construction, `Point(1, 2)`, goes through the class
+                // itself: its __init__ factory when it declares one, else the
+                // generated field constructor.  Only the bare `construct(...)`
+                // inside a factory builds the placeholder that the factory's
+                // return normalizes into the class.
+                if !class_name.is_empty() {
+                    let field_names = self.constructor_field_names(class_name);
+                    let mut slots: Vec<Option<Value>> = Vec::new();
+                    for arg in args {
+                        let value = self.eval_expr(&arg.value)?;
+                        match &arg.name {
+                            Some(name) => {
+                                let Some(index) = field_names.iter().position(|field| field == name)
+                                else {
+                                    return Err(RuntimeError {
+                                        message: format!(
+                                            "construct for '{class_name}' has no field named '{name}'"
+                                        ),
+                                        span: arg.span,
+                                    });
+                                };
+                                if slots.len() <= index {
+                                    slots.resize(index + 1, None);
+                                }
+                                slots[index] = Some(value);
+                            }
+                            None => slots.push(Some(value)),
+                        }
+                    }
+                    let positional = slots
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, slot)| {
+                            slot.ok_or_else(|| RuntimeError {
+                                message: format!(
+                                    "construct for '{class_name}' is missing field '{}'",
+                                    field_names.get(index).map(String::as_str).unwrap_or("?")
+                                ),
+                                span: *span,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return self.call_class(class_name, &positional, *span);
+                }
                 let mut field_values = HashMap::new();
                 for (idx, arg) in args.iter().enumerate() {
                     let val = self.eval_expr(&arg.value)?;
@@ -9523,6 +9571,28 @@ impl Interpreter {
                 span: expr.span(),
             }),
         }
+    }
+
+    /// The declared fields a class constructs, inherited ones first, in
+    /// declaration order.
+    fn constructor_field_names(&self, class_name: &str) -> Vec<String> {
+        let Some(class_def) = self.classes.get(class_name) else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        for base in &class_def.bases {
+            if let TypeExpr::Named { name, .. } = base {
+                if self.classes.contains_key(name) {
+                    names.extend(self.constructor_field_names(name));
+                }
+            }
+        }
+        for member in &class_def.body {
+            if let ClassMember::Field(field) = member {
+                names.push(field.name.clone());
+            }
+        }
+        names
     }
 
     fn construct_class(&mut self, class_name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
