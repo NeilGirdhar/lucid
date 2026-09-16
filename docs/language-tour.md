@@ -30,12 +30,12 @@ u = User("Alice")
 print(u.greet())  # "Hello, Alice!"
 ```
 
-## Mutability views (`T`, `&T`, `!T`)
+## Mutability views (`T`, `~T`, `!T`)
 
 Lucid tracks mutability in the type system:
 
 * `T` — Mutable reference (can mutate fields).
-* `&T` — Read-only view (cannot mutate through this reference; underlying
+* `~T` — Read-only view (cannot mutate through this reference; underlying
   data might mutate).
 * `!T` — Deeply immutable object (frozen; cannot mutate anywhere).
 
@@ -94,13 +94,21 @@ print(get_welcome_message(42))  # "Welcome, Alice!"
 print(get_welcome_message(99))  # NotFoundError("user not found")
 ```
 
-## Anonymous records
+## Anonymous record shapes
 
-Replace arbitrary dicts or tuples with typed anonymous records:
+An anonymous record shape describes the named fields a value must provide
+without declaring another nominal type. Ordinary classes satisfy the shape
+structurally:
 
 ```python
-point = record { x: 10, y: 20 }
-print(point.x + point.y)  # 30
+def total(point: (x: int, y: int)) -> int:
+    return point.x + point.y
+
+class Point:
+    x: int
+    y: int
+
+print(total(Point(10, 20)))  # 30
 ```
 
 ## Built-in primitives and collections
@@ -142,7 +150,7 @@ Relative module imports:
 
 ```python
 # utils.lucid
-export def square(x: int) -> int:
+def square(x: int) -> int:
     return x * x
 
 # main.lucid
