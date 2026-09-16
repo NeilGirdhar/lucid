@@ -56,6 +56,18 @@ pub struct IrField {
     pub ty: IrType,
 }
 
+/// A class method definition
+#[derive(Debug, Clone)]
+pub struct IrMethod {
+    pub name: String,
+    pub is_factory: bool,      // factory methods (__init__, etc.)
+    pub is_getter: bool,        // getter methods
+    pub is_setter: bool,        // setter methods
+    pub params: Vec<IrParam>,
+    pub return_type: IrType,
+    pub function_ref: String,   // Name of generated function in IR
+}
+
 /// IR types for code generation
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IrType {

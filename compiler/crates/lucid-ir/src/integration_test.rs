@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{IrModule, IrFunction, IrParam, IrType, IrValue, IrInstruction, IrTerminator, CCodegenBackend, IrClass, IrField};
+    use crate::{IrModule, IrFunction, IrParam, IrType, IrValue, IrInstruction, IrTerminator, CCodegenBackend, IrClass, IrField, MethodDispatch};
     use std::process::Command;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -578,5 +578,59 @@ mod tests {
 
         // Verify frame layout
         assert!(frame.total_size() % 16 == 0, "Frame should be 16-byte aligned");
+    }
+
+    #[test]
+    fn test_class_method_generation() {
+        let mut module = IrModule::new();
+
+        // Create a Point class
+        let mut point_class = IrClass {
+            name: "Point".to_string(),
+            fields: vec![
+                IrField { name: "x".to_string(), ty: IrType::F64 },
+                IrField { name: "y".to_string(), ty: IrType::F64 },
+            ],
+            methods: vec![
+                MethodDispatch {
+                    class_name: "Point".to_string(),
+                    method_name: "distance".to_string(),
+                    impl_function: "Point_distance".to_string(),
+                },
+            ],
+        };
+
+        module.add_class(point_class);
+
+        // Add the distance method implementation
+        let mut distance_func = IrFunction::new(
+            "Point_distance".to_string(),
+            vec![
+                IrParam { name: "self".to_string(), ty: IrType::Ptr },
+            ],
+            IrType::F64,
+        );
+
+        // Simplified: return hardcoded value (in real impl, would load self.x and self.y)
+        distance_func.blocks[0].set_terminator(IrTerminator::Return {
+            value: Some(IrValue::Float(5.0)),  // sqrt(3^2 + 4^2) = 5.0
+        });
+
+        module.add_function(distance_func);
+
+        let mut backend = CCodegenBackend::new();
+        let c = backend.generate(&module);
+
+        // Verify Point struct is generated
+        assert!(c.contains("struct Point"), "Point struct should be generated");
+        assert!(c.contains("double x"), "Point should have x field");
+        assert!(c.contains("double y"), "Point should have y field");
+
+        // Verify Point_distance method is generated
+        assert!(c.contains("Point_distance"), "Point_distance method should be generated");
+
+        // Verify it compiles
+        let full = format!("{}\n\nint main() {{\n  printf(\"1\\n\");\n  return 0;\n}}", c);
+        assert!(test_c_code(&full, "1\n"), "Class method code should compile");
     }
 }
