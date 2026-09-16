@@ -22,6 +22,7 @@ pub struct IrModule {
     pub globals: Vec<IrGlobal>,
     pub classes: Vec<IrClass>,
     pub traits: Vec<IrTrait>,
+    pub specializations: Vec<TypeSpecialization>,
 }
 
 /// An IR function with control flow graph
@@ -164,6 +165,14 @@ pub struct TraitMethod {
     pub name: String,
     pub params: Vec<IrParam>,
     pub return_type: IrType,
+}
+
+/// Generic type instantiation (monomorphization)
+#[derive(Debug, Clone)]
+pub struct TypeSpecialization {
+    pub generic_name: String,           // "List" or "Dict"
+    pub type_args: Vec<IrType>,         // [IrType::I64] for List[int]
+    pub specialized_name: String,       // "List__i64__" or "Dict__str__i64__"
 }
 
 /// Class definition in IR
@@ -362,6 +371,7 @@ impl IrModule {
             globals: Vec::new(),
             classes: Vec::new(),
             traits: Vec::new(),
+            specializations: Vec::new(),
         }
     }
 
@@ -383,6 +393,45 @@ impl IrModule {
 
     pub fn get_class(&self, name: &str) -> Option<&IrClass> {
         self.classes.iter().find(|c| c.name == name)
+    }
+
+    pub fn specialize_type(&mut self, generic_name: &str, type_args: Vec<IrType>) -> String {
+        // Generate specialized name: List__i64__ or Dict__str__i64__
+        let mut specialized = generic_name.to_string();
+        specialized.push_str("__");
+        for (i, ty) in type_args.iter().enumerate() {
+            if i > 0 { specialized.push_str("__"); }  // Double underscore between types
+            specialized.push_str(&self.type_to_name(ty));
+        }
+        specialized.push_str("__");
+
+        // Check if already specialized
+        for spec in &self.specializations {
+            if spec.specialized_name == specialized {
+                return specialized;
+            }
+        }
+
+        // Record new specialization
+        self.specializations.push(TypeSpecialization {
+            generic_name: generic_name.to_string(),
+            type_args: type_args.clone(),
+            specialized_name: specialized.clone(),
+        });
+
+        specialized
+    }
+
+    fn type_to_name(&self, ty: &IrType) -> String {
+        match ty {
+            IrType::I64 => "i64".to_string(),
+            IrType::F64 => "f64".to_string(),
+            IrType::Bool => "bool".to_string(),
+            IrType::Str => "str".to_string(),
+            IrType::Ptr => "ptr".to_string(),
+            IrType::Named(n) => n.clone(),
+            _ => "unknown".to_string(),
+        }
     }
 }
 

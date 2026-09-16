@@ -1672,4 +1672,31 @@ int main() {
         assert_eq!(module.traits[0].methods[0].name, "read");
     }
 
+    #[test]
+    fn test_generic_type_specialization() {
+        // Test monomorphization of generic types
+        let mut module = crate::IrModule::new();
+
+        // Specialize List[int]
+        let list_int_name = module.specialize_type("List", vec![crate::IrType::I64]);
+        assert_eq!(list_int_name, "List__i64__");
+
+        // Specialize List[str]
+        let list_str_name = module.specialize_type("List", vec![crate::IrType::Str]);
+        assert_eq!(list_str_name, "List__str__");
+
+        // Specialize Dict[str, int]
+        let dict_name = module.specialize_type("Dict",
+            vec![crate::IrType::Str, crate::IrType::I64]);
+        assert_eq!(dict_name, "Dict__str__i64__");
+
+        // Verify specializations recorded
+        assert_eq!(module.specializations.len(), 3);
+
+        // Specialize same type again - should return same name without duplicating
+        let list_int_name2 = module.specialize_type("List", vec![crate::IrType::I64]);
+        assert_eq!(list_int_name2, list_int_name);
+        assert_eq!(module.specializations.len(), 3);  // Still 3, not 4
+    }
+
 }
