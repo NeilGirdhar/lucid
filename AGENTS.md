@@ -2,16 +2,18 @@
 
 These instructions apply to coding agents working in this repository.
 
-This repo contains the specification for Lucid, a Python-like language
-design sketch, written as Markdown documents built into a site with
-[Zensical](https://zensical.org/). There is no compiler or interpreter
-here — the "code" is the specification prose and the worked examples
-inside it.
+This repo contains two things: the specification for Lucid, a
+Python-like language, written as Markdown documents built into a site
+with [Zensical](https://zensical.org/), and a compiler for it, written
+in Rust. The specification is authoritative: when the compiler and a
+specification document disagree, the document wins unless the document
+itself is inconsistent with `docs/principles.md`, in which case fix the
+document first, in its own commit, then the compiler.
 
 ## Project structure
 
 - `README.md`—a short pointer for GitHub's own repo view: the core
-  principle and a link into the real hub.
+  principle, a link into the real hub, and how to build the toolchain.
 - `docs/index.md`—the real hub: the core principle and a worked example.
   This is also the site's homepage. It does not list the other documents —
   Zensical's sidebar, generated from `zensical.toml`'s `nav`, is already
@@ -23,18 +25,38 @@ inside it.
   ones introduced later. A handful of forward pointers are intentional,
   where two topics genuinely reference each other for comparison (e.g.
   generics/traits, dispatch/control-flow); the reverse direction of
-  each such pair is already satisfied.
+  each such pair is already satisfied. `docs/principles.md` is the
+  canonical design foundation; the other documents are the detailed
+  specification built on it.
+- `docs/architecture.md`, `docs/getting-started.md`,
+  `docs/language-tour.md`, `docs/benchmarks.md`—describe the
+  implementation rather than the language. They must agree with the
+  specification documents, never contradict them.
 - `zensical.toml`—site config and navigation tree.
-- `.github/workflows/docs.yml`—builds and deploys the site to GitHub
-  Pages on every push to `main`.
+- `Cargo.toml`—the Rust workspace, whose members live in
+  `compiler/crates/`: `lucid-syntax` (lexer, parser, AST),
+  `lucid-checker` (static checking), `lucid-runtime` (tree-walking
+  evaluator), `lucid-codegen` and `lucid-cir`/`lucid-ir` (native code
+  generation), `lucid-cli` (the `lucid` driver, including `test-spec`,
+  which runs the specification's own code blocks through the parser
+  and checker).
+- `examples/*.lucid`, `benchmarks/*.lucid`—Lucid programs. They are
+  Lucid source, so they follow the specification exactly like a code
+  block in `docs/` does.
+- `editors/`—editor support (a VS Code grammar).
+- `.github/workflows/`—CI: the strict site build, deployed to GitHub
+  Pages on every push to `main`, and the Rust checks listed under
+  [Verification](#verification).
 
 ## Core design pillars
 
 - Two kinds of user-defined type: `trait` (obligations, reusable bodies,
   or both, no state) and `class` (owned state, construction, at most one
   class parent).
-- Definition-site variance (`+K`/`-K`/`=K`) and mutability views
-  (`T`/`~T`/`!T`) visible in the type spelling.
+- Definition-site variance—`out K`, `in K`, `in out K`, and the
+  view-specific `in ~out K`/`~in out K` (see
+  `docs/generics.md`)—and mutability views (`T`/`~T`/`!T`) visible in
+  the type spelling.
 - Julia-style multiple dispatch for binary operators; no reflected methods,
   no `NotImplemented` negotiation.
 - Recoverable errors as ordinary return types, checked exhaustively via
@@ -63,18 +85,43 @@ reasoning behind each.
 - A same-file reference to a heading uses that heading's anchor:
   `[Link text](#heading-slug)`, where the slug is the heading text
   lowercased, punctuation stripped, spaces turned to hyphens.
-- After any edit, verify the whole site still builds cleanly:
-
-  ```
-  uv run zensical build --clean --strict
-  ```
-
-  Strict mode aborts the build on any warning (a broken link, an
-  unresolved reference) — a clean run is the bar for "done," not just "no
-  exception raised."
+- Lucid source in a code block uses Lucid's own spellings: the constants
+  are `true`, `false`, and `none`; `True`, `False`, and `None` appear
+  only in a block that is explicitly showing Python.
 - Every design claim in the spec should be grounded: motivate a rule with
   a concrete Python (or other language) failure mode before stating
   Lucid's fix, the way the existing documents do throughout.
+
+## Verification
+
+After any edit to the documents, verify the whole site still builds
+cleanly:
+
+```
+uv run zensical build --clean --strict
+```
+
+Strict mode aborts the build on any warning (a broken link, an
+unresolved reference) — a clean run is the bar for "done," not just "no
+exception raised."
+
+After any edit to the compiler, or to a document whose code blocks the
+compiler is expected to accept, run the Rust checks and the
+specification conformance report:
+
+```
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets --no-fail-fast
+cargo run -p lucid-cli -- test-spec docs --verbose
+```
+
+`test-spec` parses and type-checks every code block in `docs/`, and
+checks that a block marked as an expected failure is in fact rejected.
+A block that stops passing is a specification-conformance regression,
+never something to fix by weakening the checker or by keeping obsolete
+syntax alive. Commit in small, coherent units: one syntax change, one
+checker rule, one documentation correction, each with its own tests.
 
 ## Writing guide
 
