@@ -194,10 +194,16 @@ impl CCodegenBackend {
                     .map(|arg| self.value_to_c(arg))
                     .collect::<Vec<_>>()
                     .join(", ");
+
+                // Detect math functions that return double
+                let is_float_func = matches!(func.as_str(), "sqrt" | "sin" | "cos" | "tan" | "log" | "exp");
+
                 if let Some(d) = dest {
                     if !self.declared_vars.contains(d) {
-                        self.emit_line(&format!("int64_t {} = {}({});", d, func, args_code));
+                        let var_type = if is_float_func { "double" } else { "int64_t" };
+                        self.emit_line(&format!("{} {} = {}({});", var_type, d, func, args_code));
                         self.declared_vars.insert(d.clone());
+                        self.var_types.insert(d.clone(), var_type.to_string());
                     } else {
                         self.emit_line(&format!("{} = {}({});", d, func, args_code));
                     }
@@ -342,6 +348,23 @@ impl CCodegenBackend {
                     ));
                 }
             }
+            IrInstruction::ResultCheck {
+                result,
+                error_block,
+                success_block,
+            } => {
+                let result_code = self.value_to_c(result);
+                // Generate: if (result.tag == ERROR) goto error_block; else goto success_block;
+                self.emit_line(&format!("if ({}.tag == ERROR) {{", result_code));
+                self.indent_level += 1;
+                self.emit_line(&format!("goto block_{};", error_block));
+                self.indent_level -= 1;
+                self.emit_line("} else {");
+                self.indent_level += 1;
+                self.emit_line(&format!("goto block_{};", success_block));
+                self.indent_level -= 1;
+                self.emit_line("}");
+            }
         }
     }
 
@@ -429,6 +452,8 @@ impl CCodegenBackend {
         self.emit_line("#include <stdbool.h>");
         self.emit_line("#include <stdio.h>");
         self.emit_line("#include <stdlib.h>");
+        self.emit_line("#include <math.h>");
+        self.emit_line("#include <string.h>");
     }
 
     fn emit_line(&mut self, line: &str) {

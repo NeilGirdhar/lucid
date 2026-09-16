@@ -1020,4 +1020,90 @@ int main() {
         assert_eq!(ir_module.functions.len(), 1);
     }
 
+    #[test]
+    fn test_math_functions_codegen() {
+        // Test that math functions generate valid C code
+        let c_code = r#"
+#include <stdint.h>
+#include <math.h>
+
+double sqrt_test() {
+    return sqrt(16.0);
+}
+
+double abs_test(double x) {
+    if (x < 0) return -x;
+    return x;
+}
+
+int64_t min_test(int64_t a, int64_t b) {
+    if (a < b) return a;
+    return b;
+}
+
+int main() {
+    double s = sqrt_test();
+    double a = abs_test(-5.0);
+    int64_t m = min_test(3, 7);
+
+    if (s == 4.0 && a == 5.0 && m == 3) {
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
+    #[test]
+    fn test_print_function_codegen() {
+        // Test that print function generates valid C code
+        let c_code = r#"
+#include <stdint.h>
+#include <stdio.h>
+
+void print_int(int64_t value) {
+    printf("%ld\n", value);
+}
+
+void print_string(const char* str) {
+    printf("%s\n", str);
+}
+
+int main() {
+    print_int(42);
+    print_string("hello");
+    return 0;
+}
+        "#;
+
+        assert!(test_c_code(c_code, "42\nhello\n"));
+    }
+
+    #[test]
+    fn test_string_functions_codegen() {
+        // Test string operations
+        let c_code = r#"
+#include <stdint.h>
+#include <string.h>
+
+int64_t string_length(const char* s) {
+    return (int64_t)strlen(s);
+}
+
+int main() {
+    const char* s = "hello";
+    int64_t len = string_length(s);
+
+    if (len == 5) {
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
 }

@@ -83,6 +83,10 @@ pub enum IrType {
     Str,
     /// List type
     List(Box<IrType>),
+    /// Dictionary type
+    Dict(Box<IrType>, Box<IrType>),
+    /// Union type (for Result types and error handling)
+    Union(Vec<Box<IrType>>),
     /// Named type (class reference)
     Named(String),
     /// Never type (unreachable)
@@ -101,6 +105,8 @@ impl IrType {
             IrType::Ptr => "void*",
             IrType::Str => "const char*",
             IrType::List(_) => "LucidList*",
+            IrType::Dict(_, _) => "LucidDict*",
+            IrType::Union(_) => "LucidResult*",
             IrType::Named(_) => "void*",
             IrType::Never => "void",
             IrType::Void => "void",
@@ -212,6 +218,12 @@ pub enum IrInstruction {
         dest: String,
         class_name: String,
         field_values: Vec<(String, IrValue)>,  // field name -> value pairs
+    },
+    /// Check if a Result is an error (for ? operator)
+    ResultCheck {
+        result: IrValue,
+        error_block: usize,
+        success_block: usize,
     },
 }
 
