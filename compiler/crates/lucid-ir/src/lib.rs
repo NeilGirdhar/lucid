@@ -85,6 +85,8 @@ pub enum IrType {
     List(Box<IrType>),
     /// Dictionary type
     Dict(Box<IrType>, Box<IrType>),
+    /// Range type for iteration
+    Range,
     /// Union type (for Result types and error handling)
     Union(Vec<Box<IrType>>),
     /// Named type (class reference)
@@ -106,6 +108,7 @@ impl IrType {
             IrType::Str => "const char*",
             IrType::List(_) => "LucidList*",
             IrType::Dict(_, _) => "LucidDict*",
+            IrType::Range => "LucidRange*",
             IrType::Union(_) => "LucidResult*",
             IrType::Named(_) => "void*",
             IrType::Never => "void",

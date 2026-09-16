@@ -1106,4 +1106,73 @@ int main() {
         assert!(test_c_code(c_code, ""));
     }
 
+    #[test]
+    fn test_range_function_codegen() {
+        // Test range function for iteration
+        let c_code = r#"
+#include <stdint.h>
+#include <stdlib.h>
+
+struct LucidRange {
+    int64_t start;
+    int64_t end;
+    int64_t current;
+};
+
+struct LucidRange* lucid_range_new(int64_t end) {
+    struct LucidRange* r = (struct LucidRange*)malloc(sizeof(struct LucidRange));
+    r->start = 0;
+    r->end = end;
+    r->current = 0;
+    return r;
+}
+
+int64_t lucid_range_next(struct LucidRange* r) {
+    if (r->current < r->end) {
+        return r->current++;
+    }
+    return -1;  // End of range
+}
+
+int main() {
+    struct LucidRange* r = lucid_range_new(5);
+    int64_t sum = 0;
+    int64_t val;
+    while ((val = lucid_range_next(r)) >= 0) {
+        sum += val;  // 0 + 1 + 2 + 3 + 4 = 10
+    }
+
+    if (sum == 10) {
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
+    #[test]
+    fn test_for_in_range_iteration() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def sum_to_five() -> int:
+    total = 0
+    for i in range(5):
+        total = total + i
+    return total
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for range iteration");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for range iteration");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Verify function was generated
+        assert_eq!(ir_module.functions.len(), 1);
+        assert_eq!(ir_module.functions[0].name, "sum_to_five");
+    }
+
 }
