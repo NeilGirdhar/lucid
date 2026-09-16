@@ -182,6 +182,27 @@ mod tests {
         let c_code7 = backend7.generate(&ir_module7);
         let full_c7 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", test());\n  return 0;\n}}", c_code7);
         assert!(test_c_code(&full_c7, "5\n"), "test() with Point instantiation should return 5");
+
+        // Test 8: Class instantiation with multiple fields
+        let lucid_code8 = "class Circle:\n    radius: int\n    area: int\n\ndef compute_area() -> int:\n    c = Circle(5, 78)\n    return 42\n";
+        let mut lexer8 = Lexer::new(lucid_code8);
+        let tokens8 = lexer8.tokenize().expect("Lexer failed for Circle");
+        let mut parser8 = Parser::new(tokens8);
+        let module8 = parser8.parse_module().expect("Parser failed for Circle");
+        let ir_module8 = crate::builder::IrBuilder::new().build_module(&module8);
+
+        // Verify Circle class was created with correct fields
+        let circle_class = ir_module8.get_class("Circle").expect("Circle class should exist");
+        assert_eq!(circle_class.fields.len(), 2);
+        assert_eq!(circle_class.fields[0].name, "radius");
+        assert_eq!(circle_class.fields[1].name, "area");
+
+        // Verify codegen works
+        let mut backend8 = CCodegenBackend::new();
+        let c_code8 = backend8.generate(&ir_module8);
+        assert!(c_code8.contains("struct Circle"), "Should generate Circle struct");
+        let full_c8 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", compute_area());\n  return 0;\n}}", c_code8);
+        assert!(test_c_code(&full_c8, "42\n"), "compute_area() should compile and return 42");
     }
 
     #[test]
