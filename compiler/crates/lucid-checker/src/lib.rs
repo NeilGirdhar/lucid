@@ -19825,4 +19825,47 @@ pub mod specialization {
             (unique, total)
         }
     }
+
+    /// Generates specialized (monomorphic) versions of generic functions/classes
+    pub struct SpecializationGenerator {
+        specializations: Vec<(String, Module)>,
+    }
+
+    impl SpecializationGenerator {
+        pub fn new() -> Self {
+            Self {
+                specializations: Vec::new(),
+            }
+        }
+
+        /// Generate specialized versions for collected instantiations
+        pub fn generate_specializations(
+            &mut self,
+            module: &Module,
+            instantiations: &BTreeMap<Instantiation, usize>,
+        ) {
+            for inst in instantiations.keys() {
+                self.generate_specialization(module, inst);
+            }
+        }
+
+        fn generate_specialization(&mut self, module: &Module, inst: &Instantiation) {
+            let _spec_name = format!("{}__{}",inst.name, inst.type_args.join("__"));
+            // Specialized version name generated; full impl would:
+            // 1. Clone generic definition
+            // 2. Substitute type parameters
+            // 3. Add specialized version to module
+            self.specializations.push((_spec_name, module.clone()));
+        }
+
+        pub fn specialization_count(&self) -> usize {
+            self.specializations.len()
+        }
+    }
+
+    impl Default for SpecializationGenerator {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
 }
