@@ -49,6 +49,44 @@ pub enum Type {
     TypeVar(String),
 }
 
+/// The variance a declaration-site marker has once every mutating member
+/// is gone: the read-only and immutable views of a type.  `in ~out K`
+/// loosens to covariant and `~in out K` to contravariant; the other three
+/// markers are the same on every view.
+fn view_variance(variance: &Variance) -> Variance {
+    match variance {
+        Variance::ViewCovariant => Variance::Covariant,
+        Variance::ViewContravariant => Variance::Contravariant,
+        other => other.clone(),
+    }
+}
+
+/// Whether one instantiated type argument may stand in for another under
+/// the parameter's variance.  An unknown variance is treated as invariant.
+fn type_argument_conforms(
+    source: &Type,
+    expected: &Type,
+    variance: Option<&Variance>,
+    under_view: bool,
+    env: &TypeEnvironment,
+) -> bool {
+    if matches!(source, Type::Never) {
+        return true;
+    }
+    let variance = variance.map(|variance| {
+        if under_view {
+            view_variance(variance)
+        } else {
+            variance.clone()
+        }
+    });
+    match variance {
+        Some(Variance::Covariant) => source.is_subtype_of(expected, env),
+        Some(Variance::Contravariant) => expected.is_subtype_of(source, env),
+        _ => source == expected,
+    }
+}
+
 fn trait_extends(source: &str, target: &str, env: &TypeEnvironment) -> bool {
     env.trait_bases
         .get(source)
@@ -296,6 +334,63 @@ impl Type {
         } else {
             Type::Union(unique)
         }
+    }
+
+    /// Subtyping between two types seen through a read-only or immutable
+    /// view.  Every mutating member is gone on a view, so a parameter marked
+    /// `in ~out` reads as covariant and one marked `~in out` as
+    /// contravariant; anything else is ordinary subtyping.
+    pub fn is_view_subtype_of(&self, target: &Type, env: &TypeEnvironment) -> bool {
+        let (variances, source_args, target_args) = match (self, target) {
+            (
+                Type::Class {
+                    name: source_name,
+                    type_args: source_args,
+                    ..
+                },
+                Type::Class {
+                    name: target_name,
+                    type_args: target_args,
+                    ..
+                },
+            ) if source_name == target_name => {
+                (env.class_variance.get(source_name), source_args, target_args)
+            }
+            (
+                Type::Trait {
+                    name: source_name,
+                    type_args: source_args,
+                    ..
+                },
+                Type::Trait {
+                    name: target_name,
+                    type_args: target_args,
+                    ..
+                },
+            ) if source_name == target_name => {
+                (env.trait_variance.get(source_name), source_args, target_args)
+            }
+            _ => return self.is_subtype_of(target, env),
+        };
+        if source_args.is_empty() || target_args.is_empty() {
+            return true;
+        }
+        if source_args.len() != target_args.len() {
+            return false;
+        }
+        source_args
+            .iter()
+            .zip(target_args.iter())
+            .enumerate()
+            .all(|(index, (source, expected))| {
+                type_argument_conforms(
+                    source,
+                    expected,
+                    variances.and_then(|items| items.get(index)),
+                    true,
+                    env,
+                )
+            })
     }
 
     pub fn is_subtype_of(&self, target: &Type, env: &TypeEnvironment) -> bool {
@@ -575,11 +670,14 @@ impl Type {
                 }
                 let variances = env.trait_variance.get(source_name);
                 return source_args.iter().zip(target_args.iter()).enumerate().all(
-                    |(index, (source, expected))| match variances.and_then(|items| items.get(index))
-                    {
-                        Some(Variance::Covariant) => source.is_subtype_of(expected, env),
-                        Some(Variance::Contravariant) => expected.is_subtype_of(source, env),
-                        _ => source == expected,
+                    |(index, (source, expected))| {
+                        type_argument_conforms(
+                            source,
+                            expected,
+                            variances.and_then(|items| items.get(index)),
+                            false,
+                            env,
+                        )
                     },
                 );
             }
@@ -611,7 +709,7 @@ impl Type {
                     inner: i2,
                 },
             ) => {
-                return i1.is_subtype_of(i2, env);
+                return i1.is_view_subtype_of(i2, env);
             }
             (
                 Type::View {
@@ -623,24 +721,16 @@ impl Type {
                     inner: i2,
                 },
             ) => {
-                return i1.is_subtype_of(i2, env);
+                return i1.is_view_subtype_of(i2, env);
             }
             (
-                Type::Class { name: n1, .. },
+                Type::Class { .. },
                 Type::View {
                     mutability: MutabilityView::ReadOnly,
                     inner: i2,
                 },
             ) => {
-                let bare_class = Type::Class {
-                    name: n1.clone(),
-                    type_args: Vec::new(),
-                    parent: None,
-                    traits: Vec::new(),
-                    fields: HashMap::new(),
-                    is_sealed: false,
-                };
-                return bare_class.is_subtype_of(i2, env);
+                return self.is_view_subtype_of(i2, env);
             }
             _ => {}
         }
@@ -699,13 +789,14 @@ impl Type {
                     }
                     let variances = env.class_variance.get(c_name);
                     return source_args.iter().zip(target_args.iter()).enumerate().all(
-                        |(index, (source, expected))| match variances
-                            .and_then(|items| items.get(index))
-                        {
-                            _ if matches!(source, Type::Never) => true,
-                            Some(Variance::Covariant) => source.is_subtype_of(expected, env),
-                            Some(Variance::Contravariant) => expected.is_subtype_of(source, env),
-                            _ => source == expected,
+                        |(index, (source, expected))| {
+                            type_argument_conforms(
+                                source,
+                                expected,
+                                variances.and_then(|items| items.get(index)),
+                                false,
+                                env,
+                            )
                         },
                     );
                 }
@@ -1815,6 +1906,20 @@ impl TypeChecker {
         env.class_variance
             .insert("Cell".into(), vec![Variance::Invariant]);
         env.class_bounds.insert("Cell".into(), vec![None]);
+        // Built-in containers: an element that is only ever consumed by a
+        // mutating member loosens to covariant on the read-only and
+        // immutable views; a key is looked up and enumerated by
+        // non-mutating members, so it stays invariant everywhere.
+        env.class_variance
+            .insert("list".into(), vec![Variance::ViewCovariant]);
+        env.class_variance.insert(
+            "dict".into(),
+            vec![Variance::Invariant, Variance::ViewCovariant],
+        );
+        env.class_variance.insert(
+            "frozendict".into(),
+            vec![Variance::Invariant, Variance::Covariant],
+        );
         env.class_constructor_arity.insert("Cell".into(), 1);
         env.class_constructor_required.insert("Cell".into(), 1);
         env.class_field_order
@@ -12923,7 +13028,12 @@ impl TypeChecker {
                                 return Ok(c_clone);
                             }
                             if let Some(parameters) = self.env.class_variance.get(other) {
-                                if parameters.len() != resolved_args.len() {
+                                // A bare name leaves every parameter
+                                // unspecified; only a partial list is an
+                                // arity error.
+                                if !resolved_args.is_empty()
+                                    && parameters.len() != resolved_args.len()
+                                {
                                     return Err(TypeError {
                                         message: format!(
                                             "type '{}' expects {} argument(s), got {}",
@@ -12988,7 +13098,12 @@ impl TypeChecker {
                         }
                         if let Some(tr) = self.env.traits.get(other) {
                             if let Some(parameters) = self.env.trait_variance.get(other) {
-                                if parameters.len() != resolved_args.len() {
+                                // A bare name leaves every parameter
+                                // unspecified; only a partial list is an
+                                // arity error.
+                                if !resolved_args.is_empty()
+                                    && parameters.len() != resolved_args.len()
+                                {
                                     return Err(TypeError {
                                         message: format!(
                                             "type '{}' expects {} argument(s), got {}",
@@ -15548,6 +15663,97 @@ def reject(value: not int) -> none:
         assert!(error
             .message
             .contains("no record or parameter-shape field may follow"));
+    }
+
+    fn check_source(source: &str) -> Result<(), TypeError> {
+        let module = parse(source).unwrap();
+        TypeChecker::new().check_module(&module)
+    }
+
+    const VIEW_VARIANCE_PRELUDE: &str = "class Animal:\n    pass\nclass Cat(Animal):\n    pass\nclass Box[in ~out T]:\n    value: T\n    def get(self: ~Self) -> T:\n        return self.value\n    def put(self, item: T) -> none:\n        self.value = item\nclass Sink[~in out T]:\n    value: T\n    def accept(self: ~Self, item: T) -> bool:\n        return true\n    def take(self) -> T:\n        return self.value\nclass Cell[in out T]:\n    value: T\n    def get(self: ~Self) -> T:\n        return self.value\n    def matches(self: ~Self, item: T) -> bool:\n        return true\n";
+
+    #[test]
+    fn view_covariant_parameters_widen_only_through_views() {
+        let prelude = VIEW_VARIANCE_PRELUDE;
+        check_source(&format!(
+            "{prelude}def widen(cats: Box[Cat]) -> none:\n    animals: ~Box[Animal] = cats\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def widen(cats: ~Box[Cat]) -> none:\n    animals: ~Box[Animal] = cats\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def widen(cats: !Box[Cat]) -> none:\n    animals: !Box[Animal] = cats\n"
+        ))
+        .unwrap();
+        // While mutable, `put` still consumes `T`, so Box stays invariant.
+        check_source(&format!(
+            "{prelude}def widen(cats: Box[Cat]) -> none:\n    animals: Box[Animal] = cats\n"
+        ))
+        .unwrap_err();
+        // The view loosens to covariant, never the other direction.
+        check_source(&format!(
+            "{prelude}def narrow(animals: ~Box[Animal]) -> none:\n    cats: ~Box[Cat] = animals\n"
+        ))
+        .unwrap_err();
+    }
+
+    #[test]
+    fn view_contravariant_parameters_narrow_only_through_views() {
+        let prelude = VIEW_VARIANCE_PRELUDE;
+        check_source(&format!(
+            "{prelude}def narrow(animals: Sink[Animal]) -> none:\n    cats: ~Sink[Cat] = animals\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def narrow(animals: Sink[Animal]) -> none:\n    cats: Sink[Cat] = animals\n"
+        ))
+        .unwrap_err();
+        check_source(&format!(
+            "{prelude}def widen(cats: Sink[Cat]) -> none:\n    animals: ~Sink[Animal] = cats\n"
+        ))
+        .unwrap_err();
+    }
+
+    #[test]
+    fn invariant_parameters_stay_invariant_through_views() {
+        let prelude = VIEW_VARIANCE_PRELUDE;
+        check_source(&format!(
+            "{prelude}def same(cats: Cell[Cat]) -> none:\n    view: ~Cell[Cat] = cats\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def widen(cats: Cell[Cat]) -> none:\n    animals: ~Cell[Animal] = cats\n"
+        ))
+        .unwrap_err();
+        check_source(&format!(
+            "{prelude}def narrow(animals: Cell[Animal]) -> none:\n    cats: ~Cell[Cat] = animals\n"
+        ))
+        .unwrap_err();
+    }
+
+    #[test]
+    fn builtin_containers_widen_element_types_through_views() {
+        let prelude = "class Animal:\n    pass\nclass Cat(Animal):\n    pass\n";
+        check_source(&format!(
+            "{prelude}def widen(cats: list[Cat]) -> none:\n    animals: ~list[Animal] = cats\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def widen(cats: list[Cat]) -> none:\n    animals: list[Animal] = cats\n"
+        ))
+        .unwrap_err();
+        check_source(&format!(
+            "{prelude}def widen(cats: dict[str, Cat]) -> none:\n    animals: ~dict[str, Animal] = cats\n"
+        ))
+        .unwrap();
+        // Keys are looked up and enumerated without mutation, so they stay
+        // invariant on every view.
+        check_source(&format!(
+            "{prelude}def widen(cats: dict[Cat, int]) -> none:\n    animals: ~dict[Animal, int] = cats\n"
+        ))
+        .unwrap_err();
     }
 
     #[test]
