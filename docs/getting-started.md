@@ -15,7 +15,7 @@ This guide walks through building the Lucid compiler, using the interactive REPL
 Clone the repository and build the workspace:
 
 ```bash
-git clone https://github.com/npow/lucid.git
+git clone https://github.com/NeilGirdhar/lucid.git
 cd lucid
 
 # Build release binary
