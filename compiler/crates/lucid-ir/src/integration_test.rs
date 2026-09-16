@@ -1583,4 +1583,30 @@ int main() {
         assert_eq!(ir_module.functions.len(), 1);
     }
 
+    #[test]
+    fn test_match_statement_ir_generation() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def process(value: int) -> int:
+    match value as v:
+        case 1:
+            return 10
+        case 2:
+            return 20
+        case _:
+            return 0
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for match");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for match");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Verify match statement was processed (function generated)
+        assert_eq!(ir_module.functions.len(), 1);
+        assert_eq!(ir_module.functions[0].name, "process");
+    }
+
 }

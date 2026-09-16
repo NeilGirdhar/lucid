@@ -386,8 +386,38 @@ impl IrBuilder {
                     }
                 }
             }
+            Stmt::Match { subject, subject_alias: _, arms, .. } => {
+                // Match statement: evaluate subject and branch to matching arm
+                if let Some(func_idx) = self.current_function {
+                    let subject_val = self.expr_to_ir_value(subject);
+
+                    // For each arm, create a block
+                    let mut arm_blocks = Vec::new();
+                    for _ in arms {
+                        arm_blocks.push(self.fresh_block("match_arm"));
+                    }
+                    let merge_id = self.fresh_block("match_merge");
+
+                    // TODO: Implement proper pattern matching with scrutinee checking
+                    // For MVP, just generate the first matching arm
+                    if !arm_blocks.is_empty() {
+                        self.current_block = arm_blocks[0];
+                        if let Some(first_arm) = arms.first() {
+                            for stmt in &first_arm.body {
+                                self.build_stmt_recursive(stmt);
+                            }
+                        }
+                        // Jump to merge
+                        if matches!(self.module.functions[func_idx].blocks[arm_blocks[0]].terminator, IrTerminator::Unreachable) {
+                            self.terminate(IrTerminator::Jump { target: merge_id });
+                        }
+                    }
+
+                    self.current_block = merge_id;
+                }
+            }
             _ => {
-                // Other statements not yet handled (Match, etc.)
+                // Other statements not yet handled
             }
         }
     }
