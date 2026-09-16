@@ -1439,4 +1439,52 @@ int main() {
         assert!(has_dict_access, "IR should contain DictAccess instruction");
     }
 
+    #[test]
+    fn test_generic_type_support() {
+        // Test that generic types are recognized in IR
+        // Generic List[int], List[str] are represented as GenericInstance
+
+        let list_int = crate::IrType::GenericInstance {
+            name: "List".to_string(),
+            type_args: vec![Box::new(crate::IrType::I64)],
+        };
+
+        let list_str = crate::IrType::GenericInstance {
+            name: "List".to_string(),
+            type_args: vec![Box::new(crate::IrType::Str)],
+        };
+
+        // Both should map to LucidList* in C
+        assert_eq!(list_int.c_type(), "LucidList*");
+        assert_eq!(list_str.c_type(), "LucidList*");
+    }
+
+    #[test]
+    fn test_generic_dict_type() {
+        // Test generic Dictionary types
+        let dict_str_int = crate::IrType::GenericInstance {
+            name: "Dict".to_string(),
+            type_args: vec![
+                Box::new(crate::IrType::Str),
+                Box::new(crate::IrType::I64),
+            ],
+        };
+
+        assert_eq!(dict_str_int.c_type(), "LucidDict*");
+    }
+
+    #[test]
+    fn test_generic_result_type() {
+        // Test generic Result types
+        let result_int = crate::IrType::GenericInstance {
+            name: "Result".to_string(),
+            type_args: vec![
+                Box::new(crate::IrType::I64),
+                Box::new(crate::IrType::Named("ParseError".to_string())),
+            ],
+        };
+
+        assert_eq!(result_int.c_type(), "LucidResult*");
+    }
+
 }

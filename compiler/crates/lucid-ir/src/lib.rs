@@ -89,6 +89,13 @@ pub enum IrType {
     Range,
     /// Union type (for Result types and error handling)
     Union(Vec<Box<IrType>>),
+    /// Generic type (e.g., T in List[T])
+    Generic(String),
+    /// Parameterized generic type (e.g., List[int])
+    GenericInstance {
+        name: String,
+        type_args: Vec<Box<IrType>>,
+    },
     /// Named type (class reference)
     Named(String),
     /// Never type (unreachable)
@@ -110,6 +117,16 @@ impl IrType {
             IrType::Dict(_, _) => "LucidDict*",
             IrType::Range => "LucidRange*",
             IrType::Union(_) => "LucidResult*",
+            IrType::Generic(_) => "void*",  // Type variable - use void* for now
+            IrType::GenericInstance { name, .. } => {
+                // Parameterized types map to their base type
+                match name.as_str() {
+                    "List" => "LucidList*",
+                    "Dict" => "LucidDict*",
+                    "Result" => "LucidResult*",
+                    _ => "void*",
+                }
+            }
             IrType::Named(_) => "void*",
             IrType::Never => "void",
             IrType::Void => "void",
