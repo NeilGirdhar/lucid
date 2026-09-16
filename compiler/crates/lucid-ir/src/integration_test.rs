@@ -2027,6 +2027,87 @@ int main() {
     }
 
     #[test]
+    fn test_operator_overload_registration() {
+        // Test that operator overloads can be registered
+        let mut module = IrModule::new();
+
+        // Register int + int -> int
+        let int_add = crate::OperatorOverload {
+            operator: crate::IrBinOp::Add,
+            left_type: "i64".to_string(),
+            right_type: "i64".to_string(),
+            impl_function: "int_add_int".to_string(),
+            return_type: crate::IrType::I64,
+        };
+        module.add_operator_overload(int_add);
+
+        // Register float + float -> float
+        let float_add = crate::OperatorOverload {
+            operator: crate::IrBinOp::Add,
+            left_type: "f64".to_string(),
+            right_type: "f64".to_string(),
+            impl_function: "float_add_float".to_string(),
+            return_type: crate::IrType::F64,
+        };
+        module.add_operator_overload(float_add);
+
+        assert_eq!(module.operator_overloads.len(), 2);
+    }
+
+    #[test]
+    fn test_operator_dispatch() {
+        // Test that operator dispatch correctly resolves implementations
+        let mut module = IrModule::new();
+
+        // Register i64 + i64
+        module.add_operator_overload(crate::OperatorOverload {
+            operator: crate::IrBinOp::Add,
+            left_type: "i64".to_string(),
+            right_type: "i64".to_string(),
+            impl_function: "add_i64".to_string(),
+            return_type: crate::IrType::I64,
+        });
+
+        // Register f64 + f64
+        module.add_operator_overload(crate::OperatorOverload {
+            operator: crate::IrBinOp::Add,
+            left_type: "f64".to_string(),
+            right_type: "f64".to_string(),
+            impl_function: "add_f64".to_string(),
+            return_type: crate::IrType::F64,
+        });
+
+        // Register string concatenation
+        module.add_operator_overload(crate::OperatorOverload {
+            operator: crate::IrBinOp::Add,
+            left_type: "str".to_string(),
+            right_type: "str".to_string(),
+            impl_function: "concat_str".to_string(),
+            return_type: crate::IrType::Str,
+        });
+
+        // Resolve dispatch
+        assert_eq!(
+            module.resolve_operator(crate::IrBinOp::Add, "i64", "i64"),
+            Some("add_i64".to_string())
+        );
+        assert_eq!(
+            module.resolve_operator(crate::IrBinOp::Add, "f64", "f64"),
+            Some("add_f64".to_string())
+        );
+        assert_eq!(
+            module.resolve_operator(crate::IrBinOp::Add, "str", "str"),
+            Some("concat_str".to_string())
+        );
+
+        // Non-existent dispatch returns None
+        assert_eq!(
+            module.resolve_operator(crate::IrBinOp::Add, "i64", "f64"),
+            None
+        );
+    }
+
+    #[test]
     fn test_collection_algorithms_codegen() {
         // Test that collection algorithms are generated (reverse, first, last)
         let mut module = IrModule::new();

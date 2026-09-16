@@ -26,6 +26,7 @@ pub struct IrModule {
     pub specializations: Vec<TypeSpecialization>,
     pub error_types: Vec<ErrorType>,
     pub iterator_traits: Vec<IteratorTrait>,  // Iterator support for collections
+    pub operator_overloads: Vec<OperatorOverload>,  // Multiple dispatch for binary operators
 }
 
 /// An IR function with control flow graph
@@ -545,6 +546,25 @@ pub enum IrBinOp {
     BitXor,
 }
 
+/// Binary operator overload (multiple dispatch)
+#[derive(Debug, Clone)]
+pub struct OperatorOverload {
+    pub operator: IrBinOp,
+    pub left_type: String,
+    pub right_type: String,
+    pub impl_function: String,  // Function implementing this overload
+    pub return_type: IrType,
+}
+
+impl OperatorOverload {
+    /// Check if this overload matches the given operator and types
+    pub fn matches(&self, op: IrBinOp, left: &str, right: &str) -> bool {
+        std::mem::discriminant(&self.operator) == std::mem::discriminant(&op)
+            && self.left_type == left
+            && self.right_type == right
+    }
+}
+
 /// Unary operations in IR
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrUnaryOp {
@@ -582,6 +602,7 @@ impl IrModule {
             specializations: Vec::new(),
             error_types: Vec::new(),
             iterator_traits: Vec::new(),
+            operator_overloads: Vec::new(),
         }
     }
 
@@ -642,6 +663,23 @@ impl IrModule {
             IrType::Named(n) => n.clone(),
             _ => "unknown".to_string(),
         }
+    }
+
+    /// Register a binary operator overload (multiple dispatch)
+    pub fn add_operator_overload(&mut self, overload: OperatorOverload) {
+        self.operator_overloads.push(overload);
+    }
+
+    /// Resolve a binary operator call to the appropriate implementation
+    pub fn resolve_operator(&self, op: IrBinOp, left_type: &str, right_type: &str) -> Option<String> {
+        // First try exact match
+        for overload in &self.operator_overloads {
+            if overload.matches(op, left_type, right_type) {
+                return Some(overload.impl_function.clone());
+            }
+        }
+        // Could add fallback logic here (e.g., numeric type coercion)
+        None
     }
 
     /// Check if a type implements a specific trait
