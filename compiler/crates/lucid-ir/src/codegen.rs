@@ -1259,6 +1259,90 @@ impl CCodegenBackend {
         self.emit_line("return buffer;");
         self.indent_level -= 1;
         self.emit_line("}");
+        self.emit_line("");
+
+        // Additional string methods
+        self.emit_line("// String character at index");
+        self.emit_line("char lucid_string_char_at(const char* str, int64_t index) {");
+        self.indent_level += 1;
+        self.emit_line("int len = strlen(str);");
+        self.emit_line("if (index >= 0 && index < len) return str[index];");
+        self.emit_line("return '\\0';");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String reverse");
+        self.emit_line("const char* lucid_string_reverse(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("int len = strlen(str);");
+        self.emit_line("for (int i = 0; i < len; i++) {");
+        self.indent_level += 1;
+        self.emit_line("result[i] = str[len - 1 - i];");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("result[len] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String count occurrences");
+        self.emit_line("int64_t lucid_string_count(const char* str, const char* substr) {");
+        self.indent_level += 1;
+        self.emit_line("int64_t count = 0;");
+        self.emit_line("const char* pos = str;");
+        self.emit_line("while ((pos = strstr(pos, substr)) != NULL) {");
+        self.indent_level += 1;
+        self.emit_line("count++;");
+        self.emit_line("pos += strlen(substr);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("return count;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String pad left");
+        self.emit_line("const char* lucid_string_pad_left(const char* str, int64_t width, char pad_char) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("int len = strlen(str);");
+        self.emit_line("int pad_count = width > len ? width - len : 0;");
+        self.emit_line("for (int i = 0; i < pad_count; i++) result[i] = pad_char;");
+        self.emit_line("strcpy(result + pad_count, str);");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String pad right");
+        self.emit_line("const char* lucid_string_pad_right(const char* str, int64_t width, char pad_char) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("int len = strlen(str);");
+        self.emit_line("strcpy(result, str);");
+        self.emit_line("int pad_count = width > len ? width - len : 0;");
+        self.emit_line("for (int i = 0; i < pad_count; i++) result[len + i] = pad_char;");
+        self.emit_line("result[len + pad_count] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Check if is numeric");
+        self.emit_line("bool lucid_string_is_numeric(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("if (!str || !*str) return false;");
+        self.emit_line("for (int i = 0; str[i]; i++) {");
+        self.indent_level += 1;
+        self.emit_line("if (!isdigit((unsigned char)str[i]) && str[i] != '-' && str[i] != '.') return false;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("return true;");
+        self.indent_level -= 1;
+        self.emit_line("}");
     }
 
     fn emit_line(&mut self, line: &str) {
