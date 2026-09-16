@@ -2180,6 +2180,49 @@ int main() {
     }
 
     #[test]
+    fn test_raise_instruction() {
+        // Test that raise instructions are generated for broken invariants
+        let mut module = IrModule::new();
+
+        // Create a simple function with a raise instruction
+        let mut func = IrFunction::new(
+            "check_positive".to_string(),
+            vec![IrParam {
+                name: "x".to_string(),
+                ty: IrType::I64,
+            }],
+            IrType::Bool,
+        );
+
+        // Add a raise instruction for broken invariant
+        func.blocks[0].instructions.push(IrInstruction::Raise {
+            message: "x must be positive".to_string(),
+            condition_failed: Some(IrValue::Var("x".to_string())),
+        });
+
+        func.blocks[0].set_terminator(IrTerminator::Return {
+            value: Some(IrValue::Bool(true)),
+        });
+
+        module.add_function(func);
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify raise instruction generates abort() call
+        assert!(
+            code.contains("abort()") || code.contains("fprintf(stderr"),
+            "raise should generate error handling code"
+        );
+        // Check for the error message (case-insensitive)
+        assert!(
+            code.to_lowercase().contains("must be positive"),
+            "raise should include error message"
+        );
+    }
+
+    #[test]
     fn test_collection_algorithms_codegen() {
         // Test that collection algorithms are generated (reverse, first, last)
         let mut module = IrModule::new();

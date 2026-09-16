@@ -537,6 +537,13 @@ pub enum IrInstruction {
     FileClose {
         file: IrValue,
     },
+    /// Raise (panic) on broken invariant
+    /// Only used for genuine internal errors, not for recoverable user errors
+    /// Use Result types for recoverable error handling
+    Raise {
+        message: String,
+        condition_failed: Option<IrValue>,  // Condition that failed (for debugging)
+    },
 }
 
 /// Values in IR (operands)

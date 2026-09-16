@@ -891,6 +891,21 @@ impl CCodegenBackend {
                 let file_code = self.value_to_c(file);
                 self.emit_line(&format!("fclose({});", file_code));
             }
+            IrInstruction::Raise { message, condition_failed } => {
+                // Generate code to panic/abort on broken invariant
+                if let Some(cond) = condition_failed {
+                    let cond_code = self.value_to_c(cond);
+                    self.emit_line(&format!(
+                        "if (!{}) {{ fprintf(stderr, \"Invariant failed: {}\\n\"); abort(); }}",
+                        cond_code, message
+                    ));
+                } else {
+                    self.emit_line(&format!(
+                        "{{ fprintf(stderr, \"Invariant failed: {}\\n\"); abort(); }}",
+                        message
+                    ));
+                }
+            }
         }
     }
 
