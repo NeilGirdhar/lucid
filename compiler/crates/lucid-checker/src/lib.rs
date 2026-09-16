@@ -15593,6 +15593,33 @@ u.id = 2
     }
 
     #[test]
+    fn double_underscore_members_are_not_name_mangled() {
+        // `__a` is stored and resolved exactly as written: the declaring
+        // class reads it back under that name, and the private-member rule
+        // (a leading `_`) is what keeps it out of reach elsewhere, not a
+        // Python-style rewrite to `_Secret__a`.
+        let inside = parse(
+            "class Secret:\n    __a: int\n    def get(self) -> int:\n        return self.__a\n\ns = Secret(7)\ninside = s.get()\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check_module(&inside).unwrap();
+        let Some(Type::Class { fields, .. }) = checker.env.classes.get("Secret") else {
+            panic!("expected Secret to be a class");
+        };
+        assert!(fields.contains_key("__a"));
+        assert!(!fields.keys().any(|field| field.contains("_Secret__")));
+
+        let outside = parse(
+            "class Secret:\n    __a: int\n\ns = Secret(7)\noutside = s.__a\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&outside).unwrap_err();
+        assert!(err.message.contains("member '__a' is private"), "{}", err.message);
+    }
+
+    #[test]
     fn private_members_belong_to_their_declaring_class() {
         // A subclass is "nowhere else" too: `_a` is private to the class
         // that declares it, and a child's own methods cannot reach it.
