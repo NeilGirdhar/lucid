@@ -170,6 +170,27 @@ impl CCodegenBackend {
             "int64_t {0}_index_of(struct {0}* list, {1} item) {{\n  for (int64_t i = 0; i < list->length; i++) {{\n    if (list->items[i] == item) return i;\n  }}\n  return -1;\n}}",
             type_name, elem_type
         ));
+        self.emit_line("");
+
+        // Generate sum function (for numeric types)
+        self.emit_line(&format!(
+            "{1} {0}_sum(struct {0}* list) {{\n  {1} total = 0;\n  for (int64_t i = 0; i < list->length; i++) {{\n    total += list->items[i];\n  }}\n  return total;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate min function (for numeric types)
+        self.emit_line(&format!(
+            "{1} {0}_min(struct {0}* list) {{\n  if (list->length == 0) return 0;\n  {1} min_val = list->items[0];\n  for (int64_t i = 1; i < list->length; i++) {{\n    if (list->items[i] < min_val) min_val = list->items[i];\n  }}\n  return min_val;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate max function (for numeric types)
+        self.emit_line(&format!(
+            "{1} {0}_max(struct {0}* list) {{\n  if (list->length == 0) return 0;\n  {1} max_val = list->items[0];\n  for (int64_t i = 1; i < list->length; i++) {{\n    if (list->items[i] > max_val) max_val = list->items[i];\n  }}\n  return max_val;\n}}",
+            type_name, elem_type
+        ));
     }
 
     fn generate_specialized_dict(&mut self, spec: &crate::TypeSpecialization) {
@@ -1070,6 +1091,41 @@ impl CCodegenBackend {
         self.indent_level -= 1;
         self.emit_line("}");
         self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // Utility functions
+        self.emit_line("// Type conversion utilities");
+        self.emit_line("const char* lucid_to_string_int(int64_t x) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[256];");
+        self.emit_line("snprintf(result, sizeof(result), \"%lld\", (long long)x);");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("const char* lucid_to_string_double(double x) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[256];");
+        self.emit_line("snprintf(result, sizeof(result), \"%.15g\", x);");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Random number helper");
+        self.emit_line("int64_t lucid_random_int(int64_t max) {");
+        self.indent_level += 1;
+        self.emit_line("return (int64_t)(((double)rand() / RAND_MAX) * max);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("double lucid_random_double(void) {");
+        self.indent_level += 1;
+        self.emit_line("return (double)rand() / RAND_MAX;");
         self.indent_level -= 1;
         self.emit_line("}");
     }

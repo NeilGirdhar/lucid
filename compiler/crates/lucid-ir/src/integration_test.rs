@@ -2230,4 +2230,43 @@ int main() {
         assert!(code.contains("if (list->items[i] == item)"), "contains should check items");
     }
 
+    #[test]
+    fn test_list_reduction_operations_codegen() {
+        // Test list reduction operations (sum, min, max)
+        let mut module = IrModule::new();
+
+        // Create List[i64] specialization
+        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify reduction operations
+        assert!(code.contains("List__i64___sum"), "sum should be generated");
+        assert!(code.contains("List__i64___min"), "min should be generated");
+        assert!(code.contains("List__i64___max"), "max should be generated");
+
+        // Verify implementations use accumulation
+        assert!(code.contains("total += list->items"), "sum should accumulate");
+        assert!(code.contains("if (list->items[i] < min_val)"), "min should find minimum");
+        assert!(code.contains("if (list->items[i] > max_val)"), "max should find maximum");
+    }
+
+    #[test]
+    fn test_utility_functions_generated() {
+        // Test that utility conversion and random functions are generated
+        let module = IrModule::new();
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify utility functions
+        assert!(code.contains("lucid_to_string_int"), "to_string_int should be generated");
+        assert!(code.contains("lucid_to_string_double"), "to_string_double should be generated");
+        assert!(code.contains("lucid_random_int"), "random_int should be generated");
+        assert!(code.contains("lucid_random_double"), "random_double should be generated");
+    }
+
 }
