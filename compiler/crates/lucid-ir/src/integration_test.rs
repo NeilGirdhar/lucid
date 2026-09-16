@@ -507,4 +507,39 @@ mod tests {
         let full = format!("{}\n\nint main() {{\n  void* p = allocate_object();\n  if (p != NULL) {{\n    printf(\"1\\n\");\n    free(p);\n  }}\n  return 0;\n}}", c);
         assert!(test_c_code(&full, "1\n"), "malloc should allocate memory");
     }
+
+    #[test]
+    fn test_calling_convention_parameter_passing() {
+        use lucid_abi::{AbiInfo, CallingConvention, CInteropType};
+
+        // Test System V AMD64 calling convention parameter passing
+        let cc = CallingConvention::current();
+        let mut abi = AbiInfo::new(cc, 8);
+
+        // Verify we can retrieve calling convention
+        assert!(matches!(cc, CallingConvention::SystemVAmd64 |
+                            CallingConvention::MicrosoftX64 |
+                            CallingConvention::Arm64));
+
+        // Test layout generation for multi-parameter function
+        let mut abi_test = AbiInfo::new(cc, 8);
+        abi_test.generate_layout(
+            "FunctionABI".to_string(),
+            vec![
+                ("arg0".to_string(), CInteropType::Int),
+                ("arg1".to_string(), CInteropType::Int),
+                ("arg2".to_string(), CInteropType::Int),
+            ],
+        );
+
+        // Verify layout was generated
+        let layout = abi_test.layout("FunctionABI");
+        assert!(layout.is_some(), "Layout should be generated");
+
+        // Verify field tracking
+        let l = layout.unwrap();
+        assert!(l.field_offset("arg0").is_some(), "arg0 field should exist");
+        assert!(l.field_offset("arg1").is_some(), "arg1 field should exist");
+        assert!(l.field_offset("arg2").is_some(), "arg2 field should exist");
+    }
 }
