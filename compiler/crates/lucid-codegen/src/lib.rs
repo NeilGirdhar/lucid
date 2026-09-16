@@ -189,7 +189,7 @@ fn is_none_expr(expr: &Expr) -> bool {
             value: LiteralValue::None,
             ..
         } => true,
-        Expr::Ident { name, .. } => name == "none" || name == "None",
+        Expr::Ident { name, .. } => name == "none",
         _ => false,
     }
 }
@@ -676,7 +676,6 @@ impl CCodeGenerator {
                 | "range"
                 | "DottedPath"
                 | "none"
-                | "None"
         ) && !name.chars().next().is_some_and(char::is_uppercase)
     }
 
@@ -5305,7 +5304,7 @@ static inline void lucid_print_val(LucidVal v) {
                 "complex" => "LucidVal".to_string(),
                 "bool" => "bool".to_string(),
                 "str" => "const char*".to_string(),
-                "none" | "None" => "void".to_string(),
+                "none" => "void".to_string(),
                 "list" => "LucidList*".to_string(),
                 "dict" => "LucidDict*".to_string(),
                 "set" => "LucidSet*".to_string(),
@@ -6245,7 +6244,7 @@ static inline void lucid_print_val(LucidVal v) {
                 "dict" => format!("{subject}.type == LUCID_TYPE_DICT"),
                 "range" => format!("{subject}.type == LUCID_TYPE_RANGE"),
                 "DottedPath" => format!("{subject}.type == LUCID_TYPE_DOTTED_PATH"),
-                "none" | "None" => format!("{subject}.type == LUCID_TYPE_NONE"),
+                "none" => format!("{subject}.type == LUCID_TYPE_NONE"),
                 name if self.known_classes.contains_key(name) => {
                     let names = self.class_pattern_names(name);
                     names
@@ -6316,7 +6315,7 @@ static inline void lucid_print_val(LucidVal v) {
                 "dict" => Ok(format!("{subject}.type == LUCID_TYPE_DICT")),
                 "range" => Ok(format!("{subject}.type == LUCID_TYPE_RANGE")),
                 "DottedPath" => Ok(format!("{subject}.type == LUCID_TYPE_DOTTED_PATH")),
-                "none" | "None" => Ok(format!("{subject}.type == LUCID_TYPE_NONE")),
+                "none" => Ok(format!("{subject}.type == LUCID_TYPE_NONE")),
                 name if self.known_classes.contains_key(name) => Ok(self
                     .class_pattern_names(name)
                     .into_iter()
@@ -6597,7 +6596,7 @@ static inline void lucid_print_val(LucidVal v) {
             "set" => "lucid_pending_exception.type == LUCID_TYPE_SET".to_string(),
             "dict" => "lucid_pending_exception.type == LUCID_TYPE_DICT".to_string(),
             "DottedPath" => "lucid_pending_exception.type == LUCID_TYPE_DOTTED_PATH".to_string(),
-            "none" | "None" => "lucid_pending_exception.type == LUCID_TYPE_NONE".to_string(),
+            "none" => "lucid_pending_exception.type == LUCID_TYPE_NONE".to_string(),
             name if self.known_classes.contains_key(name) => self
                 .class_pattern_names(name)
                 .into_iter()
@@ -7991,7 +7990,7 @@ static inline void lucid_print_val(LucidVal v) {
     ) {
         const BUILTINS: &[&str] = &[
             "abs", "all", "any", "bool", "bytes", "dict", "float", "int", "len", "list", "max",
-            "min", "pow", "print", "range", "repr", "round", "set", "str", "sum", "none", "None",
+            "min", "pow", "print", "range", "repr", "round", "set", "str", "sum", "none",
             "true", "false",
         ];
         match expr {
@@ -10761,7 +10760,7 @@ static inline void lucid_print_val(LucidVal v) {
                 match name.as_str() {
                     "true" => Ok("true".to_string()),
                     "false" => Ok("false".to_string()),
-                    "none" | "None" => Ok("lucid_none()".to_string()),
+                    "none" => Ok("lucid_none()".to_string()),
                     "pi" if !self.global_vars.contains_key(name) => Ok("M_PI".to_string()),
                     "e" if !self.global_vars.contains_key(name) => Ok("M_E".to_string()),
                     "platform" if !self.global_vars.contains_key(name) => {
@@ -16450,7 +16449,7 @@ pub fn compile_to_native_entry(
         }
         let call = if matches!(
             function.return_type.as_ref(),
-            Some(TypeExpr::Named { name, .. }) if name == "none" || name == "None"
+            Some(TypeExpr::Named { name, .. }) if name == "none"
         ) {
             format!("lucid_fn_{}();", function.name)
         } else {
@@ -16885,7 +16884,7 @@ print(" ".join(capitalized))
 
     #[test]
     fn native_match_buffer_patterns_test_buffer_values() {
-        let source = "data = b\"ab\"\nmatch data:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\nview = memoryview(data)\nmatch view:\n    case MemoryView:\n        print(1)\n    case _:\n        print(0)\nitems = [1, 2]\nmatch items:\n    case list:\n        print(1)\n    case _:\n        print(0)\nunique = {1, 2}\nmatch unique:\n    case set:\n        print(1)\n    case _:\n        print(0)\nmapping = {\"a\": 1}\nmatch mapping:\n    case dict:\n        print(1)\n    case _:\n        print(0)\ndef sample() -> int:\n    return 1\npath = sample.__path__\nmatch path:\n    case DottedPath:\n        print(1)\n    case _:\n        print(0)\ndoc = sample.__doc__\nmatch doc:\n    case None:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\n";
+        let source = "data = b\"ab\"\nmatch data:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\nview = memoryview(data)\nmatch view:\n    case MemoryView:\n        print(1)\n    case _:\n        print(0)\nitems = [1, 2]\nmatch items:\n    case list:\n        print(1)\n    case _:\n        print(0)\nunique = {1, 2}\nmatch unique:\n    case set:\n        print(1)\n    case _:\n        print(0)\nmapping = {\"a\": 1}\nmatch mapping:\n    case dict:\n        print(1)\n    case _:\n        print(0)\ndef sample() -> int:\n    return 1\npath = sample.__path__\nmatch path:\n    case DottedPath:\n        print(1)\n    case _:\n        print(0)\ndoc = sample.__doc__\nmatch doc:\n    case none:\n        print(1)\n    case _:\n        print(0)\nother = 3\nmatch other:\n    case bytes:\n        print(1)\n    case _:\n        print(0)\n";
         let module = parse(source).expect("buffer match pattern source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_native_buffer_match_pattern_{}",
@@ -19051,7 +19050,7 @@ print(path is DottedPath)
 print(path is not list)
 print(path is Sized)
 print(path is Container)
-print(missing is None)
+print(missing is none)
 print(missing is not list)
 "#;
         let module = parse(source).expect("builtin type-check source should parse");

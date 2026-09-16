@@ -241,14 +241,14 @@ spell out:
 ```python
 mode: 1 | 2 | 3
 status: "ok" | "error"
-flag: True
+flag: true
 ```
 means exactly:
 
 ```python
 mode: Literal[1, 2, 3]
 status: Literal["ok", "error"]
-flag: Literal[True]
+flag: Literal[true]
 ```
 None of this is ambiguous with what `1 | 2 | 3` means as a value,
 because an annotation is already parsed as a type expression

@@ -1353,7 +1353,6 @@ impl Interpreter {
                 | "range"
                 | "DottedPath"
                 | "none"
-                | "None"
         ) && !name.chars().next().is_some_and(char::is_uppercase)
     }
 
@@ -7265,7 +7264,6 @@ impl Interpreter {
                                 | "bool"
                                 | "str"
                                 | "none"
-                                | "None"
                                 | "class"
                                 | "trait"
                                 | "interface"
@@ -10630,7 +10628,7 @@ impl Interpreter {
                 Value::Dict(_) if name == "dict" => true,
                 Value::Range { .. } if name == "range" => true,
                 Value::DottedPath(_) if name == "DottedPath" => true,
-                Value::None if matches!(name.as_str(), "none" | "None") => true,
+                Value::None if name == "none" => true,
                 Value::Object { class_name, .. }
                     if class_name == name || self.is_subclass(class_name, name) =>
                 {
@@ -10669,7 +10667,7 @@ impl Interpreter {
                     Value::Complex(_, _) if name == "complex" => true,
                     Value::Str(_) if name == "str" => true,
                     Value::Bool(_) if name == "bool" => true,
-                    Value::None if matches!(name.as_str(), "none" | "None") => true,
+                    Value::None if name == "none" => true,
                     _ => false,
                 },
                 TypeExpr::Union { types, .. } => types
@@ -11525,7 +11523,7 @@ match path:
 
 doc = sample.__doc__
 match doc:
-    case None:
+    case none:
         none_result = 1
     case _:
         none_result = 0

@@ -72,18 +72,42 @@ mod tests {
     #[test]
     #[allow(clippy::approx_constant)]
     fn test_lex_basic_tokens() {
-        let src = "true false True False none None 42 3.14 \"hello\"";
+        let src = "true false none 42 3.14 \"hello\"";
         let mut lexer = Lexer::new(src);
         let tokens = lexer.tokenize().unwrap();
         assert_eq!(tokens[0].kind, TokenKind::True);
         assert_eq!(tokens[1].kind, TokenKind::False);
-        assert_eq!(tokens[2].kind, TokenKind::True);
-        assert_eq!(tokens[3].kind, TokenKind::False);
-        assert_eq!(tokens[4].kind, TokenKind::None);
-        assert_eq!(tokens[5].kind, TokenKind::None);
-        assert_eq!(tokens[6].kind, TokenKind::Int(42));
-        assert_eq!(tokens[7].kind, TokenKind::Float(3.14));
-        assert_eq!(tokens[8].kind, TokenKind::Str("hello".to_string()));
+        assert_eq!(tokens[2].kind, TokenKind::None);
+        assert_eq!(tokens[3].kind, TokenKind::Int(42));
+        assert_eq!(tokens[4].kind, TokenKind::Float(3.14));
+        assert_eq!(tokens[5].kind, TokenKind::Str("hello".to_string()));
+    }
+
+    #[test]
+    fn python_spelled_constants_are_identifiers_not_literals() {
+        let mut lexer = Lexer::new("True False None");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Ident("True".to_string()));
+        assert_eq!(tokens[1].kind, TokenKind::Ident("False".to_string()));
+        assert_eq!(tokens[2].kind, TokenKind::Ident("None".to_string()));
+
+        let module = parse("x = None\n").unwrap();
+        let Stmt::Assignment { value, .. } = &module.statements[0] else {
+            panic!("expected assignment");
+        };
+        assert!(matches!(value, Expr::Ident { name, .. } if name == "None"));
+
+        let module = parse("x = none\n").unwrap();
+        let Stmt::Assignment { value, .. } = &module.statements[0] else {
+            panic!("expected assignment");
+        };
+        assert!(matches!(
+            value,
+            Expr::Literal {
+                value: LiteralValue::None,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -7788,7 +7788,7 @@ impl TypeChecker {
                                 Type::Float if name == "float" => false,
                                 Type::Bool if name == "bool" => false,
                                 Type::Str if name == "str" => false,
-                                Type::None if matches!(name.as_str(), "none" | "None") => false,
+                                Type::None if name == "none" => false,
                                 _ => true,
                             });
                         }
@@ -7890,7 +7890,7 @@ impl TypeChecker {
                 fields: HashMap::new(),
                 is_sealed: true,
             }),
-            "none" | "None" => Some(Type::None),
+            "none" => Some(Type::None),
             _ if name
                 .chars()
                 .next()
@@ -7988,7 +7988,6 @@ impl TypeChecker {
                         | "range"
                         | "DottedPath"
                         | "none"
-                        | "None"
                 ) && self.named_pattern_type(name).is_none() =>
             {
                 self.env.variables.insert(
@@ -13842,7 +13841,6 @@ fn pattern_bound_names(pattern: &Pattern, names: &mut HashSet<String>) {
                     | "range"
                     | "DottedPath"
                     | "none"
-                    | "None"
             ) && !looks_like_class_name(name) =>
         {
             names.insert(name.clone());
@@ -14636,12 +14634,14 @@ def render(s: Shape) -> int:
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&aliased).is_ok());
 
+        // `None` is an ordinary identifier, not a spelling of `none`, so it
+        // cannot stand in for the `none` arm.
         let uppercase_none = parse(
             "type MaybeInt = int | none\ndef render(s: MaybeInt) -> int:\n    match s:\n        case int:\n            return s\n        case None:\n            return 0\n",
         )
         .unwrap();
         let mut checker = TypeChecker::new();
-        assert!(checker.check_module(&uppercase_none).is_ok());
+        assert!(checker.check_module(&uppercase_none).is_err());
 
         let bytes_alias = parse(
             "def render(s: Bytes | int) -> int:\n    match s:\n        case bytes:\n            return 1\n        case int:\n            return 2\n",
@@ -19492,10 +19492,10 @@ c = a < b
 
     #[test]
     fn type_narrowing_on_none_check() {
-        let code = r#"x: int | None = None
+        let code = r#"x: int | none = none
 
-if x is None:
-    y = x  # x should be narrowed to None
+if x is none:
+    y = x  # x should be narrowed to none
 else:
     z = x  # x should be narrowed to int
 "#;
@@ -19504,45 +19504,45 @@ else:
         let result = checker.check_module(&module);
         assert!(
             result.is_ok(),
-            "type narrowing on 'x is None' should work: {:?}",
+            "type narrowing on 'x is none' should work: {:?}",
             result
         );
     }
 
     #[test]
     fn type_narrowing_on_not_none_check() {
-        let code = r#"x: int | None = None
+        let code = r#"x: int | none = none
 
-if not (x is None):
+if not (x is none):
     y = x  # x should be narrowed to int
 else:
-    z = x  # x should be narrowed to None
+    z = x  # x should be narrowed to none
 "#;
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(
             result.is_ok(),
-            "type narrowing on 'not (x is None)' should work: {:?}",
+            "type narrowing on 'not (x is none)' should work: {:?}",
             result
         );
     }
 
     #[test]
     fn type_narrowing_on_is_not_none_check() {
-        let code = r#"x: int | None = None
+        let code = r#"x: int | none = none
 
-if x is not None:
+if x is not none:
     y = x  # x should be narrowed to int
 else:
-    z = x  # x should be narrowed to None
+    z = x  # x should be narrowed to none
 "#;
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(
             result.is_ok(),
-            "type narrowing on 'x is not None' should work: {:?}",
+            "type narrowing on 'x is not none' should work: {:?}",
             result
         );
     }
@@ -19552,10 +19552,10 @@ else:
         let code = r#"def expect_int(x: int) -> int:
     return x + 1
 
-y: int | None = None
+y: int | none = none
 
-if y is None:
-    print("y is None")
+if y is none:
+    print("y is none")
 else:
     # y should be narrowed to int here
     result = expect_int(y)
@@ -19572,12 +19572,12 @@ else:
 
     #[test]
     fn type_narrowing_in_union_types() {
-        let code = r#"x: int | str | None = None
+        let code = r#"x: int | str | none = none
 
-if x is None:
-    print("x is None")
+if x is none:
+    print("x is none")
 else:
-    # x should be narrowed from int | str | None to int | str
+    # x should be narrowed from int | str | none to int | str
     y: int | str = x
 "#;
         let module = parse(code).unwrap();
@@ -19592,8 +19592,8 @@ else:
 
     #[test]
     fn type_narrowing_persists_after_if_with_early_return() {
-        let code = r#"def process(x: int | None) -> int:
-    if x is None:
+        let code = r#"def process(x: int | none) -> int:
+    if x is none:
         return 0
 
     # x should be narrowed to int here, after the if statement
@@ -19613,17 +19613,17 @@ else:
     fn type_narrowing_in_recursive_pattern() {
         let code = r#"class Node:
     value: int
-    left: Node | None
-    right: Node | None
+    left: Node | none
+    right: Node | none
 
 def process(node: Node) -> int:
     left = node.left
     right = node.right
 
-    if left is None:
+    if left is none:
         return node.value
 
-    if right is None:
+    if right is none:
         return node.value + process(left)
 
     return node.value + process(left) + process(right)
@@ -19642,10 +19642,10 @@ def process(node: Node) -> int:
     fn type_narrowing_with_attribute_path() {
         let code = r#"class Node:
     value: int
-    left: Node | None
+    left: Node | none
 
 def process(node: Node) -> int:
-    if node.left is None:
+    if node.left is none:
         return node.value
 
     # node.left should be narrowed to Node here
@@ -19665,12 +19665,12 @@ def process(node: Node) -> int:
     fn type_narrowing_invalidated_by_assignment() {
         let code = r#"class Node:
     value: int
-    left: Node | None
+    left: Node | none
 
 def f(node: Node) -> int:
-    if node.left is not None:
-        node.left = None
-        # node.left is now None again, not Node - should be rejected
+    if node.left is not none:
+        node.left = none
+        # node.left is now none again, not Node - should be rejected
         return process(node.left)
     return 0
 
