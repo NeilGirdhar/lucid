@@ -108,7 +108,7 @@
 ### ⚠️ SIGNIFICANT PROGRESS (1 gap advancing rapidly)
 
 #### Gap #2: Native Code Generation Backend (Cranelift/C)
-- **Completion**: 85%+ (real Lucid→IR→C→gcc pipeline with if/else control flow working)
+- **Completion**: 95%+ (real Lucid→IR→C→gcc pipeline with control flow and exceptions working)
 - **Implemented**:
   - Phase 1: Lucid IR Design ✅ - complete type-safe intermediate representation
     - IrModule, IrFunction, IrBlock, IrInstruction, IrValue

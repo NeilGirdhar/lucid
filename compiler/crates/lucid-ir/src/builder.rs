@@ -323,8 +323,71 @@ impl IrBuilder {
                     self.terminate(IrTerminator::Return { value: Some(ex_val) });
                 }
             }
+            Stmt::For { target, iterable, body, .. } => {
+                if let Some(func_idx) = self.current_function {
+                    if let Pattern::Ident(loop_var, _) = target {
+                        let loop_init_id = self.fresh_block("for_init");
+                        let loop_cond_id = self.fresh_block("for_cond");
+                        let loop_body_id = self.fresh_block("for_body");
+                        let loop_exit_id = self.fresh_block("for_exit");
+
+                        // Jump to loop initialization
+                        self.terminate(IrTerminator::Jump { target: loop_init_id });
+
+                        // Loop initialization: i = 0 (simplified for range iteration)
+                        self.current_block = loop_init_id;
+                        self.emit(IrInstruction::Assign {
+                            dest: loop_var.clone(),
+                            value: IrValue::Int(0),
+                        });
+                        self.var_types.insert(loop_var.clone(), IrType::I64);
+                        self.terminate(IrTerminator::Jump { target: loop_cond_id });
+
+                        // Loop condition: i < iterable (simplified - assume iterable is an int)
+                        self.current_block = loop_cond_id;
+                        let iter_val = self.expr_to_ir_value(iterable);
+                        let cond_dest = self.fresh_var("for_cond");
+                        self.emit(IrInstruction::BinOp {
+                            dest: cond_dest.clone(),
+                            op: IrBinOp::Lt,
+                            left: IrValue::Var(loop_var.clone()),
+                            right: iter_val,
+                        });
+                        self.terminate(IrTerminator::Branch {
+                            condition: IrValue::Var(cond_dest),
+                            then_block: loop_body_id,
+                            else_block: loop_exit_id,
+                        });
+
+                        // Loop body
+                        self.current_block = loop_body_id;
+                        for stmt in body {
+                            self.build_stmt_recursive(stmt);
+                        }
+
+                        // Loop increment: i = i + 1
+                        if matches!(self.module.functions[func_idx].blocks[loop_body_id].terminator, IrTerminator::Unreachable) {
+                            let inc_dest = self.fresh_var("for_inc");
+                            self.emit(IrInstruction::BinOp {
+                                dest: inc_dest.clone(),
+                                op: IrBinOp::Add,
+                                left: IrValue::Var(loop_var.clone()),
+                                right: IrValue::Int(1),
+                            });
+                            self.emit(IrInstruction::Assign {
+                                dest: loop_var.clone(),
+                                value: IrValue::Var(inc_dest),
+                            });
+                            self.terminate(IrTerminator::Jump { target: loop_cond_id });
+                        }
+
+                        // Continue after loop
+                        self.current_block = loop_exit_id;
+                    }
+                }
+            }
             _ => {
-                // Other statements not yet handled (For, Match, etc.)
+                // Other statements not yet handled (Match, etc.)
             }
         }
     }

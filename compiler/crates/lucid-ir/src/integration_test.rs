@@ -416,4 +416,22 @@ mod tests {
         let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", safe_divide(10, 0));\n  return 0;\n}}", c_code);
         assert!(test_c_code(&full_c, "-1\n"), "safe_divide(10, 0) should return -1 (exception caught)");
     }
+
+    #[test]
+    fn test_for_loop_range_iteration() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        // Test: for loop with range iteration
+        let lucid_code = "def sum_range(n: int) -> int:\n  total: int = 0\n  for i in n:\n    total = total + i\n  return total\n";
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for for loop");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for for loop");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+        let mut backend = CCodegenBackend::new();
+        let c_code = backend.generate(&ir_module);
+        let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", sum_range(5));\n  return 0;\n}}", c_code);
+        assert!(test_c_code(&full_c, "10\n"), "sum_range(5) should return 10 (0+1+2+3+4)");
+    }
 }
