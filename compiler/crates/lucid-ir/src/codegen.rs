@@ -128,6 +128,27 @@ impl CCodegenBackend {
             "{1} {0}_last(struct {0}* list) {{\n  if (list->length > 0) return list->items[list->length - 1];\n  return ({1})0;\n}}",
             type_name, elem_type
         ));
+        self.emit_line("");
+
+        // Generate count function
+        self.emit_line(&format!(
+            "int64_t {0}_count(struct {0}* list) {{\n  return list->length;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate is_empty function
+        self.emit_line(&format!(
+            "bool {0}_is_empty(struct {0}* list) {{\n  return list->length == 0;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate clear function
+        self.emit_line(&format!(
+            "void {0}_clear(struct {0}* list) {{\n  list->length = 0;\n}}",
+            type_name
+        ));
     }
 
     fn generate_specialized_dict(&mut self, spec: &crate::TypeSpecialization) {
@@ -172,6 +193,41 @@ impl CCodegenBackend {
         self.emit_line(&format!(
             "{2} {0}_get(struct {0}* dict, {1} key) {{\n  for (int64_t i = 0; i < dict->length; i++) {{\n    if (dict->keys[i] == key) return dict->values[i];\n  }}\n  return ({2})0;\n}}",
             type_name, key_type, val_type
+        ));
+        self.emit_line("");
+
+        // Generate length function for dict
+        self.emit_line(&format!(
+            "int64_t {0}_length(struct {0}* dict) {{\n  return dict->length;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate contains_key function
+        self.emit_line(&format!(
+            "bool {0}_contains_key(struct {0}* dict, {1} key) {{\n  for (int64_t i = 0; i < dict->length; i++) {{\n    if (dict->keys[i] == key) return true;\n  }}\n  return false;\n}}",
+            type_name, key_type
+        ));
+        self.emit_line("");
+
+        // Generate is_empty function for dict
+        self.emit_line(&format!(
+            "bool {0}_is_empty(struct {0}* dict) {{\n  return dict->length == 0;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate remove function
+        self.emit_line(&format!(
+            "void {0}_remove(struct {0}* dict, {1} key) {{\n  for (int64_t i = 0; i < dict->length; i++) {{\n    if (dict->keys[i] == key) {{\n      for (int64_t j = i; j < dict->length - 1; j++) {{\n        dict->keys[j] = dict->keys[j + 1];\n        dict->values[j] = dict->values[j + 1];\n      }}\n      dict->length--;\n      return;\n    }}\n  }}\n}}",
+            type_name, key_type
+        ));
+        self.emit_line("");
+
+        // Generate clear function
+        self.emit_line(&format!(
+            "void {0}_clear(struct {0}* dict) {{\n  dict->length = 0;\n}}",
+            type_name
         ));
     }
 
@@ -780,6 +836,81 @@ impl CCodegenBackend {
         self.emit_line("for (int i = 0; str[i]; i++) result[i] = tolower(str[i]);");
         self.emit_line("result[strlen(str)] = '\\0';");
         self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // Math helper functions
+        self.emit_line("// Math helper: absolute value");
+        self.emit_line("int64_t lucid_abs(int64_t x) {");
+        self.indent_level += 1;
+        self.emit_line("return x < 0 ? -x : x;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: minimum of two integers");
+        self.emit_line("int64_t lucid_min(int64_t a, int64_t b) {");
+        self.indent_level += 1;
+        self.emit_line("return a < b ? a : b;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: maximum of two integers");
+        self.emit_line("int64_t lucid_max(int64_t a, int64_t b) {");
+        self.indent_level += 1;
+        self.emit_line("return a > b ? a : b;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: power");
+        self.emit_line("double lucid_pow(double base, double exp) {");
+        self.indent_level += 1;
+        self.emit_line("return pow(base, exp);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: integer power");
+        self.emit_line("int64_t lucid_pow_int(int64_t base, int64_t exp) {");
+        self.indent_level += 1;
+        self.emit_line("int64_t result = 1;");
+        self.emit_line("for (int64_t i = 0; i < exp; i++) result *= base;");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: floating point absolute value");
+        self.emit_line("double lucid_fabs(double x) {");
+        self.indent_level += 1;
+        self.emit_line("return fabs(x);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: round to nearest integer");
+        self.emit_line("int64_t lucid_round(double x) {");
+        self.indent_level += 1;
+        self.emit_line("return (int64_t)(x + 0.5);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: floor");
+        self.emit_line("int64_t lucid_floor_int(double x) {");
+        self.indent_level += 1;
+        self.emit_line("return (int64_t)floor(x);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Math helper: ceiling");
+        self.emit_line("int64_t lucid_ceil_int(double x) {");
+        self.indent_level += 1;
+        self.emit_line("return (int64_t)ceil(x);");
         self.indent_level -= 1;
         self.emit_line("}");
     }

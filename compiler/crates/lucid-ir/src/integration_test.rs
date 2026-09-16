@@ -20,7 +20,7 @@ mod tests {
         fs::write(&source, c_code).ok();
 
         let compile = Command::new("gcc")
-            .args(&["-o", &exe, &source])
+            .args(&["-o", &exe, &source, "-lm"])
             .output();
 
         if let Ok(out) = compile {
@@ -1947,6 +1947,63 @@ int main() {
         assert!(code.contains("lucid_string_ends_with"), "ends_with should be generated");
         assert!(code.contains("lucid_string_to_upper"), "to_upper should be generated");
         assert!(code.contains("lucid_string_to_lower"), "to_lower should be generated");
+    }
+
+    #[test]
+    fn test_math_stdlib_functions_generated() {
+        // Test that math stdlib functions are generated
+        let module = IrModule::new();
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify math functions are present
+        assert!(code.contains("lucid_abs"), "abs should be generated");
+        assert!(code.contains("lucid_min"), "min should be generated");
+        assert!(code.contains("lucid_max"), "max should be generated");
+        assert!(code.contains("lucid_pow"), "pow should be generated");
+        assert!(code.contains("lucid_round"), "round should be generated");
+        assert!(code.contains("lucid_floor_int"), "floor should be generated");
+        assert!(code.contains("lucid_ceil_int"), "ceil should be generated");
+    }
+
+    #[test]
+    fn test_list_extended_operations_codegen() {
+        // Test extended list operations (count, is_empty, clear)
+        let mut module = IrModule::new();
+
+        // Create List[i64] specialization
+        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify extended operations
+        assert!(code.contains("List__i64___count"), "count should be generated");
+        assert!(code.contains("List__i64___is_empty"), "is_empty should be generated");
+        assert!(code.contains("List__i64___clear"), "clear should be generated");
+    }
+
+    #[test]
+    fn test_dict_extended_operations_codegen() {
+        // Test extended dictionary operations
+        let mut module = IrModule::new();
+
+        // Create Dict[str, i64] specialization
+        let specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify extended operations
+        assert!(code.contains("Dict__str__i64___length"), "length should be generated");
+        assert!(code.contains("Dict__str__i64___contains_key"), "contains_key should be generated");
+        assert!(code.contains("Dict__str__i64___is_empty"), "is_empty should be generated");
+        assert!(code.contains("Dict__str__i64___remove"), "remove should be generated");
+        assert!(code.contains("Dict__str__i64___clear"), "clear should be generated");
     }
 
 }
