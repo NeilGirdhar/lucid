@@ -78,6 +78,141 @@ mod tests {
     }
 
     #[test]
+    fn test_control_flow_if_statement() {
+        let mut module = IrModule::new();
+
+        // Generate: if (x > 5) { return 10; } else { return 20; }
+        let mut func = IrFunction::new(
+            "if_test".to_string(),
+            vec![IrParam { name: "x".to_string(), ty: IrType::I64 }],
+            IrType::I64,
+        );
+
+        // Entry block: compare x > 5
+        func.blocks[0].add_instruction(IrInstruction::BinOp {
+            dest: "cond".to_string(),
+            op: crate::IrBinOp::Gt,
+            left: IrValue::Var("x".to_string()),
+            right: IrValue::Int(5),
+        });
+
+        // Branch to then (block 1) or else (block 2)
+        func.blocks[0].set_terminator(IrTerminator::Branch {
+            condition: IrValue::Var("cond".to_string()),
+            then_block: 1,
+            else_block: 2,
+        });
+
+        // Block 1: then - return 10
+        let then_id = func.new_block("if_then".to_string());
+        func.blocks[then_id].set_terminator(IrTerminator::Return {
+            value: Some(IrValue::Int(10)),
+        });
+
+        // Block 2: else - return 20
+        let else_id = func.new_block("if_else".to_string());
+        func.blocks[else_id].set_terminator(IrTerminator::Return {
+            value: Some(IrValue::Int(20)),
+        });
+
+        module.add_function(func);
+
+        let mut backend = CCodegenBackend::new();
+        let c = backend.generate(&module);
+
+        // Verify if/else branches in C code
+        assert!(c.contains("if (") || c.contains("goto"));
+
+        // Test with x = 10 (should return 10)
+        let full = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", if_test(10));\n  return 0;\n}}", c);
+        assert!(test_c_code(&full, "10\n"));
+
+        // Test with x = 3 (should return 20)
+        let full2 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", if_test(3));\n  return 0;\n}}", c);
+        assert!(test_c_code(&full2, "20\n"));
+    }
+
+    #[test]
+    fn test_control_flow_while_loop() {
+        let mut module = IrModule::new();
+
+        // Generate: int sum = 0; while (i < 5) { sum += i; i++; } return sum;
+        let mut func = IrFunction::new(
+            "sum_loop".to_string(),
+            vec![],
+            IrType::I64,
+        );
+
+        // Block 0: initialize sum = 0, i = 0
+        func.blocks[0].add_instruction(IrInstruction::Assign {
+            dest: "sum".to_string(),
+            value: IrValue::Int(0),
+        });
+
+        func.blocks[0].add_instruction(IrInstruction::Assign {
+            dest: "i".to_string(),
+            value: IrValue::Int(0),
+        });
+
+        // Jump to loop condition check (block 1)
+        func.blocks[0].set_terminator(IrTerminator::Jump { target: 1 });
+
+        // Block 1: loop condition - i < 5
+        let loop_block = func.new_block("while_cond".to_string());
+        func.blocks[loop_block].add_instruction(IrInstruction::BinOp {
+            dest: "cond".to_string(),
+            op: crate::IrBinOp::Lt,
+            left: IrValue::Var("i".to_string()),
+            right: IrValue::Int(5),
+        });
+
+        // Branch to loop body (block 2) or exit (block 3)
+        func.blocks[loop_block].set_terminator(IrTerminator::Branch {
+            condition: IrValue::Var("cond".to_string()),
+            then_block: 2,
+            else_block: 3,
+        });
+
+        // Block 2: loop body - sum += i
+        let body_block = func.new_block("while_body".to_string());
+        func.blocks[body_block].add_instruction(IrInstruction::BinOp {
+            dest: "sum".to_string(),
+            op: crate::IrBinOp::Add,
+            left: IrValue::Var("sum".to_string()),
+            right: IrValue::Var("i".to_string()),
+        });
+
+        // i++
+        func.blocks[body_block].add_instruction(IrInstruction::BinOp {
+            dest: "i".to_string(),
+            op: crate::IrBinOp::Add,
+            left: IrValue::Var("i".to_string()),
+            right: IrValue::Int(1),
+        });
+
+        // Jump back to loop condition
+        func.blocks[body_block].set_terminator(IrTerminator::Jump { target: loop_block });
+
+        // Block 3: after loop - return sum
+        let exit_block = func.new_block("while_exit".to_string());
+        func.blocks[exit_block].set_terminator(IrTerminator::Return {
+            value: Some(IrValue::Var("sum".to_string())),
+        });
+
+        module.add_function(func);
+
+        let mut backend = CCodegenBackend::new();
+        let c = backend.generate(&module);
+
+        // Verify loop structure
+        assert!(c.contains("goto") || c.contains("while"));
+
+        // sum = 0 + 1 + 2 + 3 + 4 = 10
+        let full = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", sum_loop());\n  return 0;\n}}", c);
+        assert!(test_c_code(&full, "10\n"));
+    }
+
+    #[test]
     fn test_method_call_codegen() {
         let mut module = IrModule::new();
 

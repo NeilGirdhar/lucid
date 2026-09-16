@@ -6,6 +6,7 @@ use crate::{IrModule, IrFunction, IrBlock, IrInstruction, IrValue, IrTerminator,
 pub struct CCodegenBackend {
     indent_level: usize,
     output: String,
+    declared_vars: std::collections::HashSet<String>,
 }
 
 impl CCodegenBackend {
@@ -13,6 +14,7 @@ impl CCodegenBackend {
         Self {
             indent_level: 0,
             output: String::new(),
+            declared_vars: std::collections::HashSet::new(),
         }
     }
 
@@ -49,6 +51,14 @@ impl CCodegenBackend {
     }
 
     fn generate_function(&mut self, func: &IrFunction) {
+        // Clear declared vars for each function
+        self.declared_vars.clear();
+
+        // Mark parameters as already declared
+        for param in &func.params {
+            self.declared_vars.insert(param.name.clone());
+        }
+
         // Function signature
         let return_ctype = func.return_type.c_type();
 
@@ -80,7 +90,7 @@ impl CCodegenBackend {
     fn generate_block(&mut self, block: &IrBlock) {
         // Label (not needed for entry block)
         if block.id > 0 {
-            self.emit_line(&format!("{}:", block.label));
+            self.emit_line(&format!("block_{}:", block.id));
         }
 
         // Instructions
@@ -96,7 +106,12 @@ impl CCodegenBackend {
         match instr {
             IrInstruction::Assign { dest, value } => {
                 let value_code = self.value_to_c(value);
-                self.emit_line(&format!("int64_t {} = {};", dest, value_code));
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!("int64_t {} = {};", dest, value_code));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!("{} = {};", dest, value_code));
+                }
             }
             IrInstruction::BinOp {
                 dest, op, left, right,
@@ -104,18 +119,34 @@ impl CCodegenBackend {
                 let left_code = self.value_to_c(left);
                 let right_code = self.value_to_c(right);
                 let op_str = self.binop_to_c(op);
-                self.emit_line(&format!(
-                    "int64_t {} = {} {} {};",
-                    dest, left_code, op_str, right_code
-                ));
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "int64_t {} = {} {} {};",
+                        dest, left_code, op_str, right_code
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "{} = {} {} {};",
+                        dest, left_code, op_str, right_code
+                    ));
+                }
             }
             IrInstruction::UnaryOp { dest, op, operand } => {
                 let operand_code = self.value_to_c(operand);
                 let op_str = self.unaryop_to_c(op);
-                self.emit_line(&format!(
-                    "int64_t {} = {}({}); ",
-                    dest, op_str, operand_code
-                ));
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "int64_t {} = {}({}); ",
+                        dest, op_str, operand_code
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "{} = {}({}); ",
+                        dest, op_str, operand_code
+                    ));
+                }
             }
             IrInstruction::Call {
                 dest,
@@ -128,7 +159,12 @@ impl CCodegenBackend {
                     .collect::<Vec<_>>()
                     .join(", ");
                 if let Some(d) = dest {
-                    self.emit_line(&format!("int64_t {} = {}({});", d, func, args_code));
+                    if !self.declared_vars.contains(d) {
+                        self.emit_line(&format!("int64_t {} = {}({});", d, func, args_code));
+                        self.declared_vars.insert(d.clone());
+                    } else {
+                        self.emit_line(&format!("{} = {}({});", d, func, args_code));
+                    }
                 } else {
                     self.emit_line(&format!("{}({});", func, args_code));
                 }
@@ -149,14 +185,24 @@ impl CCodegenBackend {
                 let func_name = format!("method_{}", method);
 
                 if let Some(d) = dest {
-                    self.emit_line(&format!("int64_t {} = {}({});", d, func_name, args_code));
+                    if !self.declared_vars.contains(d) {
+                        self.emit_line(&format!("int64_t {} = {}({});", d, func_name, args_code));
+                        self.declared_vars.insert(d.clone());
+                    } else {
+                        self.emit_line(&format!("{} = {}({});", d, func_name, args_code));
+                    }
                 } else {
                     self.emit_line(&format!("{}({});", func_name, args_code));
                 }
             }
             IrInstruction::Load { dest, addr } => {
                 let addr_code = self.value_to_c(addr);
-                self.emit_line(&format!("int64_t {} = *(int64_t*){};", dest, addr_code));
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!("int64_t {} = *(int64_t*){};", dest, addr_code));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!("{} = *(int64_t*){};", dest, addr_code));
+                }
             }
             IrInstruction::Store { addr, value } => {
                 let addr_code = self.value_to_c(addr);
@@ -168,10 +214,18 @@ impl CCodegenBackend {
             } => {
                 let from_code = self.value_to_c(from);
                 let to_ctype = to_type.c_type();
-                self.emit_line(&format!(
-                    "{} {} = ({}){};",
-                    to_ctype, dest, to_ctype, from_code
-                ));
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "{} {} = ({}){};",
+                        to_ctype, dest, to_ctype, from_code
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "{} = ({}){};",
+                        dest, to_ctype, from_code
+                    ));
+                }
             }
         }
     }
