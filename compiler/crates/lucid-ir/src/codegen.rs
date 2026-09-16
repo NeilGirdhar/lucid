@@ -257,6 +257,50 @@ impl CCodegenBackend {
             "struct {0} {0}_concat(struct {0}* list1, struct {0}* list2) {{\n  struct {0} result = {0}_new();\n  for (int64_t i = 0; i < list1->length; i++) {{\n    {0}_append(&result, list1->items[i]);\n  }}\n  for (int64_t i = 0; i < list2->length; i++) {{\n    {0}_append(&result, list2->items[i]);\n  }}\n  return result;\n}}",
             type_name
         ));
+        self.emit_line("");
+
+        // Generate join method for string lists (combines list of strings)
+        if elem_type == "const char*" {
+            self.emit_line(&format!(
+                "const char* {0}_join(struct {0}* list, const char* sep) {{\n  if (list->length == 0) return \"\";\n  static char result[4096];\n  int pos = 0;\n  for (int64_t i = 0; i < list->length && pos < 4090; i++) {{\n    int len = strlen((const char*)list->items[i]);\n    if (pos + len < 4090) {{\n      strcpy(result + pos, (const char*)list->items[i]);\n      pos += len;\n    }}\n    if (i < list->length - 1 && sep && pos + strlen(sep) < 4090) {{\n      strcpy(result + pos, sep);\n      pos += strlen(sep);\n    }}\n  }}\n  result[pos] = '\\0';\n  return result;\n}}",
+                type_name
+            ));
+            self.emit_line("");
+        }
+
+        // Generate last_index_of method
+        self.emit_line(&format!(
+            "int64_t {0}_last_index_of(struct {0}* list, {1} item) {{\n  for (int64_t i = list->length - 1; i >= 0; i--) {{\n    if (list->items[i] == item) return i;\n  }}\n  return -1;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate find_all method (returns indices of matching items)
+        self.emit_line(&format!(
+            "void {0}_find_all(struct {0}* list, {1} item, int64_t* indices, int64_t* count) {{\n  *count = 0;\n  for (int64_t i = 0; i < list->length; i++) {{\n    if (list->items[i] == item) {{\n      indices[(*count)++] = i;\n    }}\n  }}\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate insert method - insert at specific index
+        self.emit_line(&format!(
+            "void {0}_insert(struct {0}* list, int64_t index, {1} item) {{\n  if (index < 0 || index > list->length) return;\n  if (list->length >= list->capacity) {{\n    list->capacity = list->capacity > 0 ? list->capacity * 2 : 10;\n    list->items = realloc(list->items, list->capacity * sizeof({1}));\n  }}\n  for (int64_t i = list->length; i > index; i--) {{\n    list->items[i] = list->items[i - 1];\n  }}\n  list->items[index] = item;\n  list->length++;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate remove_at method - remove at specific index
+        self.emit_line(&format!(
+            "{1} {0}_remove_at(struct {0}* list, int64_t index) {{\n  if (index < 0 || index >= list->length) return ({1})0;\n  {1} item = list->items[index];\n  for (int64_t i = index; i < list->length - 1; i++) {{\n    list->items[i] = list->items[i + 1];\n  }}\n  list->length--;\n  return item;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate fill method - fill list with value
+        self.emit_line(&format!(
+            "void {0}_fill(struct {0}* list, {1} item) {{\n  for (int64_t i = 0; i < list->length; i++) {{\n    list->items[i] = item;\n  }}\n}}",
+            type_name, elem_type
+        ));
     }
 
     fn generate_specialized_dict(&mut self, spec: &crate::TypeSpecialization) {
@@ -364,6 +408,13 @@ impl CCodegenBackend {
         self.emit_line(&format!(
             "bool {0}_has_value(struct {0}* dict, {1} value) {{\n  for (int64_t i = 0; i < dict->length; i++) {{\n    if (dict->values[i] == value) return true;\n  }}\n  return false;\n}}",
             type_name, val_type
+        ));
+        self.emit_line("");
+
+        // Generate update function (update or insert key-value pair)
+        self.emit_line(&format!(
+            "void {0}_update(struct {0}* dict, {1} key, {2} value) {{\n  {0}_set(dict, key, value);\n}}",
+            type_name, key_type, val_type
         ));
     }
 
