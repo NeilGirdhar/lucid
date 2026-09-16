@@ -46,7 +46,26 @@ pub enum Type {
         mutability: MutabilityView,
         inner: Box<Type>,
     },
+    /// A use-site projection on one type argument, `list[in int]`.
+    Projected {
+        direction: Projection,
+        inner: Box<Type>,
+    },
     TypeVar(String),
+}
+
+/// A projected type argument without its projection.
+fn strip_projection(ty: &Type) -> Type {
+    match ty {
+        Type::Projected { inner, .. } => (**inner).clone(),
+        other => other.clone(),
+    }
+}
+
+fn type_mentions_var(ty: &Type, name: &str) -> bool {
+    let mut vars = HashSet::new();
+    collect_type_vars(ty, &mut vars);
+    vars.contains(name)
 }
 
 /// The variance a declaration-site marker has once every mutating member
@@ -72,6 +91,37 @@ fn type_argument_conforms(
 ) -> bool {
     if matches!(source, Type::Never) {
         return true;
+    }
+    // A projected argument accepts any argument the projection's
+    // direction allows, and a projected argument can never stand in for an
+    // unprojected one.
+    match (source, expected) {
+        (
+            _,
+            Type::Projected {
+                direction,
+                inner: expected_inner,
+            },
+        ) => {
+            let source_inner = match source {
+                Type::Projected {
+                    direction: source_direction,
+                    inner,
+                } => {
+                    if source_direction != direction {
+                        return false;
+                    }
+                    inner.as_ref()
+                }
+                other => other,
+            };
+            return match direction {
+                Projection::Out => source_inner.is_subtype_of(expected_inner, env),
+                Projection::In => expected_inner.is_subtype_of(source_inner, env),
+            };
+        }
+        (Type::Projected { .. }, _) => return false,
+        _ => {}
     }
     let variance = variance.map(|variance| {
         if under_view {
@@ -191,7 +241,11 @@ impl Type {
         match self {
             Type::Union(parts) => canonical_commutative(parts, true),
             Type::Intersection(parts) => canonical_commutative(parts, false),
-            Type::View { mutability, inner } => Type::View {
+            Type::Projected { direction, inner } => Type::Projected {
+                direction: direction.clone(),
+                inner: Box::new(inner.canonical()),
+            },
+                    Type::View { mutability, inner } => Type::View {
                 mutability: mutability.clone(),
                 inner: Box::new(inner.canonical()),
             },
@@ -264,6 +318,14 @@ impl Type {
             Type::None => "none".into(),
             Type::Never => "never".into(),
             Type::TypeVar(name) => format!("var({name})"),
+            Type::Projected { direction, inner } => format!(
+                "{}({})",
+                match direction {
+                    Projection::In => "in",
+                    Projection::Out => "out",
+                },
+                inner.canonical_string()
+            ),
             Type::Class {
                 name,
                 type_args,
@@ -379,7 +441,9 @@ impl Type {
             Type::Class { name, .. } | Type::Trait { name, .. } => {
                 name.clone()
             }
-            Type::Exact(inner) | Type::View { inner, .. } => inner.runtime_dispatch_key(),
+            Type::Exact(inner) | Type::View { inner, .. } | Type::Projected { inner, .. } => {
+                inner.runtime_dispatch_key()
+            }
             Type::Record { .. } => "record".into(),
             Type::Function { .. } => "function".into(),
             Type::Future(_) => "future".into(),
@@ -482,6 +546,14 @@ impl Type {
     pub fn is_subtype_of(&self, target: &Type, env: &TypeEnvironment) -> bool {
         if self == target {
             return true;
+        }
+        // Outside a type-argument list a projection has done its work
+        // already, by dropping members; what remains uses the plain type.
+        if let Type::Projected { inner, .. } = target {
+            return self.is_subtype_of(inner, env);
+        }
+        if let Type::Projected { inner, .. } = self {
+            return inner.is_subtype_of(target, env);
         }
 
         if let Type::Exact(inner) = self {
@@ -1092,6 +1164,10 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
         ),
         Type::Negation(inner) => Type::Negation(Box::new(substitute_type(inner, substitutions))),
         Type::Exact(inner) => Type::Exact(Box::new(substitute_type(inner, substitutions))),
+        Type::Projected { direction, inner } => Type::Projected {
+            direction: direction.clone(),
+            inner: Box::new(substitute_type(inner, substitutions)),
+        },
         Type::View { mutability, inner } => Type::View {
             mutability: mutability.clone(),
             inner: Box::new(substitute_type(inner, substitutions)),
@@ -1152,7 +1228,7 @@ fn collect_type_vars(ty: &Type, vars: &mut HashSet<String>) {
                 collect_type_vars(part, vars);
             }
         }
-        Type::View { inner, .. } => collect_type_vars(inner, vars),
+        Type::View { inner, .. } | Type::Projected { inner, .. } => collect_type_vars(inner, vars),
         Type::Int
         | Type::Float
         | Type::Bool
@@ -4444,9 +4520,113 @@ impl TypeChecker {
         let substitutions = params
             .iter()
             .cloned()
-            .zip(type_args.iter().cloned())
+            .zip(type_args.iter().map(strip_projection))
             .collect::<HashMap<_, _>>();
         substitute_type(&member_type, &substitutions)
+    }
+
+    /// Which type parameter a built-in container member produces or
+    /// consumes, as `(parameter index, produces, consumes)`; `None` for a
+    /// class that is not a built-in container.
+    fn builtin_member_roles(class_name: &str, attr: &str) -> Option<Vec<(usize, bool, bool)>> {
+        Some(match (class_name, attr) {
+            (
+                "list",
+                "append" | "insert" | "extend" | "remove" | "index" | "count" | "__contains__"
+                | "__setitem__",
+            ) => vec![(0, false, true)],
+            ("list", "pop" | "copy" | "__iter__" | "__getitem__") => vec![(0, true, false)],
+            ("set" | "frozenset", "add" | "remove" | "discard" | "__contains__") => {
+                vec![(0, false, true)]
+            }
+            ("set" | "frozenset", "pop" | "copy" | "__iter__") => vec![(0, true, false)],
+            ("dict" | "frozendict", "keys" | "__iter__") => vec![(0, true, false)],
+            ("dict" | "frozendict", "values") => vec![(1, true, false)],
+            ("dict" | "frozendict", "get" | "__getitem__" | "pop") => {
+                vec![(0, false, true), (1, true, false)]
+            }
+            ("dict" | "frozendict", "items") => vec![(0, true, false), (1, true, false)],
+            ("dict" | "frozendict", "__setitem__" | "setdefault" | "update") => {
+                vec![(0, false, true), (1, false, true)]
+            }
+            ("dict" | "frozendict", "__contains__") => vec![(0, false, true)],
+            ("list" | "set" | "frozenset" | "dict" | "frozendict", _) => Vec::new(),
+            _ => return None,
+        })
+    }
+
+    /// Why `attr` is unavailable on `class_name` with these type arguments:
+    /// a member that produces a parameter projected `in`, or consumes one
+    /// projected `out`, is not part of the projected type.  Reading a field
+    /// produces its type; assigning one consumes it.
+    fn projection_blocks_member(
+        &self,
+        class_name: &str,
+        type_args: &[Type],
+        attr: &str,
+        writing: bool,
+    ) -> Option<String> {
+        let projected = type_args
+            .iter()
+            .enumerate()
+            .filter_map(|(index, arg)| match arg {
+                Type::Projected { direction, .. } => Some((index, direction)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if projected.is_empty() {
+            return None;
+        }
+        let block = |direction: &Projection, produces: bool, consumes: bool| match direction {
+            Projection::In if produces => Some(format!(
+                "'{attr}' produces a type argument that is projected in on this {class_name}"
+            )),
+            Projection::Out if consumes => Some(format!(
+                "'{attr}' consumes a type argument that is projected out on this {class_name}"
+            )),
+            _ => None,
+        };
+        if let Some(roles) = Self::builtin_member_roles(class_name, attr) {
+            for (index, direction) in &projected {
+                for (role_index, produces, consumes) in &roles {
+                    if role_index == index {
+                        if let Some(message) = block(direction, *produces, *consumes) {
+                            return Some(message);
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+        let params = self.env.class_type_params.get(class_name)?;
+        for (index, direction) in projected {
+            let Some(param) = params.get(index) else {
+                continue;
+            };
+            let (produces, consumes) = if let Some(Type::Function {
+                params: method_params,
+                return_type,
+            }) = self.class_method_type(class_name, attr)
+            {
+                (
+                    type_mentions_var(&return_type, param),
+                    method_params
+                        .iter()
+                        .any(|parameter| type_mentions_var(parameter, param)),
+                )
+            } else if let Some(field_type) = self.class_field_type(class_name, attr) {
+                let mentions = type_mentions_var(&field_type, param);
+                (mentions && !writing, mentions && writing)
+            } else if let Some(getter_type) = self.class_getter_type(class_name, attr) {
+                (type_mentions_var(&getter_type, param), false)
+            } else {
+                continue;
+            };
+            if let Some(message) = block(direction, produces, consumes) {
+                return Some(message);
+            }
+        }
+        None
     }
 
     fn builtin_dict_view_method_type(
@@ -6688,6 +6868,24 @@ impl TypeChecker {
                                 });
                             }
                         }
+                        if let Type::Class {
+                            name: receiver_class,
+                            type_args: receiver_args,
+                            ..
+                        } = &obj_type
+                        {
+                            if let Some(message) = self.projection_blocks_member(
+                                receiver_class,
+                                receiver_args,
+                                attr,
+                                true,
+                            ) {
+                                return Err(TypeError {
+                                    message,
+                                    span: *span,
+                                });
+                            }
+                        }
                         if let Some(class_name) = class_name.as_deref() {
                             if attr.starts_with('_') {
                                 let owner = self.private_member_owner(class_name, attr);
@@ -6837,6 +7035,22 @@ impl TypeChecker {
                             }
                             other => other,
                         };
+                        if let Type::Class {
+                            name, type_args, ..
+                        } = &sequence_type
+                        {
+                            if let Some(message) = self.projection_blocks_member(
+                                name,
+                                type_args,
+                                "__setitem__",
+                                true,
+                            ) {
+                                return Err(TypeError {
+                                    message,
+                                    span: *span,
+                                });
+                            }
+                        }
                         match sequence_type {
                             Type::Record { fields, .. } => {
                                 let field_type = match &**index {
@@ -12122,6 +12336,14 @@ impl TypeChecker {
                                 });
                             }
                         }
+                        if let Some(message) =
+                            self.projection_blocks_member(name, type_args, attr, false)
+                        {
+                            return Err(TypeError {
+                                message,
+                                span: expr.span(),
+                            });
+                        }
                         if let Some(method_type) =
                             self.builtin_dict_view_method_type(name, type_args, attr)
                         {
@@ -12390,6 +12612,19 @@ impl TypeChecker {
             }
             Expr::Index { value, index, .. } => {
                 let val_t = self.type_of_expr(value)?;
+                if let Type::Class {
+                    name, type_args, ..
+                } = &val_t
+                {
+                    if let Some(message) =
+                        self.projection_blocks_member(name, type_args, "__getitem__", false)
+                    {
+                        return Err(TypeError {
+                            message,
+                            span: expr.span(),
+                        });
+                    }
+                }
                 if let Type::Class {
                     name, type_args, ..
                 } = &val_t
@@ -13691,6 +13926,12 @@ impl TypeChecker {
             // Existential quantification hides the concrete implementor but
             // keeps the underlying obligation for subtype and member checks.
             TypeExpr::Existential { interface, .. } => self.resolve_type_expr(interface),
+            TypeExpr::Projection {
+                direction, inner, ..
+            } => Ok(Type::Projected {
+                direction: direction.clone(),
+                inner: Box::new(self.resolve_type_expr(inner)?),
+            }),
             // A reified type expression keeps the same semantic identity at
             // compile time; reflection supplies the value-level type object.
             TypeExpr::Reification { inner, .. } => self.resolve_type_expr(inner),
@@ -16192,6 +16433,80 @@ def reject(value: not int) -> none:
         assert!(err.message.contains("mutates its receiver"), "{}", err.message);
         let source = "trait Scorable[in K]:\n    def score(self, item: K) -> float\n    def is_confident(self: ~Self, item: K) -> bool:\n        return true\nclass Model(Scorable[str]):\n    def score(self, item: str) -> float:\n        return 1.0\ndef f(m: ~Model) -> bool:\n    return m.is_confident(\"x\")\n";
         check_source(source).unwrap();
+    }
+
+    #[test]
+    fn use_site_projections_drop_members_by_role() {
+        let node = "class Node[in out Data, in out Children]:\n    data: Data\n    children: list[Children]\n    def set_data(self, d: Data) -> none:\n        self.data = d\n    def add_child(self, c: Children) -> none:\n        self.children.append(c)\n    def first_child(self: ~Self) -> Children:\n        return self.children[0]\n";
+        check_source(&format!(
+            "{node}def update(nodes: list[Node[int, out str]]) -> none:\n    for n in nodes:\n        n.set_data(5)\n"
+        ))
+        .unwrap();
+        let err = check_source(&format!(
+            "{node}def update(nodes: list[Node[int, out str]]) -> none:\n    for n in nodes:\n        n.add_child(\"x\")\n"
+        ))
+        .unwrap_err();
+        assert!(err.message.contains("consumes"), "{}", err.message);
+        check_source(&format!(
+            "{node}def f(n: Node[int, out str]) -> str:\n    return n.first_child()\n"
+        ))
+        .unwrap();
+        let err = check_source(&format!(
+            "{node}def f(n: Node[int, in str]) -> str:\n    return n.first_child()\n"
+        ))
+        .unwrap_err();
+        assert!(err.message.contains("produces"), "{}", err.message);
+        check_source(&format!(
+            "{node}def f(n: Node[int, in str]) -> none:\n    n.add_child(\"x\")\n"
+        ))
+        .unwrap();
+        // Fields: reading produces, assigning consumes.
+        let err = check_source(&format!(
+            "{node}def f(n: Node[in int, str]) -> int:\n    return n.data\n"
+        ))
+        .unwrap_err();
+        assert!(err.message.contains("produces"), "{}", err.message);
+        let err = check_source(&format!(
+            "{node}def f(n: Node[out int, str]) -> none:\n    n.data = 5\n"
+        ))
+        .unwrap_err();
+        assert!(err.message.contains("consumes"), "{}", err.message);
+    }
+
+    #[test]
+    fn projected_builtin_containers_keep_only_matching_members() {
+        check_source("def sink(buf: list[in int]) -> none:\n    buf.append(1)\n    buf[0] = 2\n")
+            .unwrap();
+        let err = check_source("def sink(buf: list[in int]) -> int:\n    return buf[0]\n").unwrap_err();
+        assert!(err.message.contains("produces"), "{}", err.message);
+        let err =
+            check_source("def sink(buf: list[in int]) -> int:\n    return buf.pop()\n").unwrap_err();
+        assert!(err.message.contains("produces"), "{}", err.message);
+        check_source("def source(buf: list[out int]) -> int:\n    return buf[0]\n").unwrap();
+        let err = check_source("def source(buf: list[out int]) -> none:\n    buf.append(1)\n")
+            .unwrap_err();
+        assert!(err.message.contains("consumes"), "{}", err.message);
+        let err = check_source("def source(buf: list[out int]) -> none:\n    buf[0] = 1\n")
+            .unwrap_err();
+        assert!(err.message.contains("consumes"), "{}", err.message);
+    }
+
+    #[test]
+    fn projected_arguments_follow_their_direction_at_the_call() {
+        let prelude = "class Animal:\n    pass\nclass Cat(Animal):\n    pass\ndef fill(buf: list[in Cat]) -> none:\n    pass\ndef drain(buf: list[out Animal]) -> none:\n    pass\n";
+        check_source(&format!(
+            "{prelude}def f(cats: list[Cat], animals: list[Animal]) -> none:\n    fill(cats)\n    fill(animals)\n    drain(cats)\n    drain(animals)\n"
+        ))
+        .unwrap();
+        check_source(&format!("{prelude}def f(names: list[str]) -> none:\n    fill(names)\n"))
+            .unwrap_err();
+        check_source(&format!("{prelude}def f(things: list[object]) -> none:\n    drain(things)\n"))
+            .unwrap_err();
+        // A projected value cannot stand in for the unprojected type.
+        check_source(&format!(
+            "{prelude}def f(buf: list[in Cat]) -> none:\n    plain: list[Cat] = buf\n"
+        ))
+        .unwrap_err();
     }
 
     #[test]

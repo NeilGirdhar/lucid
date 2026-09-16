@@ -49,6 +49,15 @@ pub struct RecordFieldType {
     pub is_variadic_keyword: bool,
 }
 
+/// A use-site projection on one type argument: `list[in int]` keeps only
+/// the members that consume the parameter, `Node[int, out str]` only those
+/// that produce it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Projection {
+    In,
+    Out,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     Named {
@@ -87,6 +96,11 @@ pub enum TypeExpr {
         inner: Box<TypeExpr>,
         span: Span,
     },
+    Projection {
+        direction: Projection,
+        inner: Box<TypeExpr>,
+        span: Span,
+    },
     Match {
         subject: Vec<TypeExpr>,
         arms: Vec<(TypeExpr, TypeExpr)>,
@@ -107,6 +121,7 @@ impl TypeExpr {
             TypeExpr::Literal { span, .. } => *span,
             TypeExpr::Existential { span, .. } => *span,
             TypeExpr::Reification { span, .. } => *span,
+            TypeExpr::Projection { span, .. } => *span,
             TypeExpr::Match { span, .. } => *span,
             TypeExpr::Wildcard(span) => *span,
             TypeExpr::Never(span) => *span,

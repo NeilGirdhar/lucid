@@ -255,6 +255,16 @@ fn type_form_name(type_expr: &TypeExpr) -> String {
         TypeExpr::Literal { value, .. } => format!("{value:?}"),
         TypeExpr::Existential { interface, .. } => format!("any {}", type_form_name(interface)),
         TypeExpr::Reification { inner, .. } => format!("type {}", type_form_name(inner)),
+        TypeExpr::Projection {
+            direction, inner, ..
+        } => format!(
+            "{} {}",
+            match direction {
+                Projection::In => "in",
+                Projection::Out => "out",
+            },
+            type_form_name(inner)
+        ),
         TypeExpr::Match { .. } => "match".into(),
         TypeExpr::Wildcard(_) => "_".into(),
         TypeExpr::Never(_) => "Never".into(),
@@ -10589,7 +10599,8 @@ impl Interpreter {
                 | TypeExpr::Existential {
                     interface: inner, ..
                 }
-                | TypeExpr::Reification { inner, .. } => {
+                | TypeExpr::Reification { inner, .. }
+                | TypeExpr::Projection { inner, .. } => {
                     self.matches_pattern(&Pattern::Type((**inner).clone(), inner.span()), value)
                 }
                 TypeExpr::Wildcard(_) => true,
@@ -11001,6 +11012,31 @@ items.append(3)
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(interp.env.borrow().get("inside"), Some(Value::Int(7)));
+    }
+
+    #[test]
+    fn double_underscore_members_are_not_name_mangled() {
+        let module = parse(
+            "class Secret:\n    __a: int\n    def get(self) -> int:\n        return self.__a\n\ns = Secret(7)\ninside = s.get()\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("inside"), Some(Value::Int(7)));
+        let Some(Value::Object { fields, .. }) = interp.env.borrow().get("s") else {
+            panic!("expected s to be an object");
+        };
+        let fields = fields.borrow();
+        assert!(fields.contains_key("__a"));
+        assert!(!fields.keys().any(|field| field.contains("_Secret__")));
+
+        let module = parse(
+            "class Secret:\n    __a: int\n\ns = Secret(7)\noutside = s.__a\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        let err = interp.eval_module(&module).unwrap_err();
+        assert!(err.message.contains("member '__a' is private"), "{}", err.message);
     }
 
     #[test]

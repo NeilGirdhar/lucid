@@ -273,6 +273,16 @@ fn type_form_name(type_expr: &TypeExpr) -> String {
         TypeExpr::Literal { value, .. } => format!("{value:?}"),
         TypeExpr::Existential { interface, .. } => format!("any {}", type_form_name(interface)),
         TypeExpr::Reification { inner, .. } => format!("type {}", type_form_name(inner)),
+        TypeExpr::Projection {
+            direction, inner, ..
+        } => format!(
+            "{} {}",
+            match direction {
+                Projection::In => "in",
+                Projection::Out => "out",
+            },
+            type_form_name(inner)
+        ),
         TypeExpr::Match { .. } => "match".into(),
         TypeExpr::Wildcard(_) => "_".into(),
         TypeExpr::Never(_) => "Never".into(),
@@ -6274,7 +6284,8 @@ static inline void lucid_print_val(LucidVal v) {
             | TypeExpr::Existential {
                 interface: inner, ..
             }
-            | TypeExpr::Reification { inner, .. } => {
+            | TypeExpr::Reification { inner, .. }
+            | TypeExpr::Projection { inner, .. } => {
                 self.emit_type_pattern_condition(inner, subject)
             }
             TypeExpr::Wildcard(_) => Ok("true".to_string()),

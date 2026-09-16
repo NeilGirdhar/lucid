@@ -762,6 +762,38 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn use_site_projections_parse_on_type_arguments() {
+        let module = parse(
+            "def recv_into(buf: list[in int], nodes: list[Node[int, out str]]) -> int:\n    return 0\n",
+        )
+        .unwrap();
+        let Stmt::Function(FunctionDef { params, .. }) = &module.statements[0] else {
+            panic!("expected function definition");
+        };
+        let Some(TypeExpr::Named { args, .. }) = &params[0].type_annotation else {
+            panic!("expected list[in int]");
+        };
+        assert!(matches!(
+            &args[0],
+            TypeExpr::Projection { direction: Projection::In, inner, .. }
+                if matches!(inner.as_ref(), TypeExpr::Named { name, .. } if name == "int")
+        ));
+        let Some(TypeExpr::Named { args, .. }) = &params[1].type_annotation else {
+            panic!("expected list[...]");
+        };
+        let TypeExpr::Named { args: node_args, .. } = &args[0] else {
+            panic!("expected Node[...]");
+        };
+        assert!(matches!(&node_args[0], TypeExpr::Named { name, .. } if name == "int"));
+        assert!(matches!(
+            &node_args[1],
+            TypeExpr::Projection { direction: Projection::Out, .. }
+        ));
+        assert!(parse("x: in int = 1\n").is_err());
+        assert!(parse("def f(buf: list[in]) -> int:\n    return 0\n").is_err());
+    }
+
+    #[test]
     fn obsolete_variance_sigils_are_rejected() {
         for spelling in ["+K", "-K", "=K", "+=K", "-=K"] {
             assert!(

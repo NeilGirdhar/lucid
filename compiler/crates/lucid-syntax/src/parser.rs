@@ -3328,7 +3328,7 @@ TokenKind::Public
                             slice_spec = Some((TypeExpr::Wildcard(tok.span), stop, step));
                             break;
                         }
-                        args.push(self.parse_type_expr()?);
+                        args.push(self.parse_type_argument()?);
                         if self.match_tok(&TokenKind::Colon) {
                             let start = args.pop().unwrap_or(TypeExpr::Wildcard(tok.span));
                             let stop = if self.check(&TokenKind::RBracket)
@@ -3420,6 +3420,27 @@ TokenKind::Public
         Err(ParseError {
             message: format!("unexpected token in type expression: {}", tok.kind),
             span: tok.span,
+        })
+    }
+
+    /// One type argument, optionally projected: `in T` or `out T`.
+    fn parse_type_argument(&mut self) -> Result<TypeExpr, ParseError> {
+        let start = self.peek().span;
+        let direction = if self.match_tok(&TokenKind::In) {
+            Some(Projection::In)
+        } else if self.match_tok(&TokenKind::Out) {
+            Some(Projection::Out)
+        } else {
+            None
+        };
+        let inner = self.parse_type_expr()?;
+        Ok(match direction {
+            Some(direction) => TypeExpr::Projection {
+                direction,
+                span: start.merge(inner.span()),
+                inner: Box::new(inner),
+            },
+            None => inner,
         })
     }
 
@@ -3662,7 +3683,7 @@ TokenKind::Public
                 if self.match_tok(&TokenKind::LBracket) {
                     let mut args = Vec::new();
                     while !self.check(&TokenKind::RBracket) && !self.check(&TokenKind::Eof) {
-                        args.push(self.parse_type_expr()?);
+                        args.push(self.parse_type_argument()?);
                         if !self.match_tok(&TokenKind::Comma) {
                             break;
                         }
