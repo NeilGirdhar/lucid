@@ -362,3 +362,128 @@ mod tests {
         );
     }
 }
+
+/// Calling convention specification for method dispatch
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallingConvention {
+    /// System V AMD64 (used on Linux/Unix)
+    SystemVAmd64 = 1,
+    /// Microsoft x64 (used on Windows)
+    MicrosoftX64 = 2,
+    /// ARM64 (used on Apple Silicon/ARM64 Linux)
+    Arm64 = 3,
+}
+
+impl CallingConvention {
+    /// Get the current platform's calling convention
+    pub const fn current() -> Self {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            CallingConvention::SystemVAmd64
+        }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        {
+            CallingConvention::MicrosoftX64
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            CallingConvention::Arm64
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "windows", target_arch = "x86_64"),
+            target_arch = "aarch64"
+        )))]
+        {
+            // Default to System V for unknown platforms
+            CallingConvention::SystemVAmd64
+        }
+    }
+}
+
+/// Memory layout specification for Lucid objects
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectLayout {
+    /// Name of the class this layout describes
+    pub class_name: String,
+    /// Offset (in bytes) of each field from object base pointer
+    pub field_offsets: Vec<(String, usize)>,
+    /// Total object size in bytes (including header/metadata)
+    pub total_size: usize,
+    /// Alignment requirement in bytes
+    pub alignment: usize,
+}
+
+impl ObjectLayout {
+    pub fn new(class_name: String, alignment: usize) -> Self {
+        Self {
+            class_name,
+            field_offsets: Vec::new(),
+            total_size: 0,
+            alignment,
+        }
+    }
+
+    /// Add a field to the layout with its byte offset
+    pub fn add_field(&mut self, name: String, offset: usize) {
+        self.field_offsets.push((name, offset));
+    }
+
+    /// Get the offset of a field by name
+    pub fn field_offset(&self, name: &str) -> Option<usize> {
+        self.field_offsets
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, offset)| *offset)
+    }
+}
+
+/// C interop type specifications
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CInteropType {
+    /// Lucid int maps to C int64_t
+    Int = 1,
+    /// Lucid float maps to C double
+    Float = 2,
+    /// Lucid bool maps to C bool
+    Bool = 3,
+    /// Lucid str maps to C const char* (null-terminated UTF-8)
+    String = 4,
+    /// Lucid object maps to opaque C void*
+    Object = 5,
+    /// Lucid list maps to C LucidList* struct
+    List = 6,
+    /// Lucid dict maps to C LucidDict* struct
+    Dict = 7,
+}
+
+/// ABI compatibility information
+#[derive(Debug, Clone)]
+pub struct AbiInfo {
+    /// Calling convention used on this platform
+    pub calling_convention: CallingConvention,
+    /// Pointer size in bytes (8 on 64-bit, 4 on 32-bit)
+    pub pointer_size: usize,
+    /// Object layouts for all classes in the module
+    pub layouts: Vec<ObjectLayout>,
+}
+
+impl AbiInfo {
+    pub fn new(calling_convention: CallingConvention, pointer_size: usize) -> Self {
+        Self {
+            calling_convention,
+            pointer_size,
+            layouts: Vec::new(),
+        }
+    }
+
+    /// Add a class layout to ABI info
+    pub fn add_layout(&mut self, layout: ObjectLayout) {
+        self.layouts.push(layout);
+    }
+
+    /// Get layout for a specific class
+    pub fn layout(&self, class_name: &str) -> Option<&ObjectLayout> {
+        self.layouts.iter().find(|l| l.class_name == class_name)
+    }
+}
