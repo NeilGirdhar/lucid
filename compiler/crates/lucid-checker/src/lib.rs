@@ -163,6 +163,16 @@ fn check_fixed_set_arguments(
     Ok(())
 }
 
+/// The view a method declares for its `self`.  No annotation means the
+/// method may mutate; any annotation other than a view (an anonymous class
+/// shape, say) is treated the same way.
+fn receiver_view(annotation: Option<&TypeExpr>) -> MutabilityView {
+    match annotation {
+        Some(TypeExpr::View { mutability, .. }) => mutability.clone(),
+        _ => MutabilityView::Mutable,
+    }
+}
+
 fn trait_extends(source: &str, target: &str, env: &TypeEnvironment) -> bool {
     env.trait_bases
         .get(source)
@@ -1306,6 +1316,11 @@ pub struct TypeEnvironment {
     pub class_abstract_members: HashMap<String, HashSet<String>>,
     pub class_methods: HashMap<(String, String), Type>,
     pub class_method_params: HashMap<(String, String), Vec<String>>,
+    /// The view each instance method declares for `self`: a bare `self`
+    /// mutates, `self: ~Self` only reads, and `self: !Self` needs an
+    /// immutable receiver.
+    pub class_method_receivers: HashMap<(String, String), MutabilityView>,
+    pub trait_method_receivers: HashMap<(String, String), MutabilityView>,
     pub class_getters: HashMap<(String, String), Type>,
     /// Callable and property signatures supplied by reusable trait bodies.
     /// Classes that list a trait as a base resolve these through the same
@@ -3119,6 +3134,12 @@ impl TypeChecker {
                         }
                         _ => continue,
                     };
+                    if let Some(receiver) = params.first().filter(|param| param.name == "self") {
+                        self.env.class_method_receivers.insert(
+                            (name.clone(), method_name.clone()),
+                            receiver_view(receiver.type_annotation.as_ref()),
+                        );
+                    }
                     let parameter_types = params
                         .iter()
                         .filter(|param| !matches!(param.name.as_str(), "self" | "cls"))
@@ -3243,6 +3264,14 @@ impl TypeChecker {
                     }
                     match member {
                         TraitMember::Method(method) | TraitMember::ClassMethod(method) => {
+                            if let Some(receiver) =
+                                method.params.first().filter(|param| param.name == "self")
+                            {
+                                self.env.trait_method_receivers.insert(
+                                    (name.clone(), method.name.clone()),
+                                    receiver_view(receiver.type_annotation.as_ref()),
+                                );
+                            }
                             let parameter_types = method
                                 .params
                                 .iter()
@@ -3804,6 +3833,67 @@ impl TypeChecker {
             ClassMember::Setter(setter) => Some((setter.name.as_str(), setter.span)),
             ClassMember::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
             ClassMember::Pass(_) | ClassMember::Ellipsis(_) => None,
+        }
+    }
+
+    /// The receiver view a method of `class_name` declares, looking through
+    /// the class's traits and parent chain.
+    fn method_receiver(&self, class_name: &str, attr: &str) -> Option<MutabilityView> {
+        if let Some(receiver) = self
+            .env
+            .class_method_receivers
+            .get(&(class_name.to_string(), attr.to_string()))
+        {
+            return Some(receiver.clone());
+        }
+        let (traits, parent) = match self.env.classes.get(class_name)? {
+            Type::Class { traits, parent, .. } => (traits.clone(), parent.clone()),
+            _ => return None,
+        };
+        for trait_name in traits {
+            if let Some(receiver) = self.trait_method_receiver(&trait_name, attr) {
+                return Some(receiver);
+            }
+        }
+        self.method_receiver(parent.as_deref()?, attr)
+    }
+
+    fn trait_method_receiver(&self, trait_name: &str, attr: &str) -> Option<MutabilityView> {
+        if let Some(receiver) = self
+            .env
+            .trait_method_receivers
+            .get(&(trait_name.to_string(), attr.to_string()))
+        {
+            return Some(receiver.clone());
+        }
+        self.env
+            .trait_bases
+            .get(trait_name)?
+            .iter()
+            .find_map(|base| self.trait_method_receiver(base, attr))
+    }
+
+    /// Whether `attr` on a value seen through a `mutability` view names a
+    /// method whose receiver that view cannot provide.
+    fn view_receiver_error(
+        &self,
+        inner: &Type,
+        mutability: &MutabilityView,
+        attr: &str,
+    ) -> Option<String> {
+        let class_name = match inner {
+            Type::Class { name, .. } => name.as_str(),
+            Type::TypeVar(name) if name == "Self" => self.env.current_class.as_deref()?,
+            _ => return None,
+        };
+        match (mutability, self.method_receiver(class_name, attr)?) {
+            (_, MutabilityView::Mutable) => Some(format!(
+                "method '{attr}' mutates its receiver and cannot be called through a read-only or immutable view"
+            )),
+            (MutabilityView::ReadOnly, MutabilityView::Immutable) => Some(format!(
+                "method '{attr}' requires an immutable receiver; a read-only view does not guarantee immutability"
+            )),
+            _ => None,
         }
     }
 
@@ -12059,7 +12149,16 @@ impl TypeChecker {
                             })
                         }
                     }
-                    Type::View { ref inner, .. } => {
+                    Type::View {
+                        ref inner,
+                        ref mutability,
+                    } => {
+                        if let Some(message) = self.view_receiver_error(inner, mutability, attr) {
+                            return Err(TypeError {
+                                message,
+                                span: expr.span(),
+                            });
+                        }
                         if let Some(member_type) = self.member_type_for_view_inner(inner, attr) {
                             return Ok(member_type);
                         }
@@ -16065,6 +16164,34 @@ def reject(value: not int) -> none:
         ))
         .unwrap_err();
         assert!(err.message.contains("fixed set"), "{}", err.message);
+    }
+
+    #[test]
+    fn views_reject_methods_their_receiver_cannot_provide() {
+        let prelude = "class Counter:\n    count: int\n    def bump(self) -> none:\n        self.count = self.count + 1\n    def peek(self: ~Self) -> int:\n        return self.count\n    def digest(self: !Self) -> int:\n        return self.count\n";
+        check_source(&format!("{prelude}def f(c: ~Counter) -> int:\n    return c.peek()\n")).unwrap();
+        check_source(&format!("{prelude}def f(c: !Counter) -> int:\n    return c.peek() + c.digest()\n"))
+            .unwrap();
+        check_source(&format!("{prelude}def f(c: Counter) -> int:\n    c.bump()\n    return c.peek()\n"))
+            .unwrap();
+        let err = check_source(&format!("{prelude}def f(c: ~Counter) -> none:\n    c.bump()\n"))
+            .unwrap_err();
+        assert!(err.message.contains("mutates its receiver"), "{}", err.message);
+        let err = check_source(&format!("{prelude}def f(c: !Counter) -> none:\n    c.bump()\n"))
+            .unwrap_err();
+        assert!(err.message.contains("mutates its receiver"), "{}", err.message);
+        let err = check_source(&format!("{prelude}def f(c: ~Counter) -> int:\n    return c.digest()\n"))
+            .unwrap_err();
+        assert!(err.message.contains("requires an immutable receiver"), "{}", err.message);
+    }
+
+    #[test]
+    fn trait_methods_carry_their_receiver_view_to_classes() {
+        let source = "trait Scorable[in K]:\n    def score(self, item: K) -> float\n    def is_confident(self: ~Self, item: K) -> bool:\n        return true\nclass Model(Scorable[str]):\n    def score(self, item: str) -> float:\n        return 1.0\ndef f(m: ~Model) -> none:\n    m.score(\"x\")\n";
+        let err = check_source(source).unwrap_err();
+        assert!(err.message.contains("mutates its receiver"), "{}", err.message);
+        let source = "trait Scorable[in K]:\n    def score(self, item: K) -> float\n    def is_confident(self: ~Self, item: K) -> bool:\n        return true\nclass Model(Scorable[str]):\n    def score(self, item: str) -> float:\n        return 1.0\ndef f(m: ~Model) -> bool:\n    return m.is_confident(\"x\")\n";
+        check_source(source).unwrap();
     }
 
     #[test]
