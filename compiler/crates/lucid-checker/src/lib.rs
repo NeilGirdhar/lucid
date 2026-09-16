@@ -20014,4 +20014,53 @@ pub mod specialization {
             Self::new()
         }
     }
+
+    /// Phase 4: Optimization passes for specialized code
+    pub struct SpecializationOptimizer;
+
+    impl SpecializationOptimizer {
+        /// Apply inlining optimization to specialized functions
+        pub fn inline_specializations(module: &Module) -> Module {
+            // Inlining would identify monomorphic call sites and inline specialized
+            // function bodies directly, avoiding function call overhead.
+            // For now, return the module unchanged - full implementation requires:
+            // 1. Identify all call sites to specialized functions
+            // 2. Analyze function bodies for inlining opportunity
+            // 3. Clone and substitute bodies at call sites
+            module.clone()
+        }
+
+        /// Eliminate dead code after specialization
+        pub fn dead_code_elimination(module: &Module) -> Module {
+            // After specialization, some generic versions may become unused.
+            // This pass would:
+            // 1. Build a call graph from specialized and remaining generic functions
+            // 2. Mark all reachable functions starting from entry points
+            // 3. Remove unreachable function definitions
+            module.clone()
+        }
+
+        /// Constant propagation within specialized functions
+        pub fn constant_propagation(module: &Module) -> Module {
+            // Specialized functions often have type information that enables
+            // compile-time constant evaluation. This would:
+            // 1. Identify type-narrowed expressions
+            // 2. Evaluate constant expressions at compile time
+            // 3. Replace dynamic operations with static values
+            module.clone()
+        }
+
+        /// Run all optimization passes
+        pub fn optimize(module: &Module) -> Module {
+            let inlined = Self::inline_specializations(module);
+            let dead_code_free = Self::dead_code_elimination(&inlined);
+            Self::constant_propagation(&dead_code_free)
+        }
+    }
+
+    impl Default for SpecializationOptimizer {
+        fn default() -> Self {
+            Self
+        }
+    }
 }
