@@ -19723,3 +19723,106 @@ result: int = adder(3)
         );
     }
 }
+
+/// Collects all generic function/class instantiations found in the AST
+pub mod specialization {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct Instantiation {
+        pub name: String,
+        pub type_args: Vec<String>,  // Simplified type representation
+    }
+
+    #[derive(Debug, Default)]
+    pub struct SpecializationCollector {
+        pub instantiations: BTreeMap<Instantiation, usize>,  // Track count
+    }
+
+    impl SpecializationCollector {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Collect all generic instantiations from a module
+        pub fn collect_from_module(&mut self, module: &Module) {
+            for stmt in &module.statements {
+                self.collect_from_statement(stmt);
+            }
+        }
+
+        fn collect_from_statement(&mut self, stmt: &Stmt) {
+            match stmt {
+                Stmt::VarDef { value, .. } => {
+                    if let Some(expr) = value {
+                        self.collect_from_expr(expr);
+                    }
+                }
+                Stmt::Assignment { value, .. } => {
+                    self.collect_from_expr(value);
+                }
+                Stmt::Return { value, .. } => {
+                    if let Some(expr) = value {
+                        self.collect_from_expr(expr);
+                    }
+                }
+                Stmt::Expr(expr) => {
+                    self.collect_from_expr(expr);
+                }
+                _ => {}
+            }
+        }
+
+        fn collect_from_expr(&mut self, expr: &Expr) {
+            match expr {
+                Expr::Call { func, args, .. } => {
+                    // Check if func is an Index (generic instantiation)
+                    if let Expr::Index { value, index, .. } = &**func {
+                        if let Expr::Ident { name, .. } = &**value {
+                            // Extract type arguments from index
+                            if let Some(type_str) = self.index_to_type_string(&**index) {
+                                let inst = Instantiation {
+                                    name: name.clone(),
+                                    type_args: vec![type_str],
+                                };
+                                *self.instantiations.entry(inst).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                    // Recursively check arguments
+                    for arg in args {
+                        self.collect_from_expr(&arg.value);
+                    }
+                }
+                Expr::Binary { left, right, .. } => {
+                    self.collect_from_expr(left);
+                    self.collect_from_expr(right);
+                }
+                Expr::Unary { expr, .. } => {
+                    self.collect_from_expr(expr);
+                }
+                Expr::List { elements, .. } => {
+                    for elem in elements {
+                        self.collect_from_expr(elem);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn index_to_type_string(&self, expr: &Expr) -> Option<String> {
+            match expr {
+                Expr::Ident { name, .. } => Some(name.clone()),
+                _ => None,
+            }
+        }
+
+        /// Get statistics about specializations
+        pub fn stats(&self) -> (usize, usize) {
+            let unique = self.instantiations.len();
+            let total = self.instantiations.values().sum::<usize>();
+            (unique, total)
+        }
+    }
+}
