@@ -105,6 +105,18 @@ mod tests {
         let c_code2 = backend2.generate(&ir_module2);
         let full_c2 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", multiply(6, 7));\n  return 0;\n}}", c_code2);
         assert!(test_c_code(&full_c2, "42\n"), "multiply(6,7) should return 42");
+
+        // Test 3: Function with variable definition
+        let lucid_code3 = "def square_plus_one(x: int) -> int:\n  y: int = x * x\n  return y + 1\n";
+        let mut lexer3 = Lexer::new(lucid_code3);
+        let tokens3 = lexer3.tokenize().expect("Lexer failed");
+        let mut parser3 = Parser::new(tokens3);
+        let module3 = parser3.parse_module().expect("Parser failed");
+        let ir_module3 = crate::builder::IrBuilder::new().build_module(&module3);
+        let mut backend3 = CCodegenBackend::new();
+        let c_code3 = backend3.generate(&ir_module3);
+        let full_c3 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", square_plus_one(5));\n  return 0;\n}}", c_code3);
+        assert!(test_c_code(&full_c3, "26\n"), "square_plus_one(5) should return 26 (5*5+1)");
     }
 
     #[test]
