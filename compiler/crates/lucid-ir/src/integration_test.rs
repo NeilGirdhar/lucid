@@ -2318,4 +2318,39 @@ int main() {
         assert_eq!(arm.bindings[0].binding_name, "error_code");
     }
 
+    #[test]
+    fn test_sorting_and_search_codegen() {
+        // Test that sorting and search functions are generated
+        let module = IrModule::new();
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify sorting functions
+        assert!(code.contains("lucid_quicksort_int"), "quicksort_int should be generated");
+        assert!(code.contains("lucid_quicksort_double"), "quicksort_double should be generated");
+        assert!(code.contains("lucid_binary_search"), "binary_search should be generated");
+
+        // Verify quicksort logic
+        assert!(code.contains("if (arr[j] < pivot)"), "quicksort should have pivot comparison");
+    }
+
+    #[test]
+    fn test_list_sort_methods_codegen() {
+        // Test that specialized list types get sort methods
+        let mut module = IrModule::new();
+
+        // Create List[i64] specialization
+        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify sort method is generated for List[i64]
+        assert!(code.contains("List__i64___sort"), "sort should be generated for List[i64]");
+        assert!(code.contains("lucid_quicksort_int"), "should call quicksort");
+    }
+
 }

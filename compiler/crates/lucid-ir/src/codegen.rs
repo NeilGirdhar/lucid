@@ -172,6 +172,21 @@ impl CCodegenBackend {
         ));
         self.emit_line("");
 
+        // Generate sort function (only for comparable types)
+        if elem_type == "int64_t" || elem_type == "double" {
+            let sort_func = if elem_type == "int64_t" {
+                "lucid_quicksort_int"
+            } else {
+                "lucid_quicksort_double"
+            };
+
+            self.emit_line(&format!(
+                "void {0}_sort(struct {0}* list) {{\n  if (list->length > 1) {{\n    {1}(list->items, 0, list->length - 1);\n  }}\n}}",
+                type_name, sort_func
+            ));
+        }
+        self.emit_line("");
+
         // Generate sum function (for numeric types)
         self.emit_line(&format!(
             "{1} {0}_sum(struct {0}* list) {{\n  {1} total = 0;\n  for (int64_t i = 0; i < list->length; i++) {{\n    total += list->items[i];\n  }}\n  return total;\n}}",
@@ -1126,6 +1141,84 @@ impl CCodegenBackend {
         self.emit_line("double lucid_random_double(void) {");
         self.indent_level += 1;
         self.emit_line("return (double)rand() / RAND_MAX;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // Sorting utilities
+        self.emit_line("// Quicksort implementation for integers");
+        self.emit_line("void lucid_quicksort_int(int64_t* arr, int64_t low, int64_t high) {");
+        self.indent_level += 1;
+        self.emit_line("if (low < high) {");
+        self.indent_level += 1;
+        self.emit_line("int64_t pivot = arr[high];");
+        self.emit_line("int64_t i = low - 1;");
+        self.emit_line("for (int64_t j = low; j < high; j++) {");
+        self.indent_level += 1;
+        self.emit_line("if (arr[j] < pivot) {");
+        self.indent_level += 1;
+        self.emit_line("i++;");
+        self.emit_line("int64_t temp = arr[i];");
+        self.emit_line("arr[i] = arr[j];");
+        self.emit_line("arr[j] = temp;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("int64_t temp = arr[i + 1];");
+        self.emit_line("arr[i + 1] = arr[high];");
+        self.emit_line("arr[high] = temp;");
+        self.emit_line("lucid_quicksort_int(arr, low, i);");
+        self.emit_line("lucid_quicksort_int(arr, i + 2, high);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Quicksort for floating point");
+        self.emit_line("void lucid_quicksort_double(double* arr, int64_t low, int64_t high) {");
+        self.indent_level += 1;
+        self.emit_line("if (low < high) {");
+        self.indent_level += 1;
+        self.emit_line("double pivot = arr[high];");
+        self.emit_line("int64_t i = low - 1;");
+        self.emit_line("for (int64_t j = low; j < high; j++) {");
+        self.indent_level += 1;
+        self.emit_line("if (arr[j] < pivot) {");
+        self.indent_level += 1;
+        self.emit_line("i++;");
+        self.emit_line("double temp = arr[i];");
+        self.emit_line("arr[i] = arr[j];");
+        self.emit_line("arr[j] = temp;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("double temp = arr[i + 1];");
+        self.emit_line("arr[i + 1] = arr[high];");
+        self.emit_line("arr[high] = temp;");
+        self.emit_line("lucid_quicksort_double(arr, low, i);");
+        self.emit_line("lucid_quicksort_double(arr, i + 2, high);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Binary search");
+        self.emit_line("int64_t lucid_binary_search(int64_t* arr, int64_t len, int64_t target) {");
+        self.indent_level += 1;
+        self.emit_line("int64_t left = 0, right = len - 1;");
+        self.emit_line("while (left <= right) {");
+        self.indent_level += 1;
+        self.emit_line("int64_t mid = left + (right - left) / 2;");
+        self.emit_line("if (arr[mid] == target) return mid;");
+        self.emit_line("if (arr[mid] < target) left = mid + 1;");
+        self.emit_line("else right = mid - 1;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("return -1;");
         self.indent_level -= 1;
         self.emit_line("}");
     }
