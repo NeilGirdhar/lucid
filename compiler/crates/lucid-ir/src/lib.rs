@@ -4,6 +4,8 @@
 //! It provides a type-safe, machine-independent representation suitable for optimization
 //! and code generation.
 
+pub mod builder;
+
 use std::collections::HashMap;
 
 /// A Lucid IR module containing functions and type definitions
