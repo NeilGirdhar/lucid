@@ -7,6 +7,7 @@ pub struct CCodegenBackend {
     indent_level: usize,
     output: String,
     declared_vars: std::collections::HashSet<String>,
+    var_types: std::collections::HashMap<String, String>, // Variable -> C type
 }
 
 impl CCodegenBackend {
@@ -15,6 +16,7 @@ impl CCodegenBackend {
             indent_level: 0,
             output: String::new(),
             declared_vars: std::collections::HashSet::new(),
+            var_types: std::collections::HashMap::new(),
         }
     }
 
@@ -51,8 +53,9 @@ impl CCodegenBackend {
     }
 
     fn generate_function(&mut self, func: &IrFunction) {
-        // Clear declared vars for each function
+        // Clear declared vars and types for each function
         self.declared_vars.clear();
+        self.var_types.clear();
 
         // Mark parameters as already declared
         for param in &func.params {
@@ -107,7 +110,18 @@ impl CCodegenBackend {
             IrInstruction::Assign { dest, value } => {
                 let value_code = self.value_to_c(value);
                 if !self.declared_vars.contains(dest) {
-                    self.emit_line(&format!("int64_t {} = {};", dest, value_code));
+                    // Determine type: use tracked type, or infer from value if it's a variable
+                    let var_type = if let Some(tracked) = self.var_types.get(dest) {
+                        tracked.clone()
+                    } else if let IrValue::Var(src_var) = value {
+                        // If assigning from another variable, propagate its type
+                        self.var_types.get(src_var).cloned().unwrap_or_else(|| "int64_t".to_string())
+                    } else {
+                        "int64_t".to_string()
+                    };
+                    // Track the type for this new variable
+                    self.var_types.insert(dest.clone(), var_type.clone());
+                    self.emit_line(&format!("{} {} = {};", var_type, dest, value_code));
                     self.declared_vars.insert(dest.clone());
                 } else {
                     self.emit_line(&format!("{} = {};", dest, value_code));
@@ -279,6 +293,8 @@ impl CCodegenBackend {
                         class_name, dest, class_name, class_name
                     ));
                     self.declared_vars.insert(dest.clone());
+                    // Track the type of this variable for future assignments
+                    self.var_types.insert(dest.clone(), format!("struct {} *", class_name));
                 } else {
                     self.emit_line(&format!(
                         "{} = (struct {} *)malloc(sizeof(struct {}));",

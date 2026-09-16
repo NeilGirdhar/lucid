@@ -465,11 +465,26 @@ impl IrBuilder {
             Expr::Construct { class_name, args, .. } => {
                 let dest = self.fresh_var("obj");
 
-                // Build field value pairs from arguments
+                // Get field names from the class definition (extract before borrowing for emit)
+                let field_names: Vec<String> = if let Some(cls) = self.module.get_class(class_name) {
+                    cls.fields.iter().map(|f| f.name.clone()).collect()
+                } else {
+                    Vec::new()
+                };
+
+                // Build field value pairs from arguments, mapping positional args to field names
                 let mut field_values = Vec::new();
                 for (idx, arg) in args.iter().enumerate() {
-                    let field_name = arg.name.clone()
-                        .unwrap_or_else(|| format!("field_{}", idx));
+                    let field_name = if let Some(name) = &arg.name {
+                        // Named argument: use provided name
+                        name.clone()
+                    } else if idx < field_names.len() {
+                        // Positional argument: use class field name at this index
+                        field_names[idx].clone()
+                    } else {
+                        // Too many positional args or no class, fall back to field_N
+                        format!("field_{}", idx)
+                    };
                     let value = self.expr_to_ir_value(&arg.value);
                     field_values.push((field_name, value));
                 }

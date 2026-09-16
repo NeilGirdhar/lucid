@@ -162,6 +162,26 @@ mod tests {
         let c_code6 = backend6.generate(&ir_module6);
         let full_c6 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", get_sum());\n  return 0;\n}}", c_code6);
         assert!(test_c_code(&full_c6, "42\n"), "get_sum() should return 42 with Point class defined");
+
+        // Test 7: Class instantiation with field mapping
+        let lucid_code7 = "class Point:\n    x: int\n    y: int\n\ndef test() -> int:\n    p = Point(3, 4)\n    return 5\n";
+        let mut lexer7 = Lexer::new(lucid_code7);
+        let tokens7 = lexer7.tokenize().expect("Lexer failed for instantiation");
+        let mut parser7 = Parser::new(tokens7);
+        let module7 = parser7.parse_module().expect("Parser failed for instantiation");
+        let ir_module7 = crate::builder::IrBuilder::new().build_module(&module7);
+
+        // Verify that Point class exists
+        assert!(ir_module7.get_class("Point").is_some(), "Point class should exist");
+
+        // Verify test function was created
+        assert!(ir_module7.functions.iter().any(|f| f.name == "test"), "test function should exist");
+
+        // Verify codegen produces valid C
+        let mut backend7 = CCodegenBackend::new();
+        let c_code7 = backend7.generate(&ir_module7);
+        let full_c7 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", test());\n  return 0;\n}}", c_code7);
+        assert!(test_c_code(&full_c7, "5\n"), "test() with Point instantiation should return 5");
     }
 
     #[test]
