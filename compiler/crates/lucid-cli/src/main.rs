@@ -1216,10 +1216,9 @@ fn check_multiline_continuation(buffer: &str, line: &str, is_continuation: bool)
 
     while let Some(c) = chars.next() {
         match c {
-            '\\'
-                if (in_single_quote || in_double_quote) => {
-                    let _ = chars.next();
-                }
+            '\\' if (in_single_quote || in_double_quote) => {
+                let _ = chars.next();
+            }
             '\'' if !in_double_quote => in_single_quote = !in_single_quote,
             '"' if !in_single_quote => in_double_quote = !in_double_quote,
             '#' if !in_single_quote && !in_double_quote => {

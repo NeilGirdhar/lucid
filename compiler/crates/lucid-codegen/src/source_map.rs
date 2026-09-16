@@ -20,12 +20,8 @@ impl SourceMapIntegration {
 
     /// Record a line of generated code with source location
     pub fn record_line(&mut self, source_file: String, source_line: usize, source_column: usize) {
-        self.source_map.add_mapping(
-            self.current_line,
-            source_file,
-            source_line,
-            source_column,
-        );
+        self.source_map
+            .add_mapping(self.current_line, source_file, source_line, source_column);
         self.current_line += 1;
     }
 

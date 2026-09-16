@@ -18,9 +18,9 @@ use std::collections::HashMap;
 /// Used for parameter bundles and Arguments/Parameters
 #[derive(Debug, Clone)]
 pub struct AnonymousClassShape {
-    pub fields: Vec<(String, IrType)>,  // (name, type) pairs
-    pub is_positional_only: Vec<bool>,  // Which fields are positional-only
-    pub is_keyword_only: Vec<bool>,     // Which fields are keyword-only
+    pub fields: Vec<(String, IrType)>, // (name, type) pairs
+    pub is_positional_only: Vec<bool>, // Which fields are positional-only
+    pub is_keyword_only: Vec<bool>,    // Which fields are keyword-only
 }
 
 impl AnonymousClassShape {
@@ -49,40 +49,40 @@ impl AnonymousClassShape {
 /// Visibility modifier for module members
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
-    Public,   // Exported from module
-    Private,  // Internal to module
+    Public,  // Exported from module
+    Private, // Internal to module
 }
 
 /// Module import statement
 #[derive(Debug, Clone)]
 pub struct ModuleImport {
-    pub module_path: String,  // "std", "utils", "math.vectors"
-    pub imported_items: Vec<String>,  // ["List", "Dict"] or empty for import *
-    pub alias: Option<String>,  // "import math.vectors as vec"
+    pub module_path: String,         // "std", "utils", "math.vectors"
+    pub imported_items: Vec<String>, // ["List", "Dict"] or empty for import *
+    pub alias: Option<String>,       // "import math.vectors as vec"
 }
 
 /// Module export (what this module provides)
 #[derive(Debug, Clone)]
 pub struct ModuleExport {
-    pub name: String,  // Function, class, or type name
+    pub name: String, // Function, class, or type name
     pub visibility: Visibility,
 }
 
 /// Module definition (namespace container)
 #[derive(Debug, Clone)]
 pub struct ModuleDef {
-    pub name: String,  // "std", "utils"
-    pub path: String,  // "std", "math.vectors"
+    pub name: String, // "std", "utils"
+    pub path: String, // "std", "math.vectors"
     pub imports: Vec<ModuleImport>,
     pub exports: Vec<ModuleExport>,
-    pub depends_on: Vec<String>,  // Other modules this depends on (for cycle detection)
+    pub depends_on: Vec<String>, // Other modules this depends on (for cycle detection)
 }
 
 /// A Lucid IR module containing functions and type definitions
 #[derive(Debug, Clone)]
 pub struct IrModule {
-    pub name: String,  // Module name ("main", "std", etc.)
-    pub path: String,  // Full module path ("std.collections")
+    pub name: String, // Module name ("main", "std", etc.)
+    pub path: String, // Full module path ("std.collections")
     pub functions: Vec<IrFunction>,
     pub types: HashMap<String, IrType>,
     pub globals: Vec<IrGlobal>,
@@ -91,25 +91,25 @@ pub struct IrModule {
     pub trait_impls: Vec<TraitImpl>,
     pub specializations: Vec<TypeSpecialization>,
     pub error_types: Vec<ErrorType>,
-    pub iterator_traits: Vec<IteratorTrait>,  // Iterator support for collections
-    pub operator_overloads: Vec<OperatorOverload>,  // Multiple dispatch for binary operators
-    pub anonymous_shapes: Vec<AnonymousClassShape>,  // Unnamed structured types for Arguments/Parameters
-    pub module_def: Option<ModuleDef>,  // Module metadata
-    pub imported_modules: HashMap<String, IrModule>,  // Imported modules (for symbol resolution)
+    pub iterator_traits: Vec<IteratorTrait>, // Iterator support for collections
+    pub operator_overloads: Vec<OperatorOverload>, // Multiple dispatch for binary operators
+    pub anonymous_shapes: Vec<AnonymousClassShape>, // Unnamed structured types for Arguments/Parameters
+    pub module_def: Option<ModuleDef>,              // Module metadata
+    pub imported_modules: HashMap<String, IrModule>, // Imported modules (for symbol resolution)
 }
 
 /// An IR function with control flow graph
 #[derive(Debug, Clone)]
 pub struct IrFunction {
     pub name: String,
-    pub generic_params: Vec<GenericParam>,  // Generic type parameters [T, K, V, ...]
-    pub where_clause: Option<WhereClause>,  // Optional where clause for advanced bounds
+    pub generic_params: Vec<GenericParam>, // Generic type parameters [T, K, V, ...]
+    pub where_clause: Option<WhereClause>, // Optional where clause for advanced bounds
     pub params: Vec<IrParam>,
     pub return_type: IrType,
     pub blocks: Vec<IrBlock>,
     pub entry_block: usize,
-    pub is_inline: bool,                    // Hint for inline optimization
-    pub is_pure: bool,                      // Pure function (no side effects)
+    pub is_inline: bool, // Hint for inline optimization
+    pub is_pure: bool,   // Pure function (no side effects)
 }
 
 /// A basic block in the CFG
@@ -131,9 +131,9 @@ pub struct IrParam {
 /// Mutability view for reference types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MutabilityView {
-    Exclusive,    // T: exclusive mutable access (owner only)
-    ReadOnly,     // ~T: read-only immutable view
-    SharedMut,    // !T: shared-mutable view (multiple readers)
+    Exclusive, // T: exclusive mutable access (owner only)
+    ReadOnly,  // ~T: read-only immutable view
+    SharedMut, // !T: shared-mutable view (multiple readers)
 }
 
 impl MutabilityView {
@@ -153,7 +153,7 @@ impl MutabilityView {
 
     /// Check if this view allows reading
     pub fn allows_read(&self) -> bool {
-        true  // All views allow reading
+        true // All views allow reading
     }
 
     /// Check if this view allows sharing (multiple references)
@@ -167,20 +167,20 @@ impl MutabilityView {
 pub struct IrField {
     pub name: String,
     pub ty: IrType,
-    pub mutability: MutabilityView,  // Mutability view for this field
+    pub mutability: MutabilityView, // Mutability view for this field
 }
 
 /// A class method definition
 #[derive(Debug, Clone)]
 pub struct IrMethod {
     pub name: String,
-    pub is_factory: bool,      // factory methods (__init__, etc.)
-    pub is_getter: bool,        // getter methods
-    pub is_setter: bool,        // setter methods (requires mutation)
-    pub required_mutability: MutabilityView,  // Minimum mutability needed for this method
+    pub is_factory: bool,                    // factory methods (__init__, etc.)
+    pub is_getter: bool,                     // getter methods
+    pub is_setter: bool,                     // setter methods (requires mutation)
+    pub required_mutability: MutabilityView, // Minimum mutability needed for this method
     pub params: Vec<IrParam>,
     pub return_type: IrType,
-    pub function_ref: String,   // Name of generated function in IR
+    pub function_ref: String, // Name of generated function in IR
 }
 
 impl IrMethod {
@@ -253,7 +253,7 @@ impl IrType {
             IrType::Dict(_, _) => "LucidDict*",
             IrType::Range => "LucidRange*",
             IrType::Union(_) => "LucidResult*",
-            IrType::Generic(_) => "void*",  // Type variable - use void* for now
+            IrType::Generic(_) => "void*", // Type variable - use void* for now
             IrType::GenericInstance { name, .. } => {
                 // Parameterized types map to their base type
                 match name.as_str() {
@@ -304,78 +304,78 @@ pub struct TraitMethod {
 /// Associated type in a trait (e.g., Iterator::Item)
 #[derive(Debug, Clone)]
 pub struct AssociatedType {
-    pub name: String,                 // e.g., "Item"
-    pub ty: IrType,                   // The concrete type
+    pub name: String, // e.g., "Item"
+    pub ty: IrType,   // The concrete type
 }
 
 /// Iterator trait support
 #[derive(Debug, Clone)]
 pub struct IteratorTrait {
-    pub collection_type: String,      // "List" or "Dict"
-    pub item_type: IrType,           // Element type being iterated
-    pub key_type: Option<IrType>,    // For Dict: key type
-    pub has_keys_method: bool,        // Dict has keys() method
-    pub has_values_method: bool,      // Dict has values() method
-    pub has_items_method: bool,       // Dict has items() method
+    pub collection_type: String,  // "List" or "Dict"
+    pub item_type: IrType,        // Element type being iterated
+    pub key_type: Option<IrType>, // For Dict: key type
+    pub has_keys_method: bool,    // Dict has keys() method
+    pub has_values_method: bool,  // Dict has values() method
+    pub has_items_method: bool,   // Dict has items() method
 }
 
 /// Error context for stack traces
 #[derive(Debug, Clone)]
 pub struct ErrorContext {
-    pub function_name: String,        // Where error occurred
-    pub error_type: String,          // Error type/enum variant
-    pub error_message: String,       // Human-readable message
-    pub line_number: usize,          // Source line (if available)
+    pub function_name: String, // Where error occurred
+    pub error_type: String,    // Error type/enum variant
+    pub error_message: String, // Human-readable message
+    pub line_number: usize,    // Source line (if available)
 }
 
 /// Error stack for tracking context through function calls
 #[derive(Debug, Clone)]
 pub struct ErrorStack {
-    pub contexts: Vec<ErrorContext>,  // Stack of error contexts
+    pub contexts: Vec<ErrorContext>, // Stack of error contexts
 }
 
 /// Trait bound for generic type parameters
 #[derive(Debug, Clone)]
 pub struct TraitBound {
-    pub type_param: String,           // e.g., "T" in T: Clone
-    pub trait_name: String,           // e.g., "Clone"
+    pub type_param: String, // e.g., "T" in T: Clone
+    pub trait_name: String, // e.g., "Clone"
 }
 
 /// Variance for generic type parameters
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variance {
-    Covariant,      // +K: can pass subtype in output positions
-    Contravariant,  // -K: can pass supertype in input positions
-    Invariant,      // =K: exact type required
+    Covariant,     // +K: can pass subtype in output positions
+    Contravariant, // -K: can pass supertype in input positions
+    Invariant,     // =K: exact type required
 }
 
 /// Generic type parameter with optional bounds
 #[derive(Debug, Clone)]
 pub struct GenericParam {
-    pub name: String,                 // e.g., "T", "K", "V"
-    pub variance: Variance,           // Covariant (+), Contravariant (-), or Invariant (=)
-    pub bounds: Vec<TraitBound>,      // e.g., [T: Clone, T: Copy]
+    pub name: String,            // e.g., "T", "K", "V"
+    pub variance: Variance,      // Covariant (+), Contravariant (-), or Invariant (=)
+    pub bounds: Vec<TraitBound>, // e.g., [T: Clone, T: Copy]
 }
 
 /// Where clause predicate for advanced trait bounds
 #[derive(Debug, Clone)]
 pub struct WhereClausePredicate {
-    pub type_name: String,            // Type being constrained (e.g., "T" or "List[T]")
+    pub type_name: String, // Type being constrained (e.g., "T" or "List[T]")
     pub required_traits: Vec<String>, // Traits that must be implemented
 }
 
 /// Where clause for generic functions/types
 #[derive(Debug, Clone)]
 pub struct WhereClause {
-    pub predicates: Vec<WhereClausePredicate>,  // e.g., [T: Clone, U: Default]
+    pub predicates: Vec<WhereClausePredicate>, // e.g., [T: Clone, U: Default]
 }
 
 /// Generic type instantiation (monomorphization)
 #[derive(Debug, Clone)]
 pub struct TypeSpecialization {
-    pub generic_name: String,           // "List" or "Dict"
-    pub type_args: Vec<IrType>,         // [IrType::I64] for List[int]
-    pub specialized_name: String,       // "List__i64__" or "Dict__str__i64__"
+    pub generic_name: String,     // "List" or "Dict"
+    pub type_args: Vec<IrType>,   // [IrType::I64] for List[int]
+    pub specialized_name: String, // "List__i64__" or "Dict__str__i64__"
 }
 
 /// Error type definition for error hierarchies
@@ -415,7 +415,7 @@ pub enum Pattern {
     /// Literal pattern (integer, string, boolean)
     Literal(IrValue),
     /// Enum variant pattern (e.g., Result::Ok, Result::Err)
-    Variant(String, Vec<String>),  // variant_name, captured_bindings
+    Variant(String, Vec<String>), // variant_name, captured_bindings
     /// Tuple pattern (for multiple values)
     Tuple(Vec<Pattern>),
 }
@@ -424,30 +424,30 @@ pub enum Pattern {
 #[derive(Debug, Clone)]
 pub struct MatchArm {
     pub pattern: Pattern,
-    pub target_block: usize,  // Block to execute if pattern matches
+    pub target_block: usize, // Block to execute if pattern matches
 }
 
 /// Pattern binding for match arms - extract values from patterns
 #[derive(Debug, Clone)]
 pub struct PatternBinding {
-    pub binding_name: String,         // Variable name to bind to
-    pub field_path: Vec<String>,      // Path to field (e.g., ["Ok", "value"])
+    pub binding_name: String,    // Variable name to bind to
+    pub field_path: Vec<String>, // Path to field (e.g., ["Ok", "value"])
 }
 
 /// Match arm with full pattern and bindings
 #[derive(Debug, Clone)]
 pub struct MatchArmWithBindings {
     pub pattern: Pattern,
-    pub bindings: Vec<PatternBinding>,  // Values extracted from pattern
+    pub bindings: Vec<PatternBinding>, // Values extracted from pattern
     pub target_block: usize,
 }
 
 /// Pattern match with exhaustiveness tracking
 #[derive(Debug, Clone)]
 pub struct MatchExpr {
-    pub scrutinee: String,           // Value being matched
-    pub arms: Vec<MatchArm>,         // All match arms
-    pub exhaustive: bool,            // Whether all cases are covered
+    pub scrutinee: String,             // Value being matched
+    pub arms: Vec<MatchArm>,           // All match arms
+    pub exhaustive: bool,              // Whether all cases are covered
     pub covered_patterns: Vec<String>, // Which patterns are covered
 }
 
@@ -455,8 +455,8 @@ pub struct MatchExpr {
 #[derive(Debug, Clone)]
 pub struct IrClass {
     pub name: String,
-    pub generic_params: Vec<GenericParam>,  // Generic type parameters
-    pub parent: Option<String>,  // Single inheritance: parent class name
+    pub generic_params: Vec<GenericParam>, // Generic type parameters
+    pub parent: Option<String>,            // Single inheritance: parent class name
     pub fields: Vec<IrField>,
     pub methods: Vec<MethodDispatch>,
 }
@@ -465,10 +465,7 @@ pub struct IrClass {
 #[derive(Debug, Clone)]
 pub enum IrInstruction {
     /// Assign a value to a variable
-    Assign {
-        dest: String,
-        value: IrValue,
-    },
+    Assign { dest: String, value: IrValue },
     /// Binary operation
     BinOp {
         dest: String,
@@ -496,15 +493,9 @@ pub enum IrInstruction {
         args: Vec<IrValue>,
     },
     /// Load from memory
-    Load {
-        dest: String,
-        addr: IrValue,
-    },
+    Load { dest: String, addr: IrValue },
     /// Store to memory
-    Store {
-        addr: IrValue,
-        value: IrValue,
-    },
+    Store { addr: IrValue, value: IrValue },
     /// Type cast
     Cast {
         dest: String,
@@ -512,14 +503,9 @@ pub enum IrInstruction {
         to_type: IrType,
     },
     /// Memory allocation (malloc)
-    Malloc {
-        dest: String,
-        size: IrValue,
-    },
+    Malloc { dest: String, size: IrValue },
     /// Memory deallocation (free)
-    Free {
-        addr: IrValue,
-    },
+    Free { addr: IrValue },
     /// Field access read (obj.field)
     FieldRead {
         dest: String,
@@ -539,7 +525,7 @@ pub enum IrInstruction {
     NewInstance {
         dest: String,
         class_name: String,
-        field_values: Vec<(String, IrValue)>,  // field name -> value pairs
+        field_values: Vec<(String, IrValue)>, // field name -> value pairs
     },
     /// Check if a Result is an error (for ? operator)
     ResultCheck {
@@ -557,28 +543,20 @@ pub enum IrInstruction {
     FileOpen {
         dest: String,
         path: IrValue,
-        mode: String,  // "r", "w", "a"
+        mode: String, // "r", "w", "a"
     },
     /// File I/O: write to file
-    FileWrite {
-        file: IrValue,
-        content: IrValue,
-    },
+    FileWrite { file: IrValue, content: IrValue },
     /// File I/O: read from file
-    FileRead {
-        dest: String,
-        file: IrValue,
-    },
+    FileRead { dest: String, file: IrValue },
     /// File I/O: close file
-    FileClose {
-        file: IrValue,
-    },
+    FileClose { file: IrValue },
     /// Raise (panic) on broken invariant
     /// Only used for genuine internal errors, not for recoverable user errors
     /// Use Result types for recoverable error handling
     Raise {
         message: String,
-        condition_failed: Option<IrValue>,  // Condition that failed (for debugging)
+        condition_failed: Option<IrValue>, // Condition that failed (for debugging)
     },
 }
 
@@ -628,7 +606,7 @@ pub struct OperatorOverload {
     pub operator: IrBinOp,
     pub left_type: String,
     pub right_type: String,
-    pub impl_function: String,  // Function implementing this overload
+    pub impl_function: String, // Function implementing this overload
     pub return_type: IrType,
 }
 
@@ -756,7 +734,9 @@ impl IrModule {
     /// Check if a symbol is publicly exported from this module
     pub fn is_exported(&self, symbol: &str) -> bool {
         if let Some(def) = &self.module_def {
-            def.exports.iter().any(|e| e.name == symbol && e.visibility == Visibility::Public)
+            def.exports
+                .iter()
+                .any(|e| e.name == symbol && e.visibility == Visibility::Public)
         } else {
             // If no module def, everything is public
             true
@@ -777,7 +757,9 @@ impl IrModule {
         let mut specialized = generic_name.to_string();
         specialized.push_str("__");
         for (i, ty) in type_args.iter().enumerate() {
-            if i > 0 { specialized.push_str("__"); }  // Double underscore between types
+            if i > 0 {
+                specialized.push_str("__");
+            } // Double underscore between types
             specialized.push_str(&self.type_to_name(ty));
         }
         specialized.push_str("__");
@@ -820,7 +802,9 @@ impl IrModule {
 
     /// Find an anonymous shape by its signature
     pub fn find_shape(&self, signature: &str) -> Option<&AnonymousClassShape> {
-        self.anonymous_shapes.iter().find(|s| s.signature() == signature)
+        self.anonymous_shapes
+            .iter()
+            .find(|s| s.signature() == signature)
     }
 
     /// Register a binary operator overload (multiple dispatch)
@@ -829,7 +813,12 @@ impl IrModule {
     }
 
     /// Resolve a binary operator call to the appropriate implementation
-    pub fn resolve_operator(&self, op: IrBinOp, left_type: &str, right_type: &str) -> Option<String> {
+    pub fn resolve_operator(
+        &self,
+        op: IrBinOp,
+        left_type: &str,
+        right_type: &str,
+    ) -> Option<String> {
         // First try exact match
         for overload in &self.operator_overloads {
             if overload.matches(op, left_type, right_type) {
@@ -851,7 +840,11 @@ impl IrModule {
     }
 
     /// Get trait bounds for a generic parameter
-    pub fn get_generic_param_bounds(&self, param_name: &str, functions: &[IrFunction]) -> Vec<String> {
+    pub fn get_generic_param_bounds(
+        &self,
+        param_name: &str,
+        functions: &[IrFunction],
+    ) -> Vec<String> {
         for func in functions {
             for param in &func.generic_params {
                 if param.name == param_name {
@@ -875,7 +868,12 @@ impl IrModule {
     /// Check if a type parameter's variance is sound in a given position
     /// position_is_output: true if parameter appears in output (return type, result)
     /// position_is_input: true if parameter appears in input (parameter, argument)
-    pub fn check_variance_soundness(&self, variance: Variance, position_is_output: bool, position_is_input: bool) -> bool {
+    pub fn check_variance_soundness(
+        &self,
+        variance: Variance,
+        position_is_output: bool,
+        position_is_input: bool,
+    ) -> bool {
         match variance {
             Variance::Covariant => {
                 // +K: produces values, cannot consume values
@@ -896,7 +894,12 @@ impl IrModule {
 
     /// Check if a generic substitution respects variance rules
     /// Returns true if declaring a subtype satisfies the type parameter's variance
-    pub fn type_is_valid_substitution(&self, param_variance: Variance, actual_type: &str, expected_type: &str) -> bool {
+    pub fn type_is_valid_substitution(
+        &self,
+        param_variance: Variance,
+        actual_type: &str,
+        expected_type: &str,
+    ) -> bool {
         if actual_type == expected_type {
             return true;
         }
@@ -983,7 +986,11 @@ impl IrModule {
     }
 
     /// Check if pattern match covers all required cases
-    pub fn validate_match_exhaustiveness(&self, type_name: &str, arms: &[MatchArm]) -> Result<(), String> {
+    pub fn validate_match_exhaustiveness(
+        &self,
+        type_name: &str,
+        arms: &[MatchArm],
+    ) -> Result<(), String> {
         if type_name == "Result" {
             if !self.is_result_match_exhaustive(arms) {
                 return Err("Match on Result must cover Ok and Err or use wildcard".to_string());
@@ -992,14 +999,22 @@ impl IrModule {
             // Check for error type
             if !self.is_error_match_exhaustive(type_name, arms) {
                 let variants = self.get_enum_variants(type_name);
-                return Err(format!("Match on {} must cover all variants: {:?}", type_name, variants));
+                return Err(format!(
+                    "Match on {} must cover all variants: {:?}",
+                    type_name, variants
+                ));
             }
         }
         Ok(())
     }
 
     /// Register an iterator trait for a collection type
-    pub fn register_iterator(&mut self, collection_type: String, item_type: IrType, key_type: Option<IrType>) -> IteratorTrait {
+    pub fn register_iterator(
+        &mut self,
+        collection_type: String,
+        item_type: IrType,
+        key_type: Option<IrType>,
+    ) -> IteratorTrait {
         let has_keys = key_type.is_some();
         let iterator = IteratorTrait {
             collection_type,
@@ -1015,14 +1030,20 @@ impl IrModule {
 
     /// Get iterator for a collection type
     pub fn get_iterator(&self, collection_type: &str) -> Option<&IteratorTrait> {
-        self.iterator_traits.iter().find(|it| it.collection_type == collection_type)
+        self.iterator_traits
+            .iter()
+            .find(|it| it.collection_type == collection_type)
     }
 
     /// Check if a type supports iteration
     pub fn is_iterable(&self, type_name: &str) -> bool {
-        self.iterator_traits.iter().any(|it| it.collection_type == type_name) ||
-        type_name == "List" || type_name == "Dict" || type_name == "Range" ||
-        type_name == "String"
+        self.iterator_traits
+            .iter()
+            .any(|it| it.collection_type == type_name)
+            || type_name == "List"
+            || type_name == "Dict"
+            || type_name == "Range"
+            || type_name == "String"
     }
 
     /// Get the item type for iteration
@@ -1036,15 +1057,20 @@ impl IrModule {
     }
 
     /// Validate that a type satisfies all where clause predicates
-    pub fn validate_where_clause(&self, where_clause: &WhereClause, type_name: &str) -> Result<(), String> {
+    pub fn validate_where_clause(
+        &self,
+        where_clause: &WhereClause,
+        type_name: &str,
+    ) -> Result<(), String> {
         for predicate in &where_clause.predicates {
             if predicate.type_name == type_name
-                && !self.type_satisfies_bounds(type_name, &predicate.required_traits) {
-                    return Err(format!(
-                        "Type {} does not satisfy where clause constraints: {:?}",
-                        type_name, predicate.required_traits
-                    ));
-                }
+                && !self.type_satisfies_bounds(type_name, &predicate.required_traits)
+            {
+                return Err(format!(
+                    "Type {} does not satisfy where clause constraints: {:?}",
+                    type_name, predicate.required_traits
+                ));
+            }
         }
         Ok(())
     }
@@ -1055,7 +1081,11 @@ impl IrModule {
     }
 
     /// Add a predicate to a where clause
-    pub fn add_where_predicate(where_clause: &mut WhereClause, type_name: String, traits: Vec<String>) {
+    pub fn add_where_predicate(
+        where_clause: &mut WhereClause,
+        type_name: String,
+        traits: Vec<String>,
+    ) {
         where_clause.predicates.push(WhereClausePredicate {
             type_name,
             required_traits: traits,
@@ -1065,14 +1095,14 @@ impl IrModule {
     /// Create pattern bindings for a match arm
     pub fn create_pattern_bindings(pattern: &Pattern) -> Vec<PatternBinding> {
         match pattern {
-            Pattern::Variant(variant_name, captured) => {
-                captured.iter().enumerate().map(|(i, name)| {
-                    PatternBinding {
-                        binding_name: name.clone(),
-                        field_path: vec![variant_name.clone(), format!("field_{}", i)],
-                    }
-                }).collect()
-            }
+            Pattern::Variant(variant_name, captured) => captured
+                .iter()
+                .enumerate()
+                .map(|(i, name)| PatternBinding {
+                    binding_name: name.clone(),
+                    field_path: vec![variant_name.clone(), format!("field_{}", i)],
+                })
+                .collect(),
             Pattern::Tuple(patterns) => {
                 let mut bindings = Vec::new();
                 for (i, pat) in patterns.iter().enumerate() {
@@ -1089,7 +1119,10 @@ impl IrModule {
     }
 
     /// Create match arm with full pattern bindings
-    pub fn create_match_arm_with_bindings(pattern: Pattern, target_block: usize) -> MatchArmWithBindings {
+    pub fn create_match_arm_with_bindings(
+        pattern: Pattern,
+        target_block: usize,
+    ) -> MatchArmWithBindings {
         let bindings = Self::create_pattern_bindings(&pattern);
         MatchArmWithBindings {
             pattern,
@@ -1126,12 +1159,17 @@ impl IrModule {
 
     /// Get full error stack trace
     pub fn get_error_trace(stack: &ErrorStack) -> Vec<String> {
-        stack.contexts.iter().enumerate().map(|(i, ctx)| {
-            format!(
-                "  {} in {}: {} ({})",
-                i, ctx.function_name, ctx.error_message, ctx.error_type
-            )
-        }).collect()
+        stack
+            .contexts
+            .iter()
+            .enumerate()
+            .map(|(i, ctx)| {
+                format!(
+                    "  {} in {}: {} ({})",
+                    i, ctx.function_name, ctx.error_message, ctx.error_type
+                )
+            })
+            .collect()
     }
 
     /// Mark function for inlining optimization
@@ -1156,11 +1194,7 @@ impl IrModule {
 }
 
 impl IrFunction {
-    pub fn new(
-        name: String,
-        params: Vec<IrParam>,
-        return_type: IrType,
-    ) -> Self {
+    pub fn new(name: String, params: Vec<IrParam>, return_type: IrType) -> Self {
         Self {
             name,
             generic_params: Vec::new(),
@@ -1236,11 +1270,7 @@ mod tests {
     #[test]
     fn test_ir_module_construction() {
         let mut module = IrModule::new();
-        let func = IrFunction::new(
-            "main".to_string(),
-            Vec::new(),
-            IrType::I64,
-        );
+        let func = IrFunction::new("main".to_string(), Vec::new(), IrType::I64);
         module.add_function(func);
         assert_eq!(module.functions.len(), 1);
     }

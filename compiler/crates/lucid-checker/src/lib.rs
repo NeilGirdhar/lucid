@@ -140,7 +140,10 @@ fn type_argument_conforms(
 /// Fill in trailing type arguments from `T = X` defaults.  A bare name is
 /// left unspecified unless every parameter has a default; a partial list is
 /// completed only when every omitted parameter has one.
-fn with_type_param_defaults(defaults: Option<&Vec<Option<Type>>>, mut args: Vec<Type>) -> Vec<Type> {
+fn with_type_param_defaults(
+    defaults: Option<&Vec<Option<Type>>>,
+    mut args: Vec<Type>,
+) -> Vec<Type> {
     let Some(defaults) = defaults else {
         return args;
     };
@@ -245,7 +248,7 @@ impl Type {
                 direction: direction.clone(),
                 inner: Box::new(inner.canonical()),
             },
-                    Type::View { mutability, inner } => Type::View {
+            Type::View { mutability, inner } => Type::View {
                 mutability: mutability.clone(),
                 inner: Box::new(inner.canonical()),
             },
@@ -438,9 +441,7 @@ impl Type {
             Type::Bool | Type::LiteralBool(_) => "bool".into(),
             Type::Str | Type::LiteralStr(_) => "str".into(),
             Type::None => "none".into(),
-            Type::Class { name, .. } | Type::Trait { name, .. } => {
-                name.clone()
-            }
+            Type::Class { name, .. } | Type::Trait { name, .. } => name.clone(),
             Type::Exact(inner) | Type::View { inner, .. } | Type::Projected { inner, .. } => {
                 inner.runtime_dispatch_key()
             }
@@ -503,9 +504,11 @@ impl Type {
                     type_args: target_args,
                     ..
                 },
-            ) if source_name == target_name => {
-                (env.class_variance.get(source_name), source_args, target_args)
-            }
+            ) if source_name == target_name => (
+                env.class_variance.get(source_name),
+                source_args,
+                target_args,
+            ),
             (
                 Type::Trait {
                     name: source_name,
@@ -517,9 +520,11 @@ impl Type {
                     type_args: target_args,
                     ..
                 },
-            ) if source_name == target_name => {
-                (env.trait_variance.get(source_name), source_args, target_args)
-            }
+            ) if source_name == target_name => (
+                env.trait_variance.get(source_name),
+                source_args,
+                target_args,
+            ),
             _ => return self.is_subtype_of(target, env),
         };
         if source_args.is_empty() || target_args.is_empty() {
@@ -1220,7 +1225,10 @@ fn collect_type_vars(ty: &Type, vars: &mut HashSet<String>) {
             }
             collect_type_vars(return_type, vars);
         }
-        Type::Future(inner) | Type::Iterator(inner) | Type::Negation(inner) | Type::Exact(inner) => {
+        Type::Future(inner)
+        | Type::Iterator(inner)
+        | Type::Negation(inner)
+        | Type::Exact(inner) => {
             collect_type_vars(inner, vars);
         }
         Type::Union(parts) | Type::Intersection(parts) => {
@@ -2509,16 +2517,34 @@ impl TypeChecker {
                 vec![any.clone(), Type::Int],
                 any.clone(),
             ),
-            ("reversed", 1, Some(1), vec![any.clone()], Type::TypeVar("ElementType".into())),
-            ("iter", 1, Some(1), vec![any.clone()], Type::TypeVar("ElementType".into())),
-            ("locals", 0, Some(0), Vec::new(), Type::Class {
-                name: "dict".into(),
-                type_args: vec![Type::Str, any.clone()],
-                parent: None,
-                traits: Vec::new(),
-                fields: HashMap::new(),
-                is_sealed: false,
-            }),
+            (
+                "reversed",
+                1,
+                Some(1),
+                vec![any.clone()],
+                Type::TypeVar("ElementType".into()),
+            ),
+            (
+                "iter",
+                1,
+                Some(1),
+                vec![any.clone()],
+                Type::TypeVar("ElementType".into()),
+            ),
+            (
+                "locals",
+                0,
+                Some(0),
+                Vec::new(),
+                Type::Class {
+                    name: "dict".into(),
+                    type_args: vec![Type::Str, any.clone()],
+                    parent: None,
+                    traits: Vec::new(),
+                    fields: HashMap::new(),
+                    is_sealed: false,
+                },
+            ),
             (
                 "format",
                 1,
@@ -2615,7 +2641,13 @@ impl TypeChecker {
             ("tan", 1, Some(1), vec![any.clone()], Type::Float),
             ("floor", 1, Some(1), vec![any.clone()], Type::Int),
             ("ceil", 1, Some(1), vec![any.clone()], Type::Int),
-            ("sorted", 1, Some(2), vec![any.clone(), any.clone()], Type::TypeVar("ElementType".into())),
+            (
+                "sorted",
+                1,
+                Some(2),
+                vec![any.clone(), any.clone()],
+                Type::TypeVar("ElementType".into()),
+            ),
             ("monotonic", 0, Some(0), Vec::new(), Type::Float),
         ];
         for (name, required, maximum, params, return_type) in builtin_contracts {
@@ -2724,8 +2756,9 @@ impl TypeChecker {
             traits: &HashMap<String, Type>,
         ) {
             if let Stmt::ClassDef {
-                    name, bases, span, ..
-                } = stmt {
+                name, bases, span, ..
+            } = stmt
+            {
                 spans.insert(name.clone(), *span);
                 if let Some(parent) = bases.iter().find_map(|base| match base {
                     TypeExpr::Named {
@@ -2733,10 +2766,7 @@ impl TypeChecker {
                     } if classes.contains_key(base_name) => Some(base_name.clone()),
                     TypeExpr::Named {
                         name: base_name, ..
-                    } if !traits.contains_key(base_name) =>
-                    {
-                        Some(base_name.clone())
-                    }
+                    } if !traits.contains_key(base_name) => Some(base_name.clone()),
                     _ => None,
                 }) {
                     parents.insert(name.clone(), parent);
@@ -2801,10 +2831,11 @@ impl TypeChecker {
 
     fn collect_class_modifiers(&mut self, stmt: &Stmt) {
         if let Stmt::ClassDef {
-                name,
-                is_final: true,
-                ..
-            } = stmt {
+            name,
+            is_final: true,
+            ..
+        } = stmt
+        {
             self.env.final_classes.insert(name.clone());
         }
     }
@@ -3142,8 +3173,14 @@ impl TypeChecker {
                     if let ClassMember::Method(method) | ClassMember::ClassMethod(method) = member {
                         Self::reject_removed_decorators(method)?;
                     }
-                    let (method_name, params, return_type, default_return, is_async, method_type_params) =
-                        match member {
+                    let (
+                        method_name,
+                        params,
+                        return_type,
+                        default_return,
+                        is_async,
+                        method_type_params,
+                    ) = match member {
                         ClassMember::Method(method) | ClassMember::ClassMethod(method) => (
                             &method.name,
                             &method.params,
@@ -3989,7 +4026,10 @@ impl TypeChecker {
     /// name a parameter that precedes it in the same list or one from an
     /// enclosing list, and reject a bound that names a later parameter or
     /// the parameter itself.  Returns each parameter's resolved bound.
-    fn bind_type_params(&mut self, type_params: &[TypeParam]) -> Result<Vec<Option<Type>>, TypeError> {
+    fn bind_type_params(
+        &mut self,
+        type_params: &[TypeParam],
+    ) -> Result<Vec<Option<Type>>, TypeError> {
         let mut bounds = Vec::new();
         for (index, param) in type_params.iter().enumerate() {
             let out_of_reach = type_params[index..]
@@ -4042,7 +4082,10 @@ impl TypeChecker {
     }
 
     /// Bring the fixed sets of `type_params` into scope for checking a body.
-    fn register_type_var_alternatives(&mut self, type_params: &[TypeParam]) -> Result<(), TypeError> {
+    fn register_type_var_alternatives(
+        &mut self,
+        type_params: &[TypeParam],
+    ) -> Result<(), TypeError> {
         for param in type_params {
             if param.alternatives.is_empty() {
                 self.env.type_var_alternatives.remove(&param.name);
@@ -5204,7 +5247,9 @@ impl TypeChecker {
                 }
             }
         }
-        Some(Type::Iterator(Box::new(self.iterable_element_type(iterable))))
+        Some(Type::Iterator(Box::new(
+            self.iterable_element_type(iterable),
+        )))
     }
 
     fn is_iterable_type(&self, iterable: &Type) -> bool {
@@ -5289,7 +5334,9 @@ impl TypeChecker {
                     // If all branches exit, the whole if exits
                     let then_exits = Self::branch_exits(then_branch);
                     let elif_all_exit = elif_branches.iter().all(|(_, b)| Self::branch_exits(b));
-                    let else_exits = else_branch.as_ref().is_some_and(|eb| Self::branch_exits(eb));
+                    let else_exits = else_branch
+                        .as_ref()
+                        .is_some_and(|eb| Self::branch_exits(eb));
 
                     if then_exits && elif_all_exit && else_exits {
                         return true;
@@ -5347,15 +5394,13 @@ impl TypeChecker {
                             match op_type {
                                 BinaryOp::Is => {
                                     let not_none = match &current_type {
-                                        Type::Union(types) => {
-                                            Type::make_union(
-                                                types
-                                                    .iter()
-                                                    .filter(|t| !matches!(t, Type::None))
-                                                    .cloned()
-                                                    .collect(),
-                                            )
-                                        }
+                                        Type::Union(types) => Type::make_union(
+                                            types
+                                                .iter()
+                                                .filter(|t| !matches!(t, Type::None))
+                                                .cloned()
+                                                .collect(),
+                                        ),
                                         Type::None => Type::Never,
                                         _ => current_type.clone(),
                                     };
@@ -5366,15 +5411,13 @@ impl TypeChecker {
                                 }
                                 BinaryOp::IsNot => {
                                     let not_none = match &current_type {
-                                        Type::Union(types) => {
-                                            Type::make_union(
-                                                types
-                                                    .iter()
-                                                    .filter(|t| !matches!(t, Type::None))
-                                                    .cloned()
-                                                    .collect(),
-                                            )
-                                        }
+                                        Type::Union(types) => Type::make_union(
+                                            types
+                                                .iter()
+                                                .filter(|t| !matches!(t, Type::None))
+                                                .cloned()
+                                                .collect(),
+                                        ),
                                         Type::None => Type::Never,
                                         _ => current_type.clone(),
                                     };
@@ -5412,15 +5455,13 @@ impl TypeChecker {
                             } = &**right
                             {
                                 let not_none = match &current_type {
-                                    Type::Union(types) => {
-                                        Type::make_union(
-                                            types
-                                                .iter()
-                                                .filter(|t| !matches!(t, Type::None))
-                                                .cloned()
-                                                .collect(),
-                                        )
-                                    }
+                                    Type::Union(types) => Type::make_union(
+                                        types
+                                            .iter()
+                                            .filter(|t| !matches!(t, Type::None))
+                                            .cloned()
+                                            .collect(),
+                                    ),
                                     Type::None => Type::Never,
                                     _ => current_type.clone(),
                                 };
@@ -5463,15 +5504,13 @@ impl TypeChecker {
                             BinaryOp::Is => {
                                 // x is None: then_branch x is None, else_branch x is not None
                                 let not_none = match current_type {
-                                    Type::Union(types) => {
-                                        Type::make_union(
-                                            types
-                                                .iter()
-                                                .filter(|t| !matches!(t, Type::None))
-                                                .cloned()
-                                                .collect(),
-                                        )
-                                    }
+                                    Type::Union(types) => Type::make_union(
+                                        types
+                                            .iter()
+                                            .filter(|t| !matches!(t, Type::None))
+                                            .cloned()
+                                            .collect(),
+                                    ),
                                     Type::None => Type::Never,
                                     _ => current_type.clone(),
                                 };
@@ -5483,15 +5522,13 @@ impl TypeChecker {
                             BinaryOp::IsNot => {
                                 // x is not None: then_branch x is not None, else_branch x is None
                                 let not_none = match current_type {
-                                    Type::Union(types) => {
-                                        Type::make_union(
-                                            types
-                                                .iter()
-                                                .filter(|t| !matches!(t, Type::None))
-                                                .cloned()
-                                                .collect(),
-                                        )
-                                    }
+                                    Type::Union(types) => Type::make_union(
+                                        types
+                                            .iter()
+                                            .filter(|t| !matches!(t, Type::None))
+                                            .cloned()
+                                            .collect(),
+                                    ),
                                     Type::None => Type::Never,
                                     _ => current_type.clone(),
                                 };
@@ -5528,15 +5565,13 @@ impl TypeChecker {
                         {
                             // not (x is None): then_branch x is not None, else_branch x is None
                             let not_none = match current_type {
-                                Type::Union(types) => {
-                                    Type::make_union(
-                                        types
-                                            .iter()
-                                            .filter(|t| !matches!(t, Type::None))
-                                            .cloned()
-                                            .collect(),
-                                    )
-                                }
+                                Type::Union(types) => Type::make_union(
+                                    types
+                                        .iter()
+                                        .filter(|t| !matches!(t, Type::None))
+                                        .cloned()
+                                        .collect(),
+                                ),
                                 Type::None => Type::Never,
                                 _ => current_type.clone(),
                             };
@@ -5573,22 +5608,27 @@ impl TypeChecker {
                     .collect();
                 Type::make_union(normalized)
             }
-            Type::Class { name, type_args, parent, traits, fields, is_sealed } => {
-                Type::Class {
-                    name: name.clone(),
-                    type_args: type_args
-                        .iter()
-                        .map(|t| self.normalize_literal_types(t))
-                        .collect(),
-                    parent: parent.clone(),
-                    traits: traits.clone(),
-                    fields: fields
-                        .iter()
-                        .map(|(k, v)| (k.clone(), self.normalize_literal_types(v)))
-                        .collect(),
-                    is_sealed: *is_sealed,
-                }
-            }
+            Type::Class {
+                name,
+                type_args,
+                parent,
+                traits,
+                fields,
+                is_sealed,
+            } => Type::Class {
+                name: name.clone(),
+                type_args: type_args
+                    .iter()
+                    .map(|t| self.normalize_literal_types(t))
+                    .collect(),
+                parent: parent.clone(),
+                traits: traits.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.normalize_literal_types(v)))
+                    .collect(),
+                is_sealed: *is_sealed,
+            },
             other => other.clone(),
         }
     }
@@ -6388,8 +6428,7 @@ impl TypeChecker {
                 let old_vars = std::mem::replace(&mut self.env.variables, local_vars);
                 let old_exact_vars =
                     std::mem::replace(&mut self.env.exact_variables, local_exact_vars);
-                let old_narrowing_constraints =
-                    std::mem::take(&mut self.narrowing_constraints);
+                let old_narrowing_constraints = std::mem::take(&mut self.narrowing_constraints);
 
                 for s in &func.body {
                     self.check_statement(s)?;
@@ -7035,10 +7074,7 @@ impl TypeChecker {
                                         });
                                     }
                                 }
-                            } else if matches!(
-                                obj_type,
-                                Type::Trait { .. } | Type::View { .. }
-                            ) {
+                            } else if matches!(obj_type, Type::Trait { .. } | Type::View { .. }) {
                                 return Err(TypeError {
                                     message: format!(
                                         "no writable member '{attr}' is declared by the receiver type"
@@ -7090,12 +7126,9 @@ impl TypeChecker {
                             name, type_args, ..
                         } = &sequence_type
                         {
-                            if let Some(message) = self.projection_blocks_member(
-                                name,
-                                type_args,
-                                "__setitem__",
-                                true,
-                            ) {
+                            if let Some(message) =
+                                self.projection_blocks_member(name, type_args, "__setitem__", true)
+                            {
                                 return Err(TypeError {
                                     message,
                                     span: *span,
@@ -7370,8 +7403,7 @@ impl TypeChecker {
                 }
 
                 // Extract type narrowing from condition
-                let (narrow_to_type, narrow_else_to_type) =
-                    self.extract_type_narrowing(condition);
+                let (narrow_to_type, narrow_else_to_type) = self.extract_type_narrowing(condition);
 
                 // Extract attribute narrowing from condition
                 let (narrow_attr_to_type, narrow_attr_else_to_type) =
@@ -7384,16 +7416,16 @@ impl TypeChecker {
                 // Apply variable narrowing to then_branch
                 if let Some((var_name, new_type)) = &narrow_to_type {
                     if let Some((_, mutability)) = self.env.variables.get(var_name) {
-                        self.env.variables.insert(
-                            var_name.clone(),
-                            (new_type.clone(), mutability.clone()),
-                        );
+                        self.env
+                            .variables
+                            .insert(var_name.clone(), (new_type.clone(), mutability.clone()));
                     }
                 }
 
                 // Apply attribute narrowing to then_branch
                 if let Some((attr_path, new_type)) = &narrow_attr_to_type {
-                    self.narrowing_constraints.insert(attr_path.clone(), new_type.clone());
+                    self.narrowing_constraints
+                        .insert(attr_path.clone(), new_type.clone());
                 }
 
                 for s in then_branch {
@@ -7412,16 +7444,16 @@ impl TypeChecker {
 
                 if let Some((var_name, new_type)) = &narrow_else_to_type {
                     if let Some((_, mutability)) = saved_vars.get(var_name) {
-                        self.env.variables.insert(
-                            var_name.clone(),
-                            (new_type.clone(), mutability.clone()),
-                        );
+                        self.env
+                            .variables
+                            .insert(var_name.clone(), (new_type.clone(), mutability.clone()));
                     }
                 }
 
                 // Apply attribute narrowing to else branches
                 if let Some((attr_path, new_type)) = &narrow_attr_else_to_type {
-                    self.narrowing_constraints.insert(attr_path.clone(), new_type.clone());
+                    self.narrowing_constraints
+                        .insert(attr_path.clone(), new_type.clone());
                 }
 
                 for (c, b) in elif_branches {
@@ -7438,7 +7470,9 @@ impl TypeChecker {
                     }
                 }
 
-                let else_branch_exits = else_branch.as_ref().is_some_and(|eb| Self::branch_exits(eb));
+                let else_branch_exits = else_branch
+                    .as_ref()
+                    .is_some_and(|eb| Self::branch_exits(eb));
 
                 if let Some(ref eb) = else_branch {
                     for s in eb {
@@ -7452,15 +7486,15 @@ impl TypeChecker {
                     // This handles patterns like: if x is None: return ... ; use_x_not_none()
                     if let Some((var_name, new_type)) = &narrow_else_to_type {
                         if let Some((_, mutability)) = saved_vars.get(var_name) {
-                            self.env.variables.insert(
-                                var_name.clone(),
-                                (new_type.clone(), mutability.clone()),
-                            );
+                            self.env
+                                .variables
+                                .insert(var_name.clone(), (new_type.clone(), mutability.clone()));
                         }
                     }
                     // Apply attribute narrowing after if for post-if conditions
                     if let Some((attr_path, new_type)) = &narrow_attr_else_to_type {
-                        self.narrowing_constraints.insert(attr_path.clone(), new_type.clone());
+                        self.narrowing_constraints
+                            .insert(attr_path.clone(), new_type.clone());
                     }
                 } else if !then_branch_exits && else_branch.is_some() {
                     // Then branch completes, else exists: check if both complete or only then
@@ -7472,9 +7506,14 @@ impl TypeChecker {
                         // Add variables that were defined in both branches
                         for (var_name, (var_type, mutability)) in vars_after_then.iter() {
                             if !saved_vars.contains_key(var_name)
-                                && vars_after_else.get(var_name) == Some(&(var_type.clone(), mutability.clone())) {
+                                && vars_after_else.get(var_name)
+                                    == Some(&(var_type.clone(), mutability.clone()))
+                            {
                                 // Variable defined in both branches - preserve it
-                                merged_vars.insert(var_name.clone(), (var_type.clone(), mutability.clone()));
+                                merged_vars.insert(
+                                    var_name.clone(),
+                                    (var_type.clone(), mutability.clone()),
+                                );
                             }
                         }
                         self.env.variables = merged_vars;
@@ -9556,27 +9595,28 @@ impl TypeChecker {
                             BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq
                         ) {
                             // Allow numeric to numeric comparisons
-                            let left_numeric = matches!(&lt, Type::Int | Type::LiteralInt(_) | Type::Float)
-                                || matches!(&lt, Type::Class { name, .. } if name == "complex");
-                            let right_numeric = matches!(&rt, Type::Int | Type::LiteralInt(_) | Type::Float)
-                                || matches!(&rt, Type::Class { name, .. } if name == "complex");
+                            let left_numeric =
+                                matches!(&lt, Type::Int | Type::LiteralInt(_) | Type::Float)
+                                    || matches!(&lt, Type::Class { name, .. } if name == "complex");
+                            let right_numeric =
+                                matches!(&rt, Type::Int | Type::LiteralInt(_) | Type::Float)
+                                    || matches!(&rt, Type::Class { name, .. } if name == "complex");
                             let both_numeric = left_numeric && right_numeric;
 
                             // Allow same type comparisons
                             let same_type = lt == rt;
 
                             // Allow Any
-                            let has_any = matches!(&lt, Type::TypeVar(n) if n == "Any") || matches!(&rt, Type::TypeVar(n) if n == "Any");
+                            let has_any = matches!(&lt, Type::TypeVar(n) if n == "Any")
+                                || matches!(&rt, Type::TypeVar(n) if n == "Any");
 
                             // Allow subtype relationships
-                            let subtype_ok = lt.is_subtype_of(&rt, &self.env) || rt.is_subtype_of(&lt, &self.env);
+                            let subtype_ok = lt.is_subtype_of(&rt, &self.env)
+                                || rt.is_subtype_of(&lt, &self.env);
 
                             if !(both_numeric || same_type || has_any || subtype_ok) {
                                 return Err(TypeError {
-                                    message: format!(
-                                        "cannot compare {:?} and {:?}",
-                                        lt, rt
-                                    ),
+                                    message: format!("cannot compare {:?} and {:?}", lt, rt),
                                     span: left.span(),
                                 });
                             }
@@ -9778,8 +9818,10 @@ impl TypeChecker {
                     | BinaryOp::Shr => {
                         if lt == Type::Int && rt == Type::Int {
                             Ok(Type::Int)
-                        } else if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
-                            && matches!(&lt, Type::Class { name, .. } if name == "set")
+                        } else if matches!(
+                            op,
+                            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                        ) && matches!(&lt, Type::Class { name, .. } if name == "set")
                             && matches!(&rt, Type::Class { name, .. } if name == "set")
                         {
                             // set & set (intersection), set | set (union), set ^ set (symmetric difference)
@@ -10824,7 +10866,8 @@ impl TypeChecker {
                                 if let Type::TypeVar(param_name) = &field_type {
                                     if let Some(params) = self.env.class_type_params.get(name) {
                                         if params.contains(param_name) {
-                                            inferred_substitutions.insert(param_name.clone(), argument_type.clone());
+                                            inferred_substitutions
+                                                .insert(param_name.clone(), argument_type.clone());
                                         }
                                     }
                                 }
@@ -10878,7 +10921,8 @@ impl TypeChecker {
                                     let mut field_type = self
                                         .class_field_type(name, field_name)
                                         .unwrap_or(Type::TypeVar("Any".into()));
-                                    field_type = substitute_type(&field_type, &inferred_substitutions);
+                                    field_type =
+                                        substitute_type(&field_type, &inferred_substitutions);
                                     let argument_type = self.type_of_expr(&argument.value)?;
                                     if !matches!(field_type, Type::TypeVar(_))
                                         && !argument_type.is_subtype_of(&field_type, &self.env)
@@ -10953,9 +10997,12 @@ impl TypeChecker {
                                                 substitutions.get(param_name).cloned()
                                             {
                                                 if existing != argument_type {
-                                                    let widened = self
-                                                        .join_types(existing, argument_type.clone());
-                                                    substitutions.insert(param_name.clone(), widened);
+                                                    let widened = self.join_types(
+                                                        existing,
+                                                        argument_type.clone(),
+                                                    );
+                                                    substitutions
+                                                        .insert(param_name.clone(), widened);
                                                     continue;
                                                 }
                                             }
@@ -10989,11 +11036,15 @@ impl TypeChecker {
                                             ..
                                         }) = generic.bound.as_ref()
                                         {
-                                            if floor_args.is_empty() && generic_names.contains(floor) {
-                                                let widened = match substitutions.get(floor).cloned() {
-                                                    Some(current) => {
-                                                        self.join_types(current, argument_type.clone())
-                                                    }
+                                            if floor_args.is_empty()
+                                                && generic_names.contains(floor)
+                                            {
+                                                let widened = match substitutions
+                                                    .get(floor)
+                                                    .cloned()
+                                                {
+                                                    Some(current) => self
+                                                        .join_types(current, argument_type.clone()),
                                                     None => argument_type.clone(),
                                                 };
                                                 substitutions.insert(floor.clone(), widened);
@@ -11195,11 +11246,12 @@ impl TypeChecker {
                                             })
                                         });
                                     if !has_fixed_set && generic_names.contains(param_name) {
-                                        if let Some(existing) = substitutions.get(param_name).cloned()
+                                        if let Some(existing) =
+                                            substitutions.get(param_name).cloned()
                                         {
                                             if existing != argument_type {
-                                                let widened =
-                                                    self.join_types(existing, argument_type.clone());
+                                                let widened = self
+                                                    .join_types(existing, argument_type.clone());
                                                 substitutions.insert(param_name.clone(), widened);
                                                 continue;
                                             }
@@ -12077,7 +12129,11 @@ impl TypeChecker {
                     is_sealed: false,
                 })
             }
-            Expr::Construct { class_name: construct_class, args, span } => {
+            Expr::Construct {
+                class_name: construct_class,
+                args,
+                span,
+            } => {
                 // Use construct_class if provided (non-empty), otherwise require current factory context
                 let class_name = if !construct_class.is_empty() {
                     construct_class.clone()
@@ -12088,10 +12144,14 @@ impl TypeChecker {
                             span: *span,
                         });
                     }
-                    self.env.current_class.as_ref().ok_or(TypeError {
-                        message: "construct(...) requires an enclosing class factory".into(),
-                        span: *span,
-                    })?.clone()
+                    self.env
+                        .current_class
+                        .as_ref()
+                        .ok_or(TypeError {
+                            message: "construct(...) requires an enclosing class factory".into(),
+                            span: *span,
+                        })?
+                        .clone()
                 };
                 let Some(mut class_type) = self.env.classes.get(&class_name).cloned() else {
                     return Err(TypeError {
@@ -12156,10 +12216,10 @@ impl TypeChecker {
                     .unwrap_or_default();
                 let infers_type_args = !class_params.is_empty()
                     && matches!(&class_type, Type::Class { type_args, .. }
-                        if type_args.is_empty()
-                            || type_args.iter().zip(&class_params).all(|(arg, param)| {
-                                matches!(arg, Type::TypeVar(name) if name == param)
-                            }));
+                    if type_args.is_empty()
+                        || type_args.iter().zip(&class_params).all(|(arg, param)| {
+                            matches!(arg, Type::TypeVar(name) if name == param)
+                        }));
                 let generic_names = class_params.iter().cloned().collect::<HashSet<_>>();
                 let mut substitutions: HashMap<String, Type> = HashMap::new();
                 let field_label = if construct_class.is_empty() {
@@ -12953,7 +13013,10 @@ impl TypeChecker {
                     }
                 } else {
                     // Handle generic class instantiation like Box[int]
-                    if let Expr::Ident { name: class_name, .. } = &**value {
+                    if let Expr::Ident {
+                        name: class_name, ..
+                    } = &**value
+                    {
                         // Only try generic class instantiation if this is actually a known class
                         if self.env.classes.contains_key(class_name) {
                             if let Some(type_expr_args) = match &**index {
@@ -14676,15 +14739,14 @@ fn yield_guaranteed(statements: &[Stmt]) -> bool {
                 elif_branches,
                 else_branch: Some(else_branch),
                 ..
+            } if yield_guaranteed(then_branch)
+                && elif_branches
+                    .iter()
+                    .all(|(_, branch)| yield_guaranteed(branch))
+                && yield_guaranteed(else_branch) =>
+            {
+                return true;
             }
-                if yield_guaranteed(then_branch)
-                    && elif_branches
-                        .iter()
-                        .all(|(_, branch)| yield_guaranteed(branch))
-                    && yield_guaranteed(else_branch)
-                => {
-                    return true;
-                }
             Stmt::Try {
                 finally_body: Some(finally_body),
                 ..
@@ -16009,13 +16071,15 @@ u.id = 2
         assert!(fields.contains_key("__a"));
         assert!(!fields.keys().any(|field| field.contains("_Secret__")));
 
-        let outside = parse(
-            "class Secret:\n    __a: int\n\ns = Secret(7)\noutside = s.__a\n",
-        )
-        .unwrap();
+        let outside =
+            parse("class Secret:\n    __a: int\n\ns = Secret(7)\noutside = s.__a\n").unwrap();
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&outside).unwrap_err();
-        assert!(err.message.contains("member '__a' is private"), "{}", err.message);
+        assert!(
+            err.message.contains("member '__a' is private"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
@@ -16029,7 +16093,8 @@ u.id = 2
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&subclass).unwrap_err();
         assert!(
-            err.message.contains("member '_a' is private to class 'Secret'"),
+            err.message
+                .contains("member '_a' is private to class 'Secret'"),
             "{}",
             err.message
         );
@@ -16581,9 +16646,14 @@ def reject(value: not int) -> none:
     #[test]
     fn type_parameter_defaults_fill_omitted_arguments() {
         let prelude = "class Foo[in out T = int]:\n    value: T\nclass Pair[in out A, in out B = str]:\n    first: A\n    second: B\n";
-        check_source(&format!("{prelude}def f(x: Foo) -> none:\n    y: Foo[int] = x\n")).unwrap();
-        check_source(&format!("{prelude}def f(x: Foo) -> none:\n    y: Foo[str] = x\n"))
-            .unwrap_err();
+        check_source(&format!(
+            "{prelude}def f(x: Foo) -> none:\n    y: Foo[int] = x\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def f(x: Foo) -> none:\n    y: Foo[str] = x\n"
+        ))
+        .unwrap_err();
         check_source(&format!(
             "{prelude}def g(x: Pair[int]) -> none:\n    y: Pair[int, str] = x\n"
         ))
@@ -16604,9 +16674,17 @@ def reject(value: not int) -> none:
         )
         .unwrap();
         let err = check_source("trait Bad[in out T: Self]:\n    pass\n").unwrap_err();
-        assert!(err.message.contains("Self cannot bound a type parameter"), "{}", err.message);
+        assert!(
+            err.message.contains("Self cannot bound a type parameter"),
+            "{}",
+            err.message
+        );
         let err = check_source("class Bad[in out T: Self]:\n    pass\n").unwrap_err();
-        assert!(err.message.contains("Self cannot bound a type parameter"), "{}", err.message);
+        assert!(
+            err.message.contains("Self cannot bound a type parameter"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
@@ -16620,8 +16698,14 @@ def reject(value: not int) -> none:
         assert!(err.message.contains("fixed set"), "{}", err.message);
 
         let container = "class Container[in out T in (int, str)]:\n    value: T\n";
-        check_source(&format!("{container}def f(c: Container[int]) -> none:\n    pass\n")).unwrap();
-        check_source(&format!("{container}def f(c: Container[str]) -> none:\n    pass\n")).unwrap();
+        check_source(&format!(
+            "{container}def f(c: Container[int]) -> none:\n    pass\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{container}def f(c: Container[str]) -> none:\n    pass\n"
+        ))
+        .unwrap();
         let err = check_source(&format!(
             "{container}def f(c: Container[float]) -> none:\n    pass\n"
         ))
@@ -16638,27 +16722,56 @@ def reject(value: not int) -> none:
     #[test]
     fn views_reject_methods_their_receiver_cannot_provide() {
         let prelude = "class Counter:\n    count: int\n    def bump(self) -> none:\n        self.count = self.count + 1\n    def peek(self: ~Self) -> int:\n        return self.count\n    def digest(self: !Self) -> int:\n        return self.count\n";
-        check_source(&format!("{prelude}def f(c: ~Counter) -> int:\n    return c.peek()\n")).unwrap();
-        check_source(&format!("{prelude}def f(c: !Counter) -> int:\n    return c.peek() + c.digest()\n"))
-            .unwrap();
-        check_source(&format!("{prelude}def f(c: Counter) -> int:\n    c.bump()\n    return c.peek()\n"))
-            .unwrap();
-        let err = check_source(&format!("{prelude}def f(c: ~Counter) -> none:\n    c.bump()\n"))
-            .unwrap_err();
-        assert!(err.message.contains("mutates its receiver"), "{}", err.message);
-        let err = check_source(&format!("{prelude}def f(c: !Counter) -> none:\n    c.bump()\n"))
-            .unwrap_err();
-        assert!(err.message.contains("mutates its receiver"), "{}", err.message);
-        let err = check_source(&format!("{prelude}def f(c: ~Counter) -> int:\n    return c.digest()\n"))
-            .unwrap_err();
-        assert!(err.message.contains("requires an immutable receiver"), "{}", err.message);
+        check_source(&format!(
+            "{prelude}def f(c: ~Counter) -> int:\n    return c.peek()\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def f(c: !Counter) -> int:\n    return c.peek() + c.digest()\n"
+        ))
+        .unwrap();
+        check_source(&format!(
+            "{prelude}def f(c: Counter) -> int:\n    c.bump()\n    return c.peek()\n"
+        ))
+        .unwrap();
+        let err = check_source(&format!(
+            "{prelude}def f(c: ~Counter) -> none:\n    c.bump()\n"
+        ))
+        .unwrap_err();
+        assert!(
+            err.message.contains("mutates its receiver"),
+            "{}",
+            err.message
+        );
+        let err = check_source(&format!(
+            "{prelude}def f(c: !Counter) -> none:\n    c.bump()\n"
+        ))
+        .unwrap_err();
+        assert!(
+            err.message.contains("mutates its receiver"),
+            "{}",
+            err.message
+        );
+        let err = check_source(&format!(
+            "{prelude}def f(c: ~Counter) -> int:\n    return c.digest()\n"
+        ))
+        .unwrap_err();
+        assert!(
+            err.message.contains("requires an immutable receiver"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
     fn trait_methods_carry_their_receiver_view_to_classes() {
         let source = "trait Scorable[in K]:\n    def score(self, item: K) -> float\n    def is_confident(self: ~Self, item: K) -> bool:\n        return true\nclass Model(Scorable[str]):\n    def score(self, item: str) -> float:\n        return 1.0\ndef f(m: ~Model) -> none:\n    m.score(\"x\")\n";
         let err = check_source(source).unwrap_err();
-        assert!(err.message.contains("mutates its receiver"), "{}", err.message);
+        assert!(
+            err.message.contains("mutates its receiver"),
+            "{}",
+            err.message
+        );
         let source = "trait Scorable[in K]:\n    def score(self, item: K) -> float\n    def is_confident(self: ~Self, item: K) -> bool:\n        return true\nclass Model(Scorable[str]):\n    def score(self, item: str) -> float:\n        return 1.0\ndef f(m: ~Model) -> bool:\n    return m.is_confident(\"x\")\n";
         check_source(source).unwrap();
     }
@@ -16705,17 +16818,18 @@ def reject(value: not int) -> none:
     fn projected_builtin_containers_keep_only_matching_members() {
         check_source("def sink(buf: list[in int]) -> none:\n    buf.append(1)\n    buf[0] = 2\n")
             .unwrap();
-        let err = check_source("def sink(buf: list[in int]) -> int:\n    return buf[0]\n").unwrap_err();
-        assert!(err.message.contains("produces"), "{}", err.message);
         let err =
-            check_source("def sink(buf: list[in int]) -> int:\n    return buf.pop()\n").unwrap_err();
+            check_source("def sink(buf: list[in int]) -> int:\n    return buf[0]\n").unwrap_err();
+        assert!(err.message.contains("produces"), "{}", err.message);
+        let err = check_source("def sink(buf: list[in int]) -> int:\n    return buf.pop()\n")
+            .unwrap_err();
         assert!(err.message.contains("produces"), "{}", err.message);
         check_source("def source(buf: list[out int]) -> int:\n    return buf[0]\n").unwrap();
         let err = check_source("def source(buf: list[out int]) -> none:\n    buf.append(1)\n")
             .unwrap_err();
         assert!(err.message.contains("consumes"), "{}", err.message);
-        let err = check_source("def source(buf: list[out int]) -> none:\n    buf[0] = 1\n")
-            .unwrap_err();
+        let err =
+            check_source("def source(buf: list[out int]) -> none:\n    buf[0] = 1\n").unwrap_err();
         assert!(err.message.contains("consumes"), "{}", err.message);
     }
 
@@ -16726,10 +16840,14 @@ def reject(value: not int) -> none:
             "{prelude}def f(cats: list[Cat], animals: list[Animal]) -> none:\n    fill(cats)\n    fill(animals)\n    drain(cats)\n    drain(animals)\n"
         ))
         .unwrap();
-        check_source(&format!("{prelude}def f(names: list[str]) -> none:\n    fill(names)\n"))
-            .unwrap_err();
-        check_source(&format!("{prelude}def f(things: list[object]) -> none:\n    drain(things)\n"))
-            .unwrap_err();
+        check_source(&format!(
+            "{prelude}def f(names: list[str]) -> none:\n    fill(names)\n"
+        ))
+        .unwrap_err();
+        check_source(&format!(
+            "{prelude}def f(things: list[object]) -> none:\n    drain(things)\n"
+        ))
+        .unwrap_err();
         // A projected value cannot stand in for the unprojected type.
         check_source(&format!(
             "{prelude}def f(buf: list[in Cat]) -> none:\n    plain: list[Cat] = buf\n"
@@ -20511,12 +20629,12 @@ pub mod specialization {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct Instantiation {
         pub name: String,
-        pub type_args: Vec<String>,  // Simplified type representation
+        pub type_args: Vec<String>, // Simplified type representation
     }
 
     #[derive(Debug, Default)]
     pub struct SpecializationCollector {
-        pub instantiations: BTreeMap<Instantiation, usize>,  // Track count
+        pub instantiations: BTreeMap<Instantiation, usize>, // Track count
     }
 
     impl SpecializationCollector {
@@ -20627,7 +20745,7 @@ pub mod specialization {
         }
 
         fn generate_specialization(&mut self, module: &Module, inst: &Instantiation) {
-            let _spec_name = format!("{}__{}",inst.name, inst.type_args.join("__"));
+            let _spec_name = format!("{}__{}", inst.name, inst.type_args.join("__"));
             // Specialized version name generated; full impl would:
             // 1. Clone generic definition
             // 2. Substitute type parameters
@@ -20648,7 +20766,7 @@ pub mod specialization {
 
     /// Phase 3: Rewrites Call expressions to use specialized names
     pub struct SpecializationRewriter {
-        name_mappings: BTreeMap<String, String>,  // original_name -> specialized_name
+        name_mappings: BTreeMap<String, String>, // original_name -> specialized_name
     }
 
     impl SpecializationRewriter {
@@ -20666,7 +20784,9 @@ pub mod specialization {
         /// Rewrite a module's Call expressions to use specialized names
         pub fn rewrite_module(&self, module: &Module) -> Module {
             Module {
-                statements: module.statements.iter()
+                statements: module
+                    .statements
+                    .iter()
                     .map(|stmt| self.rewrite_statement(stmt))
                     .collect(),
                 span: module.span,
@@ -20675,32 +20795,35 @@ pub mod specialization {
 
         fn rewrite_statement(&self, stmt: &Stmt) -> Stmt {
             match stmt {
-                Stmt::VarDef { pattern, type_annotation, value, is_let, is_final, span } => {
-                    Stmt::VarDef {
-                        pattern: pattern.clone(),
-                        type_annotation: type_annotation.clone(),
-                        value: value.as_ref().map(|v| self.rewrite_expr(v)),
-                        is_let: *is_let,
-                        is_final: *is_final,
-                        span: *span,
-                    }
-                }
-                Stmt::Assignment { target, value, span } => {
-                    Stmt::Assignment {
-                        target: self.rewrite_expr(target),
-                        value: self.rewrite_expr(value),
-                        span: *span,
-                    }
-                }
-                Stmt::Return { value, span } => {
-                    Stmt::Return {
-                        value: value.as_ref().map(|v| self.rewrite_expr(v)),
-                        span: *span,
-                    }
-                }
-                Stmt::Expr(expr) => {
-                    Stmt::Expr(self.rewrite_expr(expr))
-                }
+                Stmt::VarDef {
+                    pattern,
+                    type_annotation,
+                    value,
+                    is_let,
+                    is_final,
+                    span,
+                } => Stmt::VarDef {
+                    pattern: pattern.clone(),
+                    type_annotation: type_annotation.clone(),
+                    value: value.as_ref().map(|v| self.rewrite_expr(v)),
+                    is_let: *is_let,
+                    is_final: *is_final,
+                    span: *span,
+                },
+                Stmt::Assignment {
+                    target,
+                    value,
+                    span,
+                } => Stmt::Assignment {
+                    target: self.rewrite_expr(target),
+                    value: self.rewrite_expr(value),
+                    span: *span,
+                },
+                Stmt::Return { value, span } => Stmt::Return {
+                    value: value.as_ref().map(|v| self.rewrite_expr(v)),
+                    span: *span,
+                },
+                Stmt::Expr(expr) => Stmt::Expr(self.rewrite_expr(expr)),
                 _ => stmt.clone(),
             }
         }
@@ -20709,18 +20832,28 @@ pub mod specialization {
             match expr {
                 Expr::Call { func, args, span } => {
                     // Check if func is an Index (generic instantiation like Box[int])
-                    if let Expr::Index { value, index, span: _index_span } = &**func {
-                        if let Expr::Ident { name, span: name_span } = &**value {
+                    if let Expr::Index {
+                        value,
+                        index,
+                        span: _index_span,
+                    } = &**func
+                    {
+                        if let Expr::Ident {
+                            name,
+                            span: name_span,
+                        } = &**value
+                        {
                             // Extract type from index
                             if let Some(type_str) = self.expr_to_type_string(index) {
-                                let specialized_name = format!("{}__{}",name, type_str);
+                                let specialized_name = format!("{}__{}", name, type_str);
                                 // Rewrite to Call with Ident using specialized name
                                 return Expr::Call {
                                     func: Box::new(Expr::Ident {
                                         name: specialized_name,
                                         span: *name_span,
                                     }),
-                                    args: args.iter()
+                                    args: args
+                                        .iter()
                                         .map(|arg| Arg {
                                             name: arg.name.clone(),
                                             value: self.rewrite_expr(&arg.value),
@@ -20738,7 +20871,8 @@ pub mod specialization {
                     // Regular function call - just rewrite arguments
                     Expr::Call {
                         func: func.clone(),
-                        args: args.iter()
+                        args: args
+                            .iter()
                             .map(|arg| Arg {
                                 name: arg.name.clone(),
                                 value: self.rewrite_expr(&arg.value),
@@ -20751,29 +20885,26 @@ pub mod specialization {
                         span: *span,
                     }
                 }
-                Expr::Binary { left, op, right, span } => {
-                    Expr::Binary {
-                        left: Box::new(self.rewrite_expr(left)),
-                        op: op.clone(),
-                        right: Box::new(self.rewrite_expr(right)),
-                        span: *span,
-                    }
-                }
-                Expr::Unary { op, expr, span } => {
-                    Expr::Unary {
-                        op: op.clone(),
-                        expr: Box::new(self.rewrite_expr(expr)),
-                        span: *span,
-                    }
-                }
-                Expr::List { elements, span } => {
-                    Expr::List {
-                        elements: elements.iter()
-                            .map(|e| self.rewrite_expr(e))
-                            .collect(),
-                        span: *span,
-                    }
-                }
+                Expr::Binary {
+                    left,
+                    op,
+                    right,
+                    span,
+                } => Expr::Binary {
+                    left: Box::new(self.rewrite_expr(left)),
+                    op: op.clone(),
+                    right: Box::new(self.rewrite_expr(right)),
+                    span: *span,
+                },
+                Expr::Unary { op, expr, span } => Expr::Unary {
+                    op: op.clone(),
+                    expr: Box::new(self.rewrite_expr(expr)),
+                    span: *span,
+                },
+                Expr::List { elements, span } => Expr::List {
+                    elements: elements.iter().map(|e| self.rewrite_expr(e)).collect(),
+                    span: *span,
+                },
                 _ => expr.clone(),
             }
         }
@@ -20833,7 +20964,9 @@ pub mod specialization {
 
             // Find reachable functions (main and exported)
             let mut reachable = HashSet::new();
-            let mut to_visit: Vec<String> = module.statements.iter()
+            let mut to_visit: Vec<String> = module
+                .statements
+                .iter()
                 .filter_map(|stmt| {
                     if let Stmt::Function(func) = stmt {
                         if func.name == "main" {
@@ -20858,12 +20991,12 @@ pub mod specialization {
             }
 
             // Remove unreachable functions
-            let filtered_statements: Vec<Stmt> = module.statements.iter()
-                .filter(|stmt| {
-                    match stmt {
-                        Stmt::Function(func) => reachable.contains(&func.name),
-                        _ => true,
-                    }
+            let filtered_statements: Vec<Stmt> = module
+                .statements
+                .iter()
+                .filter(|stmt| match stmt {
+                    Stmt::Function(func) => reachable.contains(&func.name),
+                    _ => true,
                 })
                 .cloned()
                 .collect();
@@ -20880,7 +21013,9 @@ pub mod specialization {
 
             let mut constants: HashMap<String, crate::LiteralValue> = HashMap::new();
 
-            let filtered_stmts: Vec<Stmt> = module.statements.iter()
+            let filtered_stmts: Vec<Stmt> = module
+                .statements
+                .iter()
                 .map(|stmt| Self::propagate_constants_in_stmt(stmt, &mut constants))
                 .collect();
 
@@ -20917,26 +21052,30 @@ pub mod specialization {
                     }
                     Stmt::VarDef {
                         pattern: Pattern::Ident(name.clone(), *span),
-                        value: value.as_ref().map(|v| Self::fold_constants_in_expr(v, constants)),
+                        value: value
+                            .as_ref()
+                            .map(|v| Self::fold_constants_in_expr(v, constants)),
                         type_annotation: type_annotation.clone(),
                         is_let: *is_let,
                         is_final: *is_final,
                         span: *span,
                     }
                 }
-                Stmt::Assignment { target, value, span } => {
-                    Stmt::Assignment {
-                        target: target.clone(),
-                        value: Self::fold_constants_in_expr(value, constants),
-                        span: *span,
-                    }
-                }
-                Stmt::Return { value, span } => {
-                    Stmt::Return {
-                        value: value.as_ref().map(|v| Self::fold_constants_in_expr(v, constants)),
-                        span: *span,
-                    }
-                }
+                Stmt::Assignment {
+                    target,
+                    value,
+                    span,
+                } => Stmt::Assignment {
+                    target: target.clone(),
+                    value: Self::fold_constants_in_expr(value, constants),
+                    span: *span,
+                },
+                Stmt::Return { value, span } => Stmt::Return {
+                    value: value
+                        .as_ref()
+                        .map(|v| Self::fold_constants_in_expr(v, constants)),
+                    span: *span,
+                },
                 _ => stmt.clone(),
             }
         }
@@ -20956,17 +21095,22 @@ pub mod specialization {
                         expr.clone()
                     }
                 }
-                Expr::Binary { op, left, right, span } => {
+                Expr::Binary {
+                    op,
+                    left,
+                    right,
+                    span,
+                } => {
                     let left_folded = Self::fold_constants_in_expr(left, constants);
                     let right_folded = Self::fold_constants_in_expr(right, constants);
 
                     // Try to evaluate constant expressions
-                    if let (
-                        Expr::Literal { value: lval, .. },
-                        Expr::Literal { value: rval, .. },
-                    ) = (&left_folded, &right_folded)
+                    if let (Expr::Literal { value: lval, .. }, Expr::Literal { value: rval, .. }) =
+                        (&left_folded, &right_folded)
                     {
-                        if let (crate::LiteralValue::Int(lv), crate::LiteralValue::Int(rv)) = (lval, rval) {
+                        if let (crate::LiteralValue::Int(lv), crate::LiteralValue::Int(rv)) =
+                            (lval, rval)
+                        {
                             if let Some(result) = Self::eval_binop_int(op, *lv, *rv) {
                                 return Expr::Literal {
                                     value: crate::LiteralValue::Int(result),
@@ -20999,7 +21143,10 @@ pub mod specialization {
             }
         }
 
-        fn collect_calls_in_statements(stmts: &[Stmt], calls: &mut std::collections::HashSet<String>) {
+        fn collect_calls_in_statements(
+            stmts: &[Stmt],
+            calls: &mut std::collections::HashSet<String>,
+        ) {
             for stmt in stmts {
                 match stmt {
                     Stmt::Expr(expr) => Self::collect_calls_in_expr(expr, calls),
@@ -21009,7 +21156,13 @@ pub mod specialization {
                     Stmt::Assignment { value, .. } => {
                         Self::collect_calls_in_expr(value, calls);
                     }
-                    Stmt::If { condition, then_branch, elif_branches, else_branch, .. } => {
+                    Stmt::If {
+                        condition,
+                        then_branch,
+                        elif_branches,
+                        else_branch,
+                        ..
+                    } => {
                         Self::collect_calls_in_expr(condition, calls);
                         Self::collect_calls_in_statements(then_branch, calls);
                         for (cond, body) in elif_branches {

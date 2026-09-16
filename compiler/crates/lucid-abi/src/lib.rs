@@ -488,11 +488,7 @@ impl AbiInfo {
     }
 
     /// Generate layout for a class given field types
-    pub fn generate_layout(
-        &mut self,
-        class_name: String,
-        fields: Vec<(String, CInteropType)>,
-    ) {
+    pub fn generate_layout(&mut self, class_name: String, fields: Vec<(String, CInteropType)>) {
         let mut layout = ObjectLayout::new(class_name, self.pointer_size);
         let mut current_offset = 0;
 
@@ -515,9 +511,9 @@ impl AbiInfo {
     /// Calculate size of C interop type
     fn size_of_cinterop_type(&self, ty: CInteropType) -> usize {
         match ty {
-            CInteropType::Int => 8,        // int64_t
-            CInteropType::Float => 8,      // double
-            CInteropType::Bool => 1,       // bool
+            CInteropType::Int => 8,                    // int64_t
+            CInteropType::Float => 8,                  // double
+            CInteropType::Bool => 1,                   // bool
             CInteropType::String => self.pointer_size, // const char*
             CInteropType::Object => self.pointer_size, // void*
             CInteropType::List => self.pointer_size,   // LucidList*
@@ -536,9 +532,10 @@ impl AbiInfo {
     /// Validate that a field access is within bounds
     pub fn validate_field_access(&self, class_name: &str, field_name: &str, size: usize) -> bool {
         if let Some(layout) = self.layout(class_name)
-            && let Some(offset) = layout.field_offset(field_name) {
-                return offset + size <= layout.total_size;
-            }
+            && let Some(offset) = layout.field_offset(field_name)
+        {
+            return offset + size <= layout.total_size;
+        }
         false
     }
 }

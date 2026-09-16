@@ -105,10 +105,18 @@ impl SourceMap {
             json.push('\n');
             json.push_str("    {\n");
             json.push_str(&format!("      \"generated\": {},\n", entry.generated_line));
-            json.push_str(&format!("      \"source\": \"{}\",\n",
-                entry.source_file.replace('\\', "\\\\").replace('"', "\\\"")));
-            json.push_str(&format!("      \"original_line\": {},\n", entry.source_line));
-            json.push_str(&format!("      \"original_column\": {}\n", entry.source_column));
+            json.push_str(&format!(
+                "      \"source\": \"{}\",\n",
+                entry.source_file.replace('\\', "\\\\").replace('"', "\\\"")
+            ));
+            json.push_str(&format!(
+                "      \"original_line\": {},\n",
+                entry.source_line
+            ));
+            json.push_str(&format!(
+                "      \"original_column\": {}\n",
+                entry.source_column
+            ));
             json.push_str("    }");
         }
         json.push_str("\n  ]\n}\n");
@@ -2265,7 +2273,8 @@ impl CCodeGenerator {
 
     /// Write the source map to a file
     pub fn write_source_map(&self, path: &Path) -> Result<(), CodegenError> {
-        self.source_map.write_to_file(path)
+        self.source_map
+            .write_to_file(path)
             .map_err(|e| CodegenError {
                 message: format!("failed to write source map: {}", e),
             })
@@ -6684,7 +6693,8 @@ static inline void lucid_print_val(LucidVal v) {
         let eq_owner = self.method_owner(name, "__eq__").and_then(|owner| {
             if self
                 .known_method_return_types
-                .get(&(owner.clone(), "__eq__".to_string())).is_none_or(|ty| ty != "bool")
+                .get(&(owner.clone(), "__eq__".to_string()))
+                .is_none_or(|ty| ty != "bool")
             {
                 return None;
             }
@@ -6706,7 +6716,8 @@ static inline void lucid_print_val(LucidVal v) {
             self.method_owner(name, method).and_then(|owner| {
                 if self
                     .known_method_return_types
-                    .get(&(owner.clone(), method.to_string())).is_none_or(|ty| ty != "bool")
+                    .get(&(owner.clone(), method.to_string()))
+                    .is_none_or(|ty| ty != "bool")
                 {
                     return None;
                 }
@@ -7930,8 +7941,8 @@ static inline void lucid_print_val(LucidVal v) {
     ) {
         const BUILTINS: &[&str] = &[
             "abs", "all", "any", "bool", "bytes", "dict", "float", "int", "len", "list", "max",
-            "min", "pow", "print", "range", "repr", "round", "set", "str", "sum", "none",
-            "true", "false",
+            "min", "pow", "print", "range", "repr", "round", "set", "str", "sum", "none", "true",
+            "false",
         ];
         match expr {
             Expr::Ident { name, .. } => {
@@ -7957,7 +7968,11 @@ static inline void lucid_print_val(LucidVal v) {
                     self.collect_anonymous_captures(&arg.value, params, captures);
                 }
             }
-            Expr::Construct { class_name: _, args, .. } => {
+            Expr::Construct {
+                class_name: _,
+                args,
+                ..
+            } => {
                 for arg in args {
                     self.collect_anonymous_captures(&arg.value, params, captures);
                 }
@@ -15702,7 +15717,11 @@ static inline void lucid_print_val(LucidVal v) {
                     "({{ LucidVal {temp} = lucid_wrap({value}); if ({temp}.type == LUCID_TYPE_PTR) return {temp}; {temp}; }})"
                 ))
             }
-            Expr::Construct { class_name: construct_class, args, .. } => {
+            Expr::Construct {
+                class_name: construct_class,
+                args,
+                ..
+            } => {
                 // Use construct_class if non-empty, else use current_class
                 let class_name = if !construct_class.is_empty() {
                     construct_class.clone()

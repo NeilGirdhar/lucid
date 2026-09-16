@@ -1,6 +1,6 @@
 //! Code generation from IR to C
 
-use crate::{IrModule, IrFunction, IrBlock, IrInstruction, IrValue, IrTerminator};
+use crate::{IrBlock, IrFunction, IrInstruction, IrModule, IrTerminator, IrValue};
 
 /// Generates C code from IR
 pub struct CCodegenBackend {
@@ -39,12 +39,17 @@ impl CCodegenBackend {
         // Generate forward declarations for all functions (needed for vtable initialization)
         for function in &module.functions {
             let return_ctype = function.return_type.c_type();
-            let param_list = function.params.iter()
+            let param_list = function
+                .params
+                .iter()
                 .map(|p| format!("{} {}", p.ty.c_type(), p.name))
                 .collect::<Vec<_>>()
                 .join(", ");
             let qualified_name = self.qualify_symbol(&module.path, &function.name);
-            self.emit_line(&format!("{} {}({});", return_ctype, qualified_name, param_list));
+            self.emit_line(&format!(
+                "{} {}({});",
+                return_ctype, qualified_name, param_list
+            ));
         }
         self.emit_line("");
 
@@ -447,17 +452,18 @@ impl CCodegenBackend {
 
             for method in &class.methods {
                 // Look up the actual function to get the return type
-                let return_type = if let Some(func) = module.functions.iter().find(|f| f.name == method.impl_function) {
+                let return_type = if let Some(func) = module
+                    .functions
+                    .iter()
+                    .find(|f| f.name == method.impl_function)
+                {
                     func.return_type.c_type().to_string()
                 } else {
                     "int64_t".to_string()
                 };
 
                 // Generate function pointer for each method
-                self.emit_line(&format!(
-                    "{}(*{})(void*);",
-                    return_type, method.method_name
-                ));
+                self.emit_line(&format!("{}(*{})(void*);", return_type, method.method_name));
             }
 
             self.indent_level -= 1;
@@ -465,18 +471,27 @@ impl CCodegenBackend {
             self.emit_line("");
 
             // Generate static vtable instance
-            self.emit_line(&format!("struct {}_VTable {}_vtable = {{", class.name, class.name));
+            self.emit_line(&format!(
+                "struct {}_VTable {}_vtable = {{",
+                class.name, class.name
+            ));
             self.indent_level += 1;
             for method in &class.methods {
                 // Get the return type for casting if needed
-                let return_type = if let Some(func) = module.functions.iter().find(|f| f.name == method.impl_function) {
+                let return_type = if let Some(func) = module
+                    .functions
+                    .iter()
+                    .find(|f| f.name == method.impl_function)
+                {
                     func.return_type.c_type().to_string()
                 } else {
                     "int64_t".to_string()
                 };
 
-                self.emit_line(&format!(".{} = ({} (*)(void*)){},",
-                    method.method_name, return_type, method.impl_function));
+                self.emit_line(&format!(
+                    ".{} = ({} (*)(void*)){},",
+                    method.method_name, return_type, method.impl_function
+                ));
             }
             self.indent_level -= 1;
             self.emit_line("};");
@@ -520,14 +535,19 @@ impl CCodegenBackend {
             params_str.push_str("void");
         } else {
             for (i, param) in func.params.iter().enumerate() {
-                if i > 0 { params_str.push_str(", "); }
+                if i > 0 {
+                    params_str.push_str(", ");
+                }
                 params_str.push_str(param.ty.c_type());
                 params_str.push(' ');
                 params_str.push_str(&param.name);
             }
         }
 
-        self.emit_line(&format!("{} {}({}) {{", return_ctype, func.name, params_str));
+        self.emit_line(&format!(
+            "{} {}({}) {{",
+            return_ctype, func.name, params_str
+        ));
         self.indent_level += 1;
 
         // Generate basic blocks
@@ -564,7 +584,10 @@ impl CCodegenBackend {
                         tracked.clone()
                     } else if let IrValue::Var(src_var) = value {
                         // If assigning from another variable, propagate its type
-                        self.var_types.get(src_var).cloned().unwrap_or_else(|| "int64_t".to_string())
+                        self.var_types
+                            .get(src_var)
+                            .cloned()
+                            .unwrap_or_else(|| "int64_t".to_string())
                     } else {
                         "int64_t".to_string()
                     };
@@ -577,13 +600,17 @@ impl CCodegenBackend {
                 }
             }
             IrInstruction::BinOp {
-                dest, op, left, right,
+                dest,
+                op,
+                left,
+                right,
             } => {
                 let left_code = self.value_to_c(left);
                 let right_code = self.value_to_c(right);
 
                 // Check if this is string concatenation
-                let is_string_op = matches!(left, IrValue::String(_)) || matches!(right, IrValue::String(_));
+                let is_string_op =
+                    matches!(left, IrValue::String(_)) || matches!(right, IrValue::String(_));
 
                 if is_string_op && matches!(op, crate::IrBinOp::Add) {
                     // String concatenation: use sprintf
@@ -593,7 +620,8 @@ impl CCodegenBackend {
                             dest, dest, left_code, right_code
                         ));
                         self.declared_vars.insert(dest.clone());
-                        self.var_types.insert(dest.clone(), "const char*".to_string());
+                        self.var_types
+                            .insert(dest.clone(), "const char*".to_string());
                     } else {
                         self.emit_line(&format!(
                             "sprintf({}, \"%s%s\", {}, {});",
@@ -627,17 +655,10 @@ impl CCodegenBackend {
                     ));
                     self.declared_vars.insert(dest.clone());
                 } else {
-                    self.emit_line(&format!(
-                        "{} = {}({}); ",
-                        dest, op_str, operand_code
-                    ));
+                    self.emit_line(&format!("{} = {}({}); ", dest, op_str, operand_code));
                 }
             }
-            IrInstruction::Call {
-                dest,
-                func,
-                args,
-            } => {
+            IrInstruction::Call { dest, func, args } => {
                 let args_code = args
                     .iter()
                     .map(|arg| self.value_to_c(arg))
@@ -645,7 +666,10 @@ impl CCodegenBackend {
                     .join(", ");
 
                 // Detect math functions that return double
-                let is_float_func = matches!(func.as_str(), "sqrt" | "sin" | "cos" | "tan" | "log" | "exp");
+                let is_float_func = matches!(
+                    func.as_str(),
+                    "sqrt" | "sin" | "cos" | "tan" | "log" | "exp"
+                );
 
                 if let Some(d) = dest {
                     if !self.declared_vars.contains(d) {
@@ -672,15 +696,29 @@ impl CCodegenBackend {
                 let args_code = all_args.join(", ");
 
                 // Check for builtin list methods
-                let is_list_method = matches!(method.as_str(),
-                    "append" | "pop" | "length" | "get" | "first" | "last" |
-                    "map" | "filter" | "foreach" | "reverse" | "sort");
+                let is_list_method = matches!(
+                    method.as_str(),
+                    "append"
+                        | "pop"
+                        | "length"
+                        | "get"
+                        | "first"
+                        | "last"
+                        | "map"
+                        | "filter"
+                        | "foreach"
+                        | "reverse"
+                        | "sort"
+                );
 
                 if is_list_method {
                     let func_name = format!("lucid_list_{}", method);
                     if let Some(d) = dest {
                         if !self.declared_vars.contains(d) {
-                            self.emit_line(&format!("int64_t {} = {}({});", d, func_name, args_code));
+                            self.emit_line(&format!(
+                                "int64_t {} = {}({});",
+                                d, func_name, args_code
+                            ));
                             self.declared_vars.insert(d.clone());
                         } else {
                             self.emit_line(&format!("{} = {}({});", d, func_name, args_code));
@@ -727,7 +765,9 @@ impl CCodegenBackend {
                 self.emit_line(&format!("*(int64_t*){} = {};", addr_code, value_code));
             }
             IrInstruction::Cast {
-                dest, from, to_type,
+                dest,
+                from,
+                to_type,
             } => {
                 let from_code = self.value_to_c(from);
                 let to_ctype = to_type.c_type();
@@ -738,32 +778,28 @@ impl CCodegenBackend {
                     ));
                     self.declared_vars.insert(dest.clone());
                 } else {
-                    self.emit_line(&format!(
-                        "{} = ({}){};",
-                        dest, to_ctype, from_code
-                    ));
+                    self.emit_line(&format!("{} = ({}){};", dest, to_ctype, from_code));
                 }
             }
             IrInstruction::Malloc { dest, size } => {
                 let size_code = self.value_to_c(size);
                 if !self.declared_vars.contains(dest) {
-                    self.emit_line(&format!(
-                        "void* {} = malloc({});",
-                        dest, size_code
-                    ));
+                    self.emit_line(&format!("void* {} = malloc({});", dest, size_code));
                     self.declared_vars.insert(dest.clone());
                 } else {
-                    self.emit_line(&format!(
-                        "{} = malloc({});",
-                        dest, size_code
-                    ));
+                    self.emit_line(&format!("{} = malloc({});", dest, size_code));
                 }
             }
             IrInstruction::Free { addr } => {
                 let addr_code = self.value_to_c(addr);
                 self.emit_line(&format!("free({});", addr_code));
             }
-            IrInstruction::FieldRead { dest, object, field, object_type } => {
+            IrInstruction::FieldRead {
+                dest,
+                object,
+                field,
+                object_type,
+            } => {
                 let obj_code = self.value_to_c(object);
                 // Generate: dest = ((StructType*)obj)->field
                 if !self.declared_vars.contains(dest) {
@@ -779,7 +815,12 @@ impl CCodegenBackend {
                     ));
                 }
             }
-            IrInstruction::FieldWrite { object, field, value, object_type } => {
+            IrInstruction::FieldWrite {
+                object,
+                field,
+                value,
+                object_type,
+            } => {
                 let obj_code = self.value_to_c(object);
                 let val_code = self.value_to_c(value);
                 // Generate: ((StructType*)obj)->field = value
@@ -788,7 +829,11 @@ impl CCodegenBackend {
                     object_type, obj_code, field, val_code
                 ));
             }
-            IrInstruction::NewInstance { dest, class_name, field_values } => {
+            IrInstruction::NewInstance {
+                dest,
+                class_name,
+                field_values,
+            } => {
                 // Allocate memory for the instance
                 if !self.declared_vars.contains(dest) {
                     self.emit_line(&format!(
@@ -797,7 +842,8 @@ impl CCodegenBackend {
                     ));
                     self.declared_vars.insert(dest.clone());
                     // Track the type of this variable for future assignments
-                    self.var_types.insert(dest.clone(), format!("struct {} *", class_name));
+                    self.var_types
+                        .insert(dest.clone(), format!("struct {} *", class_name));
                 } else {
                     self.emit_line(&format!(
                         "{} = (struct {} *)malloc(sizeof(struct {}));",
@@ -807,19 +853,13 @@ impl CCodegenBackend {
 
                 // Initialize vtable pointer if the class has methods
                 if self.classes_with_methods.contains(class_name) {
-                    self.emit_line(&format!(
-                        "{}->__vtable = &{}_vtable;",
-                        dest, class_name
-                    ));
+                    self.emit_line(&format!("{}->__vtable = &{}_vtable;", dest, class_name));
                 }
 
                 // Initialize fields
                 for (field_name, field_value) in field_values {
                     let val_code = self.value_to_c(field_value);
-                    self.emit_line(&format!(
-                        "{}->{} = {};",
-                        dest, field_name, val_code
-                    ));
+                    self.emit_line(&format!("{}->{} = {};", dest, field_name, val_code));
                 }
             }
             IrInstruction::ResultCheck {
@@ -865,10 +905,7 @@ impl CCodegenBackend {
                     ));
                     self.declared_vars.insert(dest.clone());
                 } else {
-                    self.emit_line(&format!(
-                        "{} = fopen({}, \"{}\");",
-                        dest, path_code, mode
-                    ));
+                    self.emit_line(&format!("{} = fopen({}, \"{}\");", dest, path_code, mode));
                 }
             }
             IrInstruction::FileWrite { file, content } => {
@@ -888,17 +925,17 @@ impl CCodegenBackend {
                     ));
                     self.declared_vars.insert(dest.clone());
                 } else {
-                    self.emit_line(&format!(
-                        "fgets({}, 4096, {});",
-                        dest, file_code
-                    ));
+                    self.emit_line(&format!("fgets({}, 4096, {});", dest, file_code));
                 }
             }
             IrInstruction::FileClose { file } => {
                 let file_code = self.value_to_c(file);
                 self.emit_line(&format!("fclose({});", file_code));
             }
-            IrInstruction::Raise { message, condition_failed } => {
+            IrInstruction::Raise {
+                message,
+                condition_failed,
+            } => {
                 // Generate code to panic/abort on broken invariant
                 if let Some(cond) = condition_failed {
                     let cond_code = self.value_to_c(cond);
@@ -1004,7 +1041,7 @@ impl CCodegenBackend {
         self.emit_line("#include <string.h>");
         self.emit_line("#include <ctype.h>");
         self.emit_line("#include <stdarg.h>");
-        self.emit_line("typedef FILE* LucidFile;");  // File handle type
+        self.emit_line("typedef FILE* LucidFile;"); // File handle type
         self.emit_line("");
 
         // String helper functions
@@ -1024,7 +1061,9 @@ impl CCodegenBackend {
 
         // String replace function
         self.emit_line("// String replace (first occurrence)");
-        self.emit_line("const char* lucid_string_replace(const char* str, const char* from, const char* to) {");
+        self.emit_line(
+            "const char* lucid_string_replace(const char* str, const char* from, const char* to) {",
+        );
         self.indent_level += 1;
         self.emit_line("char* pos = strstr((char*)str, from);");
         self.emit_line("if (!pos) return str;");
@@ -1301,7 +1340,9 @@ impl CCodegenBackend {
 
         // String slice operations
         self.emit_line("// String slice (substring)");
-        self.emit_line("const char* lucid_string_slice(const char* str, int64_t start, int64_t end) {");
+        self.emit_line(
+            "const char* lucid_string_slice(const char* str, int64_t start, int64_t end) {",
+        );
         self.indent_level += 1;
         self.emit_line("static char result[4096];");
         self.emit_line("int len = strlen(str);");
@@ -1631,7 +1672,9 @@ impl CCodegenBackend {
         self.emit_line("");
 
         self.emit_line("// Print error stack trace");
-        self.emit_line("void lucid_print_error_trace(struct ErrorContext* contexts, int64_t count) {");
+        self.emit_line(
+            "void lucid_print_error_trace(struct ErrorContext* contexts, int64_t count) {",
+        );
         self.indent_level += 1;
         self.emit_line("fprintf(stderr, \"Error stack trace:\\n\");");
         self.emit_line("for (int64_t i = 0; i < count; i++) {");
@@ -1700,7 +1743,9 @@ impl CCodegenBackend {
         self.emit_line("");
 
         self.emit_line("// String pad left");
-        self.emit_line("const char* lucid_string_pad_left(const char* str, int64_t width, char pad_char) {");
+        self.emit_line(
+            "const char* lucid_string_pad_left(const char* str, int64_t width, char pad_char) {",
+        );
         self.indent_level += 1;
         self.emit_line("static char result[4096];");
         self.emit_line("int len = strlen(str);");
@@ -1713,7 +1758,9 @@ impl CCodegenBackend {
         self.emit_line("");
 
         self.emit_line("// String pad right");
-        self.emit_line("const char* lucid_string_pad_right(const char* str, int64_t width, char pad_char) {");
+        self.emit_line(
+            "const char* lucid_string_pad_right(const char* str, int64_t width, char pad_char) {",
+        );
         self.indent_level += 1;
         self.emit_line("static char result[4096];");
         self.emit_line("int len = strlen(str);");
@@ -1732,7 +1779,9 @@ impl CCodegenBackend {
         self.emit_line("if (!str || !*str) return false;");
         self.emit_line("for (int i = 0; str[i]; i++) {");
         self.indent_level += 1;
-        self.emit_line("if (!isdigit((unsigned char)str[i]) && str[i] != '-' && str[i] != '.') return false;");
+        self.emit_line(
+            "if (!isdigit((unsigned char)str[i]) && str[i] != '-' && str[i] != '.') return false;",
+        );
         self.indent_level -= 1;
         self.emit_line("}");
         self.emit_line("return true;");

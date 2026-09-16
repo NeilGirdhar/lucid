@@ -627,7 +627,11 @@ fn collect_typed_exprs<'db>(
             children.extend(args.iter().map(|arg| &arg.value));
             ("call", children)
         }
-        Expr::Construct { class_name: _, args, .. } => ("construct", args.iter().map(|arg| &arg.value).collect()),
+        Expr::Construct {
+            class_name: _,
+            args,
+            ..
+        } => ("construct", args.iter().map(|arg| &arg.value).collect()),
         Expr::Propagate { expr, .. } => ("propagate", vec![expr]),
         Expr::Await { expr, .. } => ("await", vec![expr]),
         Expr::Attribute { value, .. } => ("attribute", vec![value]),
@@ -1868,14 +1872,16 @@ pub fn lower_function_body(
     function_name: String,
 ) -> Result<Arc<lucid_cir::Function>, Arc<str>> {
     let module = parse_ast(db, file).as_ref().map_err(Arc::clone)?;
-    let Some(source_function) = module.statements.iter().find_map(|statement| {
-        match statement {
+    let Some(source_function) = module
+        .statements
+        .iter()
+        .find_map(|statement| match statement {
             lucid_syntax::Stmt::Function(candidate) if candidate.name == function_name => {
                 Some(candidate)
             }
             _ => None,
-        }
-    }) else {
+        })
+    else {
         return Err(Arc::from("function not found"));
     };
     let typed = typed_module(db, file).as_ref().map_err(Arc::clone)?;
@@ -2773,7 +2779,8 @@ pub fn lower_function_body(
         }
         if let Some((live_index, live_arm)) = arms.iter().enumerate().find(|(_, arm)| {
             arm.guard
-                .as_ref().is_none_or(|guard| static_truth(guard) != Some(false))
+                .as_ref()
+                .is_none_or(|guard| static_truth(guard) != Some(false))
         }) && live_index > 0
             && arms[..live_index].iter().all(|arm| {
                 arm.guard
@@ -14423,10 +14430,7 @@ mod tests {
             "main.lucid",
             "from support import value as answer, _private, missing\n",
         );
-        let support = db.add_file(
-            "support.lucid",
-            "value = 1\nother = 3\n_private = 2\n",
-        );
+        let support = db.add_file("support.lucid", "value = 1\nother = 3\n_private = 2\n");
         let project = Project::new(&db, vec![main, support]);
         let bindings = imported_bindings(&db, project, main);
         assert_eq!(bindings.len(), 1);

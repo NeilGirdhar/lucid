@@ -5820,7 +5820,8 @@ impl Interpreter {
                     let mut function = function.clone();
                     if function
                         .params
-                        .first().is_none_or(|param| param.name != "self")
+                        .first()
+                        .is_none_or(|param| param.name != "self")
                     {
                         function.params.insert(
                             0,
@@ -9287,7 +9288,11 @@ impl Interpreter {
                     }
                     (Value::Iterator(values), Value::Int(i)) => {
                         let values_list = values.borrow();
-                        let actual_idx = if i < 0 { values_list.len() as i64 + i } else { i };
+                        let actual_idx = if i < 0 {
+                            values_list.len() as i64 + i
+                        } else {
+                            i
+                        };
                         if actual_idx < 0 || actual_idx as usize >= values_list.len() {
                             return Err(RuntimeError {
                                 message: format!("index {i} out of range"),
@@ -9383,7 +9388,8 @@ impl Interpreter {
                         let value = self.eval_expr(&arg.value)?;
                         match &arg.name {
                             Some(name) => {
-                                let Some(index) = field_names.iter().position(|field| field == name)
+                                let Some(index) =
+                                    field_names.iter().position(|field| field == name)
                                 else {
                                     return Err(RuntimeError {
                                         message: format!(
@@ -11115,13 +11121,15 @@ items.append(3)
         assert!(fields.contains_key("__a"));
         assert!(!fields.keys().any(|field| field.contains("_Secret__")));
 
-        let module = parse(
-            "class Secret:\n    __a: int\n\ns = Secret(7)\noutside = s.__a\n",
-        )
-        .unwrap();
+        let module =
+            parse("class Secret:\n    __a: int\n\ns = Secret(7)\noutside = s.__a\n").unwrap();
         let mut interp = Interpreter::new();
         let err = interp.eval_module(&module).unwrap_err();
-        assert!(err.message.contains("member '__a' is private"), "{}", err.message);
+        assert!(
+            err.message.contains("member '__a' is private"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
@@ -12384,7 +12392,10 @@ s = sum(r)
                 }),
             Some(Value::Int(7))
         );
-        assert!(matches!(interp.env.borrow().get("c"), Some(Value::Iterator(_)) | Some(Value::List(_))));
+        assert!(matches!(
+            interp.env.borrow().get("c"),
+            Some(Value::Iterator(_)) | Some(Value::List(_))
+        ));
         assert_eq!(interp.env.borrow().get("d"), Some(Value::Bool(false)));
     }
 

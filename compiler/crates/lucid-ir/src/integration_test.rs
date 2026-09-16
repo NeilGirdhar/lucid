@@ -2,9 +2,12 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{IrModule, IrFunction, IrParam, IrType, IrValue, IrInstruction, IrTerminator, CCodegenBackend, IrClass, IrField, MethodDispatch};
-    use std::process::Command;
+    use crate::{
+        CCodegenBackend, IrClass, IrField, IrFunction, IrInstruction, IrModule, IrParam,
+        IrTerminator, IrType, IrValue, MethodDispatch,
+    };
     use std::fs;
+    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -51,8 +54,14 @@ mod tests {
         let mut func = IrFunction::new(
             "add".to_string(),
             vec![
-                IrParam { name: "a".to_string(), ty: IrType::I64 },
-                IrParam { name: "b".to_string(), ty: IrType::I64 },
+                IrParam {
+                    name: "a".to_string(),
+                    ty: IrType::I64,
+                },
+                IrParam {
+                    name: "b".to_string(),
+                    ty: IrType::I64,
+                },
             ],
             IrType::I64,
         );
@@ -72,7 +81,10 @@ mod tests {
 
         let mut backend = CCodegenBackend::new();
         let c = backend.generate(&module);
-        let full = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", add(5, 3));\n  return 0;\n}}", c);
+        let full = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", add(5, 3));\n  return 0;\n}}",
+            c
+        );
 
         assert!(test_c_code(&full, "8\n"));
     }
@@ -91,7 +103,10 @@ mod tests {
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
         let mut backend = CCodegenBackend::new();
         let c_code = backend.generate(&ir_module);
-        let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", add(5, 3));\n  return 0;\n}}", c_code);
+        let full_c = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", add(5, 3));\n  return 0;\n}}",
+            c_code
+        );
         assert!(test_c_code(&full_c, "8\n"), "add(5,3) should return 8");
 
         // Test 2: Function with multiplication
@@ -103,8 +118,14 @@ mod tests {
         let ir_module2 = crate::builder::IrBuilder::new().build_module(&module2);
         let mut backend2 = CCodegenBackend::new();
         let c_code2 = backend2.generate(&ir_module2);
-        let full_c2 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", multiply(6, 7));\n  return 0;\n}}", c_code2);
-        assert!(test_c_code(&full_c2, "42\n"), "multiply(6,7) should return 42");
+        let full_c2 = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", multiply(6, 7));\n  return 0;\n}}",
+            c_code2
+        );
+        assert!(
+            test_c_code(&full_c2, "42\n"),
+            "multiply(6,7) should return 42"
+        );
 
         // Test 3: Function with variable definition
         let lucid_code3 = "def square_plus_one(x: int) -> int:\n  y: int = x * x\n  return y + 1\n";
@@ -115,8 +136,14 @@ mod tests {
         let ir_module3 = crate::builder::IrBuilder::new().build_module(&module3);
         let mut backend3 = CCodegenBackend::new();
         let c_code3 = backend3.generate(&ir_module3);
-        let full_c3 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", square_plus_one(5));\n  return 0;\n}}", c_code3);
-        assert!(test_c_code(&full_c3, "26\n"), "square_plus_one(5) should return 26 (5*5+1)");
+        let full_c3 = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", square_plus_one(5));\n  return 0;\n}}",
+            c_code3
+        );
+        assert!(
+            test_c_code(&full_c3, "26\n"),
+            "square_plus_one(5) should return 26 (5*5+1)"
+        );
 
         // Test 4: Control flow - if/else in parsed Lucid
         let lucid_code4 = "def max_value(a: int, b: int) -> int:\n  if a > b:\n    return a\n  else:\n    return b\n";
@@ -127,8 +154,14 @@ mod tests {
         let ir_module4 = crate::builder::IrBuilder::new().build_module(&module4);
         let mut backend4 = CCodegenBackend::new();
         let c_code4 = backend4.generate(&ir_module4);
-        let full_c4 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", max_value(10, 5));\n  return 0;\n}}", c_code4);
-        assert!(test_c_code(&full_c4, "10\n"), "max_value(10, 5) should return 10");
+        let full_c4 = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", max_value(10, 5));\n  return 0;\n}}",
+            c_code4
+        );
+        assert!(
+            test_c_code(&full_c4, "10\n"),
+            "max_value(10, 5) should return 10"
+        );
 
         // Test 5: Control flow - while loop in parsed Lucid
         let lucid_code5 = "def count_to_n(n: int) -> int:\n  i: int = 0\n  sum: int = 0\n  while i < n:\n    sum = sum + i\n    i = i + 1\n  return sum\n";
@@ -139,11 +172,18 @@ mod tests {
         let ir_module5 = crate::builder::IrBuilder::new().build_module(&module5);
         let mut backend5 = CCodegenBackend::new();
         let c_code5 = backend5.generate(&ir_module5);
-        let full_c5 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", count_to_n(5));\n  return 0;\n}}", c_code5);
-        assert!(test_c_code(&full_c5, "10\n"), "count_to_n(5) should return 10 (0+1+2+3+4)");
+        let full_c5 = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", count_to_n(5));\n  return 0;\n}}",
+            c_code5
+        );
+        assert!(
+            test_c_code(&full_c5, "10\n"),
+            "count_to_n(5) should return 10 (0+1+2+3+4)"
+        );
 
         // Test 6: Class with fields parsed from source
-        let lucid_code6 = "class Point:\n    x: int\n    y: int\n\ndef get_sum() -> int:\n    return 42\n";
+        let lucid_code6 =
+            "class Point:\n    x: int\n    y: int\n\ndef get_sum() -> int:\n    return 42\n";
         let mut lexer6 = Lexer::new(lucid_code6);
         let tokens6 = lexer6.tokenize().expect("Lexer failed for class");
         let mut parser6 = Parser::new(tokens6);
@@ -152,7 +192,9 @@ mod tests {
 
         // Verify Point class was created in IR
         assert_eq!(ir_module6.classes.len(), 1, "Should have one class");
-        let point_class = ir_module6.get_class("Point").expect("Point class should exist");
+        let point_class = ir_module6
+            .get_class("Point")
+            .expect("Point class should exist");
         assert_eq!(point_class.fields.len(), 2, "Point should have 2 fields");
         assert_eq!(point_class.fields[0].name, "x");
         assert_eq!(point_class.fields[1].name, "y");
@@ -160,28 +202,48 @@ mod tests {
         // Verify codegen works
         let mut backend6 = CCodegenBackend::new();
         let c_code6 = backend6.generate(&ir_module6);
-        let full_c6 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", get_sum());\n  return 0;\n}}", c_code6);
-        assert!(test_c_code(&full_c6, "42\n"), "get_sum() should return 42 with Point class defined");
+        let full_c6 = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", get_sum());\n  return 0;\n}}",
+            c_code6
+        );
+        assert!(
+            test_c_code(&full_c6, "42\n"),
+            "get_sum() should return 42 with Point class defined"
+        );
 
         // Test 7: Class instantiation with field mapping
         let lucid_code7 = "class Point:\n    x: int\n    y: int\n\ndef test() -> int:\n    p = Point(3, 4)\n    return 5\n";
         let mut lexer7 = Lexer::new(lucid_code7);
         let tokens7 = lexer7.tokenize().expect("Lexer failed for instantiation");
         let mut parser7 = Parser::new(tokens7);
-        let module7 = parser7.parse_module().expect("Parser failed for instantiation");
+        let module7 = parser7
+            .parse_module()
+            .expect("Parser failed for instantiation");
         let ir_module7 = crate::builder::IrBuilder::new().build_module(&module7);
 
         // Verify that Point class exists
-        assert!(ir_module7.get_class("Point").is_some(), "Point class should exist");
+        assert!(
+            ir_module7.get_class("Point").is_some(),
+            "Point class should exist"
+        );
 
         // Verify test function was created
-        assert!(ir_module7.functions.iter().any(|f| f.name == "test"), "test function should exist");
+        assert!(
+            ir_module7.functions.iter().any(|f| f.name == "test"),
+            "test function should exist"
+        );
 
         // Verify codegen produces valid C
         let mut backend7 = CCodegenBackend::new();
         let c_code7 = backend7.generate(&ir_module7);
-        let full_c7 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", test());\n  return 0;\n}}", c_code7);
-        assert!(test_c_code(&full_c7, "5\n"), "test() with Point instantiation should return 5");
+        let full_c7 = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", test());\n  return 0;\n}}",
+            c_code7
+        );
+        assert!(
+            test_c_code(&full_c7, "5\n"),
+            "test() with Point instantiation should return 5"
+        );
 
         // Test 8: Class instantiation with multiple fields
         let lucid_code8 = "class Circle:\n    radius: int\n    area: int\n\ndef compute_area() -> int:\n    c = Circle(5, 78)\n    return 42\n";
@@ -192,7 +254,9 @@ mod tests {
         let ir_module8 = crate::builder::IrBuilder::new().build_module(&module8);
 
         // Verify Circle class was created with correct fields
-        let circle_class = ir_module8.get_class("Circle").expect("Circle class should exist");
+        let circle_class = ir_module8
+            .get_class("Circle")
+            .expect("Circle class should exist");
         assert_eq!(circle_class.fields.len(), 2);
         assert_eq!(circle_class.fields[0].name, "radius");
         assert_eq!(circle_class.fields[1].name, "area");
@@ -200,9 +264,18 @@ mod tests {
         // Verify codegen works
         let mut backend8 = CCodegenBackend::new();
         let c_code8 = backend8.generate(&ir_module8);
-        assert!(c_code8.contains("struct Circle"), "Should generate Circle struct");
-        let full_c8 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", compute_area());\n  return 0;\n}}", c_code8);
-        assert!(test_c_code(&full_c8, "42\n"), "compute_area() should compile and return 42");
+        assert!(
+            c_code8.contains("struct Circle"),
+            "Should generate Circle struct"
+        );
+        let full_c8 = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", compute_area());\n  return 0;\n}}",
+            c_code8
+        );
+        assert!(
+            test_c_code(&full_c8, "42\n"),
+            "compute_area() should compile and return 42"
+        );
 
         // Test 9: String concatenation (Phase 5 stdlib)
         let lucid_code9 = "def greet() -> str:\n    greeting = \"hello\" + \" \" + \"world\"\n    return greeting\n";
@@ -227,7 +300,10 @@ mod tests {
         // Generate: if (x > 5) { return 10; } else { return 20; }
         let mut func = IrFunction::new(
             "if_test".to_string(),
-            vec![IrParam { name: "x".to_string(), ty: IrType::I64 }],
+            vec![IrParam {
+                name: "x".to_string(),
+                ty: IrType::I64,
+            }],
             IrType::I64,
         );
 
@@ -267,11 +343,17 @@ mod tests {
         assert!(c.contains("if (") || c.contains("goto"));
 
         // Test with x = 10 (should return 10)
-        let full = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", if_test(10));\n  return 0;\n}}", c);
+        let full = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", if_test(10));\n  return 0;\n}}",
+            c
+        );
         assert!(test_c_code(&full, "10\n"));
 
         // Test with x = 3 (should return 20)
-        let full2 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", if_test(3));\n  return 0;\n}}", c);
+        let full2 = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", if_test(3));\n  return 0;\n}}",
+            c
+        );
         assert!(test_c_code(&full2, "20\n"));
     }
 
@@ -280,11 +362,7 @@ mod tests {
         let mut module = IrModule::new();
 
         // Generate: int sum = 0; while (i < 5) { sum += i; i++; } return sum;
-        let mut func = IrFunction::new(
-            "sum_loop".to_string(),
-            vec![],
-            IrType::I64,
-        );
+        let mut func = IrFunction::new("sum_loop".to_string(), vec![], IrType::I64);
 
         // Block 0: initialize sum = 0, i = 0
         func.blocks[0].add_instruction(IrInstruction::Assign {
@@ -351,7 +429,10 @@ mod tests {
         assert!(c.contains("goto") || c.contains("while"));
 
         // sum = 0 + 1 + 2 + 3 + 4 = 10
-        let full = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", sum_loop());\n  return 0;\n}}", c);
+        let full = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", sum_loop());\n  return 0;\n}}",
+            c
+        );
         assert!(test_c_code(&full, "10\n"));
     }
 
@@ -362,11 +443,19 @@ mod tests {
         // Create a Point class
         let point_class = IrClass {
             generic_params: Vec::new(),
-                    parent: None,
+            parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
-                IrField { name: "y".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
+                IrField {
+                    name: "x".to_string(),
+                    ty: IrType::I64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
+                IrField {
+                    name: "y".to_string(),
+                    ty: IrType::I64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
             ],
             methods: vec![],
         };
@@ -376,9 +465,10 @@ mod tests {
         // Add a method: method_get_x(Point* self) -> int64_t
         let mut get_x = IrFunction::new(
             "method_get_x".to_string(),
-            vec![
-                IrParam { name: "self".to_string(), ty: IrType::Ptr },
-            ],
+            vec![IrParam {
+                name: "self".to_string(),
+                ty: IrType::Ptr,
+            }],
             IrType::I64,
         );
 
@@ -407,11 +497,19 @@ mod tests {
         // Create Point class
         let point_class = IrClass {
             generic_params: Vec::new(),
-                    parent: None,
+            parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
-                IrField { name: "y".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
+                IrField {
+                    name: "x".to_string(),
+                    ty: IrType::I64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
+                IrField {
+                    name: "y".to_string(),
+                    ty: IrType::I64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
             ],
             methods: vec![],
         };
@@ -431,7 +529,10 @@ mod tests {
         );
 
         // offsetof(Point, y) should be 8 (after x which is 8 bytes)
-        assert!(test_c_code(&test_code, "8\n"), "ABI layout: Point.y offset should be 8");
+        assert!(
+            test_c_code(&test_code, "8\n"),
+            "ABI layout: Point.y offset should be 8"
+        );
     }
 
     #[test]
@@ -441,11 +542,19 @@ mod tests {
         // Create a Point class with x and y fields
         let point_class = IrClass {
             generic_params: Vec::new(),
-                    parent: None,
+            parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
-                IrField { name: "y".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
+                IrField {
+                    name: "x".to_string(),
+                    ty: IrType::I64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
+                IrField {
+                    name: "y".to_string(),
+                    ty: IrType::I64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
             ],
             methods: vec![],
         };
@@ -453,11 +562,7 @@ mod tests {
         module.add_class(point_class);
 
         // Add a function that creates and uses a struct
-        let mut func = IrFunction::new(
-            "test_point".to_string(),
-            vec![],
-            IrType::I64,
-        );
+        let mut func = IrFunction::new("test_point".to_string(), vec![], IrType::I64);
 
         func.blocks[0].set_terminator(IrTerminator::Return {
             value: Some(IrValue::Int(42)),
@@ -494,8 +599,14 @@ mod tests {
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
         let mut backend = CCodegenBackend::new();
         let c_code = backend.generate(&ir_module);
-        let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", safe_divide(10, 0));\n  return 0;\n}}", c_code);
-        assert!(test_c_code(&full_c, "-1\n"), "safe_divide(10, 0) should return -1 (exception caught)");
+        let full_c = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", safe_divide(10, 0));\n  return 0;\n}}",
+            c_code
+        );
+        assert!(
+            test_c_code(&full_c, "-1\n"),
+            "safe_divide(10, 0) should return -1 (exception caught)"
+        );
     }
 
     #[test]
@@ -512,13 +623,19 @@ mod tests {
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
         let mut backend = CCodegenBackend::new();
         let c_code = backend.generate(&ir_module);
-        let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", sum_range(5));\n  return 0;\n}}", c_code);
-        assert!(test_c_code(&full_c, "10\n"), "sum_range(5) should return 10 (0+1+2+3+4)");
+        let full_c = format!(
+            "{}\n\nint main() {{\n  printf(\"%ld\\n\", sum_range(5));\n  return 0;\n}}",
+            c_code
+        );
+        assert!(
+            test_c_code(&full_c, "10\n"),
+            "sum_range(5) should return 10 (0+1+2+3+4)"
+        );
     }
 
     #[test]
     fn test_abi_struct_memory_layout_validation() {
-        use lucid_abi::{AbiInfo, ObjectLayout, CallingConvention};
+        use lucid_abi::{AbiInfo, CallingConvention, ObjectLayout};
 
         // Create ABI info with current platform's calling convention
         let cc = CallingConvention::current();
@@ -526,8 +643,8 @@ mod tests {
 
         // Create struct layout: class Point { x: int (offset 0), y: int (offset 8) }
         let mut layout = ObjectLayout::new("Point".to_string(), 8);
-        layout.add_field("x".to_string(), 0);      // x at offset 0
-        layout.add_field("y".to_string(), 8);      // y at offset 8
+        layout.add_field("x".to_string(), 0); // x at offset 0
+        layout.add_field("y".to_string(), 8); // y at offset 8
         layout.total_size = 16;
         abi.add_layout(layout);
 
@@ -544,8 +661,8 @@ mod tests {
 
         // Create another struct: Rectangle { topLeft: Point (offset 0, 8 bytes), width: int (offset 8, 8 bytes) }
         let mut rect_layout = ObjectLayout::new("Rectangle".to_string(), 8);
-        rect_layout.add_field("topLeft".to_string(), 0);  // Point reference at offset 0
-        rect_layout.add_field("width".to_string(), 8);    // width at offset 8
+        rect_layout.add_field("topLeft".to_string(), 0); // Point reference at offset 0
+        rect_layout.add_field("width".to_string(), 8); // width at offset 8
         rect_layout.total_size = 16;
         abi.add_layout(rect_layout);
 
@@ -559,11 +676,7 @@ mod tests {
     fn test_memory_allocation_and_deallocation() {
         let mut module = IrModule::new();
 
-        let mut func = IrFunction::new(
-            "allocate_object".to_string(),
-            vec![],
-            IrType::Ptr,
-        );
+        let mut func = IrFunction::new("allocate_object".to_string(), vec![], IrType::Ptr);
 
         // Allocate memory
         func.blocks[0].add_instruction(IrInstruction::Malloc {
@@ -591,16 +704,19 @@ mod tests {
 
     #[test]
     fn test_calling_convention_parameter_passing() {
-        use lucid_abi::{AbiInfo, CallingConvention, CInteropType};
+        use lucid_abi::{AbiInfo, CInteropType, CallingConvention};
 
         // Test System V AMD64 calling convention parameter passing
         let cc = CallingConvention::current();
         let _abi = AbiInfo::new(cc, 8);
 
         // Verify we can retrieve calling convention
-        assert!(matches!(cc, CallingConvention::SystemVAmd64 |
-                            CallingConvention::MicrosoftX64 |
-                            CallingConvention::Arm64));
+        assert!(matches!(
+            cc,
+            CallingConvention::SystemVAmd64
+                | CallingConvention::MicrosoftX64
+                | CallingConvention::Arm64
+        ));
 
         // Test layout generation for multi-parameter function
         let mut abi_test = AbiInfo::new(cc, 8);
@@ -658,7 +774,10 @@ mod tests {
         assert_eq!(frame.total_size(), 48);
 
         // Verify frame layout
-        assert!(frame.total_size().is_multiple_of(16), "Frame should be 16-byte aligned");
+        assert!(
+            frame.total_size().is_multiple_of(16),
+            "Frame should be 16-byte aligned"
+        );
     }
 
     #[test]
@@ -671,16 +790,22 @@ mod tests {
             parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::F64, mutability: crate::MutabilityView::Exclusive },
-                IrField { name: "y".to_string(), ty: IrType::F64, mutability: crate::MutabilityView::Exclusive },
-            ],
-            methods: vec![
-                MethodDispatch {
-                    class_name: "Point".to_string(),
-                    method_name: "distance".to_string(),
-                    impl_function: "Point_distance".to_string(),
+                IrField {
+                    name: "x".to_string(),
+                    ty: IrType::F64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
+                IrField {
+                    name: "y".to_string(),
+                    ty: IrType::F64,
+                    mutability: crate::MutabilityView::Exclusive,
                 },
             ],
+            methods: vec![MethodDispatch {
+                class_name: "Point".to_string(),
+                method_name: "distance".to_string(),
+                impl_function: "Point_distance".to_string(),
+            }],
         };
 
         module.add_class(point_class);
@@ -688,15 +813,16 @@ mod tests {
         // Add the distance method implementation
         let mut distance_func = IrFunction::new(
             "Point_distance".to_string(),
-            vec![
-                IrParam { name: "self".to_string(), ty: IrType::Ptr },
-            ],
+            vec![IrParam {
+                name: "self".to_string(),
+                ty: IrType::Ptr,
+            }],
             IrType::F64,
         );
 
         // Simplified: return hardcoded value (in real impl, would load self.x and self.y)
         distance_func.blocks[0].set_terminator(IrTerminator::Return {
-            value: Some(IrValue::Float(5.0)),  // sqrt(3^2 + 4^2) = 5.0
+            value: Some(IrValue::Float(5.0)), // sqrt(3^2 + 4^2) = 5.0
         });
 
         module.add_function(distance_func);
@@ -705,16 +831,28 @@ mod tests {
         let c = backend.generate(&module);
 
         // Verify Point struct is generated
-        assert!(c.contains("struct Point"), "Point struct should be generated");
+        assert!(
+            c.contains("struct Point"),
+            "Point struct should be generated"
+        );
         assert!(c.contains("double x"), "Point should have x field");
         assert!(c.contains("double y"), "Point should have y field");
 
         // Verify Point_distance method is generated
-        assert!(c.contains("Point_distance"), "Point_distance method should be generated");
+        assert!(
+            c.contains("Point_distance"),
+            "Point_distance method should be generated"
+        );
 
         // Verify it compiles
-        let full = format!("{}\n\nint main() {{\n  printf(\"1\\n\");\n  return 0;\n}}", c);
-        assert!(test_c_code(&full, "1\n"), "Class method code should compile");
+        let full = format!(
+            "{}\n\nint main() {{\n  printf(\"1\\n\");\n  return 0;\n}}",
+            c
+        );
+        assert!(
+            test_c_code(&full, "1\n"),
+            "Class method code should compile"
+        );
     }
 
     #[test]
@@ -744,18 +882,22 @@ mod tests {
             parent: None,
             name: "Point".to_string(),
             fields: vec![
-                IrField { name: "x".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
-                IrField { name: "y".to_string(), ty: IrType::I64, mutability: crate::MutabilityView::Exclusive },
+                IrField {
+                    name: "x".to_string(),
+                    ty: IrType::I64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
+                IrField {
+                    name: "y".to_string(),
+                    ty: IrType::I64,
+                    mutability: crate::MutabilityView::Exclusive,
+                },
             ],
             methods: vec![],
         });
 
         // Create function that instantiates Point
-        let mut func = IrFunction::new(
-            "create_point".to_string(),
-            vec![],
-            IrType::Ptr,
-        );
+        let mut func = IrFunction::new("create_point".to_string(), vec![], IrType::Ptr);
 
         // Generate: p = Point(3, 4)
         func.blocks[0].add_instruction(IrInstruction::NewInstance {
@@ -777,22 +919,27 @@ mod tests {
         let c = backend.generate(&module);
 
         // Verify Point struct is generated
-        assert!(c.contains("struct Point"), "Point struct should be generated");
+        assert!(
+            c.contains("struct Point"),
+            "Point struct should be generated"
+        );
 
         // Just verify basic compilation - field initialization details may vary
-        let full = format!("{}\n\nint main() {{\n  printf(\"1\\n\");\n  return 0;\n}}", c);
-        assert!(test_c_code(&full, "1\n"), "Instance creation codegen should compile");
+        let full = format!(
+            "{}\n\nint main() {{\n  printf(\"1\\n\");\n  return 0;\n}}",
+            c
+        );
+        assert!(
+            test_c_code(&full, "1\n"),
+            "Instance creation codegen should compile"
+        );
     }
 
     #[test]
     fn test_method_call_ir_generation() {
         // Verify that MethodCall IR instruction exists and is part of the IR
         let _module = IrModule::new();
-        let mut func = IrFunction::new(
-            "test".to_string(),
-            vec![],
-            IrType::I64,
-        );
+        let mut func = IrFunction::new("test".to_string(), vec![], IrType::I64);
 
         // Manually create a MethodCall instruction
         func.blocks[0].add_instruction(IrInstruction::MethodCall {
@@ -820,9 +967,11 @@ mod tests {
             generic_params: Vec::new(),
             parent: None,
             name: "Animal".to_string(),
-            fields: vec![
-                IrField { name: "name".to_string(), ty: IrType::Str, mutability: crate::MutabilityView::Exclusive },
-            ],
+            fields: vec![IrField {
+                name: "name".to_string(),
+                ty: IrType::Str,
+                mutability: crate::MutabilityView::Exclusive,
+            }],
             methods: vec![],
         });
 
@@ -831,9 +980,11 @@ mod tests {
             generic_params: Vec::new(),
             parent: Some("Animal".to_string()),
             name: "Dog".to_string(),
-            fields: vec![
-                IrField { name: "breed".to_string(), ty: IrType::Str, mutability: crate::MutabilityView::Exclusive },
-            ],
+            fields: vec![IrField {
+                name: "breed".to_string(),
+                ty: IrType::Str,
+                mutability: crate::MutabilityView::Exclusive,
+            }],
             methods: vec![],
         });
 
@@ -861,7 +1012,9 @@ mod tests {
         let mut lexer = Lexer::new(lucid_code);
         let tokens = lexer.tokenize().expect("Lexer failed for list creation");
         let mut parser = Parser::new(tokens);
-        let module = parser.parse_module().expect("Parser failed for list creation");
+        let module = parser
+            .parse_module()
+            .expect("Parser failed for list creation");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
 
         // Check that function exists
@@ -942,7 +1095,9 @@ int main() {
         let mut lexer = Lexer::new(lucid_code);
         let tokens = lexer.tokenize().expect("Lexer failed for list append");
         let mut parser = Parser::new(tokens);
-        let module = parser.parse_module().expect("Parser failed for list append");
+        let module = parser
+            .parse_module()
+            .expect("Parser failed for list append");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
 
         // Check that function was built
@@ -970,7 +1125,9 @@ int main() {
         let mut lexer = Lexer::new(lucid_code);
         let tokens = lexer.tokenize().expect("Lexer failed for list indexing");
         let mut parser = Parser::new(tokens);
-        let module = parser.parse_module().expect("Parser failed for list indexing");
+        let module = parser
+            .parse_module()
+            .expect("Parser failed for list indexing");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
 
         assert_eq!(ir_module.functions.len(), 1);
@@ -998,7 +1155,9 @@ int main() {
         let mut lexer = Lexer::new(lucid_code);
         let tokens = lexer.tokenize().expect("Lexer failed for dict creation");
         let mut parser = Parser::new(tokens);
-        let module = parser.parse_module().expect("Parser failed for dict creation");
+        let module = parser
+            .parse_module()
+            .expect("Parser failed for dict creation");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
 
         assert_eq!(ir_module.functions.len(), 1);
@@ -1018,7 +1177,9 @@ int main() {
         let mut lexer = Lexer::new(lucid_code);
         let tokens = lexer.tokenize().expect("Lexer failed for dict operations");
         let mut parser = Parser::new(tokens);
-        let module = parser.parse_module().expect("Parser failed for dict operations");
+        let module = parser
+            .parse_module()
+            .expect("Parser failed for dict operations");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
 
         // Just verify we can generate IR for dict code
@@ -1172,7 +1333,9 @@ int main() {
         let mut lexer = Lexer::new(lucid_code);
         let tokens = lexer.tokenize().expect("Lexer failed for range iteration");
         let mut parser = Parser::new(tokens);
-        let module = parser.parse_module().expect("Parser failed for range iteration");
+        let module = parser
+            .parse_module()
+            .expect("Parser failed for range iteration");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
 
         // Verify function was generated
@@ -1350,9 +1513,13 @@ int main() {
 "#;
 
         let mut lexer = Lexer::new(lucid_code);
-        let tokens = lexer.tokenize().expect("Lexer failed for error propagation");
+        let tokens = lexer
+            .tokenize()
+            .expect("Lexer failed for error propagation");
         let mut parser = Parser::new(tokens);
-        let module = parser.parse_module().expect("Parser failed for error propagation");
+        let module = parser
+            .parse_module()
+            .expect("Parser failed for error propagation");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
 
         // Verify IR contains call to lucid_result_unwrap for ? operator
@@ -1362,7 +1529,10 @@ int main() {
                 matches!(instr, IrInstruction::Call { func, .. } if func == "lucid_result_unwrap")
             })
         });
-        assert!(has_unwrap_call, "IR should contain lucid_result_unwrap call for ? operator");
+        assert!(
+            has_unwrap_call,
+            "IR should contain lucid_result_unwrap call for ? operator"
+        );
     }
 
     #[test]
@@ -1431,15 +1601,18 @@ int main() {
         let mut lexer = Lexer::new(lucid_code);
         let tokens = lexer.tokenize().expect("Lexer failed for dict operations");
         let mut parser = Parser::new(tokens);
-        let module = parser.parse_module().expect("Parser failed for dict operations");
+        let module = parser
+            .parse_module()
+            .expect("Parser failed for dict operations");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
 
         // Verify DictAccess instruction was generated for dict["key"]
         let func = &ir_module.functions[0];
         let has_dict_access = func.blocks.iter().any(|block| {
-            block.instructions.iter().any(|instr| {
-                matches!(instr, IrInstruction::DictAccess { .. })
-            })
+            block
+                .instructions
+                .iter()
+                .any(|instr| matches!(instr, IrInstruction::DictAccess { .. }))
         });
         assert!(has_dict_access, "IR should contain DictAccess instruction");
     }
@@ -1469,10 +1642,7 @@ int main() {
         // Test generic Dictionary types
         let dict_str_int = crate::IrType::GenericInstance {
             name: "Dict".to_string(),
-            type_args: vec![
-                Box::new(crate::IrType::Str),
-                Box::new(crate::IrType::I64),
-            ],
+            type_args: vec![Box::new(crate::IrType::Str), Box::new(crate::IrType::I64)],
         };
 
         assert_eq!(dict_str_int.c_type(), "LucidDict*");
@@ -1656,16 +1826,14 @@ int main() {
         // Test trait support in IR
         let trait_obj = crate::IrTrait {
             name: "Reader".to_string(),
-            methods: vec![
-                crate::TraitMethod {
-                    name: "read".to_string(),
-                    params: vec![crate::IrParam {
-                        name: "self".to_string(),
-                        ty: crate::IrType::Ptr,
-                    }],
-                    return_type: crate::IrType::Str,
-                },
-            ],
+            methods: vec![crate::TraitMethod {
+                name: "read".to_string(),
+                params: vec![crate::IrParam {
+                    name: "self".to_string(),
+                    ty: crate::IrType::Ptr,
+                }],
+                return_type: crate::IrType::Str,
+            }],
         };
 
         let mut module = crate::IrModule::new();
@@ -1691,8 +1859,8 @@ int main() {
         assert_eq!(list_str_name, "List__str__");
 
         // Specialize Dict[str, int]
-        let dict_name = module.specialize_type("Dict",
-            vec![crate::IrType::Str, crate::IrType::I64]);
+        let dict_name =
+            module.specialize_type("Dict", vec![crate::IrType::Str, crate::IrType::I64]);
         assert_eq!(dict_name, "Dict__str__i64__");
 
         // Verify specializations recorded
@@ -1701,7 +1869,7 @@ int main() {
         // Specialize same type again - should return same name without duplicating
         let list_int_name2 = module.specialize_type("List", vec![crate::IrType::I64]);
         assert_eq!(list_int_name2, list_int_name);
-        assert_eq!(module.specializations.len(), 3);  // Still 3, not 4
+        assert_eq!(module.specializations.len(), 3); // Still 3, not 4
     }
 
     #[test]
@@ -1746,12 +1914,10 @@ int main() {
         let string_reader = crate::TraitImpl {
             trait_name: "Reader".to_string(),
             impl_type: "String".to_string(),
-            methods: vec![
-                crate::MethodImpl {
-                    method_name: "read".to_string(),
-                    impl_function: "String__read".to_string(),
-                },
-            ],
+            methods: vec![crate::MethodImpl {
+                method_name: "read".to_string(),
+                impl_function: "String__read".to_string(),
+            }],
         };
 
         module.trait_impls.push(string_reader);
@@ -1821,13 +1987,11 @@ int main() {
         // Add a Clone trait
         let clone_trait = crate::IrTrait {
             name: "Clone".to_string(),
-            methods: vec![
-                crate::TraitMethod {
-                    name: "clone".to_string(),
-                    params: vec![],
-                    return_type: IrType::Ptr,
-                },
-            ],
+            methods: vec![crate::TraitMethod {
+                name: "clone".to_string(),
+                params: vec![],
+                return_type: IrType::Ptr,
+            }],
         };
         module.traits.push(clone_trait);
 
@@ -1842,12 +2006,10 @@ int main() {
         let string_clone_impl = crate::TraitImpl {
             trait_name: "Clone".to_string(),
             impl_type: "String".to_string(),
-            methods: vec![
-                crate::MethodImpl {
-                    method_name: "clone".to_string(),
-                    impl_function: "String__clone".to_string(),
-                },
-            ],
+            methods: vec![crate::MethodImpl {
+                method_name: "clone".to_string(),
+                impl_function: "String__clone".to_string(),
+            }],
         };
         module.trait_impls.push(string_clone_impl);
 
@@ -1895,12 +2057,10 @@ int main() {
         let generic_param = crate::GenericParam {
             name: "T".to_string(),
             variance: crate::Variance::Invariant,
-            bounds: vec![
-                crate::TraitBound {
-                    type_param: "T".to_string(),
-                    trait_name: "Clone".to_string(),
-                },
-            ],
+            bounds: vec![crate::TraitBound {
+                type_param: "T".to_string(),
+                trait_name: "Clone".to_string(),
+            }],
         };
 
         assert_eq!(generic_param.name, "T");
@@ -2160,9 +2320,9 @@ int main() {
         // Test shapes with positional-only and keyword-only fields
         let shape = crate::AnonymousClassShape {
             fields: vec![
-                ("a".to_string(), IrType::I64),   // positional-only
-                ("b".to_string(), IrType::I64),   // ordinary
-                ("c".to_string(), IrType::Str),   // keyword-only
+                ("a".to_string(), IrType::I64), // positional-only
+                ("b".to_string(), IrType::I64), // ordinary
+                ("c".to_string(), IrType::Str), // keyword-only
             ],
             is_positional_only: vec![true, false, false],
             is_keyword_only: vec![false, false, true],
@@ -2264,11 +2424,7 @@ int main() {
 
         // Create a math module with a sqrt function
         let mut math_module = IrModule::with_name("math", "std.math");
-        let sqrt_func = IrFunction::new(
-            "sqrt".to_string(),
-            vec![],
-            crate::IrType::F64,
-        );
+        let sqrt_func = IrFunction::new("sqrt".to_string(), vec![], crate::IrType::F64);
         math_module.add_function(sqrt_func);
 
         // Import math module into main
@@ -2344,12 +2500,24 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify reverse, first, and last functions are generated
-        assert!(code.contains("List__i64___reverse"), "reverse should be generated");
-        assert!(code.contains("List__i64___first"), "first should be generated");
-        assert!(code.contains("List__i64___last"), "last should be generated");
+        assert!(
+            code.contains("List__i64___reverse"),
+            "reverse should be generated"
+        );
+        assert!(
+            code.contains("List__i64___first"),
+            "first should be generated"
+        );
+        assert!(
+            code.contains("List__i64___last"),
+            "last should be generated"
+        );
 
         // Verify the reverse implementation has proper swapping logic
-        assert!(code.contains("temp = list->items"), "reverse should have swap logic");
+        assert!(
+            code.contains("temp = list->items"),
+            "reverse should have swap logic"
+        );
     }
 
     #[test]
@@ -2362,13 +2530,34 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify string helper functions are present
-        assert!(code.contains("lucid_string_trim"), "trim should be generated");
-        assert!(code.contains("lucid_string_replace"), "replace should be generated");
-        assert!(code.contains("lucid_string_contains"), "contains should be generated");
-        assert!(code.contains("lucid_string_starts_with"), "starts_with should be generated");
-        assert!(code.contains("lucid_string_ends_with"), "ends_with should be generated");
-        assert!(code.contains("lucid_string_to_upper"), "to_upper should be generated");
-        assert!(code.contains("lucid_string_to_lower"), "to_lower should be generated");
+        assert!(
+            code.contains("lucid_string_trim"),
+            "trim should be generated"
+        );
+        assert!(
+            code.contains("lucid_string_replace"),
+            "replace should be generated"
+        );
+        assert!(
+            code.contains("lucid_string_contains"),
+            "contains should be generated"
+        );
+        assert!(
+            code.contains("lucid_string_starts_with"),
+            "starts_with should be generated"
+        );
+        assert!(
+            code.contains("lucid_string_ends_with"),
+            "ends_with should be generated"
+        );
+        assert!(
+            code.contains("lucid_string_to_upper"),
+            "to_upper should be generated"
+        );
+        assert!(
+            code.contains("lucid_string_to_lower"),
+            "to_lower should be generated"
+        );
     }
 
     #[test]
@@ -2386,7 +2575,10 @@ int main() {
         assert!(code.contains("lucid_max"), "max should be generated");
         assert!(code.contains("lucid_pow"), "pow should be generated");
         assert!(code.contains("lucid_round"), "round should be generated");
-        assert!(code.contains("lucid_floor_int"), "floor should be generated");
+        assert!(
+            code.contains("lucid_floor_int"),
+            "floor should be generated"
+        );
         assert!(code.contains("lucid_ceil_int"), "ceil should be generated");
     }
 
@@ -2403,9 +2595,18 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify extended operations
-        assert!(code.contains("List__i64___count"), "count should be generated");
-        assert!(code.contains("List__i64___is_empty"), "is_empty should be generated");
-        assert!(code.contains("List__i64___clear"), "clear should be generated");
+        assert!(
+            code.contains("List__i64___count"),
+            "count should be generated"
+        );
+        assert!(
+            code.contains("List__i64___is_empty"),
+            "is_empty should be generated"
+        );
+        assert!(
+            code.contains("List__i64___clear"),
+            "clear should be generated"
+        );
     }
 
     #[test]
@@ -2421,11 +2622,26 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify extended operations
-        assert!(code.contains("Dict__str__i64___length"), "length should be generated");
-        assert!(code.contains("Dict__str__i64___contains_key"), "contains_key should be generated");
-        assert!(code.contains("Dict__str__i64___is_empty"), "is_empty should be generated");
-        assert!(code.contains("Dict__str__i64___remove"), "remove should be generated");
-        assert!(code.contains("Dict__str__i64___clear"), "clear should be generated");
+        assert!(
+            code.contains("Dict__str__i64___length"),
+            "length should be generated"
+        );
+        assert!(
+            code.contains("Dict__str__i64___contains_key"),
+            "contains_key should be generated"
+        );
+        assert!(
+            code.contains("Dict__str__i64___is_empty"),
+            "is_empty should be generated"
+        );
+        assert!(
+            code.contains("Dict__str__i64___remove"),
+            "remove should be generated"
+        );
+        assert!(
+            code.contains("Dict__str__i64___clear"),
+            "clear should be generated"
+        );
     }
 
     #[test]
@@ -2445,21 +2661,30 @@ int main() {
 
         // Test exhaustive Result match
         let arms = vec![ok_arm, err_arm];
-        assert!(module.is_result_match_exhaustive(&arms), "Result match should be exhaustive");
+        assert!(
+            module.is_result_match_exhaustive(&arms),
+            "Result match should be exhaustive"
+        );
 
         // Test non-exhaustive (only Ok)
         let partial_arms = vec![crate::MatchArm {
             pattern: crate::Pattern::Variant("Ok".to_string(), vec![]),
             target_block: 1,
         }];
-        assert!(!module.is_result_match_exhaustive(&partial_arms), "Partial Result match should not be exhaustive");
+        assert!(
+            !module.is_result_match_exhaustive(&partial_arms),
+            "Partial Result match should not be exhaustive"
+        );
 
         // Test wildcard covers all
         let wildcard_arm = crate::MatchArm {
             pattern: crate::Pattern::Wildcard,
             target_block: 1,
         };
-        assert!(module.is_result_match_exhaustive(&[wildcard_arm]), "Wildcard should cover all cases");
+        assert!(
+            module.is_result_match_exhaustive(&[wildcard_arm]),
+            "Wildcard should cover all cases"
+        );
     }
 
     #[test]
@@ -2470,9 +2695,18 @@ int main() {
         let error_type = crate::ErrorType {
             name: "FileError".to_string(),
             variants: vec![
-                crate::ErrorVariant { name: "NotFound".to_string(), code: 1 },
-                crate::ErrorVariant { name: "PermissionDenied".to_string(), code: 2 },
-                crate::ErrorVariant { name: "IOError".to_string(), code: 3 },
+                crate::ErrorVariant {
+                    name: "NotFound".to_string(),
+                    code: 1,
+                },
+                crate::ErrorVariant {
+                    name: "PermissionDenied".to_string(),
+                    code: 2,
+                },
+                crate::ErrorVariant {
+                    name: "IOError".to_string(),
+                    code: 3,
+                },
             ],
         };
         module.error_types.push(error_type);
@@ -2493,7 +2727,10 @@ int main() {
             },
         ];
 
-        assert!(module.is_error_match_exhaustive("FileError", &arms_exhaustive), "Should be exhaustive");
+        assert!(
+            module.is_error_match_exhaustive("FileError", &arms_exhaustive),
+            "Should be exhaustive"
+        );
 
         // Test non-exhaustive (missing PermissionDenied)
         let arms_partial = vec![
@@ -2507,7 +2744,10 @@ int main() {
             },
         ];
 
-        assert!(!module.is_error_match_exhaustive("FileError", &arms_partial), "Should be non-exhaustive");
+        assert!(
+            !module.is_error_match_exhaustive("FileError", &arms_partial),
+            "Should be non-exhaustive"
+        );
 
         // Test wildcard covers all
         let arms_wildcard = vec![
@@ -2521,7 +2761,10 @@ int main() {
             },
         ];
 
-        assert!(module.is_error_match_exhaustive("FileError", &arms_wildcard), "Wildcard should make it exhaustive");
+        assert!(
+            module.is_error_match_exhaustive("FileError", &arms_wildcard),
+            "Wildcard should make it exhaustive"
+        );
     }
 
     #[test]
@@ -2534,16 +2777,37 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify JSON functions are present
-        assert!(code.contains("lucid_json_int"), "json_int should be generated");
-        assert!(code.contains("lucid_json_double"), "json_double should be generated");
-        assert!(code.contains("lucid_json_escape"), "json_escape should be generated");
-        assert!(code.contains("lucid_json_bool"), "json_bool should be generated");
-        assert!(code.contains("lucid_json_parse_int"), "json_parse_int should be generated");
-        assert!(code.contains("lucid_json_parse_double"), "json_parse_double should be generated");
+        assert!(
+            code.contains("lucid_json_int"),
+            "json_int should be generated"
+        );
+        assert!(
+            code.contains("lucid_json_double"),
+            "json_double should be generated"
+        );
+        assert!(
+            code.contains("lucid_json_escape"),
+            "json_escape should be generated"
+        );
+        assert!(
+            code.contains("lucid_json_bool"),
+            "json_bool should be generated"
+        );
+        assert!(
+            code.contains("lucid_json_parse_int"),
+            "json_parse_int should be generated"
+        );
+        assert!(
+            code.contains("lucid_json_parse_double"),
+            "json_parse_double should be generated"
+        );
 
         // Verify escape logic for proper JSON handling
         assert!(code.contains("case '\\\"'"), "Should handle escaped quotes");
-        assert!(code.contains("case '\\\\'"), "Should handle escaped backslashes");
+        assert!(
+            code.contains("case '\\\\'"),
+            "Should handle escaped backslashes"
+        );
     }
 
     #[test]
@@ -2552,7 +2816,8 @@ int main() {
 
         // Register iterators for List and Dict
         let list_iterator = module.register_iterator("List".to_string(), IrType::I64, None);
-        let dict_iterator = module.register_iterator("Dict".to_string(), IrType::Str, Some(IrType::I64));
+        let dict_iterator =
+            module.register_iterator("Dict".to_string(), IrType::Str, Some(IrType::I64));
 
         assert_eq!(list_iterator.collection_type, "List");
         assert_eq!(list_iterator.item_type, IrType::I64);
@@ -2583,12 +2848,24 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify iterator methods are generated
-        assert!(code.contains("Dict__str__i64___keys"), "keys() should be generated");
-        assert!(code.contains("Dict__str__i64___values"), "values() should be generated");
+        assert!(
+            code.contains("Dict__str__i64___keys"),
+            "keys() should be generated"
+        );
+        assert!(
+            code.contains("Dict__str__i64___values"),
+            "values() should be generated"
+        );
 
         // Verify method implementations return arrays
-        assert!(code.contains("keys_array = malloc"), "keys() should allocate array");
-        assert!(code.contains("values_array = malloc"), "values() should allocate array");
+        assert!(
+            code.contains("keys_array = malloc"),
+            "keys() should allocate array"
+        );
+        assert!(
+            code.contains("values_array = malloc"),
+            "values() should allocate array"
+        );
     }
 
     #[test]
@@ -2622,12 +2899,24 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify string slice functions are present
-        assert!(code.contains("lucid_string_slice"), "slice should be generated");
-        assert!(code.contains("lucid_string_split_helper"), "split should be generated");
-        assert!(code.contains("lucid_string_repeat"), "repeat should be generated");
+        assert!(
+            code.contains("lucid_string_slice"),
+            "slice should be generated"
+        );
+        assert!(
+            code.contains("lucid_string_split_helper"),
+            "split should be generated"
+        );
+        assert!(
+            code.contains("lucid_string_repeat"),
+            "repeat should be generated"
+        );
 
         // Verify slice logic
-        assert!(code.contains("strncpy(result, str + start"), "slice should copy substring");
+        assert!(
+            code.contains("strncpy(result, str + start"),
+            "slice should copy substring"
+        );
     }
 
     #[test]
@@ -2643,13 +2932,25 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify slice operations
-        assert!(code.contains("List__i64___slice"), "slice should be generated");
-        assert!(code.contains("List__i64___contains"), "contains should be generated");
-        assert!(code.contains("List__i64___index_of"), "index_of should be generated");
+        assert!(
+            code.contains("List__i64___slice"),
+            "slice should be generated"
+        );
+        assert!(
+            code.contains("List__i64___contains"),
+            "contains should be generated"
+        );
+        assert!(
+            code.contains("List__i64___index_of"),
+            "index_of should be generated"
+        );
 
         // Verify implementations
         assert!(code.contains("_new()"), "slice should create new list");
-        assert!(code.contains("if (list->items[i] == item)"), "contains should check items");
+        assert!(
+            code.contains("if (list->items[i] == item)"),
+            "contains should check items"
+        );
     }
 
     #[test]
@@ -2670,9 +2971,18 @@ int main() {
         assert!(code.contains("List__i64___max"), "max should be generated");
 
         // Verify implementations use accumulation
-        assert!(code.contains("total += list->items"), "sum should accumulate");
-        assert!(code.contains("if (list->items[i] < min_val)"), "min should find minimum");
-        assert!(code.contains("if (list->items[i] > max_val)"), "max should find maximum");
+        assert!(
+            code.contains("total += list->items"),
+            "sum should accumulate"
+        );
+        assert!(
+            code.contains("if (list->items[i] < min_val)"),
+            "min should find minimum"
+        );
+        assert!(
+            code.contains("if (list->items[i] > max_val)"),
+            "max should find maximum"
+        );
     }
 
     #[test]
@@ -2685,10 +2995,22 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify utility functions
-        assert!(code.contains("lucid_to_string_int"), "to_string_int should be generated");
-        assert!(code.contains("lucid_to_string_double"), "to_string_double should be generated");
-        assert!(code.contains("lucid_random_int"), "random_int should be generated");
-        assert!(code.contains("lucid_random_double"), "random_double should be generated");
+        assert!(
+            code.contains("lucid_to_string_int"),
+            "to_string_int should be generated"
+        );
+        assert!(
+            code.contains("lucid_to_string_double"),
+            "to_string_double should be generated"
+        );
+        assert!(
+            code.contains("lucid_random_int"),
+            "random_int should be generated"
+        );
+        assert!(
+            code.contains("lucid_random_double"),
+            "random_double should be generated"
+        );
     }
 
     #[test]
@@ -2713,10 +3035,7 @@ int main() {
     #[test]
     fn test_pattern_bindings_for_variants() {
         // Test pattern bindings extraction from variants
-        let pattern = crate::Pattern::Variant(
-            "Ok".to_string(),
-            vec!["value".to_string()],
-        );
+        let pattern = crate::Pattern::Variant("Ok".to_string(), vec!["value".to_string()]);
 
         let bindings = crate::IrModule::create_pattern_bindings(&pattern);
         assert_eq!(bindings.len(), 1);
@@ -2727,10 +3046,7 @@ int main() {
     #[test]
     fn test_match_arm_with_full_bindings() {
         // Test creating match arms with pattern bindings
-        let pattern = crate::Pattern::Variant(
-            "Err".to_string(),
-            vec!["error_code".to_string()],
-        );
+        let pattern = crate::Pattern::Variant("Err".to_string(), vec!["error_code".to_string()]);
 
         let arm = crate::IrModule::create_match_arm_with_bindings(pattern, 42);
         assert_eq!(arm.target_block, 42);
@@ -2748,12 +3064,24 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify sorting functions
-        assert!(code.contains("lucid_quicksort_int"), "quicksort_int should be generated");
-        assert!(code.contains("lucid_quicksort_double"), "quicksort_double should be generated");
-        assert!(code.contains("lucid_binary_search"), "binary_search should be generated");
+        assert!(
+            code.contains("lucid_quicksort_int"),
+            "quicksort_int should be generated"
+        );
+        assert!(
+            code.contains("lucid_quicksort_double"),
+            "quicksort_double should be generated"
+        );
+        assert!(
+            code.contains("lucid_binary_search"),
+            "binary_search should be generated"
+        );
 
         // Verify quicksort logic
-        assert!(code.contains("if (arr[j] < pivot)"), "quicksort should have pivot comparison");
+        assert!(
+            code.contains("if (arr[j] < pivot)"),
+            "quicksort should have pivot comparison"
+        );
     }
 
     #[test]
@@ -2769,8 +3097,14 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify sort method is generated for List[i64]
-        assert!(code.contains("List__i64___sort"), "sort should be generated for List[i64]");
-        assert!(code.contains("lucid_quicksort_int"), "should call quicksort");
+        assert!(
+            code.contains("List__i64___sort"),
+            "sort should be generated for List[i64]"
+        );
+        assert!(
+            code.contains("lucid_quicksort_int"),
+            "should call quicksort"
+        );
     }
 
     #[test]
@@ -2823,9 +3157,17 @@ int main() {
         let code = codegen.generate(&module);
 
         // Verify error functions
-        assert!(code.contains("struct ErrorContext"), "ErrorContext should be defined");
-        assert!(code.contains("lucid_print_error_trace"), "print_error_trace should exist");
-        assert!(code.contains("lucid_format_error"), "format_error should exist");
+        assert!(
+            code.contains("struct ErrorContext"),
+            "ErrorContext should be defined"
+        );
+        assert!(
+            code.contains("lucid_print_error_trace"),
+            "print_error_trace should exist"
+        );
+        assert!(
+            code.contains("lucid_format_error"),
+            "format_error should exist"
+        );
     }
-
 }

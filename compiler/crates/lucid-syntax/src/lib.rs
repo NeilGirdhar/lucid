@@ -739,7 +739,8 @@ def register(handler: class[Handler]) -> none:
 
         let error = parse("def one[T in (int)](a: T) -> T:\n    return a\n").unwrap_err();
         assert!(error.contains("at least two members"), "{error}");
-        let error = parse("def both[T: Sized in (int, str)](a: T) -> T:\n    return a\n").unwrap_err();
+        let error =
+            parse("def both[T: Sized in (int, str)](a: T) -> T:\n    return a\n").unwrap_err();
         assert!(error.contains("either a bound or a fixed set"), "{error}");
     }
 
@@ -790,13 +791,19 @@ def register(handler: class[Handler]) -> none:
         let Some(TypeExpr::Named { args, .. }) = &params[1].type_annotation else {
             panic!("expected list[...]");
         };
-        let TypeExpr::Named { args: node_args, .. } = &args[0] else {
+        let TypeExpr::Named {
+            args: node_args, ..
+        } = &args[0]
+        else {
             panic!("expected Node[...]");
         };
         assert!(matches!(&node_args[0], TypeExpr::Named { name, .. } if name == "int"));
         assert!(matches!(
             &node_args[1],
-            TypeExpr::Projection { direction: Projection::Out, .. }
+            TypeExpr::Projection {
+                direction: Projection::Out,
+                ..
+            }
         ));
         assert!(parse("x: in int = 1\n").is_err());
         assert!(parse("def f(buf: list[in]) -> int:\n    return 0\n").is_err());

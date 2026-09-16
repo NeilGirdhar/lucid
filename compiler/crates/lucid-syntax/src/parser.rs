@@ -2332,7 +2332,7 @@ impl Parser {
                 }
                 let end = self.expect(&TokenKind::RParen)?.span;
                 Ok(Expr::Construct {
-                    class_name: String::new(),  // Empty means use current class (inside factory)
+                    class_name: String::new(), // Empty means use current class (inside factory)
                     args,
                     span: tok.span.merge(end),
                 })

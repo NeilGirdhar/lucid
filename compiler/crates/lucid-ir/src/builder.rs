@@ -1,9 +1,9 @@
 //! IR Builder: Converts Lucid AST to IR
 
-use lucid_syntax::ast::*;
 use crate::{
-    IrModule, IrFunction, IrInstruction, IrValue, IrTerminator, IrType, IrParam, IrBinOp, IrUnaryOp,
+    IrBinOp, IrFunction, IrInstruction, IrModule, IrParam, IrTerminator, IrType, IrUnaryOp, IrValue,
 };
+use lucid_syntax::ast::*;
 use std::collections::HashMap;
 
 /// Builds IR from Lucid AST
@@ -63,7 +63,9 @@ impl IrBuilder {
             Stmt::Function(func_def) => {
                 self.build_function(func_def);
             }
-            Stmt::ClassDef { name, bases, body, .. } => {
+            Stmt::ClassDef {
+                name, bases, body, ..
+            } => {
                 self.build_class(name, bases, body);
             }
             _ => {
@@ -150,7 +152,13 @@ impl IrBuilder {
             Stmt::Expr(expr) => {
                 let _ = self.expr_to_ir_value(expr);
             }
-            Stmt::If { condition, then_branch, elif_branches, else_branch, .. } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                elif_branches,
+                else_branch,
+                ..
+            } => {
                 if let Some(func_idx) = self.current_function {
                     let cond_val = self.expr_to_ir_value(condition);
                     let then_id = self.fresh_block("if_then");
@@ -177,7 +185,10 @@ impl IrBuilder {
                         self.build_stmt_recursive(stmt);
                     }
                     // Jump to merge if not terminated
-                    if matches!(self.module.functions[func_idx].blocks[then_id].terminator, IrTerminator::Unreachable) {
+                    if matches!(
+                        self.module.functions[func_idx].blocks[then_id].terminator,
+                        IrTerminator::Unreachable
+                    ) {
                         self.terminate(IrTerminator::Jump { target: merge_id });
                     }
 
@@ -195,7 +206,10 @@ impl IrBuilder {
                             self.build_stmt_recursive(stmt);
                         }
                         // Jump to merge if not terminated
-                        if matches!(self.module.functions[func_idx].blocks[else_id].terminator, IrTerminator::Unreachable) {
+                        if matches!(
+                            self.module.functions[func_idx].blocks[else_id].terminator,
+                            IrTerminator::Unreachable
+                        ) {
                             self.terminate(IrTerminator::Jump { target: merge_id });
                         }
                     }
@@ -204,14 +218,18 @@ impl IrBuilder {
                     self.current_block = merge_id;
                 }
             }
-            Stmt::While { condition, body, .. } => {
+            Stmt::While {
+                condition, body, ..
+            } => {
                 if let Some(func_idx) = self.current_function {
                     let loop_cond_id = self.fresh_block("while_cond");
                     let loop_body_id = self.fresh_block("while_body");
                     let loop_exit_id = self.fresh_block("while_exit");
 
                     // Jump to loop condition
-                    self.terminate(IrTerminator::Jump { target: loop_cond_id });
+                    self.terminate(IrTerminator::Jump {
+                        target: loop_cond_id,
+                    });
 
                     // Loop condition block
                     let _saved_block = self.current_block;
@@ -229,15 +247,25 @@ impl IrBuilder {
                         self.build_stmt_recursive(stmt);
                     }
                     // Jump back to condition
-                    if matches!(self.module.functions[func_idx].blocks[loop_body_id].terminator, IrTerminator::Unreachable) {
-                        self.terminate(IrTerminator::Jump { target: loop_cond_id });
+                    if matches!(
+                        self.module.functions[func_idx].blocks[loop_body_id].terminator,
+                        IrTerminator::Unreachable
+                    ) {
+                        self.terminate(IrTerminator::Jump {
+                            target: loop_cond_id,
+                        });
                     }
 
                     // Continue after loop
                     self.current_block = loop_exit_id;
                 }
             }
-            Stmt::Try { body, handlers, finally_body, .. } => {
+            Stmt::Try {
+                body,
+                handlers,
+                finally_body,
+                ..
+            } => {
                 if let Some(func_idx) = self.current_function {
                     let try_body_id = self.fresh_block("try_body");
                     let merge_id = self.fresh_block("try_merge");
@@ -258,7 +286,9 @@ impl IrBuilder {
                     self.exception_handler_stack.push(handler_id);
 
                     // Jump to try body
-                    self.terminate(IrTerminator::Jump { target: try_body_id });
+                    self.terminate(IrTerminator::Jump {
+                        target: try_body_id,
+                    });
 
                     // Try body block
                     let _saved_block = self.current_block;
@@ -267,7 +297,10 @@ impl IrBuilder {
                         self.build_stmt_recursive(stmt);
                     }
                     // Jump to finally/merge on success
-                    if matches!(self.module.functions[func_idx].blocks[try_body_id].terminator, IrTerminator::Unreachable) {
+                    if matches!(
+                        self.module.functions[func_idx].blocks[try_body_id].terminator,
+                        IrTerminator::Unreachable
+                    ) {
                         self.terminate(IrTerminator::Jump { target: finally_id });
                     }
 
@@ -280,7 +313,10 @@ impl IrBuilder {
                             self.build_stmt_recursive(stmt);
                         }
                         // Jump to finally/merge
-                        if matches!(self.module.functions[func_idx].blocks[handler_id].terminator, IrTerminator::Unreachable) {
+                        if matches!(
+                            self.module.functions[func_idx].blocks[handler_id].terminator,
+                            IrTerminator::Unreachable
+                        ) {
                             self.terminate(IrTerminator::Jump { target: finally_id });
                         }
                     }
@@ -295,7 +331,10 @@ impl IrBuilder {
                             self.build_stmt_recursive(stmt);
                         }
                         // Jump to merge
-                        if matches!(self.module.functions[func_idx].blocks[finally_id].terminator, IrTerminator::Unreachable) {
+                        if matches!(
+                            self.module.functions[func_idx].blocks[finally_id].terminator,
+                            IrTerminator::Unreachable
+                        ) {
                             self.terminate(IrTerminator::Jump { target: merge_id });
                         }
                     }
@@ -311,10 +350,17 @@ impl IrBuilder {
                 } else {
                     // No handler available, return the exception value
                     let ex_val = self.expr_to_ir_value(exception);
-                    self.terminate(IrTerminator::Return { value: Some(ex_val) });
+                    self.terminate(IrTerminator::Return {
+                        value: Some(ex_val),
+                    });
                 }
             }
-            Stmt::For { target, iterable, body, .. } => {
+            Stmt::For {
+                target,
+                iterable,
+                body,
+                ..
+            } => {
                 if let Some(func_idx) = self.current_function {
                     if let Pattern::Ident(loop_var, _) = target {
                         let loop_init_id = self.fresh_block("for_init");
@@ -323,7 +369,9 @@ impl IrBuilder {
                         let loop_exit_id = self.fresh_block("for_exit");
 
                         // Jump to loop initialization
-                        self.terminate(IrTerminator::Jump { target: loop_init_id });
+                        self.terminate(IrTerminator::Jump {
+                            target: loop_init_id,
+                        });
 
                         // Loop initialization: i = 0 (simplified for range iteration)
                         self.current_block = loop_init_id;
@@ -332,7 +380,9 @@ impl IrBuilder {
                             value: IrValue::Int(0),
                         });
                         self.var_types.insert(loop_var.clone(), IrType::I64);
-                        self.terminate(IrTerminator::Jump { target: loop_cond_id });
+                        self.terminate(IrTerminator::Jump {
+                            target: loop_cond_id,
+                        });
 
                         // Loop condition: i < iterable (simplified - assume iterable is an int)
                         self.current_block = loop_cond_id;
@@ -357,7 +407,10 @@ impl IrBuilder {
                         }
 
                         // Loop increment: i = i + 1
-                        if matches!(self.module.functions[func_idx].blocks[loop_body_id].terminator, IrTerminator::Unreachable) {
+                        if matches!(
+                            self.module.functions[func_idx].blocks[loop_body_id].terminator,
+                            IrTerminator::Unreachable
+                        ) {
                             let inc_dest = self.fresh_var("for_inc");
                             self.emit(IrInstruction::BinOp {
                                 dest: inc_dest.clone(),
@@ -369,7 +422,9 @@ impl IrBuilder {
                                 dest: loop_var.clone(),
                                 value: IrValue::Var(inc_dest),
                             });
-                            self.terminate(IrTerminator::Jump { target: loop_cond_id });
+                            self.terminate(IrTerminator::Jump {
+                                target: loop_cond_id,
+                            });
                         }
 
                         // Continue after loop
@@ -377,7 +432,12 @@ impl IrBuilder {
                     }
                 }
             }
-            Stmt::Match { subject, subject_alias: _, arms, .. } => {
+            Stmt::Match {
+                subject,
+                subject_alias: _,
+                arms,
+                ..
+            } => {
                 // Match statement: evaluate subject and branch to matching arm based on patterns
                 if let Some(func_idx) = self.current_function {
                     let subject_val = self.expr_to_ir_value(subject);
@@ -391,13 +451,17 @@ impl IrBuilder {
 
                     // Implement pattern matching: check each pattern in order
                     let mut last_check_block = self.current_block;
-                    for (arm_idx, (arm, arm_block_id)) in arms.iter().zip(arm_blocks.iter()).enumerate() {
+                    for (arm_idx, (arm, arm_block_id)) in
+                        arms.iter().zip(arm_blocks.iter()).enumerate()
+                    {
                         // Check if this pattern matches
                         match &arm.pattern {
                             Pattern::Wildcard(_) => {
                                 // Wildcard always matches, branch directly to this arm
                                 self.current_block = last_check_block;
-                                self.terminate(IrTerminator::Jump { target: *arm_block_id });
+                                self.terminate(IrTerminator::Jump {
+                                    target: *arm_block_id,
+                                });
                             }
                             Pattern::Literal(lit_val, _) => {
                                 // Compare subject to literal, converting to IrValue
@@ -435,7 +499,9 @@ impl IrBuilder {
                                 // For other patterns, treat as matching for now
                                 // Full pattern support would handle Variant, Tuple, etc.
                                 self.current_block = last_check_block;
-                                self.terminate(IrTerminator::Jump { target: *arm_block_id });
+                                self.terminate(IrTerminator::Jump {
+                                    target: *arm_block_id,
+                                });
                             }
                         }
                     }
@@ -447,7 +513,10 @@ impl IrBuilder {
                             self.build_stmt_recursive(stmt);
                         }
                         // Jump to merge if not already terminated
-                        if matches!(self.module.functions[func_idx].blocks[*arm_block_id].terminator, IrTerminator::Unreachable) {
+                        if matches!(
+                            self.module.functions[func_idx].blocks[*arm_block_id].terminator,
+                            IrTerminator::Unreachable
+                        ) {
                             self.terminate(IrTerminator::Jump { target: merge_id });
                         }
                     }
@@ -508,7 +577,10 @@ impl IrBuilder {
                 if let Expr::Attribute { value, attr, .. } = &**func {
                     // This is a method call
                     let receiver = self.expr_to_ir_value(value);
-                    let ir_args: Vec<IrValue> = args.iter().map(|arg| self.expr_to_ir_value(&arg.value)).collect();
+                    let ir_args: Vec<IrValue> = args
+                        .iter()
+                        .map(|arg| self.expr_to_ir_value(&arg.value))
+                        .collect();
                     let dest = self.fresh_var("method_result");
                     self.emit(IrInstruction::MethodCall {
                         dest: Some(dest.clone()),
@@ -519,7 +591,10 @@ impl IrBuilder {
                     IrValue::Var(dest)
                 } else if let Expr::Ident { name, .. } = &**func {
                     // Regular function call
-                    let ir_args: Vec<IrValue> = args.iter().map(|arg| self.expr_to_ir_value(&arg.value)).collect();
+                    let ir_args: Vec<IrValue> = args
+                        .iter()
+                        .map(|arg| self.expr_to_ir_value(&arg.value))
+                        .collect();
                     let dest = self.fresh_var("call");
                     self.emit(IrInstruction::Call {
                         dest: Some(dest.clone()),
@@ -531,11 +606,14 @@ impl IrBuilder {
                     IrValue::Null
                 }
             }
-            Expr::Construct { class_name, args, .. } => {
+            Expr::Construct {
+                class_name, args, ..
+            } => {
                 let dest = self.fresh_var("obj");
 
                 // Get field names from the class definition (extract before borrowing for emit)
-                let field_names: Vec<String> = if let Some(cls) = self.module.get_class(class_name) {
+                let field_names: Vec<String> = if let Some(cls) = self.module.get_class(class_name)
+                {
                     cls.fields.iter().map(|f| f.name.clone()).collect()
                 } else {
                     Vec::new()
@@ -681,7 +759,10 @@ impl IrBuilder {
     fn build_class(&mut self, name: &str, bases: &[TypeExpr], body: &[ClassMember]) {
         // Extract parent class (Lucid supports single inheritance)
         let parent = bases.first().and_then(|base| {
-            if let TypeExpr::Named { name: parent_name, .. } = base {
+            if let TypeExpr::Named {
+                name: parent_name, ..
+            } = base
+            {
                 Some(parent_name.clone())
             } else {
                 None
@@ -721,7 +802,8 @@ impl IrBuilder {
                     }
 
                     let return_type = self.lucid_type_to_ir_type(func_def.return_type.as_ref());
-                    let method_func = IrFunction::new(func_name.clone(), method_params, return_type);
+                    let method_func =
+                        IrFunction::new(func_name.clone(), method_params, return_type);
 
                     // Build the method body
                     self.current_function = Some(self.module.functions.len());
@@ -754,7 +836,8 @@ impl IrBuilder {
         };
 
         self.module.add_class(ir_class);
-        self.module.add_type(name.to_string(), IrType::Named(name.to_string()));
+        self.module
+            .add_type(name.to_string(), IrType::Named(name.to_string()));
     }
 
     fn lucid_type_to_ir_type(&self, type_expr: Option<&TypeExpr>) -> IrType {
