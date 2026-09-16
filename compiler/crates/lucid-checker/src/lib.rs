@@ -20099,12 +20099,18 @@ pub mod specialization {
 
         /// Constant propagation within specialized functions
         pub fn constant_propagation(module: &Module) -> Module {
-            // Specialized functions often have type information that enables
-            // compile-time constant evaluation. This would:
-            // 1. Identify type-narrowed expressions
-            // 2. Evaluate constant expressions at compile time
-            // 3. Replace dynamic operations with static values
-            module.clone()
+            use std::collections::HashMap;
+
+            let mut constants: HashMap<String, crate::LiteralValue> = HashMap::new();
+
+            let filtered_stmts: Vec<Stmt> = module.statements.iter()
+                .map(|stmt| Self::propagate_constants_in_stmt(stmt, &mut constants))
+                .collect();
+
+            Module {
+                statements: filtered_stmts,
+                span: module.span,
+            }
         }
 
         /// Run all optimization passes
@@ -20116,6 +20122,106 @@ pub mod specialization {
     }
 
     impl SpecializationOptimizer {
+        fn propagate_constants_in_stmt(
+            stmt: &Stmt,
+            constants: &mut std::collections::HashMap<String, crate::LiteralValue>,
+        ) -> Stmt {
+            match stmt {
+                Stmt::VarDef {
+                    pattern: Pattern::Ident(name, _),
+                    value,
+                    type_annotation,
+                    is_let,
+                    is_final,
+                    span,
+                } => {
+                    if let Some(Expr::Literal { value: lit, .. }) = value {
+                        constants.insert(name.clone(), lit.clone());
+                    }
+                    Stmt::VarDef {
+                        pattern: Pattern::Ident(name.clone(), *span),
+                        value: value.as_ref().map(|v| Self::fold_constants_in_expr(v, constants)),
+                        type_annotation: type_annotation.clone(),
+                        is_let: *is_let,
+                        is_final: *is_final,
+                        span: *span,
+                    }
+                }
+                Stmt::Assignment { target, value, span } => {
+                    Stmt::Assignment {
+                        target: target.clone(),
+                        value: Self::fold_constants_in_expr(value, constants),
+                        span: *span,
+                    }
+                }
+                Stmt::Return { value, span } => {
+                    Stmt::Return {
+                        value: value.as_ref().map(|v| Self::fold_constants_in_expr(v, constants)),
+                        span: *span,
+                    }
+                }
+                _ => stmt.clone(),
+            }
+        }
+
+        fn fold_constants_in_expr(
+            expr: &Expr,
+            constants: &std::collections::HashMap<String, crate::LiteralValue>,
+        ) -> Expr {
+            match expr {
+                Expr::Ident { name, span } => {
+                    if let Some(lit) = constants.get(name) {
+                        Expr::Literal {
+                            value: lit.clone(),
+                            span: *span,
+                        }
+                    } else {
+                        expr.clone()
+                    }
+                }
+                Expr::Binary { op, left, right, span } => {
+                    let left_folded = Self::fold_constants_in_expr(left, constants);
+                    let right_folded = Self::fold_constants_in_expr(right, constants);
+
+                    // Try to evaluate constant expressions
+                    if let (
+                        Expr::Literal { value: lval, .. },
+                        Expr::Literal { value: rval, .. },
+                    ) = (&left_folded, &right_folded)
+                    {
+                        if let (crate::LiteralValue::Int(lv), crate::LiteralValue::Int(rv)) = (lval, rval) {
+                            if let Some(result) = Self::eval_binop_int(op, *lv, *rv) {
+                                return Expr::Literal {
+                                    value: crate::LiteralValue::Int(result),
+                                    span: *span,
+                                };
+                            }
+                        }
+                    }
+
+                    Expr::Binary {
+                        op: op.clone(),
+                        left: Box::new(left_folded),
+                        right: Box::new(right_folded),
+                        span: *span,
+                    }
+                }
+                _ => expr.clone(),
+            }
+        }
+
+        fn eval_binop_int(op: &crate::BinaryOp, left: i64, right: i64) -> Option<i64> {
+            use crate::BinaryOp::*;
+            match op {
+                Add => Some(left + right),
+                Sub => Some(left - right),
+                Mul => Some(left * right),
+                Div if right != 0 => Some(left / right),
+                Mod if right != 0 => Some(left % right),
+                _ => None,
+            }
+        }
+
         fn collect_calls_in_statements(stmts: &[Stmt], calls: &mut std::collections::HashSet<String>) {
             for stmt in stmts {
                 match stmt {
