@@ -2102,4 +2102,26 @@ int main() {
         assert!(module.is_error_match_exhaustive("FileError", &arms_wildcard), "Wildcard should make it exhaustive");
     }
 
+    #[test]
+    fn test_json_stdlib_functions_generated() {
+        // Test that JSON helper functions are generated
+        let module = IrModule::new();
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify JSON functions are present
+        assert!(code.contains("lucid_json_int"), "json_int should be generated");
+        assert!(code.contains("lucid_json_double"), "json_double should be generated");
+        assert!(code.contains("lucid_json_escape"), "json_escape should be generated");
+        assert!(code.contains("lucid_json_bool"), "json_bool should be generated");
+        assert!(code.contains("lucid_json_parse_int"), "json_parse_int should be generated");
+        assert!(code.contains("lucid_json_parse_double"), "json_parse_double should be generated");
+
+        // Verify escape logic for proper JSON handling
+        assert!(code.contains("case '\\\"'"), "Should handle escaped quotes");
+        assert!(code.contains("case '\\\\'"), "Should handle escaped backslashes");
+    }
+
 }

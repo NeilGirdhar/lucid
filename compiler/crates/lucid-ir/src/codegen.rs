@@ -913,6 +913,79 @@ impl CCodegenBackend {
         self.emit_line("return (int64_t)ceil(x);");
         self.indent_level -= 1;
         self.emit_line("}");
+        self.emit_line("");
+
+        // JSON helper functions
+        self.emit_line("// JSON utilities");
+        self.emit_line("// Convert integer to JSON string");
+        self.emit_line("const char* lucid_json_int(int64_t x) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[256];");
+        self.emit_line("snprintf(result, sizeof(result), \"%lld\", (long long)x);");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Convert double to JSON string");
+        self.emit_line("const char* lucid_json_double(double x) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[256];");
+        self.emit_line("snprintf(result, sizeof(result), \"%.15g\", x);");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Escape string for JSON");
+        self.emit_line("const char* lucid_json_escape(const char* str) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("int j = 0;");
+        self.emit_line("result[j++] = '\\\"';");
+        self.emit_line("for (int i = 0; str[i] && j < 4090; i++) {");
+        self.indent_level += 1;
+        self.emit_line("switch(str[i]) {");
+        self.indent_level += 1;
+        self.emit_line("case '\\\"': result[j++]='\\\\'; result[j++]='\\\"'; break;");
+        self.emit_line("case '\\\\': result[j++]='\\\\'; result[j++]='\\\\'; break;");
+        self.emit_line("case '\\n': result[j++]='\\\\'; result[j++]='n'; break;");
+        self.emit_line("case '\\r': result[j++]='\\\\'; result[j++]='r'; break;");
+        self.emit_line("case '\\t': result[j++]='\\\\'; result[j++]='t'; break;");
+        self.emit_line("default: result[j++]=str[i];");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("result[j++] = '\\\"';");
+        self.emit_line("result[j] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Convert bool to JSON");
+        self.emit_line("const char* lucid_json_bool(bool x) {");
+        self.indent_level += 1;
+        self.emit_line("return x ? \"true\" : \"false\";");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Parse JSON integer");
+        self.emit_line("int64_t lucid_json_parse_int(const char* json_str) {");
+        self.indent_level += 1;
+        self.emit_line("return strtoll(json_str, NULL, 10);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Parse JSON double");
+        self.emit_line("double lucid_json_parse_double(const char* json_str) {");
+        self.indent_level += 1;
+        self.emit_line("return strtod(json_str, NULL);");
+        self.indent_level -= 1;
+        self.emit_line("}");
     }
 
     fn emit_line(&mut self, line: &str) {
