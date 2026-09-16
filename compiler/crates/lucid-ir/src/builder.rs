@@ -12,6 +12,7 @@ pub struct IrBuilder {
     var_types: HashMap<String, IrType>,
     next_var_id: usize,
     current_function: Option<usize>,
+    current_block: usize,
 }
 
 impl IrBuilder {
@@ -21,6 +22,21 @@ impl IrBuilder {
             var_types: HashMap::new(),
             next_var_id: 0,
             current_function: None,
+            current_block: 0,
+        }
+    }
+
+    fn emit(&mut self, instr: IrInstruction) {
+        if let Some(func_idx) = self.current_function {
+            let func = &mut self.module.functions[func_idx];
+            func.blocks[self.current_block].add_instruction(instr);
+        }
+    }
+
+    fn terminate(&mut self, term: IrTerminator) {
+        if let Some(func_idx) = self.current_function {
+            let func = &mut self.module.functions[func_idx];
+            func.blocks[self.current_block].set_terminator(term);
         }
     }
 
@@ -79,6 +95,7 @@ impl IrBuilder {
 
         let func_idx = self.module.functions.len() - 1;
         self.current_function = Some(func_idx);
+        self.current_block = 0;
 
         self.var_types.clear();
         for param in &func.params {
@@ -109,9 +126,7 @@ impl IrBuilder {
         match stmt {
             Stmt::Return { value, .. } => {
                 let ir_val = value.as_ref().map(|v| self.expr_to_ir_value(v));
-                if let Some(block) = self.current_block_mut() {
-                    block.set_terminator(IrTerminator::Return { value: ir_val });
-                }
+                self.terminate(IrTerminator::Return { value: ir_val });
             }
             Stmt::VarDef {
                 pattern: Pattern::Ident(name, _),
@@ -123,25 +138,20 @@ impl IrBuilder {
                     let ty = self.infer_expr_type(expr);
                     let name_clone = name.clone();
                     self.var_types.insert(name_clone.clone(), ty);
-
-                    if let Some(block) = self.current_block_mut() {
-                        block.add_instruction(IrInstruction::Assign {
-                            dest: name_clone,
-                            value: ir_val,
-                        });
-                    }
+                    self.emit(IrInstruction::Assign {
+                        dest: name_clone,
+                        value: ir_val,
+                    });
                 }
             }
             Stmt::Assignment { target, value, .. } => {
                 if let Expr::Ident { name, .. } = target {
                     let ir_val = self.expr_to_ir_value(value);
                     let name_clone = name.clone();
-                    if let Some(block) = self.current_block_mut() {
-                        block.add_instruction(IrInstruction::Assign {
-                            dest: name_clone,
-                            value: ir_val,
-                        });
-                    }
+                    self.emit(IrInstruction::Assign {
+                        dest: name_clone,
+                        value: ir_val,
+                    });
                 }
             }
             Stmt::Expr(expr) => {
@@ -161,7 +171,7 @@ impl IrBuilder {
                 LiteralValue::Bool(b) => IrValue::Bool(*b),
                 LiteralValue::Str(s) => IrValue::String(s.clone()),
                 LiteralValue::None => IrValue::Null,
-                _ => IrValue::Int(0), // Placeholder
+                _ => IrValue::Int(0),
             },
             Expr::Ident { name, .. } => IrValue::Var(name.clone()),
             Expr::Binary {
@@ -171,8 +181,12 @@ impl IrBuilder {
                 let right_val = self.expr_to_ir_value(right);
                 let ir_op = self.binop_to_ir_binop(op);
                 let dest = self.fresh_var("binop");
-                // Would need to emit this instruction into current block
-                // For now, return placeholder
+                self.emit(IrInstruction::BinOp {
+                    dest: dest.clone(),
+                    op: ir_op,
+                    left: left_val,
+                    right: right_val,
+                });
                 IrValue::Var(dest)
             }
             Expr::Unary { op, expr, .. } => {
@@ -184,12 +198,22 @@ impl IrBuilder {
                     _ => IrUnaryOp::Neg,
                 };
                 let dest = self.fresh_var("unop");
+                self.emit(IrInstruction::UnaryOp {
+                    dest: dest.clone(),
+                    op: ir_op,
+                    operand: val,
+                });
                 IrValue::Var(dest)
             }
             Expr::Call { func, args, .. } => {
                 if let Expr::Ident { name, .. } = &**func {
-                    let _ir_args: Vec<IrValue> = args.iter().map(|arg| self.expr_to_ir_value(&arg.value)).collect();
+                    let ir_args: Vec<IrValue> = args.iter().map(|arg| self.expr_to_ir_value(&arg.value)).collect();
                     let dest = self.fresh_var("call");
+                    self.emit(IrInstruction::Call {
+                        dest: Some(dest.clone()),
+                        func: name.clone(),
+                        args: ir_args,
+                    });
                     IrValue::Var(dest)
                 } else {
                     IrValue::Null

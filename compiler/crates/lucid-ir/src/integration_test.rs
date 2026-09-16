@@ -78,6 +78,39 @@ mod tests {
     }
 
     #[test]
+    fn test_lucid_source_to_c_end_to_end() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        // Lex and parse real Lucid source
+        let lucid_code = "def add(a: int, b: int) -> int:\n  return a + b\n";
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = match lexer.tokenize() {
+            Ok(t) => t,
+            Err(e) => panic!("Lexer error: {:?}", e),
+        };
+
+        let mut parser = Parser::new(tokens);
+        let module = match parser.parse_module() {
+            Ok(m) => m,
+            Err(e) => panic!("Parser error: {:?}", e),
+        };
+
+        // Build IR from AST
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Generate C code
+        let mut backend = CCodegenBackend::new();
+        let c_code = backend.generate(&ir_module);
+
+        // Add main and compile
+        let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", add(5, 3));\n  return 0;\n}}", c_code);
+
+        // Test with gcc
+        assert!(test_c_code(&full_c, "8\n"), "Lucid add(5,3) should return 8");
+    }
+
+    #[test]
     fn test_control_flow_if_statement() {
         let mut module = IrModule::new();
 
