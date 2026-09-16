@@ -82,32 +82,29 @@ mod tests {
         use lucid_syntax::lexer::Lexer;
         use lucid_syntax::parser::Parser;
 
-        // Lex and parse real Lucid source
-        let lucid_code = "def add(a: int, b: int) -> int:\n  return a + b\n";
-        let mut lexer = Lexer::new(lucid_code);
-        let tokens = match lexer.tokenize() {
-            Ok(t) => t,
-            Err(e) => panic!("Lexer error: {:?}", e),
-        };
-
+        // Test 1: Simple add function
+        let lucid_code1 = "def add(a: int, b: int) -> int:\n  return a + b\n";
+        let mut lexer = Lexer::new(lucid_code1);
+        let tokens = lexer.tokenize().expect("Lexer failed");
         let mut parser = Parser::new(tokens);
-        let module = match parser.parse_module() {
-            Ok(m) => m,
-            Err(e) => panic!("Parser error: {:?}", e),
-        };
-
-        // Build IR from AST
+        let module = parser.parse_module().expect("Parser failed");
         let ir_module = crate::builder::IrBuilder::new().build_module(&module);
-
-        // Generate C code
         let mut backend = CCodegenBackend::new();
         let c_code = backend.generate(&ir_module);
-
-        // Add main and compile
         let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", add(5, 3));\n  return 0;\n}}", c_code);
+        assert!(test_c_code(&full_c, "8\n"), "add(5,3) should return 8");
 
-        // Test with gcc
-        assert!(test_c_code(&full_c, "8\n"), "Lucid add(5,3) should return 8");
+        // Test 2: Function with multiplication
+        let lucid_code2 = "def multiply(x: int, y: int) -> int:\n  return x * y\n";
+        let mut lexer2 = Lexer::new(lucid_code2);
+        let tokens2 = lexer2.tokenize().expect("Lexer failed");
+        let mut parser2 = Parser::new(tokens2);
+        let module2 = parser2.parse_module().expect("Parser failed");
+        let ir_module2 = crate::builder::IrBuilder::new().build_module(&module2);
+        let mut backend2 = CCodegenBackend::new();
+        let c_code2 = backend2.generate(&ir_module2);
+        let full_c2 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", multiply(6, 7));\n  return 0;\n}}", c_code2);
+        assert!(test_c_code(&full_c2, "42\n"), "multiply(6,7) should return 42");
     }
 
     #[test]
