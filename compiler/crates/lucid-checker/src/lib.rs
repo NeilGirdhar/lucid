@@ -3863,6 +3863,27 @@ impl TypeChecker {
         }
     }
 
+    /// The class that declares `member`, searching from `class_name` up its
+    /// parent chain; `class_name` itself when no ancestor declares it.
+    fn private_member_owner(&self, class_name: &str, member: &str) -> String {
+        let mut current = Some(class_name.to_string());
+        while let Some(name) = current {
+            if self
+                .env
+                .class_members
+                .get(&name)
+                .is_some_and(|members| members.contains(member))
+            {
+                return name;
+            }
+            current = self.env.classes.get(&name).and_then(|ty| match ty {
+                Type::Class { parent, .. } => parent.clone(),
+                _ => None,
+            });
+        }
+        class_name.to_string()
+    }
+
     fn interface_member_name_and_span(member: &InterfaceMember) -> Option<(&str, Span)> {
         match member {
             InterfaceMember::MethodSig { name, span, .. }
@@ -6719,15 +6740,16 @@ impl TypeChecker {
                             }
                         }
                         if let Some(class_name) = class_name.as_deref() {
-                            if attr.starts_with('_')
-                                && self.env.current_class.as_deref() != Some(class_name)
-                            {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "member '{attr}' is private to class '{class_name}'"
-                                    ),
-                                    span: *span,
-                                });
+                            if attr.starts_with('_') {
+                                let owner = self.private_member_owner(class_name, attr);
+                                if self.env.current_class.as_deref() != Some(owner.as_str()) {
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "member '{attr}' is private to class '{owner}'"
+                                        ),
+                                        span: *span,
+                                    });
+                                }
                             }
                             if let Some(field_type) = self.class_field_type(class_name, attr) {
                                 let field_type = match &obj_type {
@@ -12130,12 +12152,16 @@ impl TypeChecker {
                                 span: expr.span(),
                             });
                         }
-                        if attr.starts_with('_') && self.env.current_class.as_deref() != Some(name)
-                        {
-                            return Err(TypeError {
-                                message: format!("member '{attr}' is private to class '{name}'"),
-                                span: expr.span(),
-                            });
+                        if attr.starts_with('_') {
+                            let owner = self.private_member_owner(name, attr);
+                            if self.env.current_class.as_deref() != Some(owner.as_str()) {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "member '{attr}' is private to class '{owner}'"
+                                    ),
+                                    span: expr.span(),
+                                });
+                            }
                         }
                         if let Some(method_type) =
                             self.builtin_dict_view_method_type(name, type_args, attr)
@@ -15564,6 +15590,30 @@ u.id = 2
         let mut checker = TypeChecker::new();
         let err = checker.check_module(&module).unwrap_err();
         assert!(err.message.contains("member '_value' is private"));
+    }
+
+    #[test]
+    fn private_members_belong_to_their_declaring_class() {
+        // A subclass is "nowhere else" too: `_a` is private to the class
+        // that declares it, and a child's own methods cannot reach it.
+        let subclass = parse(
+            "class Secret:\n    _a: int\n\nclass Child(Secret):\n    def peek(self) -> int:\n        return self._a\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_module(&subclass).unwrap_err();
+        assert!(
+            err.message.contains("member '_a' is private to class 'Secret'"),
+            "{}",
+            err.message
+        );
+
+        let own = parse(
+            "class Secret:\n    _a: int\n    def get(self) -> int:\n        return self._a\n\nclass Child(Secret):\n    def doubled(self) -> int:\n        return self.get() * 2\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check_module(&own).unwrap();
     }
 
     #[test]
