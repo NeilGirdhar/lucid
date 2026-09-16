@@ -128,6 +128,7 @@ pub struct MethodDispatch {
 #[derive(Debug, Clone)]
 pub struct IrClass {
     pub name: String,
+    pub parent: Option<String>,  // Single inheritance: parent class name
     pub fields: Vec<IrField>,
     pub methods: Vec<MethodDispatch>,
 }

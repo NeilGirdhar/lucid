@@ -284,6 +284,7 @@ mod tests {
 
         // Create a Point class
         let point_class = IrClass {
+                    parent: None,
             name: "Point".to_string(),
             fields: vec![
                 IrField { name: "x".to_string(), ty: IrType::I64 },
@@ -329,6 +330,7 @@ mod tests {
 
         // Create Point class
         let point_class = IrClass {
+                    parent: None,
             name: "Point".to_string(),
             fields: vec![
                 IrField { name: "x".to_string(), ty: IrType::I64 },
@@ -361,6 +363,7 @@ mod tests {
 
         // Create a Point class with x and y fields
         let point_class = IrClass {
+                    parent: None,
             name: "Point".to_string(),
             fields: vec![
                 IrField { name: "x".to_string(), ty: IrType::I64 },
@@ -586,6 +589,7 @@ mod tests {
 
         // Create a Point class
         let mut point_class = IrClass {
+                    parent: None,
             name: "Point".to_string(),
             fields: vec![
                 IrField { name: "x".to_string(), ty: IrType::F64 },
@@ -657,6 +661,7 @@ mod tests {
 
         // Create Point class
         module.add_class(IrClass {
+                    parent: None,
             name: "Point".to_string(),
             fields: vec![
                 IrField { name: "x".to_string(), ty: IrType::I64 },
@@ -724,6 +729,41 @@ mod tests {
             IrInstruction::MethodCall { dest, method, .. }
             if dest.as_ref().map_or(false, |d| d == "result") && method == "foo"
         ));
+    }
+
+    #[test]
+    fn test_single_inheritance_ir_generation() {
+        let mut module = IrModule::new();
+
+        // Create parent class
+        module.add_class(IrClass {
+            parent: None,
+            name: "Animal".to_string(),
+            fields: vec![
+                IrField { name: "name".to_string(), ty: IrType::Str },
+            ],
+            methods: vec![],
+        });
+
+        // Create child class with parent
+        module.add_class(IrClass {
+            parent: Some("Animal".to_string()),
+            name: "Dog".to_string(),
+            fields: vec![
+                IrField { name: "breed".to_string(), ty: IrType::Str },
+            ],
+            methods: vec![],
+        });
+
+        // Verify classes
+        assert_eq!(module.classes.len(), 2);
+
+        // Verify parent tracking
+        let dog = module.get_class("Dog").unwrap();
+        assert_eq!(dog.parent.as_ref().unwrap(), "Animal");
+
+        let animal = module.get_class("Animal").unwrap();
+        assert!(animal.parent.is_none());
     }
 
 }

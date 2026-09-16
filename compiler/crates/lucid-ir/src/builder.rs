@@ -72,8 +72,8 @@ impl IrBuilder {
             Stmt::Function(func_def) => {
                 self.build_function(func_def);
             }
-            Stmt::ClassDef { name, body, .. } => {
-                self.build_class(name, body);
+            Stmt::ClassDef { name, bases, body, .. } => {
+                self.build_class(name, bases, body);
             }
             _ => {
                 // Other statements handled during function building
@@ -487,9 +487,25 @@ impl IrBuilder {
         }
     }
 
-    fn build_class(&mut self, name: &str, _body: &[ClassMember]) {
-        // Class compilation would generate constructor functions, method dispatch tables, etc.
-        // For now, just register the class type
+    fn build_class(&mut self, name: &str, bases: &[TypeExpr], _body: &[ClassMember]) {
+        // Extract parent class (Lucid supports single inheritance)
+        let parent = bases.first().and_then(|base| {
+            if let TypeExpr::Named { name: parent_name, .. } = base {
+                Some(parent_name.clone())
+            } else {
+                None
+            }
+        });
+
+        // Create IrClass with parent tracking
+        let ir_class = crate::IrClass {
+            name: name.to_string(),
+            parent,
+            fields: Vec::new(),  // TODO: extract fields from body
+            methods: Vec::new(), // TODO: extract methods from body
+        };
+
+        self.module.add_class(ir_class);
         self.module.add_type(name.to_string(), IrType::Named(name.to_string()));
     }
 
