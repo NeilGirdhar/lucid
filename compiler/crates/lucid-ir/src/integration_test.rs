@@ -1175,4 +1175,109 @@ int main() {
         assert_eq!(ir_module.functions[0].name, "sum_to_five");
     }
 
+    #[test]
+    fn test_string_operations_codegen() {
+        // Test common string operations
+        let c_code = r#"
+#include <stdint.h>
+#include <string.h>
+
+const char* string_upper(const char* s) {
+    // Simplified: just return original for now
+    return s;
+}
+
+const char* string_concat(const char* a, const char* b) {
+    // Simplified: would use proper string building
+    return a;
+}
+
+int64_t string_find(const char* haystack, const char* needle) {
+    const char* pos = strstr(haystack, needle);
+    if (pos) {
+        return (int64_t)(pos - haystack);
+    }
+    return -1;
+}
+
+int main() {
+    const char* str = "hello";
+    int64_t pos = string_find(str, "ll");
+
+    if (pos == 2) {  // "ll" starts at position 2
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
+    #[test]
+    fn test_array_operations_codegen() {
+        // Test array/list advanced operations
+        let c_code = r#"
+#include <stdint.h>
+#include <stdlib.h>
+
+struct LucidList {
+    int64_t capacity;
+    int64_t length;
+    int64_t* elements;
+};
+
+struct LucidList* lucid_list_new() {
+    struct LucidList* list = (struct LucidList*)malloc(sizeof(struct LucidList));
+    list->capacity = 10;
+    list->length = 0;
+    list->elements = (int64_t*)malloc(10 * sizeof(int64_t));
+    return list;
+}
+
+void lucid_list_append(struct LucidList* list, int64_t value) {
+    if (list->length >= list->capacity) {
+        list->capacity *= 2;
+        list->elements = (int64_t*)realloc(list->elements, list->capacity * sizeof(int64_t));
+    }
+    list->elements[list->length++] = value;
+}
+
+int64_t lucid_list_pop(struct LucidList* list) {
+    if (list->length > 0) {
+        return list->elements[--list->length];
+    }
+    return 0;
+}
+
+int64_t lucid_list_first(struct LucidList* list) {
+    if (list->length > 0) return list->elements[0];
+    return -1;
+}
+
+int64_t lucid_list_last(struct LucidList* list) {
+    if (list->length > 0) return list->elements[list->length - 1];
+    return -1;
+}
+
+int main() {
+    struct LucidList* list = lucid_list_new();
+    lucid_list_append(list, 10);
+    lucid_list_append(list, 20);
+    lucid_list_append(list, 30);
+
+    int64_t first = lucid_list_first(list);
+    int64_t last = lucid_list_last(list);
+    int64_t popped = lucid_list_pop(list);
+
+    if (first == 10 && last == 30 && popped == 30) {
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
 }
