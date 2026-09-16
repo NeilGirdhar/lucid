@@ -455,61 +455,6 @@ pub enum ClassMember {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum InterfaceMember {
-    MethodSig {
-        name: String,
-        type_params: Vec<TypeParam>,
-        params: Vec<Param>,
-        return_type: Option<TypeExpr>,
-        visibility: Option<Visibility>,
-        span: Span,
-    },
-    GetterSig {
-        name: String,
-        return_type: Option<TypeExpr>,
-        visibility: Option<Visibility>,
-        span: Span,
-    },
-    SetterSig {
-        name: String,
-        param_type: TypeExpr,
-        visibility: Option<Visibility>,
-        span: Span,
-    },
-    ClassMethodSig {
-        name: String,
-        type_params: Vec<TypeParam>,
-        params: Vec<Param>,
-        return_type: Option<TypeExpr>,
-        visibility: Option<Visibility>,
-        span: Span,
-    },
-    FactorySig {
-        name: String,
-        type_params: Vec<TypeParam>,
-        params: Vec<Param>,
-        return_type: Option<TypeExpr>,
-        visibility: Option<Visibility>,
-        span: Span,
-    },
-    FieldSig {
-        name: String,
-        type_annotation: TypeExpr,
-        is_final: bool,
-        visibility: Option<Visibility>,
-        span: Span,
-    },
-    AssociatedTypeSig {
-        name: String,
-        bound: Option<TypeExpr>,
-        visibility: Option<Visibility>,
-        span: Span,
-    },
-    Pass(Span),
-    Ellipsis(Span),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum TraitMember {
     Method(FunctionDef),
     ClassMethod(FunctionDef),
@@ -537,7 +482,6 @@ pub struct WithItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Export(Box<Stmt>),
     ClassDef {
         name: String,
         type_params: Vec<TypeParam>,
@@ -546,14 +490,6 @@ pub enum Stmt {
         body: Vec<ClassMember>,
         is_sealed: bool,
         is_final: bool,
-        visibility: Option<Visibility>,
-        span: Span,
-    },
-    InterfaceDef {
-        name: String,
-        type_params: Vec<TypeParam>,
-        bases: Vec<TypeExpr>,
-        body: Vec<InterfaceMember>,
         visibility: Option<Visibility>,
         span: Span,
     },
@@ -672,7 +608,6 @@ pub enum Stmt {
     FromImport {
         module: String,
         names: Vec<(String, Option<String>)>,
-        is_export: bool,
         span: Span,
     },
     Expr(Expr),

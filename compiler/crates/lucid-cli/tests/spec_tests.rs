@@ -262,8 +262,8 @@ repeat(true)
 #[test]
 fn test_type_specification_pillars() {
     let src = r#"
-interface Printable:
-    def format() -> str
+trait Printable:
+    def format(self) -> str
 
 trait Formatted:
     def format() -> str:
@@ -283,13 +283,13 @@ class Doc(Formatted, Printable):
 }
 
 // ---------------------------------------------------------------------------
-// 8. Interfaces (docs/interfaces.rst)
+// 8. Implementing a trait after the fact (docs/traits.md)
 // ---------------------------------------------------------------------------
 #[test]
-fn test_interfaces_retroactive_implementation() {
+fn test_traits_retroactive_implementation() {
     let src = r#"
-interface Describable:
-    def describe() -> str
+trait Describable:
+    def describe(self) -> str
 
 class Widget:
     name: str
@@ -724,10 +724,10 @@ config = {"name": "lucid-project", "version": "1.0"}
 #[test]
 fn test_modules_export_syntax() {
     let src = r#"
-export def helper(x: int) -> int:
+def helper(x: int) -> int:
     return x + 1
 
-export class Service:
+class Service:
     port: int
     factory __init__(cls, port: int):
         return construct(port)
@@ -860,10 +860,10 @@ fn test_multi_file_module_imports() {
     fs::write(
         &helper_path,
         r#"
-export def add_ten(x: int) -> int:
+def add_ten(x: int) -> int:
     return x + 10
 
-export multiplier = 3
+multiplier = 3
 "#,
     )
     .unwrap();
@@ -913,7 +913,7 @@ fn test_native_local_from_imports() {
     let output_path = temp_dir.join("main_bin");
     fs::write(
         &helper_path,
-        "export def add_ten(x: int) -> int:\n    return x + 10\n\nexport multiplier = 3\n",
+        "def add_ten(x: int) -> int:\n    return x + 10\n\nmultiplier = 3\n",
     )
     .unwrap();
     fs::write(&main_path, "from .helper import add_ten\nimport .helper as h\nprint(add_ten(5))\nprint(h.multiplier * 2)\n").unwrap();

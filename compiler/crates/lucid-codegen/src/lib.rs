@@ -460,27 +460,6 @@ impl CCodeGenerator {
         Ok(())
     }
 
-    fn validate_interface_member_names(body: &[InterfaceMember]) -> Result<(), CodegenError> {
-        for member in body {
-            match member {
-                InterfaceMember::MethodSig { name, params, .. }
-                | InterfaceMember::ClassMethodSig { name, params, .. }
-                | InterfaceMember::FactorySig { name, params, .. } => {
-                    Self::reject_nonfinal_gather(params, "method")?;
-                    Self::validate_removed_member(name)?;
-                }
-                InterfaceMember::GetterSig { name, .. }
-                | InterfaceMember::SetterSig { name, .. }
-                | InterfaceMember::FieldSig { name, .. }
-                | InterfaceMember::AssociatedTypeSig { name, .. } => {
-                    Self::validate_removed_member(name)?;
-                }
-                InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => {}
-            }
-        }
-        Ok(())
-    }
-
     fn reject_nonfinal_gather(params: &[Param], context: &str) -> Result<(), CodegenError> {
         if let Some((index, gather)) = params.iter().enumerate().find(|(_, param)| param.is_gather)
         {
@@ -525,45 +504,10 @@ impl CCodeGenerator {
         Ok(())
     }
 
-    fn exported_binding(inner: &Stmt) -> Option<&str> {
-        match inner {
-            Stmt::ClassDef { name, .. }
-            | Stmt::InterfaceDef { name, .. }
-            | Stmt::TraitDef { name, .. }
-            | Stmt::TypeAlias { name, .. } => Some(name),
-            Stmt::Function(FunctionDef { name, .. }) => Some(name),
-            Stmt::VarDef {
-                pattern: Pattern::Ident(name, _),
-                ..
-            }
-            | Stmt::Assignment {
-                target: Expr::Ident { name, .. },
-                ..
-            } => Some(name),
-            _ => None,
-        }
-    }
-
     fn validate_module_boundaries(module: &Module) -> Result<(), CodegenError> {
         let mut import_bindings = HashSet::new();
         for statement in &module.statements {
             match statement {
-                Stmt::Export(inner) => {
-                    if let Some(name) = Self::exported_binding(inner) {
-                        if name == "__all__" {
-                            return Err(CodegenError {
-                                message:
-                                    "__all__ is not supported; Lucid uses leading '_' for module privacy"
-                                        .into(),
-                            });
-                        }
-                        if name.starts_with('_') {
-                            return Err(CodegenError {
-                                message: format!("cannot export private name '{name}'"),
-                            });
-                        }
-                    }
-                }
                 Stmt::Import { module, alias, .. } => {
                     let bound_name = alias
                         .clone()
@@ -598,10 +542,9 @@ impl CCodeGenerator {
     }
 
     fn validate_declared_member_names(stmt: &Stmt) -> Result<(), CodegenError> {
-        match Self::unwrap_export(stmt) {
+        match stmt {
             Stmt::ClassDef { body, .. } => Self::validate_class_member_names(body),
             Stmt::TraitDef { body, .. } => Self::validate_trait_member_names(body),
-            Stmt::InterfaceDef { body, .. } => Self::validate_interface_member_names(body),
             Stmt::Function(function) => {
                 Self::reject_removed_decorators(function)?;
                 Self::reject_nonfinal_gather(&function.params, "function")
@@ -744,13 +687,6 @@ impl CCodeGenerator {
                         && self.expr_is_bytes_value(right))
             }
             _ => false,
-        }
-    }
-
-    fn unwrap_export(stmt: &Stmt) -> &Stmt {
-        match stmt {
-            Stmt::Export(inner) => Self::unwrap_export(inner),
-            other => other,
         }
     }
 
@@ -1290,7 +1226,7 @@ impl CCodeGenerator {
             Self::validate_declared_member_names(stmt)?;
         }
         for stmt in &module.statements {
-            match Self::unwrap_export(stmt) {
+            match stmt {
                 Stmt::Import { module, alias, .. } => {
                     let bound = alias.clone().unwrap_or_else(|| {
                         module
@@ -1322,7 +1258,7 @@ impl CCodeGenerator {
         }
         // First pass: collect class metadata and function signatures
         for stmt in &module.statements {
-            let stmt = Self::unwrap_export(stmt);
+            let stmt = stmt;
             if let Stmt::ClassDef {
                 name,
                 bases,
@@ -1566,7 +1502,7 @@ impl CCodeGenerator {
         // base would confuse a trait for a class and emit invalid ancestry
         // metadata.
         for stmt in &module.statements {
-            let Stmt::ClassDef { name, bases, .. } = Self::unwrap_export(stmt) else {
+            let Stmt::ClassDef { name, bases, .. } = stmt else {
                 continue;
             };
             if let Some(parent) = bases.iter().find_map(|base| match base {
@@ -1683,7 +1619,7 @@ impl CCodeGenerator {
 
         // 1. Emit class forward declarations
         for stmt in &module.statements {
-            if let Stmt::ClassDef { name, .. } = Self::unwrap_export(stmt) {
+            if let Stmt::ClassDef { name, .. } = stmt {
                 self.emit_line(&format!("typedef struct {name} {name};"));
                 self.emit_line(&format!("static void {name}_freeze(void* raw);"));
             }
@@ -1696,7 +1632,7 @@ impl CCodeGenerator {
 
         // 2. Emit class struct definitions & constructors
         for stmt in &module.statements {
-            if let Stmt::ClassDef { name, body, .. } = Self::unwrap_export(stmt) {
+            if let Stmt::ClassDef { name, body, .. } = stmt {
                 let mut augmented_body = body.clone();
                 if let Some(methods) = self.implementation_methods.get(name) {
                     augmented_body.extend(methods.iter().cloned().map(ClassMember::Method));
@@ -1898,13 +1834,12 @@ impl CCodeGenerator {
             .statements
             .iter()
             .filter(|s| {
-                let s = Self::unwrap_export(s);
+                let s = s;
                 !matches!(
                     s,
                     Stmt::Function(_)
                         | Stmt::ClassDef { .. }
                         | Stmt::ImplementDef { .. }
-                        | Stmt::InterfaceDef { .. }
                         | Stmt::TraitDef { .. }
                         | Stmt::TypeAlias { .. }
                 )
@@ -1916,7 +1851,7 @@ impl CCodeGenerator {
             self.collect_vars_from_stmt(stmt, &mut top_vars);
         }
         for stmt in &module.statements {
-            if let Stmt::Function(function) = Self::unwrap_export(stmt) {
+            if let Stmt::Function(function) = stmt {
                 if Self::has_runtime_decorators(function) {
                     top_vars
                         .entry(function.name.clone())
@@ -1954,7 +1889,7 @@ impl CCodeGenerator {
 
         // 3. Emit function prototypes
         for stmt in &module.statements {
-            if let Stmt::Function(f) = Self::unwrap_export(stmt) {
+            if let Stmt::Function(f) = stmt {
                 let is_contextmanager = f.decorators.iter().any(|decorator| {
                     matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
                 });
@@ -2238,7 +2173,7 @@ impl CCodeGenerator {
         let top_function_aliases = self.function_aliases.clone();
         let mut closure_adapter_names = HashSet::new();
         for stmt in &module.statements {
-            if let Stmt::Function(f) = Self::unwrap_export(stmt) {
+            if let Stmt::Function(f) = stmt {
                 if closure_adapter_names.insert(f.name.clone()) {
                     self.emit_closure_adapter(f, true)?;
                 }
@@ -2246,7 +2181,7 @@ impl CCodeGenerator {
         }
         self.emit_line("");
         for stmt in &module.statements {
-            if let Stmt::Function(f) = Self::unwrap_export(stmt) {
+            if let Stmt::Function(f) = stmt {
                 self.anonymous_bindings.clear();
                 self.partial_bindings.clear();
                 self.function_aliases.clear();
@@ -2255,7 +2190,7 @@ impl CCodeGenerator {
         }
         closure_adapter_names.clear();
         for stmt in &module.statements {
-            if let Stmt::Function(f) = Self::unwrap_export(stmt) {
+            if let Stmt::Function(f) = stmt {
                 if closure_adapter_names.insert(f.name.clone()) {
                     self.emit_closure_adapter(f, false)?;
                 }
@@ -2281,7 +2216,7 @@ impl CCodeGenerator {
 
         // Class-member defaults are initialized once, when the module starts.
         for stmt in &module.statements {
-            if let Stmt::ClassDef { name, body, .. } = Self::unwrap_export(stmt) {
+            if let Stmt::ClassDef { name, body, .. } = stmt {
                 for member in body {
                     if let ClassMember::ClassVar(field) = member {
                         if let Some(default) = &field.default {
@@ -2296,7 +2231,7 @@ impl CCodeGenerator {
             }
         }
         for stmt in &module.statements {
-            if let Stmt::Function(function) = Self::unwrap_export(stmt) {
+            if let Stmt::Function(function) = stmt {
                 self.emit_decorated_function_binding(function)?;
             }
         }
@@ -11369,7 +11304,7 @@ static inline void lucid_print_val(LucidVal v) {
                                         format!("(!lucid_is_none(lucid_wrap({l_str})))")
                                     }
                                 }
-                                "trait" | "interface" => "((bool)0)".to_string(),
+                                "trait" => "((bool)0)".to_string(),
                                 "Sized" => {
                                     if left_ty == "LucidVal" {
                                         format!(
@@ -11703,7 +11638,7 @@ static inline void lucid_print_val(LucidVal v) {
                                         format!("lucid_is_none(lucid_wrap({l_str}))")
                                     }
                                 }
-                                "trait" | "interface" => "((bool)1)".into(),
+                                "trait" => "((bool)1)".into(),
                                 "Sized" | "Container" => {
                                     if left_ty == "LucidVal" {
                                         format!(
@@ -16423,7 +16358,7 @@ pub fn compile_to_native_entry(
     let c_code = if let Some(entry) = entry {
         let target = entry.rsplit('.').next().unwrap_or(entry);
         let function = module.statements.iter().find_map(|statement| {
-            let Stmt::Function(function) = CCodeGenerator::unwrap_export(statement) else {
+            let Stmt::Function(function) = statement else {
                 return None;
             };
             (function.name == target).then_some(function)
@@ -23553,7 +23488,7 @@ print(result[1])
                 "__set_name__ is not supported",
             ),
             (
-                "interface Hook:\n    def __getattr__(self, name: str) -> int\n",
+                "trait Hook:\n    def __getattr__(self, name: str) -> int\n",
                 "__getattr__ is not supported",
             ),
             (
@@ -23614,7 +23549,6 @@ print(result[1])
     #[test]
     fn native_rejects_invalid_module_boundaries() {
         for (source, expected) in [
-            ("export _private = 1\n", "cannot export private name"),
             (
                 "from helpers import _private\n",
                 "cannot import private name '_private'",
@@ -24195,7 +24129,7 @@ print(result[1])
 
     #[test]
     fn native_exported_declarations_are_emitted() {
-        let source = "export def answer() -> int:\n    return 42\nprint(answer())\n";
+        let source = "def answer() -> int:\n    return 42\nprint(answer())\n";
         let module = parse(source).expect("exported declaration source should parse");
         let output = std::env::temp_dir().join(format!(
             "lucid_codegen_exported_declaration_test_{}",

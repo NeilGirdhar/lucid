@@ -5306,7 +5306,6 @@ impl Function {
                         | lucid_syntax::Stmt::VarDef {
                             value: Some(value), ..
                         } => Some(value),
-                        lucid_syntax::Stmt::Export(inner) => initializer(inner),
                         _ => None,
                     }
                 }
@@ -5682,9 +5681,6 @@ impl Function {
                     value: Some(_),
                     ..
                 }) => Ok(name),
-                Some(lucid_syntax::Stmt::Export(inner)) => {
-                    branch_name(std::slice::from_ref(inner.as_ref()))
-                }
                 _ => Err(LowerError::UnsupportedExpression),
             }
         }
@@ -10555,18 +10551,6 @@ impl Function {
             {
                 if matches!(expr.as_ref(), lucid_syntax::Expr::Binary { .. }) {
                     return Self::from_module_if(module);
-                }
-            }
-        }
-        if parameter_names.is_empty() {
-            if let [lucid_syntax::Stmt::Export(inner)] = module.statements.as_slice() {
-                if matches!(inner.as_ref(), lucid_syntax::Stmt::If { condition: lucid_syntax::Expr::Binary { op, .. }, .. } if !matches!(op, lucid_syntax::BinaryOp::And | lucid_syntax::BinaryOp::Or))
-                {
-                    let unwrapped = lucid_syntax::Module {
-                        statements: vec![inner.as_ref().clone()],
-                        span: module.span,
-                    };
-                    return Self::from_module_if(&unwrapped);
                 }
             }
         }
@@ -16893,14 +16877,6 @@ impl Function {
             last: &mut Option<ValueId>,
         ) -> Result<(), LowerError> {
             match stmt {
-                lucid_syntax::Stmt::Export(inner) => visit(
-                    inner,
-                    bindings,
-                    aggregate_bindings,
-                    instructions,
-                    next,
-                    last,
-                ),
                 lucid_syntax::Stmt::Assignment {
                     target: lucid_syntax::Expr::Ident { name, .. },
                     value,
@@ -18202,7 +18178,6 @@ impl Function {
                 }
                 lucid_syntax::Stmt::Module { .. }
                 | lucid_syntax::Stmt::ClassDef { .. }
-                | lucid_syntax::Stmt::InterfaceDef { .. }
                 | lucid_syntax::Stmt::TraitDef { .. }
                 | lucid_syntax::Stmt::ImplementDef { .. }
                 | lucid_syntax::Stmt::TypeAlias { .. }
@@ -18696,10 +18671,6 @@ impl Function {
             if index + 1 == module.statements.len() {
                 break;
             }
-            let statement = match statement {
-                lucid_syntax::Stmt::Export(inner) => inner.as_ref(),
-                statement => statement,
-            };
             let lucid_syntax::Stmt::If {
                 condition,
                 then_branch,
@@ -18817,10 +18788,7 @@ impl Function {
             }
         }
 
-        let last_statement = module.statements.last().map(|statement| match statement {
-            lucid_syntax::Stmt::Export(inner) => inner.as_ref(),
-            statement => statement,
-        });
+        let last_statement = module.statements.last();
         if let Some(lucid_syntax::Stmt::If {
             condition,
             then_branch,
@@ -18999,7 +18967,6 @@ impl Function {
                 matches!(
                     statement,
                     lucid_syntax::Stmt::ClassDef { .. }
-                        | lucid_syntax::Stmt::InterfaceDef { .. }
                         | lucid_syntax::Stmt::TraitDef { .. }
                         | lucid_syntax::Stmt::ImplementDef { .. }
                         | lucid_syntax::Stmt::TypeAlias { .. }
@@ -34191,15 +34158,6 @@ return total
     }
 
     #[test]
-    fn module_lowering_unwraps_exported_initializers() {
-        let module = lucid_syntax::parse("export value: int = 9\n").unwrap();
-        assert_eq!(
-            Function::from_module(&module).unwrap().execute(),
-            Ok(Some(9))
-        );
-    }
-
-    #[test]
     fn linear_module_lowering_resolves_bindings_and_returns_last_value() {
         let module = lucid_syntax::parse("x = 6\ny = x * 7\n").unwrap();
         let function = Function::from_module_linear(&module).unwrap();
@@ -35239,12 +35197,6 @@ return total
             Function::from_module_if(&module).unwrap().execute(),
             Ok(Some(6))
         );
-        let module =
-            lucid_syntax::parse("if 1 < 2:\n    export x = 2\nelse:\n    export x = 3\n").unwrap();
-        assert_eq!(
-            Function::from_module_if(&module).unwrap().execute(),
-            Ok(Some(2))
-        );
         let module = lucid_syntax::parse(
             "flag = true\nif flag:\n    x = 2\n    assert(true)\nelse:\n    x = 3\n    while false:\n        x = 9\n",
         )
@@ -35468,20 +35420,11 @@ return total
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
         let module = lucid_syntax::parse(
-            "export if value > 10:\n    high = 100\nelif value > 0:\n    positive = 1\nelse:\n    fallback = 0\n",
+            "if value > 10:\n    result = 100\nelse:\n    result = 1\nresult = result + 1\n",
         )
         .unwrap();
         let function = Function::from_module_linear_with_params(&module, &["value".into()])
-            .expect("exported final dynamic elif comparison ladder should lower");
-        assert_eq!(function.execute_with_args(&[15]), Ok(Some(100)));
-        assert_eq!(function.execute_with_args(&[5]), Ok(Some(1)));
-        assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
-        let module = lucid_syntax::parse(
-            "export if value > 10:\n    result = 100\nelse:\n    result = 1\nresult = result + 1\n",
-        )
-        .unwrap();
-        let function = Function::from_module_linear_with_params(&module, &["value".into()])
-            .expect("exported dynamic comparison diamond should lower before a suffix");
+            .expect("dynamic comparison diamond should lower before a suffix");
         assert_eq!(function.execute_with_args(&[15]), Ok(Some(101)));
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(2)));
         let module = lucid_syntax::parse(

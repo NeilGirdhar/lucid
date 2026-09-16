@@ -59,7 +59,6 @@ pub enum TokenKind {
     None,
 
     // --- Lucid Keywords ---
-    Export,
     Public,
     Private,
     Module,
@@ -71,7 +70,6 @@ pub enum TokenKind {
     Sealed,
     Override,
     Without,
-    Interface,
     Trait,
     Class,
     Implement,
@@ -194,7 +192,6 @@ impl fmt::Display for TokenKind {
             TokenKind::True => write!(f, "'true'"),
             TokenKind::False => write!(f, "'false'"),
             TokenKind::None => write!(f, "'none'"),
-            TokenKind::Export => write!(f, "'export'"),
             TokenKind::Public => write!(f, "'public'"),
             TokenKind::Private => write!(f, "'private'"),
             TokenKind::Module => write!(f, "'module'"),
@@ -206,7 +203,6 @@ impl fmt::Display for TokenKind {
             TokenKind::Sealed => write!(f, "'sealed'"),
             TokenKind::Override => write!(f, "'override'"),
             TokenKind::Without => write!(f, "'without'"),
-            TokenKind::Interface => write!(f, "'interface'"),
             TokenKind::Trait => write!(f, "'trait'"),
             TokenKind::Class => write!(f, "'class'"),
             TokenKind::Implement => write!(f, "'implement'"),

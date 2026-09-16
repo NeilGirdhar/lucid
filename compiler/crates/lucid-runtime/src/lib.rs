@@ -23,9 +23,7 @@ fn declaration_only_module(path: &std::path::Path) -> bool {
     };
     fn is_declaration(statement: &Stmt) -> bool {
         match statement {
-            Stmt::Export(inner) => is_declaration(inner),
             Stmt::ClassDef { .. }
-            | Stmt::InterfaceDef { .. }
             | Stmt::TraitDef { .. }
             | Stmt::ImplementDef { .. }
             | Stmt::TypeAlias { .. }
@@ -1136,37 +1134,6 @@ impl Interpreter {
         Ok(())
     }
 
-    fn validate_interface_member_names(body: &[InterfaceMember]) -> Result<(), RuntimeError> {
-        for member in body {
-            let (name, span) = match member {
-                InterfaceMember::MethodSig {
-                    name, params, span, ..
-                }
-                | InterfaceMember::ClassMethodSig {
-                    name, params, span, ..
-                }
-                | InterfaceMember::FactorySig {
-                    name, params, span, ..
-                } => {
-                    Self::reject_nonfinal_gather(params, "method")?;
-                    (name, *span)
-                }
-                InterfaceMember::GetterSig { name, span, .. }
-                | InterfaceMember::SetterSig { name, span, .. }
-                | InterfaceMember::FieldSig { name, span, .. }
-                | InterfaceMember::AssociatedTypeSig { name, span, .. } => (name, *span),
-                InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => continue,
-            };
-            if let Some(message) = Self::removed_member_message(name) {
-                return Err(RuntimeError {
-                    message: message.into(),
-                    span,
-                });
-            }
-        }
-        Ok(())
-    }
-
     fn reject_nonfinal_gather(params: &[Param], context: &str) -> Result<(), RuntimeError> {
         if let Some((index, gather)) = params.iter().enumerate().find(|(_, param)| param.is_gather)
         {
@@ -1183,49 +1150,10 @@ impl Interpreter {
         Ok(())
     }
 
-    fn exported_binding(inner: &Stmt) -> Option<(&str, Span)> {
-        match inner {
-            Stmt::ClassDef { name, span, .. }
-            | Stmt::InterfaceDef { name, span, .. }
-            | Stmt::TraitDef { name, span, .. }
-            | Stmt::TypeAlias { name, span, .. } => Some((name, *span)),
-            Stmt::Function(FunctionDef { name, span, .. }) => Some((name, *span)),
-            Stmt::VarDef {
-                pattern: Pattern::Ident(name, _),
-                span,
-                ..
-            }
-            | Stmt::Assignment {
-                target: Expr::Ident { name, .. },
-                span,
-                ..
-            } => Some((name, *span)),
-            _ => None,
-        }
-    }
-
     fn validate_module_boundaries(module: &Module) -> Result<(), RuntimeError> {
         let mut import_bindings = HashSet::new();
         for statement in &module.statements {
             match statement {
-                Stmt::Export(inner) => {
-                    if let Some((name, span)) = Self::exported_binding(inner) {
-                        if name == "__all__" {
-                            return Err(RuntimeError {
-                                message:
-                                    "__all__ is not supported; Lucid uses leading '_' for module privacy"
-                                        .into(),
-                                span,
-                            });
-                        }
-                        if name.starts_with('_') {
-                            return Err(RuntimeError {
-                                message: format!("cannot export private name '{name}'"),
-                                span,
-                            });
-                        }
-                    }
-                }
                 Stmt::Import {
                     module,
                     alias,
@@ -2592,7 +2520,6 @@ impl Interpreter {
                         return Ok(Value::Bool(match kind {
                             "class" => !matches!(lval, Value::None),
                             "trait" => false,
-                            "interface" => false,
                             "Callable" => matches!(
                                 lval,
                                 Value::Function { .. }
@@ -2629,7 +2556,6 @@ impl Interpreter {
                         return Ok(Value::Bool(!match kind {
                             "class" => !matches!(lval, Value::None),
                             "trait" => false,
-                            "interface" => false,
                             "Callable" => matches!(
                                 lval,
                                 Value::Function { .. }
@@ -5445,10 +5371,6 @@ impl Interpreter {
             .map(|(name, entries)| (name.clone(), entries.len()))
             .collect::<HashMap<_, _>>();
         for statement in &parsed.statements {
-            let statement = match statement {
-                Stmt::Export(inner) => inner.as_ref(),
-                other => other,
-            };
             match statement {
                 Stmt::ClassDef { name, .. } => {
                     module_env
@@ -5523,10 +5445,6 @@ impl Interpreter {
             .is_some_and(|path| self.module_cache.contains_key(path));
         if let Some(path) = root_path.as_ref().filter(|_| !root_was_cached) {
             for statement in &module.statements {
-                let statement = match statement {
-                    Stmt::Export(inner) => inner.as_ref(),
-                    other => other,
-                };
                 match statement {
                     Stmt::ClassDef { name, .. } => {
                         self.env
@@ -5760,7 +5678,6 @@ impl Interpreter {
 
     pub fn eval_statement(&mut self, stmt: &Stmt) -> Result<Value, RuntimeError> {
         match stmt {
-            Stmt::Export(inner) => self.eval_statement(inner),
             Stmt::Module { .. } => Ok(Value::None),
             Stmt::ClassDef { .. } => {
                 if let Stmt::ClassDef {
@@ -5846,13 +5763,9 @@ impl Interpreter {
                     .set(name.clone(), Value::TraitRef(name.clone()));
                 Ok(Value::None)
             }
-            // Interfaces and aliases are compile-time declarations.  Keep
-            // them explicit here so they are not mistaken for an
-            // accidentally unhandled executable statement.
-            Stmt::InterfaceDef { body, .. } => {
-                Self::validate_interface_member_names(body)?;
-                Ok(Value::None)
-            }
+            // Aliases are compile-time declarations.  Keep them explicit
+            // here so they are not mistaken for an accidentally unhandled
+            // executable statement.
             Stmt::TypeAlias { .. } => Ok(Value::None),
             Stmt::ImplementDef {
                 interface,
@@ -5871,7 +5784,7 @@ impl Interpreter {
                 };
                 let trait_name = match interface {
                     TypeExpr::Named { name, .. } => name,
-                    _ => "interface",
+                    _ => "trait",
                 };
                 let class = self
                     .classes
@@ -7266,7 +7179,6 @@ impl Interpreter {
                                 | "none"
                                 | "class"
                                 | "trait"
-                                | "interface"
                                 | "Callable"
                                 | "Eq"
                                 | "Ord"
@@ -7292,7 +7204,7 @@ impl Interpreter {
                         }
                         let matched = match name.as_str() {
                             "class" => !matches!(lval, Value::None),
-                            "trait" | "interface" => false,
+                            "trait" => false,
                             "Callable" => matches!(
                                 lval,
                                 Value::Function { .. }
@@ -14297,7 +14209,7 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
                 "__set_name__ is not supported",
             ),
             (
-                "interface Hook:\n    def __getattr__(self, name: str) -> int\n",
+                "trait Hook:\n    def __getattr__(self, name: str) -> int\n",
                 "__getattr__ is not supported",
             ),
             (
@@ -14358,7 +14270,6 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
     #[test]
     fn runtime_rejects_invalid_module_boundaries() {
         for (source, expected) in [
-            ("export _private = 1\n", "cannot export private name"),
             (
                 "from helpers import _private\n",
                 "cannot import private name '_private'",

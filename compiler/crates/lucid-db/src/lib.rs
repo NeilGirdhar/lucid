@@ -61,7 +61,6 @@ pub struct TypeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclKind {
     Class,
-    Interface,
     Trait,
     TypeAlias,
     Function,
@@ -193,36 +192,6 @@ pub struct Diagnostic {
     pub span: lucid_syntax::Span,
     pub related: Arc<[RelatedDiagnostic]>,
     pub fix: Option<DiagnosticFix>,
-}
-
-fn private_export_fix(name: &str, span: lucid_syntax::Span) -> Option<DiagnosticFix> {
-    if !name.starts_with('_') {
-        return None;
-    }
-    let public = name.trim_start_matches('_');
-    if public.is_empty() {
-        Some(DiagnosticFix {
-            message: "remove the export marker".to_string(),
-            span,
-            replacement: String::new(),
-        })
-    } else {
-        Some(DiagnosticFix {
-            message: format!("rename '{name}' to '{public}' or remove the export marker"),
-            span,
-            replacement: public.to_string(),
-        })
-    }
-}
-
-fn private_export_fix_from_message(
-    message: &str,
-    span: lucid_syntax::Span,
-) -> Option<DiagnosticFix> {
-    let name = message
-        .strip_prefix("cannot export private name '")?
-        .strip_suffix('\'')?;
-    private_export_fix(name, span)
 }
 
 #[salsa::tracked]
@@ -380,13 +349,8 @@ pub fn top_level_symbols<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<[Symbol<
     };
     let mut symbols = Vec::new();
     for statement in &module.statements {
-        let statement = match statement {
-            lucid_syntax::Stmt::Export(inner) => inner.as_ref(),
-            other => other,
-        };
         let name = match statement {
             lucid_syntax::Stmt::ClassDef { name, .. }
-            | lucid_syntax::Stmt::InterfaceDef { name, .. }
             | lucid_syntax::Stmt::TraitDef { name, .. }
             | lucid_syntax::Stmt::TypeAlias { name, .. }
             | lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef { name, .. }) => Some(name),
@@ -411,15 +375,8 @@ pub fn resolved_declarations<'db>(db: &'db dyn Db, file: SourceFile) -> Arc<[Res
     };
     let mut declarations = Vec::new();
     for statement in &module.statements {
-        let (statement, _explicitly_exported) = match statement {
-            lucid_syntax::Stmt::Export(inner) => (inner.as_ref(), true),
-            other => (other, false),
-        };
         let (name, kind, is_dispatch) = match statement {
             lucid_syntax::Stmt::ClassDef { name, .. } => (Some(name), DeclKind::Class, false),
-            lucid_syntax::Stmt::InterfaceDef { name, .. } => {
-                (Some(name), DeclKind::Interface, false)
-            }
             lucid_syntax::Stmt::TraitDef { name, .. } => (Some(name), DeclKind::Trait, false),
             lucid_syntax::Stmt::TypeAlias { name, .. } => (Some(name), DeclKind::TypeAlias, false),
             lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef {
@@ -758,9 +715,6 @@ fn collect_typed_body<'db>(
     use lucid_syntax::Stmt;
     for statement in statements {
         match statement {
-            Stmt::Export(inner) => {
-                collect_typed_body(db, checker, std::slice::from_ref(inner.as_ref()), nodes)?
-            }
             Stmt::VarDef {
                 value: Some(value), ..
             } => {
@@ -1680,10 +1634,6 @@ pub fn typed_module<'db>(
     let mut initializers = Vec::new();
     let mut expressions = Vec::new();
     for statement in &module.statements {
-        let statement = match statement {
-            lucid_syntax::Stmt::Export(inner) => inner.as_ref(),
-            other => other,
-        };
         let (name, value) = match statement {
             lucid_syntax::Stmt::Assignment {
                 target: lucid_syntax::Expr::Ident { name, .. },
@@ -1716,10 +1666,6 @@ pub fn typed_module<'db>(
     let mut functions = Vec::new();
     let mut seen_function_symbols = std::collections::HashSet::new();
     for statement in &module.statements {
-        let statement = match statement {
-            lucid_syntax::Stmt::Export(inner) => inner.as_ref(),
-            other => other,
-        };
         let lucid_syntax::Stmt::Function(function) = statement else {
             continue;
         };
@@ -1923,10 +1869,6 @@ pub fn lower_function_body(
 ) -> Result<Arc<lucid_cir::Function>, Arc<str>> {
     let module = parse_ast(db, file).as_ref().map_err(Arc::clone)?;
     let Some(source_function) = module.statements.iter().find_map(|statement| {
-        let statement = match statement {
-            lucid_syntax::Stmt::Export(inner) => inner.as_ref(),
-            other => other,
-        };
         match statement {
             lucid_syntax::Stmt::Function(candidate) if candidate.name == function_name => {
                 Some(candidate)
@@ -2071,7 +2013,6 @@ pub fn lower_function_body(
     fn statement_contains_augassign(statement: &lucid_syntax::Stmt) -> bool {
         match statement {
             lucid_syntax::Stmt::AugAssign { .. } => true,
-            lucid_syntax::Stmt::Export(inner) => statement_contains_augassign(inner),
             lucid_syntax::Stmt::If {
                 then_branch,
                 elif_branches,
@@ -8675,10 +8616,8 @@ fn import_path(file_path: &str, import: &str) -> String {
 
 fn statement_span(statement: &lucid_syntax::Stmt) -> lucid_syntax::Span {
     match statement {
-        lucid_syntax::Stmt::Export(inner) => statement_span(inner),
         lucid_syntax::Stmt::Module { span, .. }
         | lucid_syntax::Stmt::ClassDef { span, .. }
-        | lucid_syntax::Stmt::InterfaceDef { span, .. }
         | lucid_syntax::Stmt::TraitDef { span, .. }
         | lucid_syntax::Stmt::ImplementDef { span, .. }
         | lucid_syntax::Stmt::TypeAlias { span, .. }
@@ -8758,9 +8697,7 @@ pub fn module_order(db: &dyn Db, project: Project) -> Result<Arc<[SourceFile]>, 
         };
         fn statement_is_declaration(statement: &lucid_syntax::Stmt) -> bool {
             match statement {
-                lucid_syntax::Stmt::Export(inner) => statement_is_declaration(inner),
                 lucid_syntax::Stmt::ClassDef { .. }
-                | lucid_syntax::Stmt::InterfaceDef { .. }
                 | lucid_syntax::Stmt::TraitDef { .. }
                 | lucid_syntax::Stmt::ImplementDef { .. }
                 | lucid_syntax::Stmt::TypeAlias { .. }
@@ -8797,7 +8734,7 @@ pub fn module_order(db: &dyn Db, project: Project) -> Result<Arc<[SourceFile]>, 
         if state[index] == 1 {
             // Import cycles are safe when every module in the cycle only
             // contributes declarations. Declarations are collected before
-            // initialization, so classes, traits, interfaces, aliases, and
+            // initialization, so classes, traits, aliases, and
             // functions can refer to one another without observing a value
             // before its module runs. A top-level value/assignment/side
             // effect still makes the cycle an initialization error.
@@ -9020,7 +8957,6 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
     };
     let mut checker = lucid_checker::TypeChecker::new();
     if let Err(error) = checker.check_module(module) {
-        let fix = private_export_fix_from_message(&error.message, error.span);
         diagnostics.push(Diagnostic {
             file,
             severity: Severity::Error,
@@ -9028,7 +8964,7 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
             message: error.message,
             span: error.span,
             related: Arc::from([]),
-            fix,
+            fix: None,
         });
     }
     Arc::from(diagnostics)
@@ -9120,37 +9056,6 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
         };
         let mut imported_names = std::collections::BTreeMap::<String, lucid_syntax::Span>::new();
         for statement in &module.statements {
-            if let lucid_syntax::Stmt::Export(inner) = statement {
-                let private_name = match inner.as_ref() {
-                    lucid_syntax::Stmt::ClassDef { name, .. }
-                    | lucid_syntax::Stmt::InterfaceDef { name, .. }
-                    | lucid_syntax::Stmt::TraitDef { name, .. }
-                    | lucid_syntax::Stmt::TypeAlias { name, .. }
-                    | lucid_syntax::Stmt::Function(lucid_syntax::FunctionDef { name, .. }) => {
-                        Some(name)
-                    }
-                    lucid_syntax::Stmt::VarDef {
-                        pattern: lucid_syntax::Pattern::Ident(name, _),
-                        ..
-                    } => Some(name),
-                    lucid_syntax::Stmt::Assignment {
-                        target: lucid_syntax::Expr::Ident { name, .. },
-                        ..
-                    } => Some(name),
-                    _ => None,
-                };
-                if let Some(name) = private_name.filter(|name| name.starts_with('_')) {
-                    diagnostics.push(Diagnostic {
-                        file,
-                        severity: Severity::Error,
-                        code: "E0304".into(),
-                        message: format!("cannot export private name '{name}'"),
-                        span: statement_span(statement),
-                        related: Arc::from([]),
-                        fix: private_export_fix(name, statement_span(statement)),
-                    });
-                }
-            }
             if let lucid_syntax::Stmt::Import { module, alias, .. } = statement {
                 let local_name = alias.clone().unwrap_or_else(|| {
                     module
@@ -9510,7 +9415,7 @@ mod tests {
         assert!(function.body_expressions.iter().any(|node| {
             node.kind == "dict-comprehension"
                 && node.type_name
-                    == "class(dict;args=[int,int];parent=;traits=;interfaces=;fields=[];sealed=false)"
+                    == "class(dict;args=[int,int];parent=;traits=;fields=[];sealed=false)"
                 && node.children.len() == 4
         }));
         assert!(
@@ -12458,12 +12363,12 @@ mod tests {
         assert_eq!(function.execute_with_args(&[0]), Ok(Some(0)));
 
         let file = db.add_file(
-            "parameterized-exported-dynamic-if-continuation.lucid",
-            "def choose(value: int):\n    export if value > 10:\n        result = 100\n    else:\n        result = 1\n    return result + 1\n",
+            "parameterized-dynamic-if-continuation.lucid",
+            "def choose(value: int):\n    if value > 10:\n        result = 100\n    else:\n        result = 1\n    return result + 1\n",
         );
         let function = lower_function_body(&db, file, "choose".into())
             .as_ref()
-            .expect("exported dynamic comparison diamond should lower before a suffix");
+            .expect("dynamic comparison diamond should lower before a suffix");
         assert_eq!(function.execute_with_args(&[15]), Ok(Some(101)));
         assert_eq!(function.execute_with_args(&[5]), Ok(Some(2)));
 
@@ -14293,7 +14198,7 @@ mod tests {
     #[test]
     fn name_resolution_returns_stable_symbol_identity() {
         let mut db = CompilerDatabase::default();
-        let file = db.add_file("main.lucid", "export class Point:\n    x: int\n");
+        let file = db.add_file("main.lucid", "class Point:\n    x: int\n");
         let symbol = resolve_top_level(&db, file, "Point".into()).expect("Point should resolve");
         assert_eq!(symbol.name(&db), "Point");
         assert!(resolve_top_level(&db, file, "Missing".into()).is_none());
@@ -14309,7 +14214,7 @@ mod tests {
         let mut db = CompilerDatabase::default();
         let file = db.add_file(
             "main.lucid",
-            "export class Point:\n    x: int\n\ndef helper():\n    return none\n",
+            "class Point:\n    x: int\n\ndef helper():\n    return none\n",
         );
         let declarations = resolved_declarations(&db, file);
         assert_eq!(declarations.len(), 2);
@@ -14328,7 +14233,7 @@ mod tests {
     #[test]
     fn resolved_module_bundles_stable_declarations_and_imports() {
         let mut db = CompilerDatabase::default();
-        let file = db.add_file("main.lucid", "export value = 1\nimport support\n");
+        let file = db.add_file("main.lucid", "value = 1\nimport support\n");
         let module = resolved_module(&db, file);
         assert_eq!(module.file, file);
         assert_eq!(module.imports.as_ref(), &["support".to_string()]);
@@ -14487,7 +14392,7 @@ mod tests {
         let main = db.add_file("main.lucid", "import lib\nlocal = 1\n");
         let lib = db.add_file(
             "lib.lucid",
-            "export class Public:\n    pass\nclass _Private:\n    pass\n",
+            "class Public:\n    pass\nclass _Private:\n    pass\n",
         );
         let project = Project::new(&db, vec![main, lib]);
         let names = visible_symbols(&db, project, main)
@@ -14510,7 +14415,7 @@ mod tests {
         );
         let support = db.add_file(
             "support.lucid",
-            "export value = 1\nexport other = 3\n_private = 2\n",
+            "value = 1\nother = 3\n_private = 2\n",
         );
         let project = Project::new(&db, vec![main, support]);
         let bindings = imported_bindings(&db, project, main);
@@ -14769,42 +14674,6 @@ mod tests {
             .expect("duplicate module diagnostic");
         assert_ne!(duplicate.span, lucid_syntax::Span::default());
         assert!(duplicate.span.end > duplicate.span.start);
-    }
-
-    #[test]
-    fn project_diagnostics_reject_exporting_private_names() {
-        let mut db = CompilerDatabase::default();
-        let file = db.add_file("main.lucid", "export _private = 1\n");
-        let project = Project::new(&db, vec![file]);
-        let diagnostics = project_diagnostics(&db, project);
-        let diagnostic = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "E0304")
-            .expect("private export diagnostic");
-        assert!(diagnostic.message.contains("_private"));
-        assert!(diagnostic.span.end > diagnostic.span.start);
-        let fix = diagnostic.fix.as_ref().expect("private export fix");
-        assert_eq!(
-            fix.message,
-            "rename '_private' to 'private' or remove the export marker"
-        );
-        assert_eq!(fix.replacement, "private");
-        assert!(fix.span.end > fix.span.start);
-        let file_diagnostics = file_diagnostics(&db, file);
-        let file_diagnostic = file_diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "E0200")
-            .expect("checker private export diagnostic");
-        let file_fix = file_diagnostic
-            .fix
-            .as_ref()
-            .expect("checker private export fix");
-        assert_eq!(
-            file_fix.message,
-            "rename '_private' to 'private' or remove the export marker"
-        );
-        assert_eq!(file_fix.replacement, "private");
-        assert_eq!(span_text(&db, file, file_fix.span).as_ref(), "_private");
     }
 
     #[test]

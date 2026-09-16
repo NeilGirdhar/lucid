@@ -19,14 +19,8 @@ pub enum Type {
         type_args: Vec<Type>,
         parent: Option<String>,
         traits: Vec<String>,
-        interfaces: Vec<String>,
         fields: HashMap<String, Type>,
         is_sealed: bool,
-    },
-    Interface {
-        name: String,
-        type_args: Vec<Type>,
-        methods: HashSet<String>,
     },
     Trait {
         name: String,
@@ -53,14 +47,6 @@ pub enum Type {
         inner: Box<Type>,
     },
     TypeVar(String),
-}
-
-fn interface_extends(source: &str, target: &str, env: &TypeEnvironment) -> bool {
-    env.interface_bases
-        .get(source)
-        .into_iter()
-        .flatten()
-        .any(|base| base == target || interface_extends(base, target, env))
 }
 
 fn trait_extends(source: &str, target: &str, env: &TypeEnvironment) -> bool {
@@ -108,22 +94,17 @@ impl Type {
                 type_args,
                 parent,
                 traits,
-                interfaces,
                 fields,
                 is_sealed,
             } => {
                 let mut traits = traits.clone();
                 traits.sort();
                 traits.dedup();
-                let mut interfaces = interfaces.clone();
-                interfaces.sort();
-                interfaces.dedup();
                 Type::Class {
                     name: name.clone(),
                     type_args: type_args.iter().map(Type::canonical).collect(),
                     parent: parent.clone(),
                     traits,
-                    interfaces,
                     fields: fields
                         .iter()
                         .map(|(k, v)| (k.clone(), v.canonical()))
@@ -131,15 +112,6 @@ impl Type {
                     is_sealed: *is_sealed,
                 }
             }
-            Type::Interface {
-                name,
-                type_args,
-                methods,
-            } => Type::Interface {
-                name: name.clone(),
-                type_args: type_args.iter().map(Type::canonical).collect(),
-                methods: methods.clone(),
-            },
             Type::Trait {
                 name,
                 type_args,
@@ -173,7 +145,6 @@ impl Type {
                 type_args,
                 parent,
                 traits,
-                interfaces,
                 fields,
                 is_sealed,
             } => {
@@ -187,36 +158,15 @@ impl Type {
                 let mut traits = traits.to_vec();
                 traits.sort();
                 traits.dedup();
-                let mut interfaces = interfaces.to_vec();
-                interfaces.sort();
-                interfaces.dedup();
                 format!(
-                    "class({name};args=[{}];parent={};traits={};interfaces={};fields=[{fields}];sealed={is_sealed})",
+                    "class({name};args=[{}];parent={};traits={};fields=[{fields}];sealed={is_sealed})",
                     type_args
                         .iter()
                         .map(Type::canonical_string)
                         .collect::<Vec<_>>()
                         .join(","),
                     parent.as_deref().unwrap_or(""),
-                    traits.join(","),
-                    interfaces.join(",")
-                )
-            }
-            Type::Interface {
-                name,
-                type_args,
-                methods,
-            } => {
-                let mut methods = methods.iter().cloned().collect::<Vec<_>>();
-                methods.sort();
-                format!(
-                    "interface({name};args=[{}];methods=[{}])",
-                    type_args
-                        .iter()
-                        .map(Type::canonical_string)
-                        .collect::<Vec<_>>()
-                        .join(","),
-                    methods.join(",")
+                    traits.join(",")
                 )
             }
             Type::Trait {
@@ -302,7 +252,7 @@ impl Type {
             Type::Bool | Type::LiteralBool(_) => "bool".into(),
             Type::Str | Type::LiteralStr(_) => "str".into(),
             Type::None => "none".into(),
-            Type::Class { name, .. } | Type::Interface { name, .. } | Type::Trait { name, .. } => {
+            Type::Class { name, .. } | Type::Trait { name, .. } => {
                 name.clone()
             }
             Type::Exact(inner) | Type::View { inner, .. } => inner.runtime_dispatch_key(),
@@ -604,40 +554,6 @@ impl Type {
         }
 
         if let (
-            Type::Interface {
-                name: source_name,
-                type_args: source_args,
-                ..
-            },
-            Type::Interface {
-                name: target_name,
-                type_args: target_args,
-                ..
-            },
-        ) = (self, target)
-        {
-            if source_name == target_name {
-                if source_args.is_empty() || target_args.is_empty() {
-                    return true;
-                }
-                if source_args.len() != target_args.len() {
-                    return false;
-                }
-                let variances = env.interface_variance.get(source_name);
-                return source_args.iter().zip(target_args.iter()).enumerate().all(
-                    |(index, (source, expected))| match variances.and_then(|items| items.get(index))
-                    {
-                        Some(Variance::Covariant) => source.is_subtype_of(expected, env),
-                        Some(Variance::Contravariant) => expected.is_subtype_of(source, env),
-                        _ => source == expected,
-                    },
-                );
-            }
-            if interface_extends(source_name, target_name, env) {
-                return true;
-            }
-        }
-        if let (
             Type::Trait {
                 name: source_name,
                 type_args: source_args,
@@ -721,7 +637,6 @@ impl Type {
                     type_args: Vec::new(),
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 };
@@ -730,7 +645,7 @@ impl Type {
             _ => {}
         }
 
-        // Class inheritance and interface implementation subtyping
+        // Class inheritance and trait implementation subtyping
         if let (
             Type::Class {
                 name: source_name,
@@ -755,7 +670,6 @@ impl Type {
             name: c_name,
             parent,
             traits,
-            interfaces,
             ..
         } = self
         {
@@ -803,22 +717,6 @@ impl Type {
                         if parent_type.is_subtype_of(target, env) {
                             return true;
                         }
-                    }
-                }
-            }
-
-            if let Type::Interface {
-                name: target_iface, ..
-            } = target
-            {
-                if interfaces.iter().any(|interface| {
-                    interface == target_iface || interface_extends(interface, target_iface, env)
-                }) {
-                    return true;
-                }
-                for t in traits {
-                    if trait_extends(t, target_iface, env) {
-                        return true;
                     }
                 }
             }
@@ -946,7 +844,6 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
             type_args,
             parent,
             traits,
-            interfaces,
             fields,
             is_sealed,
         } if type_args.is_empty() && substitutions.contains_key(name) => {
@@ -957,7 +854,6 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
             type_args,
             parent,
             traits,
-            interfaces,
             fields,
             is_sealed,
         } => Type::Class {
@@ -968,24 +864,11 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
                 .collect(),
             parent: parent.clone(),
             traits: traits.clone(),
-            interfaces: interfaces.clone(),
             fields: fields
                 .iter()
                 .map(|(name, ty)| (name.clone(), substitute_type(ty, substitutions)))
                 .collect(),
             is_sealed: *is_sealed,
-        },
-        Type::Interface {
-            name,
-            type_args,
-            methods,
-        } => Type::Interface {
-            name: name.clone(),
-            type_args: type_args
-                .iter()
-                .map(|arg| substitute_type(arg, substitutions))
-                .collect(),
-            methods: methods.clone(),
         },
         Type::Trait {
             name,
@@ -1065,7 +948,7 @@ fn collect_type_vars(ty: &Type, vars: &mut HashSet<String>) {
                 collect_type_vars(field_type, vars);
             }
         }
-        Type::Interface { type_args, .. } | Type::Trait { type_args, .. } => {
+        Type::Trait { type_args, .. } => {
             for arg in type_args {
                 collect_type_vars(arg, vars);
             }
@@ -1220,7 +1103,6 @@ pub struct TypeError {
 #[derive(Debug, Clone, Default)]
 pub struct TypeEnvironment {
     pub classes: HashMap<String, Type>,
-    pub interfaces: HashMap<String, Type>,
     pub traits: HashMap<String, Type>,
     pub type_aliases: HashMap<String, Type>,
     pub type_alias_params: HashMap<String, Vec<String>>,
@@ -1267,11 +1149,6 @@ pub struct TypeEnvironment {
     pub trait_fields: HashMap<(String, String), Type>,
     pub trait_bases: HashMap<String, Vec<String>>,
     pub class_trait_args: HashMap<(String, String), Vec<Type>>,
-    pub interface_methods: HashMap<(String, String), Type>,
-    pub interface_method_params: HashMap<(String, String), Vec<String>>,
-    pub interface_getters: HashMap<(String, String), Type>,
-    pub interface_fields: HashMap<(String, String), Type>,
-    pub interface_bases: HashMap<String, Vec<String>>,
     pub class_vars: HashMap<String, HashMap<String, Type>>,
     pub class_field_order: HashMap<String, Vec<String>>,
     pub class_constructor_arity: HashMap<String, usize>,
@@ -1281,10 +1158,8 @@ pub struct TypeEnvironment {
     pub class_variance: HashMap<String, Vec<Variance>>,
     pub class_type_params: HashMap<String, Vec<String>>,
     pub trait_type_params: HashMap<String, Vec<String>>,
-    pub interface_variance: HashMap<String, Vec<Variance>>,
     pub trait_variance: HashMap<String, Vec<Variance>>,
     pub class_bounds: HashMap<String, Vec<Option<Type>>>,
-    pub interface_bounds: HashMap<String, Vec<Option<Type>>>,
     pub trait_bounds: HashMap<String, Vec<Option<Type>>>,
     /// Type-parameter bounds currently in scope while resolving annotations.
     pub type_var_bounds: HashMap<String, Type>,
@@ -1390,7 +1265,6 @@ impl TypeChecker {
                 type_args: Vec::new(),
                 parent: None,
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: HashMap::new(),
                 is_sealed: false,
             },
@@ -1406,7 +1280,6 @@ impl TypeChecker {
                 type_args: Vec::new(),
                 parent: None,
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: HashMap::new(),
                 is_sealed: true,
             },
@@ -1418,7 +1291,6 @@ impl TypeChecker {
                 type_args: Vec::new(),
                 parent: Some("DataType".into()),
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: HashMap::new(),
                 is_sealed: true,
             },
@@ -1430,7 +1302,6 @@ impl TypeChecker {
                 type_args: Vec::new(),
                 parent: None,
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: HashMap::new(),
                 is_sealed: true,
             },
@@ -1442,7 +1313,6 @@ impl TypeChecker {
                 type_args: Vec::new(),
                 parent: None,
                 traits: vec!["SupportsFloat".into()],
-                interfaces: Vec::new(),
                 fields: [("value".to_string(), Type::Str)].into_iter().collect(),
                 is_sealed: true,
             },
@@ -1537,7 +1407,6 @@ impl TypeChecker {
             type_args: Vec::new(),
             parent: None,
             traits: Vec::new(),
-            interfaces: Vec::new(),
             fields: HashMap::new(),
             is_sealed: true,
         };
@@ -1656,27 +1525,22 @@ impl TypeChecker {
             }
         }
         for name in ["Bytes", "ByteArray", "MemoryView"] {
-            let interfaces = if matches!(name, "Bytes" | "ByteArray" | "MemoryView") {
-                vec![
-                    "Buffer".into(),
-                    "Sized".into(),
-                    "Container".into(),
-                    "Collection".into(),
-                    "Sequence".into(),
-                    "Iterable".into(),
-                    "Reversible".into(),
-                ]
-            } else {
-                vec!["Buffer".into()]
-            };
+            let traits = vec![
+                "Buffer".into(),
+                "Sized".into(),
+                "Container".into(),
+                "Collection".into(),
+                "Sequence".into(),
+                "Iterable".into(),
+                "Reversible".into(),
+            ];
             env.classes.insert(
                 name.to_string(),
                 Type::Class {
                     name: name.to_string(),
                     type_args: Vec::new(),
                     parent: None,
-                    traits: Vec::new(),
-                    interfaces,
+                    traits,
                     fields: HashMap::new(),
                     is_sealed: true,
                 },
@@ -1688,7 +1552,6 @@ impl TypeChecker {
             type_args: vec![any.clone()],
             parent: None,
             traits: Vec::new(),
-            interfaces: Vec::new(),
             fields: HashMap::new(),
             is_sealed: false,
         };
@@ -1697,7 +1560,6 @@ impl TypeChecker {
             type_args: vec![Type::Str, any.clone()],
             parent: None,
             traits: Vec::new(),
-            interfaces: Vec::new(),
             fields: HashMap::new(),
             is_sealed: false,
         };
@@ -1710,7 +1572,6 @@ impl TypeChecker {
                 type_args: vec![any.clone()],
                 parent: None,
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: HashMap::new(),
                 is_sealed: false,
             },
@@ -1722,7 +1583,6 @@ impl TypeChecker {
                 type_args: Vec::new(),
                 parent: None,
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: HashMap::new(),
                 is_sealed: true,
             },
@@ -1840,7 +1700,6 @@ impl TypeChecker {
                     type_args: vec![any.clone(); arity],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 },
@@ -1879,7 +1738,6 @@ impl TypeChecker {
                     type_args: Vec::new(),
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: fields
                         .into_iter()
                         .map(|(field, ty)| (field.to_string(), ty))
@@ -1909,7 +1767,6 @@ impl TypeChecker {
                     type_args: Vec::new(),
                     parent: parent.map(str::to_string),
                     traits: vec!["Eq".into()],
-                    interfaces: Vec::new(),
                     fields: if parent.is_none() {
                         exception_message_fields.clone()
                     } else {
@@ -1939,7 +1796,6 @@ impl TypeChecker {
                 type_args: vec![cell_t.clone()],
                 parent: None,
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: [("value".to_string(), cell_t.clone())]
                     .into_iter()
                     .collect(),
@@ -2006,7 +1862,6 @@ impl TypeChecker {
                         type_args: vec![cell_t],
                         parent: None,
                         traits: Vec::new(),
-                        interfaces: Vec::new(),
                         fields: HashMap::new(),
                         is_sealed: true,
                     }),
@@ -2034,7 +1889,6 @@ impl TypeChecker {
                         type_args: vec![],
                         parent: None,
                         traits: vec![],
-                        interfaces: vec![],
                         fields: HashMap::new(),
                         is_sealed: false,
                     }),
@@ -2104,7 +1958,6 @@ impl TypeChecker {
                         type_args: Vec::new(),
                         parent: None,
                         traits: Vec::new(),
-                        interfaces: Vec::new(),
                         fields: HashMap::new(),
                         is_sealed: true,
                     }),
@@ -2124,7 +1977,6 @@ impl TypeChecker {
                             type_args: Vec::new(),
                             parent: Some("Exception".into()),
                             traits: vec!["Eq".into()],
-                            interfaces: Vec::new(),
                             fields: HashMap::new(),
                             is_sealed: false,
                         },
@@ -2193,8 +2045,7 @@ impl TypeChecker {
                             name: result.into(),
                             type_args: Vec::new(),
                             parent: None,
-                            traits: Vec::new(),
-                            interfaces: vec![
+                            traits: vec![
                                 "Buffer".into(),
                                 "Sized".into(),
                                 "Container".into(),
@@ -2220,8 +2071,7 @@ impl TypeChecker {
                         name: "Bytes".into(),
                         type_args: Vec::new(),
                         parent: None,
-                        traits: Vec::new(),
-                        interfaces: vec![
+                        traits: vec![
                             "Buffer".into(),
                             "Sized".into(),
                             "Container".into(),
@@ -2257,7 +2107,6 @@ impl TypeChecker {
                         type_args: vec![Type::TypeVar("Any".to_string())],
                         parent: None,
                         traits: vec![],
-                        interfaces: vec![],
                         fields: HashMap::new(),
                         is_sealed: false,
                     }),
@@ -2324,7 +2173,6 @@ impl TypeChecker {
                     type_args: vec![any.clone()],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 },
@@ -2339,7 +2187,6 @@ impl TypeChecker {
                     type_args: vec![any.clone(), any.clone()],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 },
@@ -2354,7 +2201,6 @@ impl TypeChecker {
                     type_args: vec![any.clone()],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 },
@@ -2373,7 +2219,6 @@ impl TypeChecker {
                 type_args: vec![Type::Str, any.clone()],
                 parent: None,
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: HashMap::new(),
                 is_sealed: false,
             }),
@@ -2396,7 +2241,6 @@ impl TypeChecker {
                     type_args: vec![Type::TypeVar("FieldRecord".into())],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 },
@@ -2531,7 +2375,7 @@ impl TypeChecker {
             self.collect_class_modifiers(stmt);
             self.collect_class_members(stmt);
         }
-        // Pass 1: Register class, interface, trait, and alias declarations
+        // Pass 1: Register class, trait, and alias declarations
         for stmt in &module.statements {
             self.collect_declaration(stmt)?;
         }
@@ -2579,11 +2423,9 @@ impl TypeChecker {
             parents: &mut HashMap<String, String>,
             spans: &mut HashMap<String, Span>,
             classes: &HashMap<String, Type>,
-            interfaces: &HashMap<String, Type>,
             traits: &HashMap<String, Type>,
         ) {
             match stmt {
-                Stmt::Export(inner) => collect(inner, parents, spans, classes, interfaces, traits),
                 Stmt::ClassDef {
                     name, bases, span, ..
                 } => {
@@ -2594,8 +2436,7 @@ impl TypeChecker {
                         } if classes.contains_key(base_name) => Some(base_name.clone()),
                         TypeExpr::Named {
                             name: base_name, ..
-                        } if !interfaces.contains_key(base_name)
-                            && !traits.contains_key(base_name) =>
+                        } if !traits.contains_key(base_name) =>
                         {
                             Some(base_name.clone())
                         }
@@ -2613,7 +2454,6 @@ impl TypeChecker {
                 &mut parents,
                 &mut spans,
                 &self.env.classes,
-                &self.env.interfaces,
                 &self.env.traits,
             );
         }
@@ -2666,7 +2506,6 @@ impl TypeChecker {
 
     fn collect_class_modifiers(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Export(inner) => self.collect_class_modifiers(inner),
             Stmt::ClassDef {
                 name,
                 is_final: true,
@@ -2680,7 +2519,6 @@ impl TypeChecker {
 
     fn collect_class_members(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Export(inner) => self.collect_class_members(inner),
             Stmt::ClassDef { name, body, .. } => {
                 let names = self.env.class_members.entry(name.clone()).or_default();
                 for member in body {
@@ -2730,7 +2568,6 @@ impl TypeChecker {
 
     fn collect_declaration(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         match stmt {
-            Stmt::Export(inner) => self.collect_declaration(inner),
             Stmt::ClassDef {
                 name,
                 type_params,
@@ -2744,7 +2581,6 @@ impl TypeChecker {
             } => {
                 let mut parent_class = None;
                 let mut traits = Vec::new();
-                let mut interfaces = Vec::new();
                 let saved_type_var_bounds = self.env.type_var_bounds.clone();
                 let class_type_param_names = type_params
                     .iter()
@@ -2771,8 +2607,6 @@ impl TypeChecker {
                                 });
                             }
                             parent_class = Some(base_name.clone());
-                        } else if self.env.interfaces.contains_key(base_name) {
-                            interfaces.push(base_name.clone());
                         } else if self.env.traits.contains_key(base_name) {
                             if let TypeExpr::Named { args, .. } = base_expr {
                                 let resolved_args = args
@@ -2803,7 +2637,7 @@ impl TypeChecker {
                             // Additional unknown bases are external
                             // structural obligations; Lucid still permits
                             // only one nominal class parent.
-                            interfaces.push(base_name.clone());
+                            traits.push(base_name.clone());
                         }
                     }
                 }
@@ -3017,7 +2851,6 @@ impl TypeChecker {
                                     .collect(),
                                 parent: parent_class.clone(),
                                 traits: traits.clone(),
-                                interfaces: interfaces.clone(),
                                 fields: HashMap::new(),
                                 is_sealed: *is_final,
                             }),
@@ -3097,169 +2930,12 @@ impl TypeChecker {
                     type_args: Vec::new(),
                     parent: parent_class,
                     traits,
-                    interfaces,
                     fields,
                     is_sealed: *is_sealed,
                 };
 
                 self.env.classes.insert(name.clone(), class_type);
                 self.env.type_var_bounds = saved_type_var_bounds;
-                Ok(())
-            }
-            Stmt::InterfaceDef {
-                name,
-                type_params,
-                bases,
-                body,
-                ..
-            } => {
-                let mut required = HashSet::new();
-                self.env.interface_bases.insert(
-                    name.clone(),
-                    bases
-                        .iter()
-                        .filter_map(|base| match base {
-                            TypeExpr::Named { name, .. } => Some(name.clone()),
-                            _ => None,
-                        })
-                        .collect(),
-                );
-                for member in body {
-                    if let Some((member_name, member_span)) =
-                        Self::interface_member_name_and_span(member)
-                    {
-                        Self::reject_removed_member(member_name, member_span)?;
-                    }
-                    match member {
-                        InterfaceMember::MethodSig {
-                            name: member_name,
-                            params,
-                            return_type,
-                            ..
-                        }
-                        | InterfaceMember::ClassMethodSig {
-                            name: member_name,
-                            params,
-                            return_type,
-                            ..
-                        }
-                        | InterfaceMember::FactorySig {
-                            name: member_name,
-                            params,
-                            return_type,
-                            ..
-                        } => {
-                            required.insert(member_name.clone());
-                            let parameter_types = params
-                                .iter()
-                                .filter(|param| !matches!(param.name.as_str(), "self" | "cls"))
-                                .map(|param| {
-                                    param
-                                        .type_annotation
-                                        .as_ref()
-                                        .map(|annotation| self.resolve_type_expr(annotation))
-                                        .transpose()
-                                        .map(|ty| ty.unwrap_or(Type::TypeVar("Any".into())))
-                                })
-                                .collect::<Result<Vec<_>, _>>()?;
-                            let return_type = return_type
-                                .as_ref()
-                                .map(|annotation| self.resolve_type_expr(annotation))
-                                .transpose()?
-                                .unwrap_or(Type::None);
-                            self.env.interface_methods.insert(
-                                (name.clone(), member_name.clone()),
-                                Type::Function {
-                                    params: parameter_types,
-                                    return_type: Box::new(return_type),
-                                },
-                            );
-                            self.env.interface_method_params.insert(
-                                (name.clone(), member_name.clone()),
-                                params.iter().map(|param| param.name.clone()).collect(),
-                            );
-                        }
-                        InterfaceMember::GetterSig {
-                            name: member_name,
-                            return_type,
-                            ..
-                        } => {
-                            required.insert(member_name.clone());
-                            let return_type = return_type
-                                .as_ref()
-                                .map(|annotation| self.resolve_type_expr(annotation))
-                                .transpose()?
-                                .unwrap_or(Type::None);
-                            self.env
-                                .interface_getters
-                                .insert((name.clone(), member_name.clone()), return_type);
-                        }
-                        InterfaceMember::SetterSig {
-                            name: member_name,
-                            param_type,
-                            ..
-                        } => {
-                            required.insert(member_name.clone());
-                            let parameter_type = self.resolve_type_expr(param_type)?;
-                            self.env.interface_methods.insert(
-                                (name.clone(), member_name.clone()),
-                                Type::Function {
-                                    params: vec![parameter_type],
-                                    return_type: Box::new(Type::None),
-                                },
-                            );
-                        }
-                        InterfaceMember::FieldSig {
-                            name: member_name,
-                            type_annotation,
-                            is_final,
-                            ..
-                        } => {
-                            if *is_final {
-                                self.env
-                                    .final_obligations
-                                    .entry(name.clone())
-                                    .or_default()
-                                    .insert(member_name.clone());
-                            }
-                            required.insert(member_name.clone());
-                            let field_type = self.resolve_type_expr(type_annotation)?;
-                            self.env
-                                .interface_fields
-                                .insert((name.clone(), member_name.clone()), field_type);
-                        }
-                        InterfaceMember::AssociatedTypeSig { name, .. } => {
-                            required.insert(name.clone());
-                        }
-                        InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => {}
-                    }
-                }
-                self.env.obligations.insert(name.clone(), required);
-                self.env.interface_variance.insert(
-                    name.clone(),
-                    type_params
-                        .iter()
-                        .map(|param| param.variance.clone())
-                        .collect(),
-                );
-                self.env.interface_bounds.insert(
-                    name.clone(),
-                    type_params
-                        .iter()
-                        .map(|param| {
-                            param
-                                .bound
-                                .as_ref()
-                                .and_then(|bound| self.resolve_type_expr(bound).ok())
-                        })
-                        .collect(),
-                );
-                let iface_type = Type::Interface {
-                    name: name.clone(),
-                    type_args: Vec::new(),
-                    methods: HashSet::new(),
-                };
-                self.env.interfaces.insert(name.clone(), iface_type);
                 Ok(())
             }
             Stmt::TraitDef {
@@ -3884,19 +3560,6 @@ impl TypeChecker {
         class_name.to_string()
     }
 
-    fn interface_member_name_and_span(member: &InterfaceMember) -> Option<(&str, Span)> {
-        match member {
-            InterfaceMember::MethodSig { name, span, .. }
-            | InterfaceMember::GetterSig { name, span, .. }
-            | InterfaceMember::SetterSig { name, span, .. }
-            | InterfaceMember::ClassMethodSig { name, span, .. }
-            | InterfaceMember::FactorySig { name, span, .. }
-            | InterfaceMember::FieldSig { name, span, .. }
-            | InterfaceMember::AssociatedTypeSig { name, span, .. } => Some((name.as_str(), *span)),
-            InterfaceMember::Pass(_) | InterfaceMember::Ellipsis(_) => None,
-        }
-    }
-
     fn trait_member_name_and_span(member: &TraitMember) -> Option<(&str, Span)> {
         match member {
             TraitMember::Method(function) | TraitMember::ClassMethod(function) => {
@@ -3911,7 +3574,6 @@ impl TypeChecker {
 
     fn verify_structure(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         match stmt {
-            Stmt::Export(inner) => self.verify_structure(inner),
             Stmt::ClassDef {
                 name,
                 bases,
@@ -4053,10 +3715,7 @@ impl TypeChecker {
                         name: base_name, ..
                     } = base
                     {
-                        if self.env.interfaces.contains_key(base_name) {
-                            required.extend(self.interface_obligation_names(base_name));
-                            final_required.extend(self.final_obligation_names(base_name));
-                        } else if self.env.traits.contains_key(base_name) {
+                        if self.env.traits.contains_key(base_name) {
                             required.extend(self.trait_obligation_names(base_name));
                             final_required.extend(self.final_obligation_names(base_name));
                         }
@@ -4221,11 +3880,6 @@ impl TypeChecker {
                 names.extend(self.final_obligation_names(base));
             }
         }
-        if let Some(bases) = self.env.interface_bases.get(obligation_name) {
-            for base in bases {
-                names.extend(self.final_obligation_names(base));
-            }
-        }
         names
     }
 
@@ -4297,91 +3951,6 @@ impl TypeChecker {
             .into_iter()
             .flatten()
             .find_map(|base| self.trait_method_params(base, name))
-    }
-
-    fn interface_obligation_names(&self, interface_name: &str) -> HashSet<String> {
-        let mut names = self
-            .env
-            .obligations
-            .get(interface_name)
-            .cloned()
-            .unwrap_or_default();
-        if let Some(bases) = self.env.interface_bases.get(interface_name) {
-            for base in bases {
-                names.extend(self.interface_obligation_names(base));
-            }
-        }
-        names
-    }
-
-    fn interface_method_type(&self, interface_name: &str, name: &str) -> Option<Type> {
-        if let Some(method) = self
-            .env
-            .interface_methods
-            .get(&(interface_name.to_string(), name.to_string()))
-        {
-            return Some(method.clone());
-        }
-        self.env
-            .interface_bases
-            .get(interface_name)
-            .into_iter()
-            .flatten()
-            .find_map(|base| self.interface_method_type(base, name))
-    }
-
-    fn interface_getter_type(&self, interface_name: &str, name: &str) -> Option<Type> {
-        if let Some(getter) = self
-            .env
-            .interface_getters
-            .get(&(interface_name.to_string(), name.to_string()))
-        {
-            return Some(getter.clone());
-        }
-        self.env
-            .interface_bases
-            .get(interface_name)
-            .into_iter()
-            .flatten()
-            .find_map(|base| self.interface_getter_type(base, name))
-    }
-
-    fn interface_field_type(&self, interface_name: &str, name: &str) -> Option<Type> {
-        if let Some(field) = self
-            .env
-            .interface_fields
-            .get(&(interface_name.to_string(), name.to_string()))
-        {
-            return Some(field.clone());
-        }
-        self.env
-            .interface_bases
-            .get(interface_name)
-            .into_iter()
-            .flatten()
-            .find_map(|base| self.interface_field_type(base, name))
-    }
-
-    fn interface_method_params(&self, interface_name: &str, name: &str) -> Option<Vec<String>> {
-        if let Some(params) = self
-            .env
-            .interface_method_params
-            .get(&(interface_name.to_string(), name.to_string()))
-        {
-            return Some(
-                params
-                    .iter()
-                    .filter(|param| !matches!(param.as_str(), "self" | "cls"))
-                    .cloned()
-                    .collect(),
-            );
-        }
-        self.env
-            .interface_bases
-            .get(interface_name)
-            .into_iter()
-            .flatten()
-            .find_map(|base| self.interface_method_params(base, name))
     }
 
     fn class_var_type(&self, class_name: &str, name: &str) -> Option<Type> {
@@ -4457,7 +4026,6 @@ impl TypeChecker {
                 type_args: vec![element],
                 parent: None,
                 traits: Vec::new(),
-                interfaces: Vec::new(),
                 fields: HashMap::new(),
                 is_sealed: false,
             }),
@@ -4528,13 +4096,6 @@ impl TypeChecker {
                     } else {
                         method.clone()
                     };
-                    return Some(method);
-                }
-            }
-        }
-        if let Some(Type::Class { interfaces, .. }) = self.env.classes.get(class_name) {
-            for interface_name in interfaces {
-                if let Some(method) = self.interface_method_type(interface_name, name) {
                     return Some(method);
                 }
             }
@@ -4671,7 +4232,6 @@ impl TypeChecker {
                         type_args: vec![element_type.clone()],
                         parent: None,
                         traits: Vec::new(),
-                        interfaces: Vec::new(),
                         fields: HashMap::new(),
                         is_sealed: false,
                     }))
@@ -4891,9 +4451,6 @@ impl TypeChecker {
             ),
             Type::Trait {
                 name, type_args, ..
-            }
-            | Type::Interface {
-                name, type_args, ..
             } if Self::is_iterable_obligation_name(name, &self.env) => type_args
                 .first()
                 .cloned()
@@ -4987,7 +4544,7 @@ impl TypeChecker {
         ) || matches!(base, Type::Shape(_) | Type::Record { .. })
             || matches!(base, Type::Class { name, .. }
                 if self.env.class_members.get(name).is_some_and(|members| members.contains("__iter__")))
-            || matches!(base, Type::Trait { name, .. } | Type::Interface { name, .. }
+            || matches!(base, Type::Trait { name, .. }
                 if Self::is_iterable_obligation_name(name, &self.env))
     }
 
@@ -4996,7 +4553,6 @@ impl TypeChecker {
             name,
             "Iterable" | "Iterator" | "Collection" | "Sequence" | "Set"
         ) || trait_extends(name, "Iterable", env)
-            || interface_extends(name, "Iterable", env)
     }
 
     fn is_reversible_type(&self, value: &Type) -> bool {
@@ -5321,7 +4877,7 @@ impl TypeChecker {
                     .collect();
                 Type::make_union(normalized)
             }
-            Type::Class { name, type_args, parent, traits, interfaces, fields, is_sealed } => {
+            Type::Class { name, type_args, parent, traits, fields, is_sealed } => {
                 Type::Class {
                     name: name.clone(),
                     type_args: type_args
@@ -5330,7 +4886,6 @@ impl TypeChecker {
                         .collect(),
                     parent: parent.clone(),
                     traits: traits.clone(),
-                    interfaces: interfaces.clone(),
                     fields: fields
                         .iter()
                         .map(|(k, v)| (k.clone(), self.normalize_literal_types(v)))
@@ -5429,13 +4984,6 @@ impl TypeChecker {
                 }
             }
         }
-        if let Some(Type::Class { interfaces, .. }) = self.env.classes.get(class_name) {
-            for interface_name in interfaces {
-                if let Some(getter) = self.interface_getter_type(interface_name, name) {
-                    return Some(getter);
-                }
-            }
-        }
         let parent = self
             .env
             .classes
@@ -5464,13 +5012,6 @@ impl TypeChecker {
         if let Some(Type::Class { traits, .. }) = self.env.classes.get(class_name) {
             for trait_name in traits {
                 if let Some(params) = self.trait_method_params(trait_name, name) {
-                    return Some(params);
-                }
-            }
-        }
-        if let Some(Type::Class { interfaces, .. }) = self.env.classes.get(class_name) {
-            for interface_name in interfaces {
-                if let Some(params) = self.interface_method_params(interface_name, name) {
                     return Some(params);
                 }
             }
@@ -5603,10 +5144,6 @@ impl TypeChecker {
                         .contains(name)
                         .then(|| Type::TypeVar("Any".into()))
                 }),
-            Type::Interface { name, .. } => self
-                .interface_getter_type(name, attr)
-                .or_else(|| self.interface_field_type(name, attr))
-                .or_else(|| self.interface_method_type(name, attr)),
             Type::Trait { name, .. } => self
                 .trait_getter_type(name, attr)
                 .or_else(|| self.trait_field_type(name, attr))
@@ -5709,29 +5246,6 @@ impl TypeChecker {
                     });
                 }
             }
-            Type::Interface { name, .. } => {
-                if let Some(Type::Function { params, .. }) = self.interface_method_type(name, attr)
-                {
-                    if let Some(parameter_type) = params.first() {
-                        if !value_type.is_subtype_of(parameter_type, &self.env) {
-                            return Err(TypeError {
-                                message: format!(
-                                    "cannot assign type {:?} to setter '{}' expecting {:?}",
-                                    value_type, attr, parameter_type
-                                ),
-                                span,
-                            });
-                        }
-                    }
-                    return Ok(());
-                }
-                return Err(TypeError {
-                    message: format!(
-                        "no writable member '{attr}' is declared by the receiver type"
-                    ),
-                    span,
-                });
-            }
             Type::Trait { name, .. } => {
                 if let Some(Type::Function { params, .. }) = self.trait_method_type(name, attr) {
                     if let Some(parameter_type) = params.first() {
@@ -5778,25 +5292,6 @@ impl TypeChecker {
     }
 
     pub fn check_statement(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
-        if let Stmt::Export(inner) = stmt {
-            if let Some((name, span)) = Self::reserved_module_binding(inner) {
-                if name == "__all__" {
-                    return Err(TypeError {
-                        message:
-                            "__all__ is not supported; Lucid uses leading '_' for module privacy"
-                                .into(),
-                        span,
-                    });
-                }
-                if name.starts_with('_') {
-                    return Err(TypeError {
-                        message: format!("cannot export private name '{name}'"),
-                        span,
-                    });
-                }
-            }
-            return self.check_statement(inner);
-        }
         if let Some((name, span)) = Self::reserved_module_binding(stmt) {
             if name == "__all__" {
                 return Err(TypeError {
@@ -5931,30 +5426,20 @@ impl TypeChecker {
                     TypeExpr::Named { name, .. } => name,
                     _ => {
                         return Err(TypeError {
-                            message: "implemented obligation must be a named trait or interface"
-                                .into(),
+                            message: "implemented obligation must be a named trait".into(),
                             span: *span,
                         });
                     }
                 };
-                let is_trait = self.env.traits.contains_key(interface_name);
-                let is_interface = self.env.interfaces.contains_key(interface_name);
-                if !is_trait && !is_interface {
+                if !self.env.traits.contains_key(interface_name) {
                     return Err(TypeError {
-                        message: format!("unknown trait or interface '{interface_name}'"),
+                        message: format!("unknown trait '{interface_name}'"),
                         span: *span,
                     });
                 }
-                if let Some(Type::Class {
-                    traits, interfaces, ..
-                }) = self.env.classes.get_mut(target_name)
-                {
-                    if is_trait {
-                        if !traits.contains(interface_name) {
-                            traits.push(interface_name.clone());
-                        }
-                    } else if !interfaces.contains(interface_name) {
-                        interfaces.push(interface_name.clone());
+                if let Some(Type::Class { traits, .. }) = self.env.classes.get_mut(target_name) {
+                    if !traits.contains(interface_name) {
+                        traits.push(interface_name.clone());
                     }
                 }
                 let implementation_names: Vec<String> =
@@ -6168,7 +5653,6 @@ impl TypeChecker {
                             type_args: vec![pt],
                             parent: None,
                             traits: Vec::new(),
-                            interfaces: Vec::new(),
                             fields: HashMap::new(),
                             is_sealed: false,
                         };
@@ -6818,14 +6302,8 @@ impl TypeChecker {
                             }
                         } else {
                             let setter_type = match &obj_type {
-                                Type::Interface { name, .. } => {
-                                    self.interface_method_type(name, attr)
-                                }
                                 Type::Trait { name, .. } => self.trait_method_type(name, attr),
                                 Type::View { inner, .. } => match inner.as_ref() {
-                                    Type::Interface { name, .. } => {
-                                        self.interface_method_type(name, attr)
-                                    }
                                     Type::Trait { name, .. } => self.trait_method_type(name, attr),
                                     _ => None,
                                 },
@@ -6845,7 +6323,7 @@ impl TypeChecker {
                                 }
                             } else if matches!(
                                 obj_type,
-                                Type::Interface { .. } | Type::Trait { .. } | Type::View { .. }
+                                Type::Trait { .. } | Type::View { .. }
                             ) {
                                 return Err(TypeError {
                                     message: format!(
@@ -7615,10 +7093,8 @@ impl TypeChecker {
 
     fn reserved_module_binding(stmt: &Stmt) -> Option<(&str, Span)> {
         match stmt {
-            Stmt::Export(inner) => Self::reserved_module_binding(inner),
             Stmt::Module { name, span, .. }
             | Stmt::ClassDef { name, span, .. }
-            | Stmt::InterfaceDef { name, span, .. }
             | Stmt::TraitDef { name, span, .. }
             | Stmt::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
             Stmt::Function(FunctionDef { name, span, .. }) => Some((name.as_str(), *span)),
@@ -7882,8 +7358,7 @@ impl TypeChecker {
                 name: "Bytes".into(),
                 type_args: Vec::new(),
                 parent: None,
-                traits: Vec::new(),
-                interfaces: vec![
+                traits: vec![
                     "Buffer".into(),
                     "Sized".into(),
                     "Container".into(),
@@ -7899,8 +7374,7 @@ impl TypeChecker {
                 name: "MemoryView".into(),
                 type_args: Vec::new(),
                 parent: None,
-                traits: Vec::new(),
-                interfaces: vec![
+                traits: vec![
                     "Buffer".into(),
                     "Sized".into(),
                     "Container".into(),
@@ -7923,7 +7397,6 @@ impl TypeChecker {
                     type_args: Vec::new(),
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 })
@@ -7952,8 +7425,7 @@ impl TypeChecker {
                     name: "Bytes".into(),
                     type_args: Vec::new(),
                     parent: None,
-                    traits: Vec::new(),
-                    interfaces: vec![
+                    traits: vec![
                         "Buffer".into(),
                         "Sized".into(),
                         "Container".into(),
@@ -8049,7 +7521,6 @@ impl TypeChecker {
                     type_args: vec![subject_type.clone()],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 };
@@ -8125,8 +7596,7 @@ impl TypeChecker {
                     name: "Bytes".into(),
                     type_args: Vec::new(),
                     parent: None,
-                    traits: Vec::new(),
-                    interfaces: vec![
+                    traits: vec![
                         "Buffer".into(),
                         "Sized".into(),
                         "Container".into(),
@@ -8205,7 +7675,6 @@ impl TypeChecker {
                             | "shape"
                             | "typing.Shape"
                     ) || self.env.classes.contains_key(name)
-                        || self.env.interfaces.contains_key(name)
                         || self.env.traits.contains_key(name)
                         || self.env.type_aliases.contains_key(name)
                         || self.env.type_var_bounds.contains_key(name);
@@ -8761,7 +8230,6 @@ impl TypeChecker {
             type_args,
             parent,
             traits,
-            interfaces,
             fields,
             is_sealed,
         } = &inner
@@ -8772,7 +8240,6 @@ impl TypeChecker {
                     type_args: type_args.clone(),
                     parent: parent.clone(),
                     traits: traits.clone(),
-                    interfaces: interfaces.clone(),
                     fields: fields.clone(),
                     is_sealed: *is_sealed,
                 };
@@ -8783,7 +8250,6 @@ impl TypeChecker {
                     type_args: type_args.clone(),
                     parent: parent.clone(),
                     traits: traits.clone(),
-                    interfaces: interfaces.clone(),
                     fields: fields.clone(),
                     is_sealed: *is_sealed,
                 };
@@ -8818,7 +8284,6 @@ impl TypeChecker {
                         type_args: vec![class_type.clone()],
                         parent: None,
                         traits: Vec::new(),
-                        interfaces: Vec::new(),
                         fields: HashMap::new(),
                         is_sealed: true,
                     });
@@ -8982,8 +8447,7 @@ impl TypeChecker {
                     name: "Bytes".into(),
                     type_args: Vec::new(),
                     parent: None,
-                    traits: Vec::new(),
-                    interfaces: vec![
+                    traits: vec![
                         "Buffer".into(),
                         "Sized".into(),
                         "Container".into(),
@@ -9501,8 +8965,8 @@ impl TypeChecker {
                         Ok(Type::Bool)
                     }
                     BinaryOp::Is | BinaryOp::IsNot | BinaryOp::Identity | BinaryOp::NotIdentity => {
-                        let declaration_kind_check = matches!(&**right, Expr::Ident { name, .. } if matches!(name.as_str(), "class" | "trait" | "interface"))
-                            || matches!(&**right, Expr::Type(TypeExpr::Named { name, .. }) if matches!(name.as_str(), "class" | "trait" | "interface"));
+                        let declaration_kind_check = matches!(&**right, Expr::Ident { name, .. } if matches!(name.as_str(), "class" | "trait"))
+                            || matches!(&**right, Expr::Type(TypeExpr::Named { name, .. }) if matches!(name.as_str(), "class" | "trait"));
                         let tested_type = if let Expr::Ident { name, .. } = &**right {
                             match name.as_str() {
                                 "int" => Type::Int,
@@ -10352,13 +9816,9 @@ impl TypeChecker {
                                 .map(|(_, param_names)| param_names)
                         }
                         Type::Class { name, .. } => self.class_method_params(&name, attr),
-                        Type::Interface { name, .. } => self.interface_method_params(&name, attr),
                         Type::Trait { name, .. } => self.trait_method_params(&name, attr),
                         Type::View { inner, .. } => match *inner {
                             Type::Class { name, .. } => self.class_method_params(&name, attr),
-                            Type::Interface { name, .. } => {
-                                self.interface_method_params(&name, attr)
-                            }
                             Type::Trait { name, .. } => self.trait_method_params(&name, attr),
                             _ => None,
                         },
@@ -11242,7 +10702,6 @@ impl TypeChecker {
                                             ],
                                             parent: None,
                                             traits: Vec::new(),
-                                            interfaces: Vec::new(),
                                             fields: HashMap::new(),
                                             is_sealed: false,
                                         })
@@ -11255,7 +10714,6 @@ impl TypeChecker {
                                             ],
                                             parent: None,
                                             traits: Vec::new(),
-                                            interfaces: Vec::new(),
                                             fields: HashMap::new(),
                                             is_sealed: false,
                                         })
@@ -11270,7 +10728,6 @@ impl TypeChecker {
                                             ],
                                             parent: None,
                                             traits: Vec::new(),
-                                            interfaces: Vec::new(),
                                             fields: HashMap::new(),
                                             is_sealed: false,
                                         })
@@ -11364,7 +10821,6 @@ impl TypeChecker {
                                             type_args: vec![element_type],
                                             parent: None,
                                             traits: Vec::new(),
-                                            interfaces: Vec::new(),
                                             fields: HashMap::new(),
                                             is_sealed: false,
                                         })
@@ -11372,7 +10828,7 @@ impl TypeChecker {
                                     "monotonic" => Some(Type::Float),
                                     "dict" if matches!(&argument_type, Type::Class { name, type_args, .. } if name == "dict" && type_args.len() == 2) => {
                                         if let Type::Class { type_args, .. } = argument_type {
-                                            Some(Type::Class { name: "dict".into(), type_args, parent: None, traits: Vec::new(), interfaces: Vec::new(), fields: HashMap::new(), is_sealed: false })
+                                            Some(Type::Class { name: "dict".into(), type_args, parent: None, traits: Vec::new(), fields: HashMap::new(), is_sealed: false })
                                         } else { None }
                                     }
                                     "dict" => {
@@ -11383,7 +10839,6 @@ impl TypeChecker {
                                             type_args: vec![key_type, value_type],
                                             parent: None,
                                             traits: Vec::new(),
-                                            interfaces: Vec::new(),
                                             fields: HashMap::new(),
                                             is_sealed: false,
                                         })
@@ -11394,7 +10849,6 @@ impl TypeChecker {
                                             type_args: vec![self.iterable_element_type(&argument_type)],
                                             parent: None,
                                             traits: Vec::new(),
-                                            interfaces: Vec::new(),
                                             fields: HashMap::new(),
                                             is_sealed: false,
                                         })
@@ -11405,7 +10859,6 @@ impl TypeChecker {
                                             type_args: vec![self.iterable_element_type(&argument_type)],
                                             parent: None,
                                             traits: Vec::new(),
-                                            interfaces: Vec::new(),
                                             fields: HashMap::new(),
                                             is_sealed: false,
                                         })
@@ -11464,7 +10917,6 @@ impl TypeChecker {
                                                         type_args: vec![Type::Str, Type::TypeVar("object".into())],
                                                         parent: None,
                                                         traits: Vec::new(),
-                                                        interfaces: Vec::new(),
                                                         fields: HashMap::new(),
                                                         is_sealed: false,
                                                     }),
@@ -11473,7 +10925,6 @@ impl TypeChecker {
                                             }],
                                             parent: None,
                                             traits: Vec::new(),
-                                            interfaces: Vec::new(),
                                             fields: HashMap::new(),
                                             is_sealed: false,
                                         })
@@ -11696,7 +11147,6 @@ impl TypeChecker {
                     type_args: vec![Type::make_union(normalized)],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 })
@@ -11726,7 +11176,6 @@ impl TypeChecker {
                     type_args: vec![Type::make_union(normalized)],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 })
@@ -11764,7 +11213,6 @@ impl TypeChecker {
                     type_args: vec![Type::make_union(key_types), Type::make_union(value_types)],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 })
@@ -11927,7 +11375,6 @@ impl TypeChecker {
                                 type_args: vec![Type::Str],
                                 parent: None,
                                 traits: Vec::new(),
-                                interfaces: Vec::new(),
                                 fields: HashMap::new(),
                                 is_sealed: false,
                             }),
@@ -11939,7 +11386,6 @@ impl TypeChecker {
                                 type_args: vec![Type::Str],
                                 parent: None,
                                 traits: Vec::new(),
-                                interfaces: Vec::new(),
                                 fields: HashMap::new(),
                                 is_sealed: false,
                             }),
@@ -12199,20 +11645,6 @@ impl TypeChecker {
                             span: expr.span(),
                         })
                     }
-                    Type::Interface { ref name, .. } => {
-                        if let Some(getter_type) = self.interface_getter_type(name, attr) {
-                            Ok(getter_type)
-                        } else if let Some(field_type) = self.interface_field_type(name, attr) {
-                            Ok(field_type)
-                        } else if let Some(method_type) = self.interface_method_type(name, attr) {
-                            Ok(method_type)
-                        } else {
-                            Err(TypeError {
-                                message: format!("interface '{name}' has no member '{attr}'"),
-                                span: expr.span(),
-                            })
-                        }
-                    }
                     Type::Trait { ref name, .. } => {
                         match attr.as_str() {
                             "__name__" => return Ok(Type::Str),
@@ -12350,7 +11782,6 @@ impl TypeChecker {
                     type_args: vec![et],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 })
@@ -12390,7 +11821,6 @@ impl TypeChecker {
                     type_args: vec![et],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 })
@@ -12432,7 +11862,6 @@ impl TypeChecker {
                     type_args: vec![kt, vt],
                     parent: None,
                     traits: Vec::new(),
-                    interfaces: Vec::new(),
                     fields: HashMap::new(),
                     is_sealed: false,
                 })
@@ -12851,8 +12280,7 @@ impl TypeChecker {
                                 name: "Bytes".into(),
                                 type_args: Vec::new(),
                                 parent: None,
-                                traits: Vec::new(),
-                                interfaces: vec![
+                                traits: vec![
                                     "Buffer".into(),
                                     "Sized".into(),
                                     "Container".into(),
@@ -13393,7 +12821,6 @@ impl TypeChecker {
                                 type_args: resolved_args,
                                 parent: None,
                                 traits: Vec::new(),
-                                interfaces: Vec::new(),
                                 fields: HashMap::new(),
                                 is_sealed: false,
                             });
@@ -13409,7 +12836,6 @@ impl TypeChecker {
                                     type_args: Vec::new(),
                                     parent: None,
                                     traits: Vec::new(),
-                                    interfaces: Vec::new(),
                                     fields: HashMap::new(),
                                     is_sealed: true,
                                 });
@@ -13428,7 +12854,6 @@ impl TypeChecker {
                                 type_args: resolved_args,
                                 parent: None,
                                 traits: Vec::new(),
-                                interfaces: Vec::new(),
                                 fields: HashMap::new(),
                                 is_sealed: true,
                             });
@@ -13560,45 +12985,6 @@ impl TypeChecker {
                                 *type_args = resolved_args;
                             }
                             return Ok(c_clone);
-                        }
-                        if let Some(iface) = self.env.interfaces.get(other) {
-                            if let Some(parameters) = self.env.interface_variance.get(other) {
-                                if parameters.len() != resolved_args.len() {
-                                    return Err(TypeError {
-                                        message: format!(
-                                            "type '{}' expects {} argument(s), got {}",
-                                            other,
-                                            parameters.len(),
-                                            resolved_args.len()
-                                        ),
-                                        span: texpr.span(),
-                                    });
-                                }
-                            }
-                            if let Some(bounds) = self.env.interface_bounds.get(other) {
-                                for (index, argument) in resolved_args.iter().enumerate() {
-                                    if let Some(Some(bound)) = bounds.get(index) {
-                                        if !argument.is_subtype_of(bound, &self.env) {
-                                            return Err(TypeError {
-                                                message: format!(
-                                                    "type argument {} for '{}' does not satisfy its bound",
-                                                    index + 1,
-                                                    other
-                                                ),
-                                                span: texpr.span(),
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            let mut iface_clone = iface.clone();
-                            if let Type::Interface {
-                                ref mut type_args, ..
-                            } = iface_clone
-                            {
-                                *type_args = resolved_args;
-                            }
-                            return Ok(iface_clone);
                         }
                         if let Some(tr) = self.env.traits.get(other) {
                             if let Some(parameters) = self.env.trait_variance.get(other) {
@@ -13778,8 +13164,7 @@ impl TypeChecker {
                     name: "Bytes".into(),
                     type_args: Vec::new(),
                     parent: None,
-                    traits: Vec::new(),
-                    interfaces: vec![
+                    traits: vec![
                         "Buffer".into(),
                         "Sized".into(),
                         "Container".into(),
@@ -13986,7 +13371,6 @@ fn collect_local_binding_names(statements: &[Stmt], names: &mut HashSet<String>)
             }
             Stmt::Function(_)
             | Stmt::ClassDef { .. }
-            | Stmt::InterfaceDef { .. }
             | Stmt::TraitDef { .. }
             | Stmt::ImplementDef { .. } => {}
             _ => {}
@@ -14075,7 +13459,6 @@ fn external_class_placeholder_type(name: &str) -> Type {
         type_args: Vec::new(),
         parent: None,
         traits: vec!["Eq".into(), "Ord".into(), "Hashable".into()],
-        interfaces: Vec::new(),
         fields: HashMap::new(),
         is_sealed: false,
     }
@@ -14087,7 +13470,6 @@ fn class_object_type(class_type: Type) -> Type {
         type_args: vec![class_type],
         parent: None,
         traits: Vec::new(),
-        interfaces: Vec::new(),
         fields: HashMap::new(),
         is_sealed: true,
     }
@@ -14257,9 +13639,6 @@ fn types_may_overlap(left: &Type, right: &Type, env: &TypeEnvironment) -> bool {
         (Type::Trait { .. }, Type::Class { .. })
             | (Type::Class { .. }, Type::Trait { .. })
             | (Type::Trait { .. }, Type::Trait { .. })
-            | (Type::Interface { .. }, Type::Class { .. })
-            | (Type::Class { .. }, Type::Interface { .. })
-            | (Type::Interface { .. }, Type::Interface { .. })
     )
 }
 
@@ -14586,7 +13965,6 @@ class Child(Reusable, Base1, Base2):
             type_args: Vec::new(),
             parent: None,
             traits: Vec::new(),
-            interfaces: Vec::new(),
             fields: HashMap::new(),
             is_sealed: false,
         };
@@ -14754,7 +14132,7 @@ dispatch def area(c: Circle) -> int:
         assert!(res.is_ok(), "{:?}", res);
 
         let module = parse(
-            "interface Base:\n    pass\ninterface Derived(Base):\n    pass\nclass Widget(Derived):\n    pass\nvalue: Base = Widget()\n",
+            "trait Base:\n    pass\ntrait Derived(Base):\n    pass\nclass Widget(Derived):\n    pass\nvalue: Base = Widget()\n",
         )
         .unwrap();
         let mut checker = TypeChecker::new();
@@ -15713,7 +15091,7 @@ u.id = 2
         assert!(err.message.contains("required member 'required'"));
 
         let module = parse(
-            "interface Describable:\n    def describe(prefix: str) -> str\n\nclass Widget:\n    value: int\n\nimplement Describable for Widget:\n    def describe(self, prefix: str) -> str:\n        return prefix\n\nw = Widget(1)\nresult = w.describe(prefix=1)\n",
+            "trait Describable:\n    def describe(self, prefix: str) -> str\n\nclass Widget:\n    value: int\n\nimplement Describable for Widget:\n    def describe(self, prefix: str) -> str:\n        return prefix\n\nw = Widget(1)\nresult = w.describe(prefix=1)\n",
         )
         .unwrap();
         let mut checker = TypeChecker::new();
@@ -15721,7 +15099,7 @@ u.id = 2
         assert!(err.message.contains("incompatible type"));
 
         let module = parse(
-            "interface Describable:\n    def describe(prefix: str) -> str\n\nclass Widget:\n    value: int\n\nimplement Describable for Widget:\n    def describe(self, prefix: str) -> str:\n        return prefix\n\nw: Describable = Widget(1)\nresult = w.describe(prefix=1)\n",
+            "trait Describable:\n    def describe(self, prefix: str) -> str\n\nclass Widget:\n    value: int\n\nimplement Describable for Widget:\n    def describe(self, prefix: str) -> str:\n        return prefix\n\nw: Describable = Widget(1)\nresult = w.describe(prefix=1)\n",
         )
         .unwrap();
         let mut checker = TypeChecker::new();
@@ -16092,7 +15470,6 @@ def reject(value: not int) -> none:
             type_args: vec![],
             parent: None,
             traits: vec![],
-            interfaces: vec![],
             fields: HashMap::new(),
             is_sealed: false,
         };
@@ -16107,7 +15484,6 @@ def reject(value: not int) -> none:
             type_args: vec![Type::Str],
             parent: None,
             traits: vec![],
-            interfaces: vec![],
             fields: HashMap::new(),
             is_sealed: false,
         };
@@ -16394,7 +15770,6 @@ def reject(value: not int) -> none:
                     type_args: vec![Type::Int],
                     parent: None,
                     traits: vec![],
-                    interfaces: vec![],
                     fields: HashMap::new(),
                     is_sealed: false,
                 },
@@ -18308,28 +17683,10 @@ def reject(value: not int) -> none:
     }
 
     #[test]
-    fn test_private_exports_are_rejected_statically() {
-        let mut checker = TypeChecker::new();
-        let error = checker
-            .check_module(&parse("export _private = 1\n").unwrap())
-            .expect_err("private exports must fail static checking");
-        assert!(error.message.contains("cannot export private name"));
-        assert!(error.span.end > error.span.start);
-
-        let mut checker = TypeChecker::new();
-        let error = checker
-            .check_module(&parse("export def _hidden() -> int:\n    return 1\n").unwrap())
-            .expect_err("private function exports must fail static checking");
-        assert!(error.message.contains("_hidden"));
-        assert_eq!(error.span.line, 1);
-        assert!(error.span.end > error.span.start);
-    }
-
-    #[test]
     fn test_delitem_member_is_rejected_statically() {
         for source in [
             "class Bag:\n    def __delitem__(self, index: int):\n        pass\n",
-            "interface Removable:\n    def __delitem__(self, index: int) -> none\n",
+            "trait Removable:\n    def __delitem__(self, index: int) -> none\n",
             "trait Removable:\n    def __delitem__(self, index: int):\n        pass\n",
         ] {
             let mut checker = TypeChecker::new();
@@ -18361,7 +17718,7 @@ def reject(value: not int) -> none:
                 "__del__ is not supported",
             ),
             (
-                "interface Hook:\n    def __getattr__(self, name: str) -> int\n",
+                "trait Hook:\n    def __getattr__(self, name: str) -> int\n",
                 "__getattr__ is not supported",
             ),
             (
@@ -18584,7 +17941,7 @@ def reject(value: not int) -> none:
                 "__set_name__ is not supported",
             ),
             (
-                "interface Descriptor:\n    def __get__(self, obj: object, owner: object) -> int\n",
+                "trait Descriptor:\n    def __get__(self, obj: object, owner: object) -> int\n",
                 "__get__ is not supported",
             ),
             (
@@ -18655,7 +18012,6 @@ def reject(value: not int) -> none:
             type_args: vec![],
             parent: None,
             traits: vec!["Sized".into(), "Iterable".into(), "Sized".into()],
-            interfaces: vec!["Readable".into(), "Writable".into(), "Readable".into()],
             fields: HashMap::from([("z".into(), Type::Int), ("a".into(), Type::Float)]),
             is_sealed: false,
         };
@@ -18664,7 +18020,6 @@ def reject(value: not int) -> none:
             type_args: vec![],
             parent: None,
             traits: vec!["Iterable".into(), "Sized".into()],
-            interfaces: vec!["Writable".into(), "Readable".into()],
             fields: HashMap::from([("a".into(), Type::Float), ("z".into(), Type::Int)]),
             is_sealed: false,
         };
@@ -20146,7 +19501,7 @@ pub mod specialization {
             let mut to_visit: Vec<String> = module.statements.iter()
                 .filter_map(|stmt| {
                     if let Stmt::Function(func) = stmt {
-                        if func.name == "main" || stmt.clone() == Stmt::Export(Box::new(stmt.clone())) {
+                        if func.name == "main" {
                             return Some(func.name.clone());
                         }
                     }

@@ -840,7 +840,6 @@ impl<'a> Lexer<'a> {
             "none" => TokenKind::None,
 
             // Lucid keywords
-            "export" => TokenKind::Export,
             "public" => TokenKind::Public,
             "private" => TokenKind::Private,
             "module" => TokenKind::Module,
@@ -852,7 +851,6 @@ impl<'a> Lexer<'a> {
             "sealed" => TokenKind::Sealed,
             "override" => TokenKind::Override,
             "without" => TokenKind::Without,
-            "interface" => TokenKind::Interface,
             "trait" => TokenKind::Trait,
             "class" => TokenKind::Class,
             "implement" => TokenKind::Implement,

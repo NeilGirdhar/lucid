@@ -146,20 +146,38 @@ mod tests {
 
     #[test]
     fn test_lex_lucid_keywords_and_sigils() {
-        let src = "interface trait class factory construct out *** ? -> ! &";
+        let src = "trait class factory construct out *** ? -> ! &";
         let mut lexer = Lexer::new(src);
         let tokens = lexer.tokenize().unwrap();
-        assert_eq!(tokens[0].kind, TokenKind::Interface);
-        assert_eq!(tokens[1].kind, TokenKind::Trait);
-        assert_eq!(tokens[2].kind, TokenKind::Class);
-        assert_eq!(tokens[3].kind, TokenKind::Factory);
-        assert_eq!(tokens[4].kind, TokenKind::Construct);
-        assert_eq!(tokens[5].kind, TokenKind::Out);
-        assert_eq!(tokens[6].kind, TokenKind::TripleStar);
-        assert_eq!(tokens[7].kind, TokenKind::Question);
-        assert_eq!(tokens[8].kind, TokenKind::Arrow);
-        assert_eq!(tokens[9].kind, TokenKind::Bang);
-        assert_eq!(tokens[10].kind, TokenKind::Amp);
+        assert_eq!(tokens[0].kind, TokenKind::Trait);
+        assert_eq!(tokens[1].kind, TokenKind::Class);
+        assert_eq!(tokens[2].kind, TokenKind::Factory);
+        assert_eq!(tokens[3].kind, TokenKind::Construct);
+        assert_eq!(tokens[4].kind, TokenKind::Out);
+        assert_eq!(tokens[5].kind, TokenKind::TripleStar);
+        assert_eq!(tokens[6].kind, TokenKind::Question);
+        assert_eq!(tokens[7].kind, TokenKind::Arrow);
+        assert_eq!(tokens[8].kind, TokenKind::Bang);
+        assert_eq!(tokens[9].kind, TokenKind::Amp);
+    }
+
+    #[test]
+    fn interface_and_export_are_ordinary_identifiers() {
+        let tokens = Lexer::new("interface export").tokenize().unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Ident("interface".to_string()));
+        assert_eq!(tokens[1].kind, TokenKind::Ident("export".to_string()));
+
+        assert!(parse("interface Printable:\n    def format(self) -> str\n").is_err());
+        assert!(parse("export def helper(x: int) -> int:\n    return x\n").is_err());
+        assert!(parse("export class Service:\n    pass\n").is_err());
+        assert!(parse("from util export helper\n").is_err());
+    }
+
+    #[test]
+    fn ampersand_is_intersection_not_a_view_marker() {
+        assert!(parse("def take(xs: &list[int]) -> int:\n    return 0\n").is_err());
+        let module = parse("def take(xs: Sized & Iterable[int]) -> int:\n    return 0\n").unwrap();
+        assert_eq!(module.statements.len(), 1);
     }
 
     #[test]
@@ -172,27 +190,24 @@ mod tests {
     #[test]
     fn test_parse_class_with_factory_and_views() {
         let src = r#"
-export class Point:
+class Point:
     x: float
     y: float
 
     factory origin(cls) -> Point:
         return construct(0.0, 0.0)
 
-    def dist(self: &Self) -> float:
+    def dist(self: ~Self) -> float:
         return self.x + self.y
 "#;
         let module = parse(src).unwrap();
         assert_eq!(module.statements.len(), 1);
         match &module.statements[0] {
-            Stmt::Export(inner) => match inner.as_ref() {
-                Stmt::ClassDef { name, body, .. } => {
-                    assert_eq!(name, "Point");
-                    assert_eq!(body.len(), 4);
-                }
-                _ => panic!("expected class def"),
-            },
-            _ => panic!("expected export"),
+            Stmt::ClassDef { name, body, .. } => {
+                assert_eq!(name, "Point");
+                assert_eq!(body.len(), 4);
+            }
+            _ => panic!("expected class def"),
         }
     }
 
@@ -716,7 +731,6 @@ def register(handler: class[Handler]) -> none:
             "let __all__ = [\"value\"]\n",
             "def __all__() -> int:\n    return 1\n",
             "class __all__:\n    pass\n",
-            "export __all__ = [\"value\"]\n",
             "type __all__ = int\n",
         ] {
             let error = parse(source).unwrap_err();

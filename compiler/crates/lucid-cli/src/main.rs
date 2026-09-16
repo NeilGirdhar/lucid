@@ -241,9 +241,7 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
         };
         fn is_declaration(statement: &Stmt) -> bool {
             match statement {
-                Stmt::Export(inner) => is_declaration(inner),
                 Stmt::ClassDef { .. }
-                | Stmt::InterfaceDef { .. }
                 | Stmt::TraitDef { .. }
                 | Stmt::ImplementDef { .. }
                 | Stmt::TypeAlias { .. }
@@ -349,7 +347,6 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
                 .into_iter()
                 .filter_map(|statement| match statement {
                     Stmt::FromImport { .. } => None,
-                    Stmt::Export(inner) => Some(*inner),
                     other => Some(other),
                 }),
         );
