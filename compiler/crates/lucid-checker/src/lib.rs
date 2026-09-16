@@ -15759,7 +15759,7 @@ def reject(value: not int) -> none:
     #[test]
     fn test_class_type_arguments_honor_definition_site_variance() {
         let mut checker = TypeChecker::new();
-        let module = parse("class Animal:\n    pass\nclass Dog(Animal):\n    pass\nclass Box[out T: Animal]:\n    pass\ntrait Read[out T]:\n    pass\ntrait Sink[in T]:\n    pass\n").unwrap();
+        let module = parse("class Animal:\n    pass\nclass Dog(Animal):\n    pass\nclass Box[out T: Animal]:\n    pass\nclass Pair[out A, out B]:\n    pass\ntrait Read[out T]:\n    pass\ntrait Sink[in T]:\n    pass\n").unwrap();
         checker.check_module(&module).unwrap();
         let box_dog = checker
             .resolve_type_expr(&TypeExpr::Named {
@@ -15798,14 +15798,27 @@ def reject(value: not int) -> none:
             .unwrap_err()
             .message
             .contains("does not satisfy its bound"));
-        let wrong_class_arity = checker
+        // A bare name leaves its parameters unspecified; only a partial
+        // argument list is an arity error.
+        checker
             .resolve_type_expr(&TypeExpr::Named {
                 name: "Box".into(),
                 args: vec![],
                 span: Span::default(),
             })
+            .unwrap();
+        let wrong_class_arity = checker
+            .resolve_type_expr(&TypeExpr::Named {
+                name: "Pair".into(),
+                args: vec![TypeExpr::Named {
+                    name: "Dog".into(),
+                    args: vec![],
+                    span: Span::default(),
+                }],
+                span: Span::default(),
+            })
             .unwrap_err();
-        assert!(wrong_class_arity.message.contains("expects 1 argument"));
+        assert!(wrong_class_arity.message.contains("expects 2 argument"));
         let read_dog = checker
             .resolve_type_expr(&TypeExpr::Named {
                 name: "Read".into(),
