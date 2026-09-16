@@ -12504,26 +12504,29 @@ impl TypeChecker {
                 } else {
                     // Handle generic class instantiation like Box[int]
                     if let Expr::Ident { name: class_name, .. } = &**value {
-                        if let Some(type_expr_args) = match &**index {
-                            Expr::Record { fields, .. } => fields
-                                .iter()
-                                .map(|(n, expr)| {
-                                    if n.is_some() {
-                                        None
-                                    } else {
-                                        expr_to_type_expr(expr)
-                                    }
-                                })
-                                .collect::<Option<Vec<_>>>(),
-                            other => expr_to_type_expr(other).map(|arg| vec![arg]),
-                        } {
-                            // Try to resolve as a generic class instantiation
-                            if let Ok(specialized) = self.resolve_type_expr(&TypeExpr::Named {
-                                name: class_name.clone(),
-                                args: type_expr_args,
-                                span: index.span(),
-                            }) {
-                                return Ok(specialized);
+                        // Only try generic class instantiation if this is actually a known class
+                        if self.env.classes.contains_key(class_name) {
+                            if let Some(type_expr_args) = match &**index {
+                                Expr::Record { fields, .. } => fields
+                                    .iter()
+                                    .map(|(n, expr)| {
+                                        if n.is_some() {
+                                            None
+                                        } else {
+                                            expr_to_type_expr(expr)
+                                        }
+                                    })
+                                    .collect::<Option<Vec<_>>>(),
+                                other => expr_to_type_expr(other).map(|arg| vec![arg]),
+                            } {
+                                // Resolve as a generic class instantiation
+                                if let Ok(specialized) = self.resolve_type_expr(&TypeExpr::Named {
+                                    name: class_name.clone(),
+                                    args: type_expr_args,
+                                    span: index.span(),
+                                }) {
+                                    return Ok(specialized);
+                                }
                             }
                         }
                     }
