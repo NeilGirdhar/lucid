@@ -486,4 +486,60 @@ impl AbiInfo {
     pub fn layout(&self, class_name: &str) -> Option<&ObjectLayout> {
         self.layouts.iter().find(|l| l.class_name == class_name)
     }
+
+    /// Generate layout for a class given field types
+    pub fn generate_layout(
+        &mut self,
+        class_name: String,
+        fields: Vec<(String, CInteropType)>,
+    ) {
+        let mut layout = ObjectLayout::new(class_name, self.pointer_size);
+        let mut current_offset = 0;
+
+        // Add object header (vtable pointer)
+        layout.add_field("__vtable".to_string(), current_offset);
+        current_offset += self.pointer_size;
+
+        // Add fields with proper alignment
+        for (field_name, field_type) in fields {
+            let field_size = self.size_of_cinterop_type(field_type);
+            current_offset = self.align_offset(current_offset, field_size);
+            layout.add_field(field_name, current_offset);
+            current_offset += field_size;
+        }
+
+        layout.total_size = self.align_offset(current_offset, layout.alignment);
+        self.add_layout(layout);
+    }
+
+    /// Calculate size of C interop type
+    fn size_of_cinterop_type(&self, ty: CInteropType) -> usize {
+        match ty {
+            CInteropType::Int => 8,        // int64_t
+            CInteropType::Float => 8,      // double
+            CInteropType::Bool => 1,       // bool
+            CInteropType::String => self.pointer_size, // const char*
+            CInteropType::Object => self.pointer_size, // void*
+            CInteropType::List => self.pointer_size,   // LucidList*
+            CInteropType::Dict => self.pointer_size,   // LucidDict*
+        }
+    }
+
+    /// Align offset to next boundary
+    fn align_offset(&self, offset: usize, alignment: usize) -> usize {
+        if alignment == 0 {
+            return offset;
+        }
+        ((offset + alignment - 1) / alignment) * alignment
+    }
+
+    /// Validate that a field access is within bounds
+    pub fn validate_field_access(&self, class_name: &str, field_name: &str, size: usize) -> bool {
+        if let Some(layout) = self.layout(class_name) {
+            if let Some(offset) = layout.field_offset(field_name) {
+                return offset + size <= layout.total_size;
+            }
+        }
+        false
+    }
 }
