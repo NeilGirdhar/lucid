@@ -23,6 +23,7 @@ pub struct IrModule {
     pub classes: Vec<IrClass>,
     pub traits: Vec<IrTrait>,
     pub specializations: Vec<TypeSpecialization>,
+    pub error_types: Vec<ErrorType>,
 }
 
 /// An IR function with control flow graph
@@ -173,6 +174,20 @@ pub struct TypeSpecialization {
     pub generic_name: String,           // "List" or "Dict"
     pub type_args: Vec<IrType>,         // [IrType::I64] for List[int]
     pub specialized_name: String,       // "List__i64__" or "Dict__str__i64__"
+}
+
+/// Error type definition for error hierarchies
+#[derive(Debug, Clone)]
+pub struct ErrorType {
+    pub name: String,
+    pub variants: Vec<ErrorVariant>,
+}
+
+/// Error variant (case) in an error enum
+#[derive(Debug, Clone)]
+pub struct ErrorVariant {
+    pub name: String,
+    pub code: i64,
 }
 
 /// Class definition in IR
@@ -372,6 +387,7 @@ impl IrModule {
             classes: Vec::new(),
             traits: Vec::new(),
             specializations: Vec::new(),
+            error_types: Vec::new(),
         }
     }
 

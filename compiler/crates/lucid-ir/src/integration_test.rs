@@ -1699,4 +1699,37 @@ int main() {
         assert_eq!(module.specializations.len(), 3);  // Still 3, not 4
     }
 
+    #[test]
+    fn test_error_type_hierarchies() {
+        // Test error enum definitions
+        let mut module = crate::IrModule::new();
+
+        // Create ParseError enum
+        let parse_error = crate::ErrorType {
+            name: "ParseError".to_string(),
+            variants: vec![
+                crate::ErrorVariant {
+                    name: "InvalidFormat".to_string(),
+                    code: 1,
+                },
+                crate::ErrorVariant {
+                    name: "UnexpectedEnd".to_string(),
+                    code: 2,
+                },
+                crate::ErrorVariant {
+                    name: "InvalidChar".to_string(),
+                    code: 3,
+                },
+            ],
+        };
+
+        module.error_types.push(parse_error);
+
+        // Verify error type registered
+        assert_eq!(module.error_types.len(), 1);
+        assert_eq!(module.error_types[0].name, "ParseError");
+        assert_eq!(module.error_types[0].variants.len(), 3);
+        assert_eq!(module.error_types[0].variants[0].code, 1);
+    }
+
 }
