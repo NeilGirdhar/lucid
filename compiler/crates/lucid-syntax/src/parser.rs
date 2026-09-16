@@ -77,16 +77,6 @@ impl Parser {
         while self.match_tok(&TokenKind::Newline) {}
     }
 
-    fn parse_visibility(&mut self) -> Option<Visibility> {
-        if self.match_tok(&TokenKind::Public) {
-            Some(Visibility::Public)
-        } else if self.match_tok(&TokenKind::Private) {
-            Some(Visibility::Private)
-        } else {
-            None
-        }
-    }
-
     pub fn parse_module(&mut self) -> Result<Module, ParseError> {
         self.skip_newlines();
         let start_span = self.peek().span;
@@ -195,9 +185,7 @@ impl Parser {
     fn statement_can_own_block(kind: &TokenKind) -> bool {
         matches!(
             kind,
-TokenKind::Public
-                | TokenKind::Private
-                | TokenKind::Module
+            TokenKind::Module
                 | TokenKind::Class
                 | TokenKind::Sealed
                 | TokenKind::Final
@@ -556,7 +544,6 @@ TokenKind::Public
 
     fn parse_class_def(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
-        let visibility = self.parse_visibility();
         let mut is_sealed = false;
         let mut is_final = false;
 
@@ -661,7 +648,6 @@ TokenKind::Public
             body,
             is_sealed,
             is_final,
-            visibility,
             span: start.merge(end),
         })
     }
@@ -677,7 +663,6 @@ TokenKind::Public
             self.skip_newlines();
         }
 
-        let visibility = self.parse_visibility();
         let is_override = self.match_tok(&TokenKind::Override);
         let is_final = self.match_tok(&TokenKind::Final);
         let is_dispatch = self.match_tok(&TokenKind::Dispatch);
@@ -717,7 +702,6 @@ TokenKind::Public
                 type_annotation,
                 default,
                 is_final,
-                visibility,
                 doc: None,
                 span: start,
             }));
@@ -733,7 +717,6 @@ TokenKind::Public
                 name,
                 type_params,
                 value: TypeAliasValue::Direct(val),
-                visibility,
                 span: start,
             });
         }
@@ -814,7 +797,6 @@ TokenKind::Public
             func.is_async = is_async;
             func.is_override = is_override;
             func.is_final = is_final;
-            func.visibility = visibility;
             return Ok(ClassMember::ClassMethod(func));
         }
 
@@ -846,7 +828,6 @@ TokenKind::Public
             func.is_async = is_async;
             func.is_override = is_override;
             func.is_final = is_final;
-            func.visibility = visibility;
             return Ok(ClassMember::Method(func));
         }
 
@@ -890,7 +871,6 @@ TokenKind::Public
             type_annotation,
             default,
             is_final,
-            visibility,
             doc,
             span: start,
         }))
@@ -898,7 +878,6 @@ TokenKind::Public
 
     fn parse_trait_def(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
-        let visibility = self.parse_visibility();
         self.expect(&TokenKind::Trait)?;
         let name = self.expect_ident()?;
         let type_params = self.parse_optional_type_params()?;
@@ -1013,7 +992,6 @@ TokenKind::Public
                     type_annotation,
                     default,
                     is_final,
-                    visibility: None,
                     doc: None,
                     span: f_start,
                 }));
@@ -1033,7 +1011,6 @@ TokenKind::Public
                     type_annotation,
                     default: None,
                     is_final: false,
-                    visibility: None,
                     doc: None,
                     span: f_start,
                 }));
@@ -1067,7 +1044,6 @@ TokenKind::Public
             type_params,
             bases,
             body,
-            visibility,
             span: start.merge(end),
         })
     }
@@ -1134,7 +1110,6 @@ TokenKind::Public
 
     fn parse_type_alias(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
-        let visibility = self.parse_visibility();
         self.expect(&TokenKind::Type)?;
         let name = self.expect_ident()?;
         let type_params = self.parse_optional_type_params()?;
@@ -1155,7 +1130,6 @@ TokenKind::Public
                     name,
                     type_params,
                     value: TypeAliasValue::Direct(TypeExpr::Wildcard(start_span)),
-                    visibility,
                     span: start,
                 });
             }
@@ -1199,7 +1173,6 @@ TokenKind::Public
                     subject: subjects,
                     arms,
                 },
-                visibility,
                 span: start,
             });
         }
@@ -1211,7 +1184,6 @@ TokenKind::Public
             name,
             type_params,
             value: TypeAliasValue::Direct(value_type),
-            visibility,
             span: start,
         })
     }
@@ -1221,13 +1193,11 @@ TokenKind::Public
         mut is_dispatch: bool,
         decorators: Vec<Expr>,
     ) -> Result<Stmt, ParseError> {
-        let visibility = self.parse_visibility();
         self.expect(&TokenKind::Def)?;
         if self.match_tok(&TokenKind::Dispatch) {
             is_dispatch = true;
         }
         let mut func = self.parse_raw_function(is_dispatch, decorators)?;
-        func.visibility = visibility;
         Ok(Stmt::Function(func))
     }
 
@@ -1305,7 +1275,6 @@ TokenKind::Public
             is_async: false,
             is_override: false,
             is_final: false,
-            visibility: None,
             decorators,
             span: start,
         })

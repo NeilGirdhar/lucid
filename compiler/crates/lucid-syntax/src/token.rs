@@ -59,8 +59,6 @@ pub enum TokenKind {
     None,
 
     // --- Lucid Keywords ---
-    Public,
-    Private,
     Module,
     Factory,
     Construct,
@@ -192,8 +190,6 @@ impl fmt::Display for TokenKind {
             TokenKind::True => write!(f, "'true'"),
             TokenKind::False => write!(f, "'false'"),
             TokenKind::None => write!(f, "'none'"),
-            TokenKind::Public => write!(f, "'public'"),
-            TokenKind::Private => write!(f, "'private'"),
             TokenKind::Module => write!(f, "'module'"),
             TokenKind::Factory => write!(f, "'factory'"),
             TokenKind::Construct => write!(f, "'construct'"),

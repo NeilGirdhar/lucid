@@ -840,8 +840,6 @@ impl<'a> Lexer<'a> {
             "none" => TokenKind::None,
 
             // Lucid keywords
-            "public" => TokenKind::Public,
-            "private" => TokenKind::Private,
             "module" => TokenKind::Module,
             "factory" => TokenKind::Factory,
             "construct" => TokenKind::Construct,

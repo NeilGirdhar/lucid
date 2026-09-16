@@ -174,6 +174,15 @@ mod tests {
     }
 
     #[test]
+    fn public_and_private_are_ordinary_identifiers() {
+        // Visibility is a leading underscore; there is no keyword for it.
+        let module = parse("public = 1\nprivate = public + 1\n").unwrap();
+        assert_eq!(module.statements.len(), 2);
+        assert!(parse("public class Service:\n    pass\n").is_err());
+        assert!(parse("private def helper() -> int:\n    return 1\n").is_err());
+    }
+
+    #[test]
     fn ampersand_is_intersection_not_a_view_marker() {
         assert!(parse("def take(xs: &list[int]) -> int:\n    return 0\n").is_err());
         let module = parse("def take(xs: Sized & Iterable[int]) -> int:\n    return 0\n").unwrap();

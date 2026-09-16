@@ -1,12 +1,6 @@
 use crate::token::Span;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Visibility {
-    Public,
-    Private,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum MutabilityView {
     Mutable,   // T
     ReadOnly,  // ~T
@@ -415,7 +409,6 @@ pub struct FunctionDef {
     pub is_async: bool,
     pub is_override: bool,
     pub is_final: bool,
-    pub visibility: Option<Visibility>,
     pub decorators: Vec<Expr>,
     pub span: Span,
 }
@@ -452,7 +445,6 @@ pub struct FieldDef {
     pub type_annotation: TypeExpr,
     pub default: Option<Expr>,
     pub is_final: bool,
-    pub visibility: Option<Visibility>,
     pub doc: Option<String>,
     pub span: Span,
 }
@@ -470,7 +462,6 @@ pub enum ClassMember {
         name: String,
         type_params: Vec<TypeParam>,
         value: TypeAliasValue,
-        visibility: Option<Visibility>,
         span: Span,
     },
     Pass(Span),
@@ -513,7 +504,6 @@ pub enum Stmt {
         body: Vec<ClassMember>,
         is_sealed: bool,
         is_final: bool,
-        visibility: Option<Visibility>,
         span: Span,
     },
     TraitDef {
@@ -521,7 +511,6 @@ pub enum Stmt {
         type_params: Vec<TypeParam>,
         bases: Vec<TypeExpr>,
         body: Vec<TraitMember>,
-        visibility: Option<Visibility>,
         span: Span,
     },
     ImplementDef {
@@ -534,7 +523,6 @@ pub enum Stmt {
         name: String,
         type_params: Vec<TypeParam>,
         value: TypeAliasValue,
-        visibility: Option<Visibility>,
         span: Span,
     },
     Function(FunctionDef),
