@@ -698,6 +698,7 @@ impl IrBuilder {
         // Create IrClass with parent tracking, extracted fields, and methods
         let ir_class = crate::IrClass {
             name: name.to_string(),
+            generic_params: Vec::new(),
             parent,
             fields,
             methods,

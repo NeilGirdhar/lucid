@@ -361,6 +361,7 @@ mod tests {
 
         // Create a Point class
         let point_class = IrClass {
+            generic_params: Vec::new(),
                     parent: None,
             name: "Point".to_string(),
             fields: vec![
@@ -407,6 +408,7 @@ mod tests {
 
         // Create Point class
         let point_class = IrClass {
+            generic_params: Vec::new(),
                     parent: None,
             name: "Point".to_string(),
             fields: vec![
@@ -440,6 +442,7 @@ mod tests {
 
         // Create a Point class with x and y fields
         let point_class = IrClass {
+            generic_params: Vec::new(),
                     parent: None,
             name: "Point".to_string(),
             fields: vec![
@@ -666,7 +669,8 @@ mod tests {
 
         // Create a Point class
         let mut point_class = IrClass {
-                    parent: None,
+            generic_params: Vec::new(),
+            parent: None,
             name: "Point".to_string(),
             fields: vec![
                 IrField { name: "x".to_string(), ty: IrType::F64 },
@@ -738,7 +742,8 @@ mod tests {
 
         // Create Point class
         module.add_class(IrClass {
-                    parent: None,
+            generic_params: Vec::new(),
+            parent: None,
             name: "Point".to_string(),
             fields: vec![
                 IrField { name: "x".to_string(), ty: IrType::I64 },
@@ -814,6 +819,7 @@ mod tests {
 
         // Create parent class
         module.add_class(IrClass {
+            generic_params: Vec::new(),
             parent: None,
             name: "Animal".to_string(),
             fields: vec![
@@ -824,6 +830,7 @@ mod tests {
 
         // Create child class with parent
         module.add_class(IrClass {
+            generic_params: Vec::new(),
             parent: Some("Animal".to_string()),
             name: "Dog".to_string(),
             fields: vec![
@@ -1807,6 +1814,99 @@ int main() {
         assert!(code.contains("Dict__str__i64___new"));
         assert!(code.contains("Dict__str__i64___set"));
         assert!(code.contains("Dict__str__i64___get"));
+    }
+
+    #[test]
+    fn test_trait_bounds_checking() {
+        let mut module = IrModule::new();
+
+        // Add a Clone trait
+        let clone_trait = crate::IrTrait {
+            name: "Clone".to_string(),
+            methods: vec![
+                crate::TraitMethod {
+                    name: "clone".to_string(),
+                    params: vec![],
+                    return_type: IrType::Ptr,
+                },
+            ],
+        };
+        module.traits.push(clone_trait);
+
+        // Add Copy trait
+        let copy_trait = crate::IrTrait {
+            name: "Copy".to_string(),
+            methods: vec![],
+        };
+        module.traits.push(copy_trait);
+
+        // String implements Clone
+        let string_clone_impl = crate::TraitImpl {
+            trait_name: "Clone".to_string(),
+            impl_type: "String".to_string(),
+            methods: vec![
+                crate::MethodImpl {
+                    method_name: "clone".to_string(),
+                    impl_function: "String__clone".to_string(),
+                },
+            ],
+        };
+        module.trait_impls.push(string_clone_impl);
+
+        // i64 implements Clone and Copy
+        let i64_clone_impl = crate::TraitImpl {
+            trait_name: "Clone".to_string(),
+            impl_type: "i64".to_string(),
+            methods: vec![],
+        };
+        module.trait_impls.push(i64_clone_impl);
+
+        let i64_copy_impl = crate::TraitImpl {
+            trait_name: "Copy".to_string(),
+            impl_type: "i64".to_string(),
+            methods: vec![],
+        };
+        module.trait_impls.push(i64_copy_impl);
+
+        // Verify trait implementations
+        assert!(module.type_implements_trait("String", "Clone"));
+        assert!(!module.type_implements_trait("String", "Copy"));
+        assert!(module.type_implements_trait("i64", "Clone"));
+        assert!(module.type_implements_trait("i64", "Copy"));
+        assert!(!module.type_implements_trait("f64", "Clone"));
+
+        // Test bounds satisfaction
+        let clone_bound = vec!["Clone".to_string()];
+        assert!(module.type_satisfies_bounds("String", &clone_bound));
+        assert!(module.type_satisfies_bounds("i64", &clone_bound));
+        assert!(!module.type_satisfies_bounds("f64", &clone_bound));
+
+        let copy_bound = vec!["Copy".to_string()];
+        assert!(!module.type_satisfies_bounds("String", &copy_bound));
+        assert!(module.type_satisfies_bounds("i64", &copy_bound));
+
+        // Test multiple bounds
+        let multi_bounds = vec!["Clone".to_string(), "Copy".to_string()];
+        assert!(!module.type_satisfies_bounds("String", &multi_bounds));
+        assert!(module.type_satisfies_bounds("i64", &multi_bounds));
+    }
+
+    #[test]
+    fn test_generic_param_with_bounds() {
+        // Test that generic parameters can have trait bounds
+        let generic_param = crate::GenericParam {
+            name: "T".to_string(),
+            bounds: vec![
+                crate::TraitBound {
+                    type_param: "T".to_string(),
+                    trait_name: "Clone".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(generic_param.name, "T");
+        assert_eq!(generic_param.bounds.len(), 1);
+        assert_eq!(generic_param.bounds[0].trait_name, "Clone");
     }
 
 }

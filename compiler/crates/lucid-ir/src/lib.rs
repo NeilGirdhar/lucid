@@ -31,6 +31,7 @@ pub struct IrModule {
 #[derive(Debug, Clone)]
 pub struct IrFunction {
     pub name: String,
+    pub generic_params: Vec<GenericParam>,  // Generic type parameters [T, K, V, ...]
     pub params: Vec<IrParam>,
     pub return_type: IrType,
     pub blocks: Vec<IrBlock>,
@@ -169,6 +170,20 @@ pub struct TraitMethod {
     pub return_type: IrType,
 }
 
+/// Trait bound for generic type parameters
+#[derive(Debug, Clone)]
+pub struct TraitBound {
+    pub type_param: String,           // e.g., "T" in T: Clone
+    pub trait_name: String,           // e.g., "Clone"
+}
+
+/// Generic type parameter with optional bounds
+#[derive(Debug, Clone)]
+pub struct GenericParam {
+    pub name: String,                 // e.g., "T", "K", "V"
+    pub bounds: Vec<TraitBound>,      // e.g., [T: Clone, T: Copy]
+}
+
 /// Generic type instantiation (monomorphization)
 #[derive(Debug, Clone)]
 pub struct TypeSpecialization {
@@ -210,6 +225,7 @@ pub struct MethodImpl {
 #[derive(Debug, Clone)]
 pub struct IrClass {
     pub name: String,
+    pub generic_params: Vec<GenericParam>,  // Generic type parameters
     pub parent: Option<String>,  // Single inheritance: parent class name
     pub fields: Vec<IrField>,
     pub methods: Vec<MethodDispatch>,
@@ -466,6 +482,38 @@ impl IrModule {
             _ => "unknown".to_string(),
         }
     }
+
+    /// Check if a type implements a specific trait
+    pub fn type_implements_trait(&self, type_name: &str, trait_name: &str) -> bool {
+        for impl_block in &self.trait_impls {
+            if impl_block.impl_type == type_name && impl_block.trait_name == trait_name {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get trait bounds for a generic parameter
+    pub fn get_generic_param_bounds(&self, param_name: &str, functions: &[IrFunction]) -> Vec<String> {
+        for func in functions {
+            for param in &func.generic_params {
+                if param.name == param_name {
+                    return param.bounds.iter().map(|b| b.trait_name.clone()).collect();
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// Validate that a type satisfies trait bounds
+    pub fn type_satisfies_bounds(&self, type_name: &str, bounds: &[String]) -> bool {
+        for bound in bounds {
+            if !self.type_implements_trait(type_name, bound) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl IrFunction {
@@ -476,6 +524,7 @@ impl IrFunction {
     ) -> Self {
         Self {
             name,
+            generic_params: Vec::new(),
             params,
             return_type,
             blocks: vec![IrBlock {
