@@ -1360,4 +1360,83 @@ int main() {
         assert!(has_unwrap_call, "IR should contain lucid_result_unwrap call for ? operator");
     }
 
+    #[test]
+    fn test_dict_access_codegen() {
+        // Test dictionary subscript access
+        let c_code = r#"
+#include <stdint.h>
+#include <stdlib.h>
+
+struct LucidDict {
+    int64_t size;
+    // Simplified: just track one key-value pair for test
+    const char* keys[10];
+    int64_t values[10];
+};
+
+int64_t lucid_dict_get(struct LucidDict* dict, const char* key) {
+    for (int i = 0; i < dict->size; i++) {
+        if (dict->keys[i] == key) {
+            return dict->values[i];
+        }
+    }
+    return -1;  // Not found
+}
+
+void lucid_dict_set(struct LucidDict* dict, const char* key, int64_t value) {
+    dict->keys[dict->size] = key;
+    dict->values[dict->size] = value;
+    dict->size++;
+}
+
+int main() {
+    struct LucidDict d;
+    d.size = 0;
+
+    // Set values
+    lucid_dict_set(&d, "one", 1);
+    lucid_dict_set(&d, "two", 2);
+    lucid_dict_set(&d, "three", 3);
+
+    // Access values
+    int64_t one = lucid_dict_get(&d, "one");
+    int64_t two = lucid_dict_get(&d, "two");
+    int64_t three = lucid_dict_get(&d, "three");
+
+    if (one == 1 && two == 2 && three == 3) {
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
+    #[test]
+    fn test_dict_operations_ir() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def lookup_dict() -> int:
+    d = {}
+    return d["key"]
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for dict operations");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for dict operations");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Verify DictAccess instruction was generated for dict["key"]
+        let func = &ir_module.functions[0];
+        let has_dict_access = func.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instr| {
+                matches!(instr, IrInstruction::DictAccess { .. })
+            })
+        });
+        assert!(has_dict_access, "IR should contain DictAccess instruction");
+    }
+
 }

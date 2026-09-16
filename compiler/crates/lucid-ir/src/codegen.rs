@@ -409,6 +409,23 @@ impl CCodegenBackend {
                 self.indent_level -= 1;
                 self.emit_line("}");
             }
+            IrInstruction::DictAccess { dest, dict, key } => {
+                let dict_code = self.value_to_c(dict);
+                let key_code = self.value_to_c(key);
+
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "int64_t {} = lucid_dict_get({}, {});",
+                        dest, dict_code, key_code
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "{} = lucid_dict_get({}, {});",
+                        dest, dict_code, key_code
+                    ));
+                }
+            }
         }
     }
 

@@ -546,17 +546,29 @@ impl IrBuilder {
                 IrValue::Var(dest)
             }
             Expr::Index { value, index, .. } => {
-                // Array/list indexing: list[index]
+                // Array/list/dict indexing: obj[index]
                 let obj_value = self.expr_to_ir_value(value);
                 let idx_value = self.expr_to_ir_value(index);
                 let dest = self.fresh_var("elem");
 
-                // Generate: dest = lucid_list_get(list, index)
-                self.emit(IrInstruction::Call {
-                    dest: Some(dest.clone()),
-                    func: "lucid_list_get".to_string(),
-                    args: vec![obj_value, idx_value],
-                });
+                // Heuristic: if index is a string, assume dict; otherwise list
+                let is_dict_access = matches!(idx_value, IrValue::String(_));
+
+                if is_dict_access {
+                    // Dictionary access: dict[key]
+                    self.emit(IrInstruction::DictAccess {
+                        dest: dest.clone(),
+                        dict: obj_value,
+                        key: idx_value,
+                    });
+                } else {
+                    // List indexing: list[index]
+                    self.emit(IrInstruction::Call {
+                        dest: Some(dest.clone()),
+                        func: "lucid_list_get".to_string(),
+                        args: vec![obj_value, idx_value],
+                    });
+                }
 
                 IrValue::Var(dest)
             }

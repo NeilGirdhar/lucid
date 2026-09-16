@@ -228,6 +228,12 @@ pub enum IrInstruction {
         error_block: usize,
         success_block: usize,
     },
+    /// Dictionary access: dict[key] -> value
+    DictAccess {
+        dest: String,
+        dict: IrValue,
+        key: IrValue,
+    },
 }
 
 /// Values in IR (operands)
