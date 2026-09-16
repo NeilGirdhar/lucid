@@ -10522,6 +10522,8 @@ impl TypeChecker {
                         let mut bound = HashSet::new();
                         let mut positional_index = 0usize;
                         let mut saw_named = false;
+                        let mut inferred_substitutions: HashMap<String, Type> = HashMap::new();
+                        // First pass: collect inferred type arguments
                         for argument in args {
                             let index = if let Some(argument_name) = &argument.name {
                                 saw_named = true;
@@ -10566,6 +10568,14 @@ impl TypeChecker {
                                     .class_field_type(name, field_name)
                                     .unwrap_or(Type::TypeVar("Any".into()));
                                 let argument_type = self.type_of_expr(&argument.value)?;
+                                // Try to infer generic type arguments from field/argument types
+                                if let Type::TypeVar(param_name) = &field_type {
+                                    if let Some(params) = self.env.class_type_params.get(name) {
+                                        if params.contains(param_name) {
+                                            inferred_substitutions.insert(param_name.clone(), argument_type.clone());
+                                        }
+                                    }
+                                }
                                 // An uninstantiated constructor may infer its
                                 // class type arguments from the supplied
                                 // fields; defer checks against bare type
@@ -10588,6 +10598,47 @@ impl TypeChecker {
                                         ),
                                         span: argument.value.span(),
                                     });
+                                }
+                            }
+                        }
+                        // Second pass: re-check with inferred types
+                        if !inferred_substitutions.is_empty() {
+                            bound.clear();
+                            positional_index = 0;
+                            saw_named = false;
+                            for argument in args {
+                                let index = if let Some(argument_name) = &argument.name {
+                                    saw_named = true;
+                                    field_names
+                                        .iter()
+                                        .position(|field_name| field_name == argument_name)
+                                        .unwrap_or(0)
+                                } else {
+                                    if !saw_named {
+                                        let index = positional_index;
+                                        positional_index += 1;
+                                        index
+                                    } else {
+                                        continue;
+                                    }
+                                };
+                                if let Some(field_name) = field_names.get(index) {
+                                    let mut field_type = self
+                                        .class_field_type(name, field_name)
+                                        .unwrap_or(Type::TypeVar("Any".into()));
+                                    field_type = substitute_type(&field_type, &inferred_substitutions);
+                                    let argument_type = self.type_of_expr(&argument.value)?;
+                                    if !matches!(field_type, Type::TypeVar(_))
+                                        && !argument_type.is_subtype_of(&field_type, &self.env)
+                                    {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "constructor field '{}' expects {:?}, got {:?}",
+                                                field_name, field_type, argument_type
+                                            ),
+                                            span: argument.value.span(),
+                                        });
+                                    }
                                 }
                             }
                         }
