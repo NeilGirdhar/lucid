@@ -26,6 +26,12 @@ impl CCodegenBackend {
         self.emit_includes();
         self.emit_line("");
 
+        // Add module namespace comment for clarity in generated code
+        if module.path != "main" {
+            self.emit_line(&format!("// Module: {}", module.path));
+            self.emit_line("");
+        }
+
         // Generate specialized type definitions (List[T], Dict[K,V])
         self.generate_specialized_types(module);
         self.emit_line("");
@@ -37,7 +43,8 @@ impl CCodegenBackend {
                 .map(|p| format!("{} {}", p.ty.c_type(), p.name))
                 .collect::<Vec<_>>()
                 .join(", ");
-            self.emit_line(&format!("{} {}({});", return_ctype, function.name, param_list));
+            let qualified_name = self.qualify_symbol(&module.path, &function.name);
+            self.emit_line(&format!("{} {}({});", return_ctype, qualified_name, param_list));
         }
         self.emit_line("");
 
@@ -1775,6 +1782,16 @@ impl CCodegenBackend {
         self.emit_line("return (a / lucid_gcd(a, b)) * b;");
         self.indent_level -= 1;
         self.emit_line("}");
+    }
+
+    fn qualify_symbol(&self, module_path: &str, symbol: &str) -> String {
+        // Generate a C-compatible qualified name from module path and symbol
+        // std.math.sqrt -> std_math_sqrt
+        if module_path == "main" {
+            symbol.to_string()
+        } else {
+            format!("{}_{}", module_path.replace(".", "_"), symbol)
+        }
     }
 
     fn emit_line(&mut self, line: &str) {

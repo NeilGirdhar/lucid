@@ -2223,6 +2223,117 @@ int main() {
     }
 
     #[test]
+    fn test_module_creation() {
+        // Test creating modules with names and paths
+        let module = IrModule::with_name("math", "std.math");
+
+        assert_eq!(module.name, "math");
+        assert_eq!(module.path, "std.math");
+        assert_eq!(module.imported_modules.len(), 0);
+    }
+
+    #[test]
+    fn test_module_imports_and_exports() {
+        // Test module import and export declarations
+        let math_export = crate::ModuleExport {
+            name: "sqrt".to_string(),
+            visibility: crate::Visibility::Public,
+        };
+
+        let import = crate::ModuleImport {
+            module_path: "std".to_string(),
+            imported_items: vec!["List".to_string(), "Dict".to_string()],
+            alias: None,
+        };
+
+        let mut module_def = crate::ModuleDef {
+            name: "math".to_string(),
+            path: "std.math".to_string(),
+            imports: vec![import],
+            exports: vec![math_export],
+            depends_on: vec!["std".to_string()],
+        };
+
+        assert_eq!(module_def.exports.len(), 1);
+        assert_eq!(module_def.imports.len(), 1);
+        assert_eq!(module_def.depends_on.len(), 1);
+    }
+
+    #[test]
+    fn test_symbol_resolution() {
+        // Test that symbols can be resolved across module boundaries
+        let mut main_module = IrModule::with_name("main", "main");
+
+        // Create a math module with a sqrt function
+        let mut math_module = IrModule::with_name("math", "std.math");
+        let sqrt_func = IrFunction::new(
+            "sqrt".to_string(),
+            vec![],
+            crate::IrType::F64,
+        );
+        math_module.add_function(sqrt_func);
+
+        // Import math module into main
+        main_module.add_imported_module(math_module);
+
+        // Resolve sqrt symbol
+        let resolved = main_module.resolve_symbol("sqrt");
+        assert!(resolved.is_some());
+        let (path, name) = resolved.unwrap();
+        assert_eq!(path, "std.math");
+        assert_eq!(name, "sqrt");
+    }
+
+    #[test]
+    fn test_module_visibility() {
+        // Test that visibility controls what's exported
+        let mut module = IrModule::with_name("api", "std.api");
+
+        let public_fn = crate::ModuleExport {
+            name: "process".to_string(),
+            visibility: crate::Visibility::Public,
+        };
+
+        let private_fn = crate::ModuleExport {
+            name: "internal_helper".to_string(),
+            visibility: crate::Visibility::Private,
+        };
+
+        let def = crate::ModuleDef {
+            name: "api".to_string(),
+            path: "std.api".to_string(),
+            imports: vec![],
+            exports: vec![public_fn, private_fn],
+            depends_on: vec![],
+        };
+
+        module.set_module_def(def);
+
+        // Check visibility
+        assert!(module.is_exported("process"));
+        assert!(!module.is_exported("internal_helper"));
+    }
+
+    #[test]
+    fn test_circular_dependency_detection() {
+        // Test that circular dependencies are detected
+        let def = crate::ModuleDef {
+            name: "a".to_string(),
+            path: "a".to_string(),
+            imports: vec![],
+            exports: vec![],
+            depends_on: vec!["b".to_string()],
+        };
+
+        let mut module = IrModule::with_name("a", "a");
+        module.set_module_def(def);
+
+        // Check if module A depends on B
+        assert!(module.has_circular_dependency("b"));
+        assert!(!module.has_circular_dependency("c"));
+    }
+
+    #[test]
     fn test_collection_algorithms_codegen() {
         // Test that collection algorithms are generated (reverse, first, last)
         let mut module = IrModule::new();

@@ -46,9 +46,43 @@ impl AnonymousClassShape {
     }
 }
 
+/// Visibility modifier for module members
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Public,   // Exported from module
+    Private,  // Internal to module
+}
+
+/// Module import statement
+#[derive(Debug, Clone)]
+pub struct ModuleImport {
+    pub module_path: String,  // "std", "utils", "math.vectors"
+    pub imported_items: Vec<String>,  // ["List", "Dict"] or empty for import *
+    pub alias: Option<String>,  // "import math.vectors as vec"
+}
+
+/// Module export (what this module provides)
+#[derive(Debug, Clone)]
+pub struct ModuleExport {
+    pub name: String,  // Function, class, or type name
+    pub visibility: Visibility,
+}
+
+/// Module definition (namespace container)
+#[derive(Debug, Clone)]
+pub struct ModuleDef {
+    pub name: String,  // "std", "utils"
+    pub path: String,  // "std", "math.vectors"
+    pub imports: Vec<ModuleImport>,
+    pub exports: Vec<ModuleExport>,
+    pub depends_on: Vec<String>,  // Other modules this depends on (for cycle detection)
+}
+
 /// A Lucid IR module containing functions and type definitions
 #[derive(Debug, Clone)]
 pub struct IrModule {
+    pub name: String,  // Module name ("main", "std", etc.)
+    pub path: String,  // Full module path ("std.collections")
     pub functions: Vec<IrFunction>,
     pub types: HashMap<String, IrType>,
     pub globals: Vec<IrGlobal>,
@@ -60,6 +94,8 @@ pub struct IrModule {
     pub iterator_traits: Vec<IteratorTrait>,  // Iterator support for collections
     pub operator_overloads: Vec<OperatorOverload>,  // Multiple dispatch for binary operators
     pub anonymous_shapes: Vec<AnonymousClassShape>,  // Unnamed structured types for Arguments/Parameters
+    pub module_def: Option<ModuleDef>,  // Module metadata
+    pub imported_modules: HashMap<String, IrModule>,  // Imported modules (for symbol resolution)
 }
 
 /// An IR function with control flow graph
@@ -632,7 +668,13 @@ pub enum IrTerminator {
 
 impl IrModule {
     pub fn new() -> Self {
+        Self::with_name("main", "main")
+    }
+
+    pub fn with_name(name: &str, path: &str) -> Self {
         Self {
+            name: name.to_string(),
+            path: path.to_string(),
             functions: Vec::new(),
             types: HashMap::new(),
             globals: Vec::new(),
@@ -644,6 +686,8 @@ impl IrModule {
             iterator_traits: Vec::new(),
             operator_overloads: Vec::new(),
             anonymous_shapes: Vec::new(),
+            module_def: None,
+            imported_modules: HashMap::new(),
         }
     }
 
@@ -665,6 +709,61 @@ impl IrModule {
 
     pub fn get_class(&self, name: &str) -> Option<&IrClass> {
         self.classes.iter().find(|c| c.name == name)
+    }
+
+    /// Define this module's metadata
+    pub fn set_module_def(&mut self, def: ModuleDef) {
+        self.module_def = Some(def);
+    }
+
+    /// Add an imported module to this module's namespace
+    pub fn add_imported_module(&mut self, module: IrModule) {
+        self.imported_modules.insert(module.path.clone(), module);
+    }
+
+    /// Resolve a symbol (function, type, class) potentially across module boundaries
+    /// Returns (module_path, symbol_name) if found
+    pub fn resolve_symbol(&self, symbol: &str) -> Option<(String, String)> {
+        // First check if it's in this module
+        if self.functions.iter().any(|f| f.name == symbol)
+            || self.classes.iter().any(|c| c.name == symbol)
+            || self.types.contains_key(symbol)
+            || self.traits.iter().any(|t| t.name == symbol)
+        {
+            return Some((self.path.clone(), symbol.to_string()));
+        }
+
+        // Check imported modules
+        for (_, imported) in &self.imported_modules {
+            if imported.functions.iter().any(|f| f.name == symbol)
+                || imported.classes.iter().any(|c| c.name == symbol)
+                || imported.types.contains_key(symbol)
+                || imported.traits.iter().any(|t| t.name == symbol)
+            {
+                return Some((imported.path.clone(), symbol.to_string()));
+            }
+        }
+
+        None
+    }
+
+    /// Check if a symbol is publicly exported from this module
+    pub fn is_exported(&self, symbol: &str) -> bool {
+        if let Some(def) = &self.module_def {
+            def.exports.iter().any(|e| e.name == symbol && e.visibility == Visibility::Public)
+        } else {
+            // If no module def, everything is public
+            true
+        }
+    }
+
+    /// Check for circular dependencies
+    pub fn has_circular_dependency(&self, other: &str) -> bool {
+        if let Some(def) = &self.module_def {
+            def.depends_on.iter().any(|dep| dep == other)
+        } else {
+            false
+        }
     }
 
     pub fn specialize_type(&mut self, generic_name: &str, type_args: Vec<IrType>) -> String {
