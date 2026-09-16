@@ -5,6 +5,7 @@
 //! and code generation.
 
 pub mod builder;
+pub mod codegen;
 
 use std::collections::HashMap;
 
