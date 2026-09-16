@@ -164,6 +164,23 @@ after it — Python's own extended-unpacking form, unchanged:
 first, *middle, last = [1, 2, 3, 4, 5]
 middle: list[int] = [2, 3, 4]
 ```
+The same `*`/`**` also splice an existing collection's contents into a
+new literal — the reverse direction from unpacking a target, building
+a collection instead of taking one apart:
+
+```python
+first = [1, 2]
+combined: list[int] = [*first, 3, 4]
+merged: dict[str, int] = {**{"a": 1}, "b": 2}
+```
+This is also the one way to build a `list`, `set`, or `dict` from an
+already-unpacked source: [`list`, `set`, and `dict`'s own
+constructors](builtins.md#builtin-functions) take exactly the single
+positional argument Python's already give them — an iterable, or for
+`dict`, a mapping — never a second positional argument and never a
+keyword argument, so `list(*a)` or `dict(**kw)` are errors rather than
+a second spelling of `[*a]` and `{**kw}`.
+
 Lucid uses Python's operators and Python's order of operations unless this
 document says otherwise. In an expression, as opposed to an assignment
 target, unpacking binds tighter than binary operators:

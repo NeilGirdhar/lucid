@@ -67,9 +67,20 @@
   elsewhere: by position. `any(xs)` is a call; `any Trait` is bare, no
   parentheses, and never appears where a call would.
 * `iter`, `locals`, `format`, `hash`, `help`, `sum`, `reversed`,
-  `repr`, `print`, `list`, `set`, `dict`, `enumerate`, `map`, `max`,
+  `repr`, `print`, `enumerate`, `map`, `max`,
   `min`, `sorted`, `slice`, `getattr`, `setattr`, `hasattr` — kept,
   unchanged.
+* `list`, `set`, `dict` — construction takes exactly the one
+  positional argument Python's own signature already allows — an
+  iterable, or for `dict`, a mapping — never a second positional
+  argument, and never a keyword argument. Python's `dict()` folds five
+  different call shapes into one name — no arguments, a mapping, an
+  iterable of pairs, keyword arguments, and combinations of a mapping
+  or pairs with keyword arguments, each with its own rule for which
+  value wins on a key collision. Lucid already has one way to build a
+  collection from an unpacked source — a literal with `*`/`**` spread,
+  [`[*a]` or `{**kw}`](collections.md#unpacking) — so the constructor
+  call never needs to be a second.
 * [`pow`](numeric-types.md#pow-dispatches-per-type) — kept, but
   multiple-dispatch, one case per base type, so the zero-base,
   negative-exponent case returns each type's own `inf` instead of
