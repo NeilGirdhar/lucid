@@ -20032,12 +20032,69 @@ pub mod specialization {
 
         /// Eliminate dead code after specialization
         pub fn dead_code_elimination(module: &Module) -> Module {
-            // After specialization, some generic versions may become unused.
-            // This pass would:
-            // 1. Build a call graph from specialized and remaining generic functions
-            // 2. Mark all reachable functions starting from entry points
-            // 3. Remove unreachable function definitions
-            module.clone()
+            use std::collections::{HashMap, HashSet};
+
+            // Build call graph
+            let mut call_graph: HashMap<String, HashSet<String>> = HashMap::new();
+            let mut all_functions = HashSet::new();
+
+            for stmt in &module.statements {
+                if let Stmt::Function(func) = stmt {
+                    all_functions.insert(func.name.clone());
+                    call_graph.insert(func.name.clone(), HashSet::new());
+                }
+            }
+
+            // Analyze calls in each function
+            for stmt in &module.statements {
+                if let Stmt::Function(func) = stmt {
+                    if let Some(calls) = call_graph.get_mut(&func.name) {
+                        Self::collect_calls_in_statements(&func.body, calls);
+                    }
+                }
+            }
+
+            // Find reachable functions (main and exported)
+            let mut reachable = HashSet::new();
+            let mut to_visit: Vec<String> = module.statements.iter()
+                .filter_map(|stmt| {
+                    if let Stmt::Function(func) = stmt {
+                        if func.name == "main" || stmt.clone() == Stmt::Export(Box::new(stmt.clone())) {
+                            return Some(func.name.clone());
+                        }
+                    }
+                    None
+                })
+                .collect();
+
+            // BFS to find all reachable functions
+            while let Some(func) = to_visit.pop() {
+                if reachable.insert(func.clone()) {
+                    if let Some(callees) = call_graph.get(&func) {
+                        for callee in callees {
+                            if all_functions.contains(callee) {
+                                to_visit.push(callee.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Remove unreachable functions
+            let filtered_statements: Vec<Stmt> = module.statements.iter()
+                .filter(|stmt| {
+                    match stmt {
+                        Stmt::Function(func) => reachable.contains(&func.name),
+                        _ => true,
+                    }
+                })
+                .cloned()
+                .collect();
+
+            Module {
+                statements: filtered_statements,
+                span: module.span,
+            }
         }
 
         /// Constant propagation within specialized functions
@@ -20055,6 +20112,67 @@ pub mod specialization {
             let inlined = Self::inline_specializations(module);
             let dead_code_free = Self::dead_code_elimination(&inlined);
             Self::constant_propagation(&dead_code_free)
+        }
+    }
+
+    impl SpecializationOptimizer {
+        fn collect_calls_in_statements(stmts: &[Stmt], calls: &mut std::collections::HashSet<String>) {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Expr(expr) => Self::collect_calls_in_expr(expr, calls),
+                    Stmt::Return { value, .. } => {
+                        if let Some(v) = value {
+                            Self::collect_calls_in_expr(v, calls);
+                        }
+                    }
+                    Stmt::VarDef { value, .. } => {
+                        if let Some(v) = value {
+                            Self::collect_calls_in_expr(v, calls);
+                        }
+                    }
+                    Stmt::Assignment { value, .. } => {
+                        Self::collect_calls_in_expr(value, calls);
+                    }
+                    Stmt::If { condition, then_branch, elif_branches, else_branch, .. } => {
+                        Self::collect_calls_in_expr(condition, calls);
+                        Self::collect_calls_in_statements(then_branch, calls);
+                        for (cond, body) in elif_branches {
+                            Self::collect_calls_in_expr(cond, calls);
+                            Self::collect_calls_in_statements(body, calls);
+                        }
+                        if let Some(else_b) = else_branch {
+                            Self::collect_calls_in_statements(else_b, calls);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        fn collect_calls_in_expr(expr: &Expr, calls: &mut std::collections::HashSet<String>) {
+            match expr {
+                Expr::Call { func, args, .. } => {
+                    if let Expr::Ident { name, .. } = &**func {
+                        calls.insert(name.clone());
+                    }
+                    for arg in args {
+                        Self::collect_calls_in_expr(&arg.value, calls);
+                    }
+                }
+                Expr::Binary { left, right, .. } => {
+                    Self::collect_calls_in_expr(left, calls);
+                    Self::collect_calls_in_expr(right, calls);
+                }
+                Expr::Unary { expr, .. } => {
+                    Self::collect_calls_in_expr(expr, calls);
+                }
+                Expr::List { elements, .. } => {
+                    for elem in elements {
+                        Self::collect_calls_in_expr(elem, calls);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
