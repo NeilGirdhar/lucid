@@ -38,6 +38,8 @@ pub struct IrFunction {
     pub return_type: IrType,
     pub blocks: Vec<IrBlock>,
     pub entry_block: usize,
+    pub is_inline: bool,                    // Hint for inline optimization
+    pub is_pure: bool,                      // Pure function (no side effects)
 }
 
 /// A basic block in the CFG
@@ -822,6 +824,26 @@ impl IrModule {
             )
         }).collect()
     }
+
+    /// Mark function for inlining optimization
+    pub fn mark_for_inlining(func: &mut IrFunction) {
+        func.is_inline = true;
+    }
+
+    /// Mark function as pure (no side effects)
+    pub fn mark_as_pure(func: &mut IrFunction) {
+        func.is_pure = true;
+    }
+
+    /// Count instructions in function for complexity analysis
+    pub fn function_complexity(func: &IrFunction) -> usize {
+        func.blocks.iter().map(|b| b.instructions.len()).sum()
+    }
+
+    /// Check if function is eligible for inlining based on size
+    pub fn is_inlinable(func: &IrFunction, max_complexity: usize) -> bool {
+        Self::function_complexity(func) <= max_complexity
+    }
 }
 
 impl IrFunction {
@@ -843,6 +865,8 @@ impl IrFunction {
                 terminator: IrTerminator::Unreachable,
             }],
             entry_block: 0,
+            is_inline: false,
+            is_pure: false,
         }
     }
 
