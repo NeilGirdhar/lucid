@@ -141,6 +141,27 @@ mod tests {
         let c_code5 = backend5.generate(&ir_module5);
         let full_c5 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", count_to_n(5));\n  return 0;\n}}", c_code5);
         assert!(test_c_code(&full_c5, "10\n"), "count_to_n(5) should return 10 (0+1+2+3+4)");
+
+        // Test 6: Class with fields parsed from source
+        let lucid_code6 = "class Point:\n    x: int\n    y: int\n\ndef get_sum() -> int:\n    return 42\n";
+        let mut lexer6 = Lexer::new(lucid_code6);
+        let tokens6 = lexer6.tokenize().expect("Lexer failed for class");
+        let mut parser6 = Parser::new(tokens6);
+        let module6 = parser6.parse_module().expect("Parser failed for class");
+        let ir_module6 = crate::builder::IrBuilder::new().build_module(&module6);
+
+        // Verify Point class was created in IR
+        assert_eq!(ir_module6.classes.len(), 1, "Should have one class");
+        let point_class = ir_module6.get_class("Point").expect("Point class should exist");
+        assert_eq!(point_class.fields.len(), 2, "Point should have 2 fields");
+        assert_eq!(point_class.fields[0].name, "x");
+        assert_eq!(point_class.fields[1].name, "y");
+
+        // Verify codegen works
+        let mut backend6 = CCodegenBackend::new();
+        let c_code6 = backend6.generate(&ir_module6);
+        let full_c6 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", get_sum());\n  return 0;\n}}", c_code6);
+        assert!(test_c_code(&full_c6, "42\n"), "get_sum() should return 42 with Point class defined");
     }
 
     #[test]
