@@ -190,6 +190,21 @@ pub struct IteratorTrait {
     pub has_items_method: bool,       // Dict has items() method
 }
 
+/// Error context for stack traces
+#[derive(Debug, Clone)]
+pub struct ErrorContext {
+    pub function_name: String,        // Where error occurred
+    pub error_type: String,          // Error type/enum variant
+    pub error_message: String,       // Human-readable message
+    pub line_number: usize,          // Source line (if available)
+}
+
+/// Error stack for tracking context through function calls
+#[derive(Debug, Clone)]
+pub struct ErrorStack {
+    pub contexts: Vec<ErrorContext>,  // Stack of error contexts
+}
+
 /// Trait bound for generic type parameters
 #[derive(Debug, Clone)]
 pub struct TraitBound {
@@ -770,6 +785,42 @@ impl IrModule {
             bindings,
             target_block,
         }
+    }
+
+    /// Create error context for stack traces
+    pub fn create_error_context(
+        function_name: String,
+        error_type: String,
+        error_message: String,
+    ) -> ErrorContext {
+        ErrorContext {
+            function_name,
+            error_type,
+            error_message,
+            line_number: 0, // Set by codegen if source locations available
+        }
+    }
+
+    /// Create new error stack
+    pub fn create_error_stack() -> ErrorStack {
+        ErrorStack {
+            contexts: Vec::new(),
+        }
+    }
+
+    /// Push error context onto stack
+    pub fn push_error_context(stack: &mut ErrorStack, context: ErrorContext) {
+        stack.contexts.push(context);
+    }
+
+    /// Get full error stack trace
+    pub fn get_error_trace(stack: &ErrorStack) -> Vec<String> {
+        stack.contexts.iter().enumerate().map(|(i, ctx)| {
+            format!(
+                "  {} in {}: {} ({})",
+                i, ctx.function_name, ctx.error_message, ctx.error_type
+            )
+        }).collect()
     }
 }
 

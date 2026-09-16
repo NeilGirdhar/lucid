@@ -2353,4 +2353,59 @@ int main() {
         assert!(code.contains("lucid_quicksort_int"), "should call quicksort");
     }
 
+    #[test]
+    fn test_error_context_support() {
+        // Test error context for stack traces
+        let ctx = crate::IrModule::create_error_context(
+            "parse_config".to_string(),
+            "ConfigError".to_string(),
+            "Invalid syntax at line 42".to_string(),
+        );
+
+        assert_eq!(ctx.function_name, "parse_config");
+        assert_eq!(ctx.error_type, "ConfigError");
+        assert_eq!(ctx.error_message, "Invalid syntax at line 42");
+    }
+
+    #[test]
+    fn test_error_stack_trace() {
+        let mut stack = crate::IrModule::create_error_stack();
+
+        let ctx1 = crate::IrModule::create_error_context(
+            "main".to_string(),
+            "FileError".to_string(),
+            "File not found".to_string(),
+        );
+        let ctx2 = crate::IrModule::create_error_context(
+            "open_file".to_string(),
+            "FileError".to_string(),
+            "Cannot access /data/config.json".to_string(),
+        );
+
+        crate::IrModule::push_error_context(&mut stack, ctx1);
+        crate::IrModule::push_error_context(&mut stack, ctx2);
+
+        assert_eq!(stack.contexts.len(), 2);
+
+        let trace = crate::IrModule::get_error_trace(&stack);
+        assert_eq!(trace.len(), 2);
+        assert!(trace[0].contains("main"));
+        assert!(trace[1].contains("open_file"));
+    }
+
+    #[test]
+    fn test_error_context_codegen() {
+        // Test that error context functions are generated
+        let module = IrModule::new();
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify error functions
+        assert!(code.contains("struct ErrorContext"), "ErrorContext should be defined");
+        assert!(code.contains("lucid_print_error_trace"), "print_error_trace should exist");
+        assert!(code.contains("lucid_format_error"), "format_error should exist");
+    }
+
 }

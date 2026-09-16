@@ -1221,6 +1221,44 @@ impl CCodegenBackend {
         self.emit_line("return -1;");
         self.indent_level -= 1;
         self.emit_line("}");
+        self.emit_line("");
+
+        // Error context and stack traces
+        self.emit_line("// Error context structure for stack traces");
+        self.emit_line("struct ErrorContext {");
+        self.indent_level += 1;
+        self.emit_line("const char* function_name;");
+        self.emit_line("const char* error_type;");
+        self.emit_line("const char* error_message;");
+        self.emit_line("int line_number;");
+        self.indent_level -= 1;
+        self.emit_line("};");
+        self.emit_line("");
+
+        self.emit_line("// Print error stack trace");
+        self.emit_line("void lucid_print_error_trace(struct ErrorContext* contexts, int64_t count) {");
+        self.indent_level += 1;
+        self.emit_line("fprintf(stderr, \"Error stack trace:\\n\");");
+        self.emit_line("for (int64_t i = 0; i < count; i++) {");
+        self.indent_level += 1;
+        self.emit_line("fprintf(stderr, \"  at %s: %s (%s)\\n\",");
+        self.emit_line("    contexts[i].function_name,");
+        self.emit_line("    contexts[i].error_message,");
+        self.emit_line("    contexts[i].error_type);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// Format error message with context");
+        self.emit_line("const char* lucid_format_error(const char* func, const char* msg) {");
+        self.indent_level += 1;
+        self.emit_line("static char buffer[512];");
+        self.emit_line("snprintf(buffer, sizeof(buffer), \"%s: %s\", func, msg);");
+        self.emit_line("return buffer;");
+        self.indent_level -= 1;
+        self.emit_line("}");
     }
 
     fn emit_line(&mut self, line: &str) {
