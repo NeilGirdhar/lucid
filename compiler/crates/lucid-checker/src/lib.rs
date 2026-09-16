@@ -10234,6 +10234,17 @@ impl TypeChecker {
                             }
                         }
                     }
+                    if matches!(name.as_str(), "list" | "set" | "dict") {
+                        if let Some(argument) = args.iter().find(|argument| argument.name.is_some())
+                        {
+                            return Err(TypeError {
+                                message: format!(
+                                    "{name}() does not accept keyword arguments; use [*a] or {{**kw}} to build from an unpacked source"
+                                ),
+                                span: argument.value.span(),
+                            });
+                        }
+                    }
                     if matches!(name.as_str(), "list" | "set") {
                         if let Some(argument) = args.first() {
                             if !argument.is_spread
@@ -18546,6 +18557,18 @@ def reject(value: not int) -> none:
             ("complex(1, 2, 3)\n", "accepts at most 2"),
             ("list([], [])\n", "accepts at most 1"),
             ("set([], [])\n", "accepts at most 1"),
+            (
+                "items = list(items=[1])\n",
+                "list() does not accept keyword arguments",
+            ),
+            (
+                "items = set(items={1})\n",
+                "set() does not accept keyword arguments",
+            ),
+            (
+                "items = dict(a=1, b=2)\n",
+                "dict() does not accept keyword arguments",
+            ),
             ("help(1, 2)\n", "accepts at most 1"),
             ("fields()\n", "requires at least 1"),
             ("len(1)\n", "not sized"),
