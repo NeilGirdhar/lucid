@@ -40,8 +40,33 @@ impl CCodegenBackend {
     }
 
     fn generate_class(&mut self, class: &crate::IrClass) {
+        // Generate vtable structure if class has methods
+        if !class.methods.is_empty() {
+            self.emit_line(&format!("struct {}_VTable {{", class.name));
+            self.indent_level += 1;
+
+            for method in &class.methods {
+                // Generate function pointer for each method
+                // For now, assume all methods return int64_t and take void* self
+                self.emit_line(&format!(
+                    "int64_t (*{})(void*);",
+                    method.method_name
+                ));
+            }
+
+            self.indent_level -= 1;
+            self.emit_line("};");
+            self.emit_line("");
+        }
+
+        // Generate struct definition
         self.emit_line(&format!("struct {} {{", class.name));
         self.indent_level += 1;
+
+        // Add vtable pointer if there are methods
+        if !class.methods.is_empty() {
+            self.emit_line(&format!("struct {}_VTable *__vtable;", class.name));
+        }
 
         for field in &class.fields {
             let field_type = field.ty.c_type();
@@ -218,31 +243,46 @@ impl CCodegenBackend {
                 args,
             } => {
                 let receiver_code = self.value_to_c(receiver);
-                let mut all_args = vec![receiver_code];
+                let mut all_args = vec![receiver_code.clone()];
                 all_args.extend(args.iter().map(|a| self.value_to_c(a)));
                 let args_code = all_args.join(", ");
 
                 // Check for builtin list methods
                 let is_list_method = matches!(method.as_str(), "append" | "pop" | "length" | "get");
-                let func_name = if is_list_method {
-                    format!("lucid_list_{}", method)
-                } else {
-                    format!("method_{}", method)
-                };
 
-                if let Some(d) = dest {
-                    if !self.declared_vars.contains(d) {
-                        self.emit_line(&format!("int64_t {} = {}({});", d, func_name, args_code));
-                        self.declared_vars.insert(d.clone());
+                if is_list_method {
+                    let func_name = format!("lucid_list_{}", method);
+                    if let Some(d) = dest {
+                        if !self.declared_vars.contains(d) {
+                            self.emit_line(&format!("int64_t {} = {}({});", d, func_name, args_code));
+                            self.declared_vars.insert(d.clone());
+                        } else {
+                            self.emit_line(&format!("{} = {}({});", d, func_name, args_code));
+                        }
                     } else {
-                        self.emit_line(&format!("{} = {}({});", d, func_name, args_code));
+                        self.emit_line(&format!("{}({});", func_name, args_code));
                     }
                 } else {
-                    // For append, which typically doesn't return a value
-                    if method == "append" {
-                        self.emit_line(&format!("{}({});", func_name, args_code));
+                    // Class method call - use virtual dispatch through vtable
+                    // receiver->__vtable->method(receiver, args)
+                    if let Some(d) = dest {
+                        if !self.declared_vars.contains(d) {
+                            self.emit_line(&format!(
+                                "int64_t {} = {}->__vtable->{}({});",
+                                d, receiver_code, method, receiver_code
+                            ));
+                            self.declared_vars.insert(d.clone());
+                        } else {
+                            self.emit_line(&format!(
+                                "{} = {}->__vtable->{}({});",
+                                d, receiver_code, method, receiver_code
+                            ));
+                        }
                     } else {
-                        self.emit_line(&format!("{}({});", func_name, args_code));
+                        self.emit_line(&format!(
+                            "{}->__vtable->{}({});",
+                            receiver_code, method, receiver_code
+                        ));
                     }
                 }
             }
@@ -338,6 +378,10 @@ impl CCodegenBackend {
                         dest, class_name, class_name
                     ));
                 }
+
+                // TODO: Initialize vtable pointer if class has methods
+                // This requires checking module.get_class(class_name).methods
+                // For now, skip vtable init - will be added in post-processing pass
 
                 // Initialize fields
                 for (field_name, field_value) in field_values {
