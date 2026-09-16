@@ -19868,4 +19868,150 @@ pub mod specialization {
             Self::new()
         }
     }
+
+    /// Phase 3: Rewrites Call expressions to use specialized names
+    pub struct SpecializationRewriter {
+        name_mappings: BTreeMap<String, String>,  // original_name -> specialized_name
+    }
+
+    impl SpecializationRewriter {
+        pub fn new() -> Self {
+            Self {
+                name_mappings: BTreeMap::new(),
+            }
+        }
+
+        /// Register a specialization mapping
+        pub fn register_specialization(&mut self, original: String, specialized: String) {
+            self.name_mappings.insert(original, specialized);
+        }
+
+        /// Rewrite a module's Call expressions to use specialized names
+        pub fn rewrite_module(&self, module: &Module) -> Module {
+            Module {
+                statements: module.statements.iter()
+                    .map(|stmt| self.rewrite_statement(stmt))
+                    .collect(),
+                span: module.span,
+            }
+        }
+
+        fn rewrite_statement(&self, stmt: &Stmt) -> Stmt {
+            match stmt {
+                Stmt::VarDef { pattern, type_annotation, value, is_let, is_final, span } => {
+                    Stmt::VarDef {
+                        pattern: pattern.clone(),
+                        type_annotation: type_annotation.clone(),
+                        value: value.as_ref().map(|v| self.rewrite_expr(v)),
+                        is_let: *is_let,
+                        is_final: *is_final,
+                        span: *span,
+                    }
+                }
+                Stmt::Assignment { target, value, span } => {
+                    Stmt::Assignment {
+                        target: self.rewrite_expr(target),
+                        value: self.rewrite_expr(value),
+                        span: *span,
+                    }
+                }
+                Stmt::Return { value, span } => {
+                    Stmt::Return {
+                        value: value.as_ref().map(|v| self.rewrite_expr(v)),
+                        span: *span,
+                    }
+                }
+                Stmt::Expr(expr) => {
+                    Stmt::Expr(self.rewrite_expr(expr))
+                }
+                _ => stmt.clone(),
+            }
+        }
+
+        fn rewrite_expr(&self, expr: &Expr) -> Expr {
+            match expr {
+                Expr::Call { func, args, span } => {
+                    // Check if func is an Index (generic instantiation like Box[int])
+                    if let Expr::Index { value, index, span: _index_span } = &**func {
+                        if let Expr::Ident { name, span: name_span } = &**value {
+                            // Extract type from index
+                            if let Some(type_str) = self.expr_to_type_string(&**index) {
+                                let specialized_name = format!("{}__{}",name, type_str);
+                                // Rewrite to Call with Ident using specialized name
+                                return Expr::Call {
+                                    func: Box::new(Expr::Ident {
+                                        name: specialized_name,
+                                        span: *name_span,
+                                    }),
+                                    args: args.iter()
+                                        .map(|arg| Arg {
+                                            name: arg.name.clone(),
+                                            value: self.rewrite_expr(&arg.value),
+                                            is_spread: arg.is_spread,
+                                            is_dict_spread: arg.is_dict_spread,
+                                            is_gather_spread: arg.is_gather_spread,
+                                            span: arg.span,
+                                        })
+                                        .collect(),
+                                    span: *span,
+                                };
+                            }
+                        }
+                    }
+                    // Regular function call - just rewrite arguments
+                    Expr::Call {
+                        func: func.clone(),
+                        args: args.iter()
+                            .map(|arg| Arg {
+                                name: arg.name.clone(),
+                                value: self.rewrite_expr(&arg.value),
+                                is_spread: arg.is_spread,
+                                is_dict_spread: arg.is_dict_spread,
+                                is_gather_spread: arg.is_gather_spread,
+                                span: arg.span,
+                            })
+                            .collect(),
+                        span: *span,
+                    }
+                }
+                Expr::Binary { left, op, right, span } => {
+                    Expr::Binary {
+                        left: Box::new(self.rewrite_expr(left)),
+                        op: op.clone(),
+                        right: Box::new(self.rewrite_expr(right)),
+                        span: *span,
+                    }
+                }
+                Expr::Unary { op, expr, span } => {
+                    Expr::Unary {
+                        op: op.clone(),
+                        expr: Box::new(self.rewrite_expr(expr)),
+                        span: *span,
+                    }
+                }
+                Expr::List { elements, span } => {
+                    Expr::List {
+                        elements: elements.iter()
+                            .map(|e| self.rewrite_expr(e))
+                            .collect(),
+                        span: *span,
+                    }
+                }
+                _ => expr.clone(),
+            }
+        }
+
+        fn expr_to_type_string(&self, expr: &Expr) -> Option<String> {
+            match expr {
+                Expr::Ident { name, .. } => Some(name.clone()),
+                _ => None,
+            }
+        }
+    }
+
+    impl Default for SpecializationRewriter {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
 }
