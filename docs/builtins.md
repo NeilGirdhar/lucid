@@ -56,6 +56,10 @@
   given (an instance or the class itself included), replacing both
   Python's `vars()` (no `__dict__` to return) and `dir()` (an ordered,
   documented walk instead of an unordered list of bare names).
+* [`asdict`](collections.md#anonymous-record-shapes) — flattens a
+  record, anonymous or a named class instance, into a plain
+  `dict[str, object]` by walking `fields()`; also the concise way to
+  write a `dict` with identifier-shaped keys, `asdict((x=0, y=0))`.
 * `zip` — always strict. Mismatched-length iterables are a runtime
   error, never silent truncation to the shortest — the same class of
   mistake `assert`'s required parentheses closes elsewhere, just for

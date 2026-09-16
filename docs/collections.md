@@ -251,6 +251,19 @@ means the construction site already reads like a call, so replacing the
 anonymous shape with a named class later is a small edit, not a rewrite —
 `(x=0, y=0)` becomes `Point2D(x=0, y=0)`.
 
+`asdict` converts a record — anonymous or a named class instance — into
+a plain `dict[str, object]`, walking [`fields()`](construction.md#field-reflection-with-fields)
+the way `dataclasses.asdict` does in Python:
+
+```python
+asdict((x=0, y=0))  # {"x": 0, "y": 0}
+```
+This is also the concise way to write a `dict` with identifier-shaped
+keys, without inventing a second, quote-free dict literal syntax
+alongside `{key: value}`'s own: a record's fields are already
+identifier-shaped, `(...)`'s value-construction already reads like a
+call, and `asdict` is one ordinary function away.
+
 ## `skip` in collection literals
 
 `skip` is not a value and cannot be returned, assigned, or passed through
