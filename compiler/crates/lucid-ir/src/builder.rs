@@ -11,6 +11,7 @@ pub struct IrBuilder {
     module: IrModule,
     var_types: HashMap<String, IrType>,
     next_var_id: usize,
+    current_function: Option<usize>,
 }
 
 impl IrBuilder {
@@ -19,6 +20,25 @@ impl IrBuilder {
             module: IrModule::new(),
             var_types: HashMap::new(),
             next_var_id: 0,
+            current_function: None,
+        }
+    }
+
+    fn fresh_block(&mut self, label: &str) -> usize {
+        if let Some(func_idx) = self.current_function {
+            let func = &mut self.module.functions[func_idx];
+            func.new_block(label.to_string())
+        } else {
+            0
+        }
+    }
+
+    fn current_block_mut(&mut self) -> Option<&mut IrBlock> {
+        if let Some(func_idx) = self.current_function {
+            let func = &mut self.module.functions[func_idx];
+            Some(func.current_block_mut())
+        } else {
+            None
         }
     }
 
@@ -54,7 +74,11 @@ impl IrBuilder {
             .collect();
 
         let return_type = self.lucid_type_to_ir_type(func.return_type.as_ref());
-        let mut ir_func = IrFunction::new(func.name.clone(), params, return_type);
+        let ir_func = IrFunction::new(func.name.clone(), params, return_type);
+        self.module.add_function(ir_func);
+
+        let func_idx = self.module.functions.len() - 1;
+        self.current_function = Some(func_idx);
 
         self.var_types.clear();
         for param in &func.params {
@@ -64,26 +88,30 @@ impl IrBuilder {
             );
         }
 
-        let entry_block = ir_func.current_block_mut();
-
         // Build function body
         for stmt in &func.body {
-            self.build_stmt_in_block(stmt, entry_block);
+            self.build_stmt_recursive(stmt);
         }
 
         // Add default return if missing
-        if matches!(entry_block.terminator, IrTerminator::Unreachable) {
-            entry_block.terminator = IrTerminator::Return { value: None };
+        if let Some(func_idx) = self.current_function {
+            let func = &mut self.module.functions[func_idx];
+            let last_block = func.current_block_mut();
+            if matches!(last_block.terminator, IrTerminator::Unreachable) {
+                last_block.terminator = IrTerminator::Return { value: None };
+            }
         }
 
-        self.module.add_function(ir_func);
+        self.current_function = None;
     }
 
-    fn build_stmt_in_block(&mut self, stmt: &Stmt, block: &mut IrBlock) {
+    fn build_stmt_recursive(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Return { value, .. } => {
                 let ir_val = value.as_ref().map(|v| self.expr_to_ir_value(v));
-                block.set_terminator(IrTerminator::Return { value: ir_val });
+                if let Some(block) = self.current_block_mut() {
+                    block.set_terminator(IrTerminator::Return { value: ir_val });
+                }
             }
             Stmt::VarDef {
                 pattern: Pattern::Ident(name, _),
@@ -93,27 +121,34 @@ impl IrBuilder {
                 if let Some(expr) = value {
                     let ir_val = self.expr_to_ir_value(expr);
                     let ty = self.infer_expr_type(expr);
-                    self.var_types.insert(name.clone(), ty);
-                    block.add_instruction(IrInstruction::Assign {
-                        dest: name.clone(),
-                        value: ir_val,
-                    });
+                    let name_clone = name.clone();
+                    self.var_types.insert(name_clone.clone(), ty);
+
+                    if let Some(block) = self.current_block_mut() {
+                        block.add_instruction(IrInstruction::Assign {
+                            dest: name_clone,
+                            value: ir_val,
+                        });
+                    }
                 }
             }
             Stmt::Assignment { target, value, .. } => {
                 if let Expr::Ident { name, .. } = target {
                     let ir_val = self.expr_to_ir_value(value);
-                    block.add_instruction(IrInstruction::Assign {
-                        dest: name.clone(),
-                        value: ir_val,
-                    });
+                    let name_clone = name.clone();
+                    if let Some(block) = self.current_block_mut() {
+                        block.add_instruction(IrInstruction::Assign {
+                            dest: name_clone,
+                            value: ir_val,
+                        });
+                    }
                 }
             }
             Stmt::Expr(expr) => {
                 let _ = self.expr_to_ir_value(expr);
             }
             _ => {
-                // Other statements not yet handled
+                // Control flow and other statements not yet handled
             }
         }
     }

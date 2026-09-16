@@ -31,17 +31,21 @@ impl CCodegenBackend {
     fn generate_function(&mut self, func: &IrFunction) {
         // Function signature
         let return_ctype = func.return_type.c_type();
-        self.emit_line(&format!("{} {}(", return_ctype, func.name));
 
-        self.indent_level += 1;
-        for (i, param) in func.params.iter().enumerate() {
-            let comma = if i < func.params.len() - 1 { "," } else { "" };
-            let param_ctype = param.ty.c_type();
-            self.emit_line(&format!("{} {}{}", param_ctype, param.name, comma));
+        // Build parameter list inline for cleaner output
+        let mut params_str = String::new();
+        if func.params.is_empty() {
+            params_str.push_str("void");
+        } else {
+            for (i, param) in func.params.iter().enumerate() {
+                if i > 0 { params_str.push_str(", "); }
+                params_str.push_str(param.ty.c_type());
+                params_str.push(' ');
+                params_str.push_str(&param.name);
+            }
         }
-        self.indent_level -= 1;
 
-        self.emit_line(") {");
+        self.emit_line(&format!("{} {}({}) {{", return_ctype, func.name, params_str));
         self.indent_level += 1;
 
         // Generate basic blocks
@@ -254,8 +258,8 @@ mod tests {
             m
         };
         let code = backend.generate(&module);
-        assert!(code.contains("int64_t test("));
-        assert!(code.contains("int64_t x,"));
+        assert!(code.contains("int64_t test(int64_t x)"));
+        assert!(code.contains("{"));
         assert!(code.contains("#include"));
     }
 

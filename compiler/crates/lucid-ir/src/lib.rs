@@ -7,6 +7,11 @@
 pub mod builder;
 pub mod codegen;
 
+pub use codegen::CCodegenBackend;
+
+#[cfg(test)]
+mod integration_test;
+
 use std::collections::HashMap;
 
 /// A Lucid IR module containing functions and type definitions
