@@ -10565,16 +10565,6 @@ impl TypeChecker {
                                 let field_type = self
                                     .class_field_type(name, field_name)
                                     .unwrap_or(Type::TypeVar("Any".into()));
-                                // Apply type substitution if this is a generic class instantiation
-                                let field_type = if let Type::Class { type_args, .. } = &ft {
-                                    if type_args.is_empty() {
-                                        field_type
-                                    } else {
-                                        self.instantiate_class_member_type(name, type_args, field_type)
-                                    }
-                                } else {
-                                    field_type
-                                };
                                 let argument_type = self.type_of_expr(&argument.value)?;
                                 // An uninstantiated constructor may infer its
                                 // class type arguments from the supplied
