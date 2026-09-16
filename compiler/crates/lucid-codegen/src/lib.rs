@@ -11,6 +11,7 @@
 )]
 
 use lucid_syntax::ast::*;
+use lucid_syntax::token::Span;
 use num_bigint::BigInt;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -22,6 +23,63 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub mod cranelift_backend;
 pub mod native_abi;
 pub use lucid_abi;
+
+/// Source map entry: maps generated code location to source location
+#[derive(Debug, Clone)]
+pub struct SourceMapEntry {
+    pub generated_line: usize,
+    pub source_file: String,
+    pub source_line: usize,
+    pub source_column: usize,
+}
+
+/// Tracks mapping between generated code and source locations
+#[derive(Debug, Clone, Default)]
+pub struct SourceMap {
+    entries: Vec<SourceMapEntry>,
+}
+
+impl SourceMap {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Record a mapping from generated code line to source location
+    pub fn add_mapping(
+        &mut self,
+        generated_line: usize,
+        source_file: String,
+        source_line: usize,
+        source_column: usize,
+    ) {
+        self.entries.push(SourceMapEntry {
+            generated_line,
+            source_file,
+            source_line,
+            source_column,
+        });
+    }
+
+    /// Add a mapping from a Span
+    pub fn add_span_mapping(&mut self, generated_line: usize, source_file: String, span: Span) {
+        self.add_mapping(generated_line, source_file, span.line, span.column);
+    }
+
+    /// Look up source location for a generated line
+    pub fn lookup(&self, generated_line: usize) -> Option<&SourceMapEntry> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|e| e.generated_line <= generated_line)
+    }
+
+    /// Get all entries
+    pub fn entries(&self) -> &[SourceMapEntry] {
+        &self.entries
+    }
+}
 
 fn bigint_literal_decimal(text: &str) -> String {
     let text = text.trim().replace('_', "");
