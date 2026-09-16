@@ -157,8 +157,62 @@ impl IrBuilder {
             Stmt::Expr(expr) => {
                 let _ = self.expr_to_ir_value(expr);
             }
+            Stmt::If { condition, then_branch, elif_branches, else_branch, .. } => {
+                if let Some(func_idx) = self.current_function {
+                    let cond_val = self.expr_to_ir_value(condition);
+                    let then_id = self.fresh_block("if_then");
+                    let merge_id = self.fresh_block("if_merge");
+
+                    // Create else block (or use merge if no else)
+                    let else_id = if elif_branches.is_empty() && else_branch.is_none() {
+                        merge_id
+                    } else {
+                        self.fresh_block("if_else")
+                    };
+
+                    // Branch in current block
+                    self.terminate(IrTerminator::Branch {
+                        condition: cond_val,
+                        then_block: then_id,
+                        else_block: else_id,
+                    });
+
+                    // Build then branch
+                    let saved_block = self.current_block;
+                    self.current_block = then_id;
+                    for stmt in then_branch {
+                        self.build_stmt_recursive(stmt);
+                    }
+                    // Jump to merge if not terminated
+                    if matches!(self.module.functions[func_idx].blocks[then_id].terminator, IrTerminator::Unreachable) {
+                        self.terminate(IrTerminator::Jump { target: merge_id });
+                    }
+
+                    // Build else branch (simplified - just the first elif or else)
+                    if !elif_branches.is_empty() || else_branch.is_some() {
+                        self.current_block = else_id;
+                        let else_stmts = if let Some(stmts) = else_branch {
+                            stmts
+                        } else if !elif_branches.is_empty() {
+                            &elif_branches[0].1
+                        } else {
+                            &vec![]
+                        };
+                        for stmt in else_stmts {
+                            self.build_stmt_recursive(stmt);
+                        }
+                        // Jump to merge if not terminated
+                        if matches!(self.module.functions[func_idx].blocks[else_id].terminator, IrTerminator::Unreachable) {
+                            self.terminate(IrTerminator::Jump { target: merge_id });
+                        }
+                    }
+
+                    // Continue in merge block
+                    self.current_block = merge_id;
+                }
+            }
             _ => {
-                // Control flow and other statements not yet handled
+                // Other control flow not yet handled (While, For, etc.)
             }
         }
     }

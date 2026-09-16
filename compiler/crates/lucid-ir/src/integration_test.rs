@@ -117,6 +117,18 @@ mod tests {
         let c_code3 = backend3.generate(&ir_module3);
         let full_c3 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", square_plus_one(5));\n  return 0;\n}}", c_code3);
         assert!(test_c_code(&full_c3, "26\n"), "square_plus_one(5) should return 26 (5*5+1)");
+
+        // Test 4: Control flow - if/else in parsed Lucid
+        let lucid_code4 = "def max_value(a: int, b: int) -> int:\n  if a > b:\n    return a\n  else:\n    return b\n";
+        let mut lexer4 = Lexer::new(lucid_code4);
+        let tokens4 = lexer4.tokenize().expect("Lexer failed for if/else");
+        let mut parser4 = Parser::new(tokens4);
+        let module4 = parser4.parse_module().expect("Parser failed for if/else");
+        let ir_module4 = crate::builder::IrBuilder::new().build_module(&module4);
+        let mut backend4 = CCodegenBackend::new();
+        let c_code4 = backend4.generate(&ir_module4);
+        let full_c4 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", max_value(10, 5));\n  return 0;\n}}", c_code4);
+        assert!(test_c_code(&full_c4, "10\n"), "max_value(10, 5) should return 10");
     }
 
     #[test]
