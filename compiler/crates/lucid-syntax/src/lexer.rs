@@ -859,6 +859,7 @@ impl<'a> Lexer<'a> {
             "dispatch" => TokenKind::Dispatch,
             "type" => TokenKind::Type,
             "any" => TokenKind::Any,
+            "out" => TokenKind::Out,
             "trust" => TokenKind::Trust,
             "match" => TokenKind::Match,
             "case" => TokenKind::Case,

@@ -15,9 +15,11 @@ pub enum MutabilityView {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Variance {
-    Invariant,     // =K
-    Covariant,     // +K
-    Contravariant, // -K
+    Invariant,                 // in out K
+    Covariant,                 // out K
+    Contravariant,             // in K
+    ViewCovariant,             // in ~out K
+    ViewContravariant,         // ~in out K
 }
 
 #[derive(Debug, Clone, PartialEq)]

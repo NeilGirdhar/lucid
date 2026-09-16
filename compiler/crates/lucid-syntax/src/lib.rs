@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_lex_lucid_keywords_and_sigils() {
-        let src = "interface trait class factory construct *** ? -> ! &";
+        let src = "interface trait class factory construct out *** ? -> ! &";
         let mut lexer = Lexer::new(src);
         let tokens = lexer.tokenize().unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Interface);
@@ -130,11 +130,12 @@ mod tests {
         assert_eq!(tokens[2].kind, TokenKind::Class);
         assert_eq!(tokens[3].kind, TokenKind::Factory);
         assert_eq!(tokens[4].kind, TokenKind::Construct);
-        assert_eq!(tokens[5].kind, TokenKind::TripleStar);
-        assert_eq!(tokens[6].kind, TokenKind::Question);
-        assert_eq!(tokens[7].kind, TokenKind::Arrow);
-        assert_eq!(tokens[8].kind, TokenKind::Bang);
-        assert_eq!(tokens[9].kind, TokenKind::Amp);
+        assert_eq!(tokens[5].kind, TokenKind::Out);
+        assert_eq!(tokens[6].kind, TokenKind::TripleStar);
+        assert_eq!(tokens[7].kind, TokenKind::Question);
+        assert_eq!(tokens[8].kind, TokenKind::Arrow);
+        assert_eq!(tokens[9].kind, TokenKind::Bang);
+        assert_eq!(tokens[10].kind, TokenKind::Amp);
     }
 
     #[test]
@@ -257,14 +258,14 @@ def process(x) -> int:
     #[test]
     fn test_parse_readme_example() {
         let src = r#"
-export interface Scorable[+K]:
+trait Scorable[in K]:
     def score(self, item: K) -> float
 
-export trait ScoreBands[+K](Scorable[K]):
+trait ScoreBands[in K](Scorable[K]):
     def is_confident(self, item: K) -> bool:
         return self.score(item) >= 0.8
 
-export class InferenceModel[=K](Scorable[K], ScoreBands[K]):
+class InferenceModel[in ~out K](Scorable[K], ScoreBands[K]):
     weights: Tensor
     labels: list[K]
     scores: dict[K, float]
@@ -278,6 +279,10 @@ export class InferenceModel[=K](Scorable[K], ScoreBands[K]):
 "#;
         let module = parse(src).unwrap();
         assert_eq!(module.statements.len(), 3);
+        let Stmt::ClassDef { type_params, .. } = &module.statements[2] else {
+            panic!("expected class definition");
+        };
+        assert_eq!(type_params[0].variance, Variance::ViewCovariant);
     }
 
     #[test]
@@ -585,6 +590,75 @@ def register(handler: class[Handler]) -> none:
     fn test_parse_tilde_read_only_views() {
         let module = parse("def take(xs: ~list[int]) -> ~list[int]:\n    return xs\n").unwrap();
         assert_eq!(module.statements.len(), 1);
+    }
+
+    fn first_type_param_variance(source: &str) -> Variance {
+        let module = parse(source).unwrap();
+        match &module.statements[0] {
+            Stmt::ClassDef { type_params, .. } | Stmt::TraitDef { type_params, .. } => {
+                type_params[0].variance.clone()
+            }
+            other => panic!("expected class or trait definition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn variance_keywords_parse_to_their_variants() {
+        for (spelling, expected) in [
+            ("out K", Variance::Covariant),
+            ("in K", Variance::Contravariant),
+            ("in out K", Variance::Invariant),
+            ("in ~out K", Variance::ViewCovariant),
+            ("~in out K", Variance::ViewContravariant),
+        ] {
+            assert_eq!(
+                first_type_param_variance(&format!("class Box[{spelling}]:\n    pass\n")),
+                expected,
+                "class Box[{spelling}]"
+            );
+            assert_eq!(
+                first_type_param_variance(&format!("trait Box[{spelling}]:\n    pass\n")),
+                expected,
+                "trait Box[{spelling}]"
+            );
+        }
+    }
+
+    #[test]
+    fn variance_keywords_compose_with_bounds_and_multiple_params() {
+        let module = parse("class Cache[in out K: Hashable, in ~out V]:\n    pass\n").unwrap();
+        let Stmt::ClassDef { type_params, .. } = &module.statements[0] else {
+            panic!("expected class definition");
+        };
+        assert_eq!(type_params.len(), 2);
+        assert_eq!(type_params[0].name, "K");
+        assert_eq!(type_params[0].variance, Variance::Invariant);
+        assert!(matches!(
+            &type_params[0].bound,
+            Some(TypeExpr::Named { name, .. }) if name == "Hashable"
+        ));
+        assert_eq!(type_params[1].name, "V");
+        assert_eq!(type_params[1].variance, Variance::ViewCovariant);
+    }
+
+    #[test]
+    fn obsolete_variance_sigils_are_rejected() {
+        for spelling in ["+K", "-K", "=K", "+=K", "-=K"] {
+            assert!(
+                parse(&format!("class Box[{spelling}]:\n    pass\n")).is_err(),
+                "class Box[{spelling}] must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_view_variance_spellings_are_rejected() {
+        for spelling in ["~out K", "~in K", "out ~in K", "in ~in K", "~in ~out K"] {
+            assert!(
+                parse(&format!("class Box[{spelling}]:\n    pass\n")).is_err(),
+                "class Box[{spelling}] must not parse"
+            );
+        }
     }
 
     #[test]

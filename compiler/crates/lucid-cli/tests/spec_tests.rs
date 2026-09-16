@@ -213,7 +213,7 @@ frozen_acc = freeze(acc)
 #[test]
 fn test_generics_higher_kinded_and_variance() {
     let src = r#"
-class Box[+T]:
+class Box[out T]:
     val: T
     factory __init__(cls, val: T):
         return construct(val)

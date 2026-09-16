@@ -3659,16 +3659,22 @@ impl Parser {
         let mut params = Vec::new();
         while !self.check(&TokenKind::RBracket) && !self.check(&TokenKind::Eof) {
             let start = self.peek().span;
-            let variance = if self.match_tok(&TokenKind::Plus) || self.match_tok(&TokenKind::PlusEq)
-            {
+            let variance = if self.match_tok(&TokenKind::Tilde) {
+                self.expect(&TokenKind::In)?;
+                self.expect(&TokenKind::Out)?;
+                Variance::ViewContravariant
+            } else if self.match_tok(&TokenKind::In) {
+                if self.match_tok(&TokenKind::Tilde) {
+                    self.expect(&TokenKind::Out)?;
+                    Variance::ViewCovariant
+                } else if self.match_tok(&TokenKind::Out) {
+                    Variance::Invariant
+                } else {
+                    Variance::Contravariant
+                }
+            } else if self.match_tok(&TokenKind::Out) {
                 Variance::Covariant
-            } else if self.match_tok(&TokenKind::Minus) {
-                Variance::Contravariant
             } else {
-                // `=K` is the explicit invariant spelling. It has the same
-                // semantic value as an omitted marker, but still must consume
-                // the token so the following name parses correctly.
-                self.match_tok(&TokenKind::Eq);
                 Variance::Invariant
             };
 

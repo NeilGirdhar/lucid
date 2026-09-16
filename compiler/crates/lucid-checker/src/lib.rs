@@ -15493,7 +15493,7 @@ joined = ", ".join(["a", "b", "c"])
     #[test]
     fn numeric_capability_traits_accept_builtin_stubs() {
         let module = parse(
-            "trait SupportsInt:\n    def __int__(self: ~Self) -> int\n\ntrait SupportsFloat:\n    def __float__(self: ~Self) -> float\n\ntrait SupportsComplex:\n    def __complex__(self: ~Self) -> complex\n\ntrait SupportsIndex:\n    def __index__(self: ~Self) -> int\n\ntrait SupportsAbs[+K]:\n    def __abs__(self: ~Self) -> K\n\ntrait SupportsRound[+K]:\n    def __round__(self: ~Self, ndigits: int | none = none) -> K\n\nclass int(SupportsInt, SupportsFloat, SupportsComplex, SupportsIndex):\n    ...\n\ndef repeat(count: SupportsIndex, action: () -> none) -> none:\n    for _ in range(count.__index__()):\n        action()\n\ndef magnitude(x: SupportsAbs[float]) -> float:\n    return abs(x)\n\ndef rounded(x: SupportsRound[int]) -> int:\n    return round(x)\n",
+            "trait SupportsInt:\n    def __int__(self: ~Self) -> int\n\ntrait SupportsFloat:\n    def __float__(self: ~Self) -> float\n\ntrait SupportsComplex:\n    def __complex__(self: ~Self) -> complex\n\ntrait SupportsIndex:\n    def __index__(self: ~Self) -> int\n\ntrait SupportsAbs[out K]:\n    def __abs__(self: ~Self) -> K\n\ntrait SupportsRound[out K]:\n    def __round__(self: ~Self, ndigits: int | none = none) -> K\n\nclass int(SupportsInt, SupportsFloat, SupportsComplex, SupportsIndex):\n    ...\n\ndef repeat(count: SupportsIndex, action: () -> none) -> none:\n    for _ in range(count.__index__()):\n        action()\n\ndef magnitude(x: SupportsAbs[float]) -> float:\n    return abs(x)\n\ndef rounded(x: SupportsRound[int]) -> int:\n    return round(x)\n",
         )
         .unwrap();
         TypeChecker::new()
@@ -16100,7 +16100,7 @@ def reject(value: not int) -> none:
     #[test]
     fn test_class_type_arguments_honor_definition_site_variance() {
         let mut checker = TypeChecker::new();
-        let module = parse("class Animal:\n    pass\nclass Dog(Animal):\n    pass\nclass Box[+T: Animal]:\n    pass\ninterface Read[+T]:\n    pass\ntrait Sink[-T]:\n    pass\n").unwrap();
+        let module = parse("class Animal:\n    pass\nclass Dog(Animal):\n    pass\nclass Box[out T: Animal]:\n    pass\ntrait Read[out T]:\n    pass\ntrait Sink[in T]:\n    pass\n").unwrap();
         checker.check_module(&module).unwrap();
         let box_dog = checker
             .resolve_type_expr(&TypeExpr::Named {
