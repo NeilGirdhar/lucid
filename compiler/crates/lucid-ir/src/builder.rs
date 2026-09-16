@@ -528,6 +528,35 @@ impl IrBuilder {
                 ClassMember::Method(func_def) => {
                     // Generate unique function name for this method
                     let func_name = format!("{}_{}", name, func_def.name);
+
+                    // Build the method as an IrFunction with self as first parameter
+                    let mut method_params = vec![IrParam {
+                        name: "self".to_string(),
+                        ty: IrType::Ptr, // self is a pointer to the object
+                    }];
+
+                    // Add the original function parameters
+                    for param in &func_def.params {
+                        method_params.push(IrParam {
+                            name: param.name.clone(),
+                            ty: self.lucid_type_to_ir_type(param.type_annotation.as_ref()),
+                        });
+                    }
+
+                    let return_type = self.lucid_type_to_ir_type(func_def.return_type.as_ref());
+                    let mut method_func = IrFunction::new(func_name.clone(), method_params, return_type);
+
+                    // Build the method body
+                    self.current_function = Some(self.module.functions.len());
+                    self.module.add_function(method_func);
+
+                    // Build statements in the method body
+                    for stmt in &func_def.body {
+                        self.build_statement(stmt);
+                    }
+
+                    self.current_function = None;
+
                     methods.push(crate::MethodDispatch {
                         class_name: name.to_string(),
                         method_name: func_def.name.clone(),
