@@ -132,18 +132,40 @@ impl CCodegenBackend {
             } => {
                 let left_code = self.value_to_c(left);
                 let right_code = self.value_to_c(right);
-                let op_str = self.binop_to_c(op);
-                if !self.declared_vars.contains(dest) {
-                    self.emit_line(&format!(
-                        "int64_t {} = {} {} {};",
-                        dest, left_code, op_str, right_code
-                    ));
-                    self.declared_vars.insert(dest.clone());
+
+                // Check if this is string concatenation
+                let is_string_op = matches!(left, IrValue::String(_)) || matches!(right, IrValue::String(_));
+
+                if is_string_op && matches!(op, crate::IrBinOp::Add) {
+                    // String concatenation: use sprintf
+                    if !self.declared_vars.contains(dest) {
+                        self.emit_line(&format!(
+                            "char {}[1024]; sprintf({}, \"%s%s\", {}, {});",
+                            dest, dest, left_code, right_code
+                        ));
+                        self.declared_vars.insert(dest.clone());
+                        self.var_types.insert(dest.clone(), "const char*".to_string());
+                    } else {
+                        self.emit_line(&format!(
+                            "sprintf({}, \"%s%s\", {}, {});",
+                            dest, left_code, right_code
+                        ));
+                    }
                 } else {
-                    self.emit_line(&format!(
-                        "{} = {} {} {};",
-                        dest, left_code, op_str, right_code
-                    ));
+                    // Normal arithmetic operation
+                    let op_str = self.binop_to_c(op);
+                    if !self.declared_vars.contains(dest) {
+                        self.emit_line(&format!(
+                            "int64_t {} = {} {} {};",
+                            dest, left_code, op_str, right_code
+                        ));
+                        self.declared_vars.insert(dest.clone());
+                    } else {
+                        self.emit_line(&format!(
+                            "{} = {} {} {};",
+                            dest, left_code, op_str, right_code
+                        ));
+                    }
                 }
             }
             IrInstruction::UnaryOp { dest, op, operand } => {

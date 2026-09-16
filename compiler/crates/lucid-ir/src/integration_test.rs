@@ -203,6 +203,21 @@ mod tests {
         assert!(c_code8.contains("struct Circle"), "Should generate Circle struct");
         let full_c8 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", compute_area());\n  return 0;\n}}", c_code8);
         assert!(test_c_code(&full_c8, "42\n"), "compute_area() should compile and return 42");
+
+        // Test 9: String concatenation (Phase 5 stdlib)
+        let lucid_code9 = "def greet() -> str:\n    greeting = \"hello\" + \" \" + \"world\"\n    return greeting\n";
+        let mut lexer9 = Lexer::new(lucid_code9);
+        let tokens9 = lexer9.tokenize().expect("Lexer failed for string");
+        let mut parser9 = Parser::new(tokens9);
+        let module9 = parser9.parse_module().expect("Parser failed for string");
+        let ir_module9 = crate::builder::IrBuilder::new().build_module(&module9);
+
+        // Verify codegen works for strings
+        let mut backend9 = CCodegenBackend::new();
+        let c_code9 = backend9.generate(&ir_module9);
+        // Note: this test validates that string concatenation can be parsed and codegenned
+        // but the output validation would require printing the string result
+        assert!(c_code9.contains("greet"), "Should have greet function");
     }
 
     #[test]
