@@ -129,6 +129,18 @@ mod tests {
         let c_code4 = backend4.generate(&ir_module4);
         let full_c4 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", max_value(10, 5));\n  return 0;\n}}", c_code4);
         assert!(test_c_code(&full_c4, "10\n"), "max_value(10, 5) should return 10");
+
+        // Test 5: Control flow - while loop in parsed Lucid
+        let lucid_code5 = "def count_to_n(n: int) -> int:\n  i: int = 0\n  sum: int = 0\n  while i < n:\n    sum = sum + i\n    i = i + 1\n  return sum\n";
+        let mut lexer5 = Lexer::new(lucid_code5);
+        let tokens5 = lexer5.tokenize().expect("Lexer failed for while");
+        let mut parser5 = Parser::new(tokens5);
+        let module5 = parser5.parse_module().expect("Parser failed for while");
+        let ir_module5 = crate::builder::IrBuilder::new().build_module(&module5);
+        let mut backend5 = CCodegenBackend::new();
+        let c_code5 = backend5.generate(&ir_module5);
+        let full_c5 = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", count_to_n(5));\n  return 0;\n}}", c_code5);
+        assert!(test_c_code(&full_c5, "10\n"), "count_to_n(5) should return 10 (0+1+2+3+4)");
     }
 
     #[test]

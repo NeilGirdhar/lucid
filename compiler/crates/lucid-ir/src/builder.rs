@@ -211,8 +211,41 @@ impl IrBuilder {
                     self.current_block = merge_id;
                 }
             }
+            Stmt::While { condition, body, .. } => {
+                if let Some(func_idx) = self.current_function {
+                    let loop_cond_id = self.fresh_block("while_cond");
+                    let loop_body_id = self.fresh_block("while_body");
+                    let loop_exit_id = self.fresh_block("while_exit");
+
+                    // Jump to loop condition
+                    self.terminate(IrTerminator::Jump { target: loop_cond_id });
+
+                    // Loop condition block
+                    let saved_block = self.current_block;
+                    self.current_block = loop_cond_id;
+                    let cond_val = self.expr_to_ir_value(condition);
+                    self.terminate(IrTerminator::Branch {
+                        condition: cond_val,
+                        then_block: loop_body_id,
+                        else_block: loop_exit_id,
+                    });
+
+                    // Loop body block
+                    self.current_block = loop_body_id;
+                    for stmt in body {
+                        self.build_stmt_recursive(stmt);
+                    }
+                    // Jump back to condition
+                    if matches!(self.module.functions[func_idx].blocks[loop_body_id].terminator, IrTerminator::Unreachable) {
+                        self.terminate(IrTerminator::Jump { target: loop_cond_id });
+                    }
+
+                    // Continue after loop
+                    self.current_block = loop_exit_id;
+                }
+            }
             _ => {
-                // Other control flow not yet handled (While, For, etc.)
+                // Other statements not yet handled (For, Match, etc.)
             }
         }
     }
