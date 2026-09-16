@@ -1,5 +1,48 @@
 # Strings
 
+## Triple-quoted strings are always dedented
+
+Python's triple-quoted string is exactly the characters between the
+quotes, indentation included — a multi-line string written inside an
+indented block carries that indentation as literal content:
+
+```python
+def transfer():
+    return """
+    Move money between two accounts.
+
+    Raises if either account does not exist.
+    """
+```
+That function returns `"\n    Move money...\n\n    Raises...\n    "`,
+four leading spaces on every content line, because the block itself
+sits four spaces into the function. Getting the string a reader
+actually wants means calling `textwrap.dedent` or `inspect.cleandoc`
+by hand, every time, and remembering to.
+
+Lucid dedents a triple-quoted string automatically: the smallest
+leading-whitespace count shared by every line after the first is
+stripped from all of them, so what the literal reads as — independent
+of how deeply the surrounding code happens to be nested — is what it
+means:
+
+```python
+def transfer():
+    return """
+    Move money between two accounts.
+
+    Raises if either account does not exist.
+    """
+```
+returns `"\nMove money between two accounts.\n\nRaises if either
+account does not exist.\n"`. Re-indenting the function, or moving the
+whole block one level deeper, changes nothing about the string's
+value — only the source's own indentation moved, and that was never
+part of the content. This applies to every triple-quoted string, not
+only ones used as documentation; a string is either short enough that
+dedenting has nothing to do, or long enough that the reader wants it
+anyway.
+
 ## No adjacent string literal concatenation
 
 Python concatenates adjacent string literals at compile time. Lucid rejects
@@ -127,6 +170,22 @@ str.hex(255)  # "0xff"
 The same result is also reachable through an f-string's own
 format-spec mini-language (`f"{255:#b}"`), for when the string being
 built is more than just the number itself.
+
+## `join` is a named factory, not a method on the separator
+
+Python's `",".join(items)` calls `join` on the separator — the
+smallest, least interesting part of the operation — with the thing
+actually being joined arriving as the argument, backwards from how the
+operation reads: "join these items with this separator" becomes "ask
+this separator to join these items." Lucid keeps `join` where every
+other "build a `str` a particular way" operation already lives, a
+named factory on `str` itself, with the pieces being joined as the
+primary argument and the separator named instead of implied by which
+object happens to own the method:
+
+```python
+str.join(["a", "b", "c"], sep=",")  # "a,b,c"
+```
 
 [Collections](collections.md) covers the container types built from
 values like these — sets, dicts, and records.

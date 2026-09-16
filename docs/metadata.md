@@ -119,17 +119,40 @@ class Config:
     ; {"cli_flag": "--retries"}
 ```
 
-## No leading string literal instead
+## Triple-quoted strings are docstring shorthand
 
-Because a metadata block is the one way to write a docstring, a bare
-string literal as a function, class, trait, or module's first statement
-is no longer read as one — it's an ordinary, pointless expression
-statement, and the checker rejects it the same way it already rejects
-other code that looks like a well-known convention but silently isn't,
-such as the parenthesized-`assert` requirement in
-[Assert](assert.md) or the names in [Removed builtins](removed-builtins.md).
-Writing `"a docstring"` where `; "a docstring"` was meant fails loudly
-instead of compiling to a documentation string nothing ever reads.
+A triple-quoted string standing alone on its own line is shorthand for
+a metadata block carrying it as a docstring, [always dedented](strings.md#triple-quoted-strings-are-always-dedented)
+the way every triple-quoted string already is:
+
+```python
+def transfer(amount: float, from_account: str, to_account: str) -> none:
+    """Move money between two accounts."""
+    ...
+```
+reads exactly as
+
+```python
+def transfer(amount: float, from_account: str, to_account: str) -> none:
+    ; "Move money between two accounts."
+    ...
+```
+and follows the same attachment rule as any other standalone metadata
+block — the statement above it, or the enclosing suite's own header
+when it's that suite's first line, the same way `name: str` followed
+by a triple-quoted line attaches to the field.
+
+This is the one place a bare string literal still means something.
+Any other bare string statement — single- or double-quoted, or a
+triple-quoted string sharing a line with other code — is an ordinary,
+pointless expression statement, and the checker rejects it the same
+way it already rejects other code that looks like a well-known
+convention but silently isn't, such as the parenthesized-`assert`
+requirement in [Assert](assert.md) or the names in
+[Removed builtins](removed-builtins.md). A bare dict has no such
+shorthand either — `{...}` alone is still just a discarded value, not
+metadata, because accidentally leaving one behind is a real mistake
+worth catching, not a convention worth recognizing.
 
 ## Reading metadata blocks back
 
