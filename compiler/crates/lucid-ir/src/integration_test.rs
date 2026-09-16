@@ -2269,4 +2269,25 @@ int main() {
         assert!(code.contains("lucid_random_double"), "random_double should be generated");
     }
 
+    #[test]
+
+    #[test]
+    fn test_where_clause_creation_and_modification() {
+        let mut where_clause = crate::IrModule::create_where_clause(vec![]);
+
+        // Start with empty
+        assert_eq!(where_clause.predicates.len(), 0);
+
+        // Add predicates
+        crate::IrModule::add_where_predicate(
+            &mut where_clause,
+            "T".to_string(),
+            vec!["Clone".to_string(), "Copy".to_string()],
+        );
+
+        assert_eq!(where_clause.predicates.len(), 1);
+        assert_eq!(where_clause.predicates[0].type_name, "T");
+        assert_eq!(where_clause.predicates[0].required_traits.len(), 2);
+    }
+
 }

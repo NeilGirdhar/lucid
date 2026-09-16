@@ -33,6 +33,7 @@ pub struct IrModule {
 pub struct IrFunction {
     pub name: String,
     pub generic_params: Vec<GenericParam>,  // Generic type parameters [T, K, V, ...]
+    pub where_clause: Option<WhereClause>,  // Optional where clause for advanced bounds
     pub params: Vec<IrParam>,
     pub return_type: IrType,
     pub blocks: Vec<IrBlock>,
@@ -201,6 +202,19 @@ pub struct TraitBound {
 pub struct GenericParam {
     pub name: String,                 // e.g., "T", "K", "V"
     pub bounds: Vec<TraitBound>,      // e.g., [T: Clone, T: Copy]
+}
+
+/// Where clause predicate for advanced trait bounds
+#[derive(Debug, Clone)]
+pub struct WhereClausePredicate {
+    pub type_name: String,            // Type being constrained (e.g., "T" or "List[T]")
+    pub required_traits: Vec<String>, // Traits that must be implemented
+}
+
+/// Where clause for generic functions/types
+#[derive(Debug, Clone)]
+pub struct WhereClause {
+    pub predicates: Vec<WhereClausePredicate>,  // e.g., [T: Clone, U: Default]
 }
 
 /// Generic type instantiation (monomorphization)
@@ -678,6 +692,34 @@ impl IrModule {
             _ => self.get_iterator(type_name).map(|it| it.item_type.clone()),
         }
     }
+
+    /// Validate that a type satisfies all where clause predicates
+    pub fn validate_where_clause(&self, where_clause: &WhereClause, type_name: &str) -> Result<(), String> {
+        for predicate in &where_clause.predicates {
+            if predicate.type_name == type_name {
+                if !self.type_satisfies_bounds(type_name, &predicate.required_traits) {
+                    return Err(format!(
+                        "Type {} does not satisfy where clause constraints: {:?}",
+                        type_name, predicate.required_traits
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Create a where clause for function
+    pub fn create_where_clause(predicates: Vec<WhereClausePredicate>) -> WhereClause {
+        WhereClause { predicates }
+    }
+
+    /// Add a predicate to a where clause
+    pub fn add_where_predicate(where_clause: &mut WhereClause, type_name: String, traits: Vec<String>) {
+        where_clause.predicates.push(WhereClausePredicate {
+            type_name,
+            required_traits: traits,
+        });
+    }
 }
 
 impl IrFunction {
@@ -689,6 +731,7 @@ impl IrFunction {
         Self {
             name,
             generic_params: Vec::new(),
+            where_clause: None,
             params,
             return_type,
             blocks: vec![IrBlock {
