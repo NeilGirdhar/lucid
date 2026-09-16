@@ -289,6 +289,40 @@ mod tests {
     }
 
     #[test]
+    fn test_abi_layout_verification() {
+        use lucid_abi::{AbiInfo, CInteropType};
+
+        let mut module = IrModule::new();
+
+        // Create Point class
+        let point_class = IrClass {
+            name: "Point".to_string(),
+            fields: vec![
+                IrField { name: "x".to_string(), ty: IrType::I64 },
+                IrField { name: "y".to_string(), ty: IrType::I64 },
+            ],
+            methods: vec![],
+        };
+
+        module.add_class(point_class);
+
+        // Generate C code
+        let mut backend = CCodegenBackend::new();
+        let c_code = backend.generate(&module);
+
+        // Gap #6: ABI struct layout verification (verifies C struct offset)
+
+        // Verify C struct compiles and has correct layout
+        let test_code = format!(
+            "{}\n#include <stddef.h>\nint main() {{\n  printf(\"%zu\\n\", offsetof(struct Point, y));\n  return 0;\n}}",
+            c_code
+        );
+
+        // offsetof(Point, y) should be 8 (after x which is 8 bytes)
+        assert!(test_c_code(&test_code, "8\n"), "ABI layout: Point.y offset should be 8");
+    }
+
+    #[test]
     fn test_struct_generation() {
         let mut module = IrModule::new();
 

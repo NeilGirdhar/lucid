@@ -452,6 +452,7 @@ dependencies = [
 name = "lucid-ir"
 version = "0.1.0"
 dependencies = [
+ "lucid-abi",
  "lucid-syntax",
 ]
 
