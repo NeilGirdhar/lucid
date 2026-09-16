@@ -133,6 +133,27 @@ impl CCodegenBackend {
                     self.emit_line(&format!("{}({});", func, args_code));
                 }
             }
+            IrInstruction::MethodCall {
+                dest,
+                receiver,
+                method,
+                args,
+            } => {
+                let receiver_code = self.value_to_c(receiver);
+                let mut all_args = vec![receiver_code];
+                all_args.extend(args.iter().map(|a| self.value_to_c(a)));
+                let args_code = all_args.join(", ");
+
+                // Translate receiver.method(args) to method(receiver, args)
+                // In a real implementation, we'd look up the class type to generate the right function name
+                let func_name = format!("method_{}", method);
+
+                if let Some(d) = dest {
+                    self.emit_line(&format!("int64_t {} = {}({});", d, func_name, args_code));
+                } else {
+                    self.emit_line(&format!("{}({});", func_name, args_code));
+                }
+            }
             IrInstruction::Load { dest, addr } => {
                 let addr_code = self.value_to_c(addr);
                 self.emit_line(&format!("int64_t {} = *(int64_t*){};", dest, addr_code));

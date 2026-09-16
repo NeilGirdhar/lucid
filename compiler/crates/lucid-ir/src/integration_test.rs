@@ -78,6 +78,49 @@ mod tests {
     }
 
     #[test]
+    fn test_method_call_codegen() {
+        let mut module = IrModule::new();
+
+        // Create a Point class
+        let point_class = IrClass {
+            name: "Point".to_string(),
+            fields: vec![
+                IrField { name: "x".to_string(), ty: IrType::I64 },
+                IrField { name: "y".to_string(), ty: IrType::I64 },
+            ],
+            methods: vec![],
+        };
+
+        module.add_class(point_class);
+
+        // Add a method: method_get_x(Point* self) -> int64_t
+        let mut get_x = IrFunction::new(
+            "method_get_x".to_string(),
+            vec![
+                IrParam { name: "self".to_string(), ty: IrType::Ptr },
+            ],
+            IrType::I64,
+        );
+
+        get_x.blocks[0].set_terminator(IrTerminator::Return {
+            value: Some(IrValue::Int(99)),
+        });
+
+        module.add_function(get_x);
+
+        let mut backend = CCodegenBackend::new();
+        let c = backend.generate(&module);
+
+        // Verify method declaration is generated
+        assert!(c.contains("method_get_x"));
+
+        // Verify it compiles with a call to the method
+        let test_code = format!("{}\n\nint main() {{\n  struct Point p;\n  p.x = 10;\n  int64_t val = method_get_x((void*)&p);\n  printf(\"%ld\\n\", val);\n  return 0;\n}}", c);
+
+        assert!(test_c_code(&test_code, "99\n"));
+    }
+
+    #[test]
     fn test_struct_generation() {
         let mut module = IrModule::new();
 

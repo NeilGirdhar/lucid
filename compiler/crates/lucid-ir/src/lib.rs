@@ -147,6 +147,13 @@ pub enum IrInstruction {
         func: String,
         args: Vec<IrValue>,
     },
+    /// Method call (receiver.method(args))
+    MethodCall {
+        dest: Option<String>,
+        receiver: IrValue,
+        method: String,
+        args: Vec<IrValue>,
+    },
     /// Load from memory
     Load {
         dest: String,
