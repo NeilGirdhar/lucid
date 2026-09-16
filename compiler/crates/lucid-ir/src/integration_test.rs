@@ -2290,4 +2290,32 @@ int main() {
         assert_eq!(where_clause.predicates[0].required_traits.len(), 2);
     }
 
+    #[test]
+    fn test_pattern_bindings_for_variants() {
+        // Test pattern bindings extraction from variants
+        let pattern = crate::Pattern::Variant(
+            "Ok".to_string(),
+            vec!["value".to_string()],
+        );
+
+        let bindings = crate::IrModule::create_pattern_bindings(&pattern);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].binding_name, "value");
+        assert_eq!(bindings[0].field_path[0], "Ok");
+    }
+
+    #[test]
+    fn test_match_arm_with_full_bindings() {
+        // Test creating match arms with pattern bindings
+        let pattern = crate::Pattern::Variant(
+            "Err".to_string(),
+            vec!["error_code".to_string()],
+        );
+
+        let arm = crate::IrModule::create_match_arm_with_bindings(pattern, 42);
+        assert_eq!(arm.target_block, 42);
+        assert_eq!(arm.bindings.len(), 1);
+        assert_eq!(arm.bindings[0].binding_name, "error_code");
+    }
+
 }

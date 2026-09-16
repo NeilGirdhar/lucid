@@ -274,6 +274,21 @@ pub struct MatchArm {
     pub target_block: usize,  // Block to execute if pattern matches
 }
 
+/// Pattern binding for match arms - extract values from patterns
+#[derive(Debug, Clone)]
+pub struct PatternBinding {
+    pub binding_name: String,         // Variable name to bind to
+    pub field_path: Vec<String>,      // Path to field (e.g., ["Ok", "value"])
+}
+
+/// Match arm with full pattern and bindings
+#[derive(Debug, Clone)]
+pub struct MatchArmWithBindings {
+    pub pattern: Pattern,
+    pub bindings: Vec<PatternBinding>,  // Values extracted from pattern
+    pub target_block: usize,
+}
+
 /// Pattern match with exhaustiveness tracking
 #[derive(Debug, Clone)]
 pub struct MatchExpr {
@@ -719,6 +734,42 @@ impl IrModule {
             type_name,
             required_traits: traits,
         });
+    }
+
+    /// Create pattern bindings for a match arm
+    pub fn create_pattern_bindings(pattern: &Pattern) -> Vec<PatternBinding> {
+        match pattern {
+            Pattern::Variant(variant_name, captured) => {
+                captured.iter().enumerate().map(|(i, name)| {
+                    PatternBinding {
+                        binding_name: name.clone(),
+                        field_path: vec![variant_name.clone(), format!("field_{}", i)],
+                    }
+                }).collect()
+            }
+            Pattern::Tuple(patterns) => {
+                let mut bindings = Vec::new();
+                for (i, pat) in patterns.iter().enumerate() {
+                    let sub_bindings = Self::create_pattern_bindings(pat);
+                    for mut binding in sub_bindings {
+                        binding.field_path.insert(0, format!("tuple_{}", i));
+                        bindings.push(binding);
+                    }
+                }
+                bindings
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Create match arm with full pattern bindings
+    pub fn create_match_arm_with_bindings(pattern: Pattern, target_block: usize) -> MatchArmWithBindings {
+        let bindings = Self::create_pattern_bindings(&pattern);
+        MatchArmWithBindings {
+            pattern,
+            bindings,
+            target_block,
+        }
     }
 }
 
