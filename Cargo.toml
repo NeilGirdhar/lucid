@@ -9,6 +9,7 @@ members = [
     "compiler/crates/lucid-codegen",
     "compiler/crates/lucid-runtime",
     "compiler/crates/lucid-cli",
+    "compiler/crates/lucid-ir",
 ]
 resolver = "2"
 

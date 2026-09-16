@@ -449,6 +449,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lucid-ir"
+version = "0.1.0"
+
+[[package]]
 name = "lucid-runtime"
 version = "0.1.0"
 dependencies = [
