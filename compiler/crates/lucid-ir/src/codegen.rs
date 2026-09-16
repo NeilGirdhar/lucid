@@ -8,6 +8,7 @@ pub struct CCodegenBackend {
     output: String,
     declared_vars: std::collections::HashSet<String>,
     var_types: std::collections::HashMap<String, String>, // Variable -> C type
+    classes_with_methods: std::collections::HashSet<String>, // Track which classes have methods/vtables
 }
 
 impl CCodegenBackend {
@@ -17,6 +18,7 @@ impl CCodegenBackend {
             output: String::new(),
             declared_vars: std::collections::HashSet::new(),
             var_types: std::collections::HashMap::new(),
+            classes_with_methods: std::collections::HashSet::new(),
         }
     }
 
@@ -28,13 +30,24 @@ impl CCodegenBackend {
         self.generate_specialized_types(module);
         self.emit_line("");
 
-        // Generate struct definitions for classes
+        // Generate forward declarations for all functions (needed for vtable initialization)
+        for function in &module.functions {
+            let return_ctype = function.return_type.c_type();
+            let param_list = function.params.iter()
+                .map(|p| format!("{} {}", p.ty.c_type(), p.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.emit_line(&format!("{} {}({});", return_ctype, function.name, param_list));
+        }
+        self.emit_line("");
+
+        // Generate struct definitions for classes (needs access to function signatures for vtable)
         for class in &module.classes {
-            self.generate_class(class);
+            self.generate_class_with_vtable(class, module);
             self.emit_line("");
         }
 
-        // Generate function declarations and implementations
+        // Generate function implementations
         for function in &module.functions {
             self.generate_function(function);
             self.emit_line("");
@@ -418,21 +431,46 @@ impl CCodegenBackend {
         ));
     }
 
-    fn generate_class(&mut self, class: &crate::IrClass) {
+    fn generate_class_with_vtable(&mut self, class: &crate::IrClass, module: &IrModule) {
         // Generate vtable structure if class has methods
         if !class.methods.is_empty() {
+            self.classes_with_methods.insert(class.name.clone());
             self.emit_line(&format!("struct {}_VTable {{", class.name));
             self.indent_level += 1;
 
             for method in &class.methods {
+                // Look up the actual function to get the return type
+                let return_type = if let Some(func) = module.functions.iter().find(|f| f.name == method.impl_function) {
+                    func.return_type.c_type().to_string()
+                } else {
+                    "int64_t".to_string()
+                };
+
                 // Generate function pointer for each method
-                // For now, assume all methods return int64_t and take void* self
                 self.emit_line(&format!(
-                    "int64_t (*{})(void*);",
-                    method.method_name
+                    "{}(*{})(void*);",
+                    return_type, method.method_name
                 ));
             }
 
+            self.indent_level -= 1;
+            self.emit_line("};");
+            self.emit_line("");
+
+            // Generate static vtable instance
+            self.emit_line(&format!("struct {}_VTable {}_vtable = {{", class.name, class.name));
+            self.indent_level += 1;
+            for method in &class.methods {
+                // Get the return type for casting if needed
+                let return_type = if let Some(func) = module.functions.iter().find(|f| f.name == method.impl_function) {
+                    func.return_type.c_type().to_string()
+                } else {
+                    "int64_t".to_string()
+                };
+
+                self.emit_line(&format!(".{} = ({} (*)(void*)){},",
+                    method.method_name, return_type, method.impl_function));
+            }
             self.indent_level -= 1;
             self.emit_line("};");
             self.emit_line("");
@@ -760,9 +798,13 @@ impl CCodegenBackend {
                     ));
                 }
 
-                // TODO: Initialize vtable pointer if class has methods
-                // This requires checking module.get_class(class_name).methods
-                // For now, skip vtable init - will be added in post-processing pass
+                // Initialize vtable pointer if the class has methods
+                if self.classes_with_methods.contains(class_name) {
+                    self.emit_line(&format!(
+                        "{}->__vtable = &{}_vtable;",
+                        dest, class_name
+                    ));
+                }
 
                 // Initialize fields
                 for (field_name, field_value) in field_values {

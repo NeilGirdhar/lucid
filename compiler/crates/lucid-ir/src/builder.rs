@@ -387,28 +387,76 @@ impl IrBuilder {
                 }
             }
             Stmt::Match { subject, subject_alias: _, arms, .. } => {
-                // Match statement: evaluate subject and branch to matching arm
+                // Match statement: evaluate subject and branch to matching arm based on patterns
                 if let Some(func_idx) = self.current_function {
                     let subject_val = self.expr_to_ir_value(subject);
 
-                    // For each arm, create a block
+                    // Create blocks for each arm
                     let mut arm_blocks = Vec::new();
                     for _ in arms {
                         arm_blocks.push(self.fresh_block("match_arm"));
                     }
                     let merge_id = self.fresh_block("match_merge");
 
-                    // TODO: Implement proper pattern matching with scrutinee checking
-                    // For MVP, just generate the first matching arm
-                    if !arm_blocks.is_empty() {
-                        self.current_block = arm_blocks[0];
-                        if let Some(first_arm) = arms.first() {
-                            for stmt in &first_arm.body {
-                                self.build_stmt_recursive(stmt);
+                    // Implement pattern matching: check each pattern in order
+                    let mut last_check_block = self.current_block;
+                    for (arm_idx, (arm, arm_block_id)) in arms.iter().zip(arm_blocks.iter()).enumerate() {
+                        // Check if this pattern matches
+                        match &arm.pattern {
+                            Pattern::Wildcard(_) => {
+                                // Wildcard always matches, branch directly to this arm
+                                self.current_block = last_check_block;
+                                self.terminate(IrTerminator::Jump { target: *arm_block_id });
+                            }
+                            Pattern::Literal(lit_val, _) => {
+                                // Compare subject to literal, converting to IrValue
+                                let cond_var = self.fresh_var("pattern_match");
+                                let ir_lit_val = match lit_val {
+                                    LiteralValue::Int(n) => IrValue::Int(*n),
+                                    LiteralValue::Float(f) => IrValue::Float(*f),
+                                    LiteralValue::Bool(b) => IrValue::Bool(*b),
+                                    LiteralValue::Str(s) => IrValue::String(s.clone()),
+                                    LiteralValue::None => IrValue::Null,
+                                    _ => IrValue::Int(0),
+                                };
+                                self.current_block = last_check_block;
+                                self.emit(IrInstruction::BinOp {
+                                    dest: cond_var.clone(),
+                                    op: IrBinOp::Eq,
+                                    left: subject_val.clone(),
+                                    right: ir_lit_val,
+                                });
+
+                                let next_check_block = if arm_idx < arms.len() - 1 {
+                                    self.fresh_block("pattern_check")
+                                } else {
+                                    merge_id
+                                };
+
+                                self.terminate(IrTerminator::Branch {
+                                    condition: IrValue::Var(cond_var),
+                                    then_block: *arm_block_id,
+                                    else_block: next_check_block,
+                                });
+                                last_check_block = next_check_block;
+                            }
+                            _ => {
+                                // For other patterns, treat as matching for now
+                                // Full pattern support would handle Variant, Tuple, etc.
+                                self.current_block = last_check_block;
+                                self.terminate(IrTerminator::Jump { target: *arm_block_id });
                             }
                         }
-                        // Jump to merge
-                        if matches!(self.module.functions[func_idx].blocks[arm_blocks[0]].terminator, IrTerminator::Unreachable) {
+                    }
+
+                    // Generate code for each arm
+                    for (arm, arm_block_id) in arms.iter().zip(arm_blocks.iter()) {
+                        self.current_block = *arm_block_id;
+                        for stmt in &arm.body {
+                            self.build_stmt_recursive(stmt);
+                        }
+                        // Jump to merge if not already terminated
+                        if matches!(self.module.functions[func_idx].blocks[*arm_block_id].terminator, IrTerminator::Unreachable) {
                             self.terminate(IrTerminator::Jump { target: merge_id });
                         }
                     }
@@ -563,15 +611,24 @@ impl IrBuilder {
             }
             Expr::List { elements, .. } => {
                 // List literal: [1, 2, 3]
-                // For MVP, generate a call to create list
                 let dest = self.fresh_var("list");
 
-                // Create an empty list (TODO: initialize with elements)
+                // Create empty list
                 self.emit(IrInstruction::Call {
                     dest: Some(dest.clone()),
                     func: "lucid_list_new".to_string(),
                     args: vec![],
                 });
+
+                // Append each element
+                for elem_expr in elements {
+                    let elem_val = self.expr_to_ir_value(elem_expr);
+                    self.emit(IrInstruction::Call {
+                        dest: None,
+                        func: "lucid_list_append".to_string(),
+                        args: vec![IrValue::Var(dest.clone()), elem_val],
+                    });
+                }
 
                 IrValue::Var(dest)
             }
