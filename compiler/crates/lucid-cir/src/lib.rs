@@ -10817,13 +10817,16 @@ impl Function {
                 lucid_syntax::Expr::Call { func, args, .. }
                     if matches!(
                         func.as_ref(),
-                        lucid_syntax::Expr::Attribute { attr, .. } if attr == "join"
-                    ) && args.len() == 1 =>
+                        lucid_syntax::Expr::Attribute { value, attr, .. }
+                            if attr == "join"
+                                && matches!(value.as_ref(), lucid_syntax::Expr::Ident { name, .. } if name == "str")
+                    ) && args.len() == 2 =>
                 {
-                    let lucid_syntax::Expr::Attribute { value, .. } = func.as_ref() else {
-                        unreachable!();
-                    };
-                    let separator = constant_string(value, aggregate_bindings)?;
+                    let sep_arg = args
+                        .iter()
+                        .find(|arg| arg.name.as_deref() == Some("sep"))
+                        .or_else(|| args.get(1))?;
+                    let separator = constant_string(&sep_arg.value, aggregate_bindings)?;
                     let values = constant_string_list(&args[0].value, aggregate_bindings)?;
                     Some(values.join(&separator))
                 }
@@ -34608,7 +34611,7 @@ return total
                 "values = set({1: \"a\", 2: \"bc\"}.values())\nreturn \"bc\" in values\n",
                 1,
             ),
-            ("return \",\".join([\"a\", \"b\"]) == \"a,b\"\n", 1),
+            ("return str.join([\"a\", \"b\"], sep=\",\") == \"a,b\"\n", 1),
             ("return [\"a\", \"b\"] == [\"a\", \"b\"]\n", 1),
             ("return \"a\" in [\"a\", \"b\"]\n", 1),
             ("return \"c\" not in [\"a\", \"b\"]\n", 1),
@@ -34708,7 +34711,7 @@ return total
                 1,
             ),
             (
-                "parts = [\"a\", \"b\"]\nseparator = \",\"\nreturn separator.join(parts) == \"a,b\"\n",
+                "parts = [\"a\", \"b\"]\nseparator = \",\"\nreturn str.join(parts, sep=separator) == \"a,b\"\n",
                 1,
             ),
             (

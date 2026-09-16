@@ -75,7 +75,7 @@ though the string doesn't behave like one once inside:
 
 ```python
 def render_lines(lines: Sequence[str]) -> str:
-    return "\n".join(lines)
+    return str.join(lines, sep="\n")
 
 render_lines("hello")  # type-checks, returns "h\ne\nl\nl\no"
 ```
@@ -97,7 +97,7 @@ the contract violations above:
 
 ```python
 def render_lines(lines: Iterable[str]) -> str:
-    return "\n".join(lines)
+    return str.join(lines, sep="\n")
 
 render_lines("hello")  # error: str is not Iterable[str]
 ```

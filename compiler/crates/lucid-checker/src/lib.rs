@@ -10502,7 +10502,7 @@ impl TypeChecker {
                     if is_string {
                         let valid = match attr.as_str() {
                             "split" => args.len() <= 1,
-                            "join" | "startswith" | "endswith" => args.len() == 1,
+                            "startswith" | "endswith" => args.len() == 1,
                             "replace" => args.len() == 2,
                             "upper" | "lower" | "strip" | "trim" => args.is_empty(),
                             "bin" | "oct" | "hex" => args.len() == 1,
@@ -10537,22 +10537,36 @@ impl TypeChecker {
                                 });
                             }
                         }
-                        if attr == "join" {
-                            if let Some(argument) = args.first().filter(|argument| {
-                                !argument.is_spread
-                                    && !argument.is_dict_spread
-                                    && !argument.is_gather_spread
-                            }) {
-                                let actual = self.type_of_expr(&argument.value)?;
-                                if !self.is_iterable_type(&actual) {
-                                    return Err(TypeError {
-                                        message: format!(
-                                            "str.join() argument must be iterable, got {:?}",
-                                            actual
-                                        ),
-                                        span: argument.value.span(),
-                                    });
-                                }
+                    }
+                    if matches!(&**value, Expr::Ident { name, .. } if name == "str")
+                        && attr == "join"
+                    {
+                        if let Some(items_argument) = args.first() {
+                            let items_type = self.type_of_expr(&items_argument.value)?;
+                            if !self.is_iterable_type(&items_type) {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "str.join() argument must be iterable, got {:?}",
+                                        items_type
+                                    ),
+                                    span: items_argument.value.span(),
+                                });
+                            }
+                        }
+                        let sep_argument = args
+                            .iter()
+                            .find(|argument| argument.name.as_deref() == Some("sep"))
+                            .or_else(|| args.get(1));
+                        if let Some(sep_argument) = sep_argument {
+                            let sep_type = self.type_of_expr(&sep_argument.value)?;
+                            if !sep_type.is_subtype_of(&Type::Str, &self.env) {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "str.join() sep must be str, got {:?}",
+                                        sep_type
+                                    ),
+                                    span: sep_argument.value.span(),
+                                });
                             }
                         }
                     }
@@ -12354,6 +12368,14 @@ impl TypeChecker {
                         return_type: Box::new(Type::Str),
                     });
                 }
+                if matches!(value.as_ref(), Expr::Ident { name, .. } if name == "str")
+                    && attr == "join"
+                {
+                    return Ok(Type::Function {
+                        params: vec![Type::TypeVar("Any".into()), Type::Str],
+                        return_type: Box::new(Type::Str),
+                    });
+                }
                 if let Expr::Ident { name, .. } = &**value {
                     if matches!(
                         (name.as_str(), attr.as_str()),
@@ -12408,14 +12430,6 @@ impl TypeChecker {
                         }),
                         "upper" | "lower" | "strip" | "trim" => Ok(Type::Function {
                             params: Vec::new(),
-                            return_type: Box::new(Type::Str),
-                        }),
-                        "join" => Ok(Type::Function {
-                            params: vec![Type::Trait {
-                                name: "Iterable".into(),
-                                type_args: Vec::new(),
-                                methods: HashSet::new(),
-                            }],
                             return_type: Box::new(Type::Str),
                         }),
                         "replace" => Ok(Type::Function {
@@ -15590,7 +15604,7 @@ parts = text.split()
 upper = text.upper()
 lower = text.lower()
 result = text.replace("world", "lucid")
-joined = ", ".join(["a", "b", "c"])
+joined = str.join(["a", "b", "c"], sep=", ")
 "#;
         let module = parse(code).unwrap();
         let mut checker = TypeChecker::new();
@@ -18536,8 +18550,14 @@ def reject(value: not int) -> none:
             ("fields()\n", "requires at least 1"),
             ("len(1)\n", "not sized"),
             ("parts = \"a b\".split(1)\n", "str.split() argument has incompatible type"),
-            ("joined = \",\".join(1)\n", "str.join() argument must be iterable"),
-            ("joiner = \",\".join\njoined = joiner(1)\n", "argument 1 has incompatible type"),
+            (
+                "joined = str.join(1, sep=\",\")\n",
+                "str.join() argument must be iterable",
+            ),
+            (
+                "joined = str.join([\"a\"], sep=1)\n",
+                "str.join() sep must be str",
+            ),
             (
                 "def double(x: int) -> int:\n    return x * 2\nf = double\nvalue = f(\"bad\")\n",
                 "argument 1 has incompatible type",
@@ -18645,7 +18665,7 @@ def reject(value: not int) -> none:
         string_checker
             .check_module(
                 &parse(
-                    "words: list[str] = \"a b\".split()\nparts: list[str] = \"a,b\".split(\",\")\njoined: str = \",\".join([1, 2])\njoiner = \",\".join\njoined_later: str = joiner([1, 2])\ntrimmed: str = \" x \".strip()\n",
+                    "words: list[str] = \"a b\".split()\nparts: list[str] = \"a,b\".split(\",\")\njoined: str = str.join([\"a\", \"b\"], sep=\",\")\njoiner = str.join\njoined_later: str = joiner([\"a\", \"b\"], \",\")\ntrimmed: str = \" x \".strip()\n",
                 )
                 .unwrap(),
             )

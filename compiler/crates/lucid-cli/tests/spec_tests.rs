@@ -813,7 +813,7 @@ biggest = max(nums)
 
 words = "lucid is expressive and fast".split()
 upper_words = [w.upper() for w in words if len(w) > 3]
-slug = "-".join(upper_words)
+slug = str.join(upper_words, sep="-")
 "#;
     let val = eval_ok(src);
     assert_eq!(val, Value::Str("LUCID-EXPRESSIVE-FAST".to_string()));

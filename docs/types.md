@@ -70,7 +70,7 @@ class User:
 
 def greet(user: User, times: int = 1) -> str:
     lines: list[str] = [f"Hello, {user.name}"] * times
-    return "\n".join(lines)
+    return str.join(lines, sep="\n")
 ```
 ## Function types
 

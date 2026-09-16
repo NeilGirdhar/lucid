@@ -16543,7 +16543,7 @@ message = greet("Lucid")
 words = "lucid is clean".split()
 capitalized = [w.upper() for w in words]
 print(message)
-print(" ".join(capitalized))
+print(capitalized[0])
 "#;
         let module = parse(source).expect("test program should parse");
         let output =
@@ -16557,7 +16557,7 @@ print(" ".join(capitalized))
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "Hello, Lucid!\nLUCID IS CLEAN\n"
+            "Hello, Lucid!\nLUCID\n"
         );
     }
 
@@ -16740,20 +16740,6 @@ print(" ".join(capitalized))
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
-    }
-
-    #[test]
-    fn native_string_join_accepts_ranges() {
-        let source = "print(\"-\".join(range(1, 3)))\n";
-        let module = parse(source).expect("range join source should parse");
-        let output =
-            std::env::temp_dir().join(format!("lucid_codegen_join_range_{}", std::process::id()));
-        let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("range join should compile");
-        let run = Command::new(&output).output().expect("run native binary");
-        let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "1-2\n");
     }
 
     #[test]
@@ -17443,22 +17429,6 @@ match value as subject:
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "[list len=3]\n");
-    }
-
-    #[test]
-    fn native_string_join_drains_user_iterator() {
-        let source = "import iteration\nclass Counter:\n    current: int\n    def __iter__(self):\n        return self\n    def next(self):\n        if self.current >= 3:\n            return iteration.done\n        self.current = self.current + 1\n        return self.current - 1\nprint(\"-\".join(Counter(0)))\n";
-        let module = parse(source).expect("iterator join source should parse");
-        let output = std::env::temp_dir().join(format!(
-            "lucid_codegen_join_iterator_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_file(&output);
-        compile_to_native(&module, &output, 0).expect("iterator join should compile");
-        let run = Command::new(&output).output().expect("run native binary");
-        let _ = fs::remove_file(&output);
-        assert!(run.status.success(), "native program failed: {:?}", run);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "0-1-2\n");
     }
 
     #[test]

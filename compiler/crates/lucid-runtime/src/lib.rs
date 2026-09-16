@@ -7125,6 +7125,48 @@ impl Interpreter {
         }
     }
 
+    fn call_str_join(&mut self, args: &[Arg], span: Span) -> Result<Value, RuntimeError> {
+        let Some(items_arg) = args.first() else {
+            return Err(RuntimeError {
+                message: "str.join() requires an iterable of items".into(),
+                span,
+            });
+        };
+        let sep_arg = args
+            .iter()
+            .find(|arg| arg.name.as_deref() == Some("sep"))
+            .or_else(|| args.get(1));
+        let Some(sep_arg) = sep_arg else {
+            return Err(RuntimeError {
+                message: "str.join() requires a sep argument".into(),
+                span,
+            });
+        };
+
+        let items_value = self.eval_expr(&items_arg.value)?;
+        let items = self.materialize_iterable(items_value, items_arg.span)?;
+
+        let sep_value = self.eval_expr(&sep_arg.value)?;
+        let Value::Str(sep) = sep_value else {
+            return Err(RuntimeError {
+                message: "str.join() sep must be str".into(),
+                span: sep_arg.span,
+            });
+        };
+
+        let mut parts = Vec::with_capacity(items.len());
+        for item in items {
+            let Value::Str(part) = item else {
+                return Err(RuntimeError {
+                    message: format!("str.join() items must be str, found {}", item.type_name()),
+                    span: items_arg.span,
+                });
+            };
+            parts.push(part);
+        }
+        Ok(Value::Str(parts.join(&sep)))
+    }
+
     #[allow(clippy::needless_return)]
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
         match expr {
@@ -7393,6 +7435,9 @@ impl Interpreter {
                                 _ => format!("0x{value:x}"),
                             };
                             return Ok(Value::Str(rendered));
+                        }
+                        if name == "str" && attr == "join" {
+                            return self.call_str_join(args, *span);
                         }
                     }
                     if attr == "replace" {
@@ -8066,6 +8111,41 @@ impl Interpreter {
                     }
                     Value::BuiltinFunction {
                         name: builtin_name, ..
+                    } if builtin_name == "str" && attr == "join" => Ok(Value::BuiltinFunction {
+                        name: "str.join".to_string(),
+                        func: Rc::new(move |args, interp| {
+                            if args.len() != 2 {
+                                return Err(RuntimeError {
+                                    message: "str.join() takes exactly two arguments".into(),
+                                    span: Span::default(),
+                                });
+                            }
+                            let items =
+                                interp.materialize_iterable(args[0].clone(), Span::default())?;
+                            let Value::Str(sep) = &args[1] else {
+                                return Err(RuntimeError {
+                                    message: "str.join() sep must be str".into(),
+                                    span: Span::default(),
+                                });
+                            };
+                            let mut parts = Vec::with_capacity(items.len());
+                            for item in items {
+                                let Value::Str(part) = item else {
+                                    return Err(RuntimeError {
+                                        message: format!(
+                                            "str.join() items must be str, found {}",
+                                            item.type_name()
+                                        ),
+                                        span: Span::default(),
+                                    });
+                                };
+                                parts.push(part);
+                            }
+                            Ok(Value::Str(parts.join(sep)))
+                        }),
+                    }),
+                    Value::BuiltinFunction {
+                        name: builtin_name, ..
                     } if builtin_name == "str"
                         && matches!(attr.as_str(), "bin" | "oct" | "hex") =>
                     {
@@ -8143,31 +8223,6 @@ impl Interpreter {
                                         });
                                     };
                                     Ok(Value::List(Rc::new(RefCell::new(pieces))))
-                                }),
-                            });
-                        }
-                        if attr == "join" {
-                            let sep = s.clone();
-                            return Ok(Value::BuiltinFunction {
-                                name: "join".to_string(),
-                                func: Rc::new(move |args, interp| {
-                                    if args.len() != 1 {
-                                        return Err(RuntimeError {
-                                            message: "join() takes exactly 1 argument (iterable)"
-                                                .into(),
-                                            span: Span::default(),
-                                        });
-                                    }
-                                    let values = interp
-                                        .materialize_iterable(args[0].clone(), Span::default())?;
-                                    let items: Vec<String> = values
-                                        .iter()
-                                        .map(|v| match v {
-                                            Value::Str(s) => s.clone(),
-                                            other => format!("{other:?}"),
-                                        })
-                                        .collect();
-                                    Ok(Value::Str(items.join(&sep)))
                                 }),
                             });
                         }
@@ -13089,7 +13144,7 @@ after = c.current
 s = "  hello world  "
 stripped = s.strip()
 parts = stripped.split(" ")
-joined = "-".join(parts)
+joined = str.join(parts, sep="-")
 up = joined.upper()
 sw = up.startswith("HEL")
 ew = up.endswith("RLD")
@@ -14013,7 +14068,8 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
 
     #[test]
     fn test_string_join_accepts_any_iterable() {
-        let module = parse("result = \"-\".join(range(1, 3))\n").unwrap();
+        let module =
+            parse("result = str.join([str(n) for n in range(1, 3)], sep=\"-\")\n").unwrap();
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(
@@ -14024,7 +14080,7 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
 
     #[test]
     fn test_string_join_drains_user_iterator() {
-        let module = parse("import iteration\nclass Counter:\n    current: int\n    def __iter__(self):\n        return self\n    def next(self):\n        if self.current >= 3:\n            return iteration.done\n        self.current = self.current + 1\n        return self.current - 1\nresult = \"-\".join(Counter(0))\n").unwrap();
+        let module = parse("import iteration\nclass Counter:\n    current: int\n    def __iter__(self):\n        return self\n    def next(self):\n        if self.current >= 3:\n            return iteration.done\n        self.current = self.current + 1\n        value = self.current - 1\n        return str(value)\nresult = str.join(Counter(0), sep=\"-\")\n").unwrap();
         let mut interp = Interpreter::new();
         interp.eval_module(&module).unwrap();
         assert_eq!(
