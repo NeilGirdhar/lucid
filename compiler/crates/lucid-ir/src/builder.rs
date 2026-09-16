@@ -498,6 +498,28 @@ impl IrBuilder {
 
                 IrValue::Var(dest)
             }
+            Expr::Propagate { expr, .. } => {
+                // The ? operator: evaluate expression, pass through for now
+                // TODO: Proper error checking and early return
+                self.expr_to_ir_value(expr)
+            }
+            Expr::Attribute { value, attr, .. } => {
+                // Field access: obj.field
+                let obj_value = self.expr_to_ir_value(value);
+                let dest = self.fresh_var("field");
+
+                // For now, emit a FieldRead instruction
+                // The type should be inferred from the class definition
+                // For MVP, assume it's the same object's class
+                self.emit(IrInstruction::FieldRead {
+                    dest: dest.clone(),
+                    object: obj_value,
+                    field: attr.clone(),
+                    object_type: "Object".to_string(), // TODO: infer from value type
+                });
+
+                IrValue::Var(dest)
+            }
             _ => IrValue::Null,
         }
     }
