@@ -191,6 +191,20 @@ pub enum IrInstruction {
     Free {
         addr: IrValue,
     },
+    /// Field access read (obj.field)
+    FieldRead {
+        dest: String,
+        object: IrValue,
+        field: String,
+        object_type: String,
+    },
+    /// Field access write (obj.field = value)
+    FieldWrite {
+        object: IrValue,
+        field: String,
+        value: IrValue,
+        object_type: String,
+    },
 }
 
 /// Values in IR (operands)

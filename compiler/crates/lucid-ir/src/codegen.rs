@@ -246,6 +246,31 @@ impl CCodegenBackend {
                 let addr_code = self.value_to_c(addr);
                 self.emit_line(&format!("free({});", addr_code));
             }
+            IrInstruction::FieldRead { dest, object, field, object_type } => {
+                let obj_code = self.value_to_c(object);
+                // Generate: dest = ((StructType*)obj)->field
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "int64_t {} = (({} *){}).{};",
+                        dest, object_type, obj_code, field
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "{} = (({} *){}).{};",
+                        dest, object_type, obj_code, field
+                    ));
+                }
+            }
+            IrInstruction::FieldWrite { object, field, value, object_type } => {
+                let obj_code = self.value_to_c(object);
+                let val_code = self.value_to_c(value);
+                // Generate: ((StructType*)obj)->field = value
+                self.emit_line(&format!(
+                    "(({} *){}).{} = {};",
+                    object_type, obj_code, field, val_code
+                ));
+            }
         }
     }
 
