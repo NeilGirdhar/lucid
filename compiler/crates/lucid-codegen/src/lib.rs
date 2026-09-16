@@ -8018,7 +8018,7 @@ static inline void lucid_print_val(LucidVal v) {
                     self.collect_anonymous_captures(&arg.value, params, captures);
                 }
             }
-            Expr::Construct { args, .. } => {
+            Expr::Construct { class_name: _, args, .. } => {
                 for arg in args {
                     self.collect_anonymous_captures(&arg.value, params, captures);
                 }
@@ -15763,10 +15763,15 @@ static inline void lucid_print_val(LucidVal v) {
                     "({{ LucidVal {temp} = lucid_wrap({value}); if ({temp}.type == LUCID_TYPE_PTR) return {temp}; {temp}; }})"
                 ))
             }
-            Expr::Construct { args, .. } => {
-                let class_name = self.current_class.clone().ok_or_else(|| CodegenError {
-                    message: "construct is only valid inside a class factory".to_string(),
-                })?;
+            Expr::Construct { class_name: construct_class, args, .. } => {
+                // Use construct_class if non-empty, else use current_class
+                let class_name = if !construct_class.is_empty() {
+                    construct_class.clone()
+                } else {
+                    self.current_class.clone().ok_or_else(|| CodegenError {
+                        message: "construct is only valid inside a class factory".to_string(),
+                    })?
+                };
                 let fields = self
                     .known_classes
                     .get(&class_name)

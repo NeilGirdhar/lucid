@@ -448,15 +448,17 @@ impl IrBuilder {
                     IrValue::Null
                 }
             }
-            Expr::Construct { args, .. } => {
+            Expr::Construct { class_name, args, .. } => {
                 // Construct a new object: allocate memory, initialize
                 let dest = self.fresh_var("obj");
-                // Simplified: allocate 64 bytes (enough for most small objects)
+                // TODO: Get actual size from class definition
+                // For now: allocate 64 bytes (enough for most small objects)
                 self.emit(IrInstruction::Malloc {
                     dest: dest.clone(),
                     size: IrValue::Int(64),
                 });
-                // In a real implementation, would initialize fields here
+                // TODO: Call constructor if it exists
+                // TODO: Initialize fields from args
                 // For now, just return the allocated pointer
                 IrValue::Var(dest)
             }

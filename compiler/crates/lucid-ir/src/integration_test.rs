@@ -633,4 +633,21 @@ mod tests {
         let full = format!("{}\n\nint main() {{\n  printf(\"1\\n\");\n  return 0;\n}}", c);
         assert!(test_c_code(&full, "1\n"), "Class method code should compile");
     }
+
+    #[test]
+    fn test_class_instantiation_parsing() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        // Test: Parse class instantiation syntax
+        // Point(3.0, 4.0) where Point is a class name (capital letter)
+        let lucid_code = "def create_point() -> int:\n  p = Point(3, 4)\n  return 0\n";
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed");
+
+        // Verify the module parsed successfully
+        assert_eq!(module.statements.len(), 1, "Should have one function");
+    }
 }

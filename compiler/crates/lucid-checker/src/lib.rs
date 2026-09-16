@@ -11741,20 +11741,23 @@ impl TypeChecker {
                     is_sealed: false,
                 })
             }
-            Expr::Construct { args, span } => {
-                if !self.env.current_factory {
-                    return Err(TypeError {
-                        message: "construct(...) is only valid inside a class factory".into(),
-                        span: *span,
-                    });
-                }
-                let Some(class_name) = self.env.current_class.as_ref() else {
-                    return Err(TypeError {
+            Expr::Construct { class_name: construct_class, args, span } => {
+                // Use construct_class if provided (non-empty), otherwise require current factory context
+                let class_name = if !construct_class.is_empty() {
+                    construct_class.clone()
+                } else {
+                    if !self.env.current_factory {
+                        return Err(TypeError {
+                            message: "construct(...) is only valid inside a class factory".into(),
+                            span: *span,
+                        });
+                    }
+                    self.env.current_class.as_ref().ok_or(TypeError {
                         message: "construct(...) requires an enclosing class factory".into(),
                         span: *span,
-                    });
+                    })?.clone()
                 };
-                let Some(mut class_type) = self.env.classes.get(class_name).cloned() else {
+                let Some(mut class_type) = self.env.classes.get(&class_name).cloned() else {
                     return Err(TypeError {
                         message: format!("unknown enclosing class '{class_name}'"),
                         span: *span,
@@ -11764,13 +11767,13 @@ impl TypeChecker {
                     name: return_class, ..
                 }) = self.env.current_return_type.as_ref()
                 {
-                    if return_class == class_name {
+                    if return_class == &class_name {
                         if let Some(return_type) = self.env.current_return_type.clone() {
                             class_type = return_type;
                         }
                     }
                 }
-                let field_order = self.class_constructor_field_names(class_name);
+                let field_order = self.class_constructor_field_names(&class_name);
                 if args.len() != field_order.len() {
                     return Err(TypeError {
                         message: format!(
@@ -11787,7 +11790,7 @@ impl TypeChecker {
                         .name
                         .as_deref()
                         .unwrap_or_else(|| field_order[index].as_str());
-                    let Some(field_type) = self.class_field_type(class_name, field_name) else {
+                    let Some(field_type) = self.class_field_type(&class_name, field_name) else {
                         return Err(TypeError {
                             message: format!(
                                 "construct for '{}' has no field named '{}'",
@@ -11797,7 +11800,7 @@ impl TypeChecker {
                         });
                     };
                     let field_type = if let Type::Class { type_args, .. } = &class_type {
-                        self.instantiate_class_member_type(class_name, type_args, field_type)
+                        self.instantiate_class_member_type(&class_name, type_args, field_type)
                     } else {
                         field_type
                     };

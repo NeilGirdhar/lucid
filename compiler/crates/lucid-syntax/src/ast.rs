@@ -203,6 +203,7 @@ pub enum Expr {
         span: Span,
     },
     Construct {
+        class_name: String,  // e.g. "Point" in Point(3.0, 4.0)
         args: Vec<Arg>,
         span: Span,
     },

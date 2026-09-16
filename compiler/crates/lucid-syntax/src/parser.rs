@@ -2246,11 +2246,30 @@ impl Parser {
                 }
                 let end = self.expect(&TokenKind::RParen)?.span;
                 let span = expr.span().merge(end);
-                expr = Expr::Call {
-                    func: Box::new(expr),
-                    args,
-                    span,
-                };
+
+                // Check if this is a class instantiation (Ident with capital letter)
+                if let Expr::Ident { name, .. } = &expr {
+                    // Heuristic: if identifier starts with capital letter, treat as class instantiation
+                    if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                        expr = Expr::Construct {
+                            class_name: name.clone(),
+                            args,
+                            span,
+                        };
+                    } else {
+                        expr = Expr::Call {
+                            func: Box::new(expr),
+                            args,
+                            span,
+                        };
+                    }
+                } else {
+                    expr = Expr::Call {
+                        func: Box::new(expr),
+                        args,
+                        span,
+                    };
+                }
                 continue;
             }
 
@@ -2493,6 +2512,7 @@ impl Parser {
                 }
                 let end = self.expect(&TokenKind::RParen)?.span;
                 Ok(Expr::Construct {
+                    class_name: String::new(),  // Empty means use current class (inside factory)
                     args,
                     span: tok.span.merge(end),
                 })

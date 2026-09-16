@@ -9430,7 +9430,7 @@ impl Interpreter {
                 }
                 Ok(Value::Set(Rc::new(RefCell::new(set_vals))))
             }
-            Expr::Construct { args, span: _ } => {
+            Expr::Construct { class_name, args, span: _ } => {
                 let mut field_values = HashMap::new();
                 for (idx, arg) in args.iter().enumerate() {
                     let val = self.eval_expr(&arg.value)?;

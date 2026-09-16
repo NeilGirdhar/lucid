@@ -670,7 +670,7 @@ fn collect_typed_exprs<'db>(
             children.extend(args.iter().map(|arg| &arg.value));
             ("call", children)
         }
-        Expr::Construct { args, .. } => ("construct", args.iter().map(|arg| &arg.value).collect()),
+        Expr::Construct { class_name: _, args, .. } => ("construct", args.iter().map(|arg| &arg.value).collect()),
         Expr::Propagate { expr, .. } => ("propagate", vec![expr]),
         Expr::Await { expr, .. } => ("await", vec![expr]),
         Expr::Attribute { value, .. } => ("attribute", vec![value]),
