@@ -68,25 +68,22 @@ This separates shared class state from stored instance fields.
 
 ## Field docstrings and metadata
 
-A field declaration can open an indented block with `:`, the same suite
-grammar every other compound statement already has. The block holds up to
-two bare statements, in this order and both optional: a string literal,
-the field's docstring, and a dict literal, its metadata:
+A field's docstring and metadata are [metadata blocks](metadata.md),
+standalone `;` lines right after the field:
 
 ```python
 class Config:
-    name: str:
-        "the user's display name"
+    name: str
+    ; "the user's display name"
 
-    retries: int = 3:
-        "how many times to retry a failed request"
-        {"cli_flag": "--retries"}
+    retries: int = 3
+    ; "how many times to retry a failed request"
+    ; {"cli_flag": "--retries"}
 ```
-No new keyword or builtin call is needed — the block reads the same way a
-function body's leading string literal already reads as a docstring in
-Python, just made a real, checked part of the field declaration instead
-of an unenforced convention. The `fields()` builtin reports both
-alongside each field's name and value.
+No new keyword or builtin call is needed — a checked, structured
+replacement for what a leading string literal only conventionally means
+in Python. The `fields()` builtin reports both alongside each field's
+name and value.
 
 ## Final fields
 

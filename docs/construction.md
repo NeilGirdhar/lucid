@@ -164,6 +164,9 @@ def dispatch fields(trait: type Trait) -> Iterable[(name: str, obligation: bool,
 
 def dispatch fields(mod: Module) -> Iterable[(name: str, doc: str | none)]:
     ...
+
+def dispatch fields(fn: Callable) -> Iterable[(name: str, doc: str | none, metadata: dict[str, object])]:
+    ...
 ```
 The instance and class forms yield fields in declaration order — the
 instance form pairs each field's name with its current value; the
@@ -174,12 +177,24 @@ and `{:}` respectively when a field declares neither.
 
 ```python
 class Config:
-    name: str:
-        "the user's display name"
+    name: str
+    ; "the user's display name"
 
 c = Config("Ada")
 list(fields(c))[0]      # (name="name", value="Ada", doc="the user's display name", metadata={:})
 list(fields(Config))[0]  # (name="name", doc="the user's display name", metadata={:})
+```
+The function form walks a callable's own parameters, in declaration
+order, carrying whatever [metadata blocks](metadata.md) they declare —
+the mechanism that makes a parameter's metadata dict readable at all,
+for a use like a `jit`-style decorator branching on which arguments are
+static:
+
+```python
+def transfer(amount: float, from_account: str; {"static": true}) -> none:
+    ...
+
+list(fields(transfer))[1]  # (name="from_account", doc=none, metadata={"static": true})
 ```
 The trait form walks a trait's own declared members — fields,
 getters, setters, methods, classmethods, and factories alike —

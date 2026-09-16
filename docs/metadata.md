@@ -1,0 +1,141 @@
+# Metadata blocks
+
+## Three unchecked conventions, doing one job
+
+Python has three separate, informal ways to attach something to a piece
+of code that only a *tool* — a reader, an IDE, a linter — needs to see,
+and none of them are checked.
+
+A **docstring** is a bare string literal, conventionally the first
+statement of a module, class, or function. Nothing enforces that it's
+actually first, that there's only one, or that it says anything true.
+
+**Per-parameter documentation** has no convention of its own at all.
+Projects invent one inside the docstring's own text instead — Google
+style, NumPy style, reST field lists — three incompatible dialects for
+the same job, each parsed by a different tool's own regular expressions,
+none of them checked against the function's actual parameters. Rename a
+parameter and every one of these silently goes stale.
+
+A **suppression comment** — `# type: ignore`, `# noqa` — silences one
+specific checker complaint. It shares nothing with the docstring
+convention even though both exist to tell a tool something about the
+line they sit next to.
+
+Lucid replaces all three with one construct, checked the same way
+everywhere it appears: a *metadata block*, introduced by `;`.
+
+## One marker, three payloads
+
+A metadata block is `;` followed by exactly one of three things, read
+as a real expression — a genuine string or dict literal, fully
+tokenized, not scanned as raw text — so a comma or `#` inside a nested
+string or dict doesn't end the block early:
+
+```python
+; "the amount to move, in the account's currency"   # a docstring
+; {"cli_flag": "--retries"}                          # metadata
+; ignore: unused_import                              # a linter directive
+```
+
+A bare string is a docstring. A bare dict is metadata — arbitrary,
+tool-facing data, the way `{"cli_flag": "--retries"}` might drive an
+argument-parser generator; Lucid never looks inside it. `ignore` is the
+one word a metadata block itself recognizes, naming a check the linter
+should not report here; `unused_import` is not checked by the compiler
+at all — it's validated against the linter's own registry of known
+checks, the same way a misspelled field name is the linter's problem,
+not the parser's.
+
+A `#` comment may follow any of the three, carrying the human reason —
+the same job a comment already does everywhere else:
+
+```python
+; ignore: unused_import  # kept for its side effect on import
+```
+
+## Several directives at once
+
+`;` also separates one directive from the next, so a block can carry
+more than one entry, either on one line:
+
+```python
+x: int = 5; ignore: unused_variable; ignore: shadowed_name
+```
+
+or as several standalone lines, each its own metadata block:
+
+```python
+x: int = 5
+; ignore: unused_variable
+; ignore: shadowed_name
+```
+
+A binding may have at most one docstring and at most one metadata dict;
+a second one is a checker error, the same way a duplicate field or a
+duplicate import already is. `ignore` has no such limit — there's
+nothing wrong with suppressing several unrelated checks on one line.
+
+## Where a block attaches
+
+Trailing on the same line, a metadata block attaches to whatever
+precedes it:
+
+```python
+def clamp(value: int, low: int; "inclusive lower bound", high: int) -> int:
+    ...
+```
+
+Here the block attaches to the parameter `low`, not to `clamp` as a
+whole — the same "attaches to what's immediately to its left" reading a
+trailing `# comment` already has, just checked instead of merely
+conventional.
+
+Standing alone on its own line, a metadata block attaches to the
+statement immediately above it, at the same indentation:
+
+```python
+x: int = 5
+; ignore: unused_variable
+```
+
+If nothing at that indentation precedes it — it's the first line of a
+suite a compound statement just opened — it attaches to that
+statement's own header instead, since a line ending in `:` already
+requires an indented block to follow, and a metadata block is legal
+content for that block the same way an ordinary statement is:
+
+```python
+def transfer(amount: float, from_account: str, to_account: str) -> none:
+    ; "Move money between two accounts."
+    ...
+
+class Config:
+    ; "Application configuration."
+    name: str
+    ; "the user's display name"
+    retries: int = 3
+    ; "how many times to retry a failed request"
+    ; {"cli_flag": "--retries"}
+```
+
+## No leading string literal instead
+
+Because a metadata block is the one way to write a docstring, a bare
+string literal as a function, class, trait, or module's first statement
+is no longer read as one — it's an ordinary, pointless expression
+statement, and the checker rejects it the same way it already rejects
+other code that looks like a well-known convention but silently isn't,
+such as the parenthesized-`assert` requirement in
+[Assert](assert.md) or the names in [Removed builtins](removed-builtins.md).
+Writing `"a docstring"` where `; "a docstring"` was meant fails loudly
+instead of compiling to a documentation string nothing ever reads.
+
+## Reading metadata blocks back
+
+`fields()` ([Field reflection with `fields`](construction.md#field-reflection-with-fields)) is how code reads a docstring or metadata
+dict back at runtime, for a field, a class, a trait, or a module — and,
+since parameters can carry the same two payloads, for a function's own
+parameters too. `ignore` is different: it exists only for the linter,
+never appears in `fields()`'s output, and has no runtime meaning at
+all.
