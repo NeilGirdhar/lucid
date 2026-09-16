@@ -9147,6 +9147,11 @@ impl TypeChecker {
     fn exact_class_of_expr(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident { name, .. } => self.env.exact_variables.get(name).cloned(),
+            Expr::Construct { class_name, .. }
+                if !class_name.is_empty() && self.env.classes.contains_key(class_name) =>
+            {
+                Some(class_name.clone())
+            }
             Expr::Call { func, .. } => match &**func {
                 Expr::Ident { name, .. }
                     if self.env.classes.contains_key(name)
@@ -12096,6 +12101,17 @@ impl TypeChecker {
                         span: *span,
                     });
                 };
+                if !construct_class.is_empty() {
+                    let abstract_members = self.class_abstract_member_names(&class_name);
+                    if let Some(member) = abstract_members.iter().min() {
+                        return Err(TypeError {
+                            message: format!(
+                                "cannot construct class '{class_name}' with unimplemented abstract member '{member}'"
+                            ),
+                            span: *span,
+                        });
+                    }
+                }
                 if let Some(Type::Class {
                     name: return_class, ..
                 }) = self.env.current_return_type.as_ref()

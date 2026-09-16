@@ -9362,6 +9362,22 @@ impl Interpreter {
                 // inside a factory builds the placeholder that the factory's
                 // return normalizes into the class.
                 if !class_name.is_empty() {
+                    // A capitalized name that is not a declared class, such as
+                    // the built-in Cell, is whatever value the name is bound to.
+                    if !self.classes.contains_key(class_name) {
+                        let Some(callee) = self.env.borrow().get(class_name) else {
+                            return Err(RuntimeError {
+                                message: format!("undefined variable '{class_name}'"),
+                                span: *span,
+                            });
+                        };
+                        let mut evaluated = Vec::new();
+                        for arg in args {
+                            let value = self.eval_expr(&arg.value)?;
+                            evaluated.push((arg.name.clone(), value));
+                        }
+                        return self.invoke_value(callee, evaluated, *span);
+                    }
                     let field_names = self.constructor_field_names(class_name);
                     let mut slots: Vec<Option<Value>> = Vec::new();
                     for arg in args {
