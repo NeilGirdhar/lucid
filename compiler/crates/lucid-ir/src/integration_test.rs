@@ -2190,4 +2190,44 @@ int main() {
         assert_eq!(module.get_iteration_type("String"), Some(IrType::Str));
     }
 
+    #[test]
+    fn test_string_slice_operations_generated() {
+        // Test that string slice operations are generated
+        let module = IrModule::new();
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify string slice functions are present
+        assert!(code.contains("lucid_string_slice"), "slice should be generated");
+        assert!(code.contains("lucid_string_split_helper"), "split should be generated");
+        assert!(code.contains("lucid_string_repeat"), "repeat should be generated");
+
+        // Verify slice logic
+        assert!(code.contains("strncpy(result, str + start"), "slice should copy substring");
+    }
+
+    #[test]
+    fn test_list_slice_and_search_operations_codegen() {
+        // Test list slice, contains, and search operations
+        let mut module = IrModule::new();
+
+        // Create List[i64] specialization
+        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify slice operations
+        assert!(code.contains("List__i64___slice"), "slice should be generated");
+        assert!(code.contains("List__i64___contains"), "contains should be generated");
+        assert!(code.contains("List__i64___index_of"), "index_of should be generated");
+
+        // Verify implementations
+        assert!(code.contains("_new()"), "slice should create new list");
+        assert!(code.contains("if (list->items[i] == item)"), "contains should check items");
+    }
+
 }

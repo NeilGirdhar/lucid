@@ -149,6 +149,27 @@ impl CCodegenBackend {
             "void {0}_clear(struct {0}* list) {{\n  list->length = 0;\n}}",
             type_name
         ));
+        self.emit_line("");
+
+        // Generate slice function
+        self.emit_line(&format!(
+            "struct {0} {0}_slice(struct {0}* list, int64_t start, int64_t end) {{\n  struct {0} result = {0}_new();\n  if (start < 0) start = 0;\n  if (end > list->length) end = list->length;\n  if (start >= end) return result;\n  for (int64_t i = start; i < end; i++) {{\n    {0}_append(&result, list->items[i]);\n  }}\n  return result;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate contains function
+        self.emit_line(&format!(
+            "bool {0}_contains(struct {0}* list, {1} item) {{\n  for (int64_t i = 0; i < list->length; i++) {{\n    if (list->items[i] == item) return true;\n  }}\n  return false;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate index_of function
+        self.emit_line(&format!(
+            "int64_t {0}_index_of(struct {0}* list, {1} item) {{\n  for (int64_t i = 0; i < list->length; i++) {{\n    if (list->items[i] == item) return i;\n  }}\n  return -1;\n}}",
+            type_name, elem_type
+        ));
     }
 
     fn generate_specialized_dict(&mut self, spec: &crate::TypeSpecialization) {
@@ -998,6 +1019,57 @@ impl CCodegenBackend {
         self.emit_line("double lucid_json_parse_double(const char* json_str) {");
         self.indent_level += 1;
         self.emit_line("return strtod(json_str, NULL);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        // String slice operations
+        self.emit_line("// String slice (substring)");
+        self.emit_line("const char* lucid_string_slice(const char* str, int64_t start, int64_t end) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("int len = strlen(str);");
+        self.emit_line("if (start < 0) start = 0;");
+        self.emit_line("if (end > len) end = len;");
+        self.emit_line("if (start > end) return \"\";");
+        self.emit_line("int slice_len = end - start;");
+        self.emit_line("strncpy(result, str + start, slice_len);");
+        self.emit_line("result[slice_len] = '\\0';");
+        self.emit_line("return result;");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String split by delimiter");
+        self.emit_line("void lucid_string_split_helper(const char* str, const char* delim, const char** results, int64_t* count) {");
+        self.indent_level += 1;
+        self.emit_line("char* copy = malloc(strlen(str) + 1);");
+        self.emit_line("strcpy(copy, str);");
+        self.emit_line("char* token = strtok(copy, delim);");
+        self.emit_line("*count = 0;");
+        self.emit_line("while (token != NULL && *count < 100) {");
+        self.indent_level += 1;
+        self.emit_line("results[*count] = token;");
+        self.emit_line("(*count)++;");
+        self.emit_line("token = strtok(NULL, delim);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("free(copy);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("");
+
+        self.emit_line("// String repeat");
+        self.emit_line("const char* lucid_string_repeat(const char* str, int64_t times) {");
+        self.indent_level += 1;
+        self.emit_line("static char result[4096];");
+        self.emit_line("result[0] = '\\0';");
+        self.emit_line("for (int64_t i = 0; i < times; i++) {");
+        self.indent_level += 1;
+        self.emit_line("strcat(result, str);");
+        self.indent_level -= 1;
+        self.emit_line("}");
+        self.emit_line("return result;");
         self.indent_level -= 1;
         self.emit_line("}");
     }
