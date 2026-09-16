@@ -15,6 +15,7 @@ pub struct IrModule {
     pub functions: Vec<IrFunction>,
     pub types: HashMap<String, IrType>,
     pub globals: Vec<IrGlobal>,
+    pub classes: Vec<IrClass>,
 }
 
 /// An IR function with control flow graph
@@ -89,6 +90,22 @@ pub struct IrGlobal {
     pub name: String,
     pub ty: IrType,
     pub mutable: bool,
+}
+
+/// Method dispatch information for class methods
+#[derive(Debug, Clone)]
+pub struct MethodDispatch {
+    pub class_name: String,
+    pub method_name: String,
+    pub impl_function: String,
+}
+
+/// Class definition in IR
+#[derive(Debug, Clone)]
+pub struct IrClass {
+    pub name: String,
+    pub fields: Vec<(String, IrType)>,
+    pub methods: Vec<MethodDispatch>,
 }
 
 /// IR instructions (SSA form)
@@ -207,6 +224,7 @@ impl IrModule {
             functions: Vec::new(),
             types: HashMap::new(),
             globals: Vec::new(),
+            classes: Vec::new(),
         }
     }
 
@@ -220,6 +238,14 @@ impl IrModule {
 
     pub fn add_global(&mut self, global: IrGlobal) {
         self.globals.push(global);
+    }
+
+    pub fn add_class(&mut self, class: IrClass) {
+        self.classes.push(class);
+    }
+
+    pub fn get_class(&self, name: &str) -> Option<&IrClass> {
+        self.classes.iter().find(|c| c.name == name)
     }
 }
 
