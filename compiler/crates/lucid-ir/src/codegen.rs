@@ -20,12 +20,32 @@ impl CCodegenBackend {
         self.emit_includes();
         self.emit_line("");
 
+        // Generate struct definitions for classes
+        for class in &module.classes {
+            self.generate_class(class);
+            self.emit_line("");
+        }
+
+        // Generate function declarations and implementations
         for function in &module.functions {
             self.generate_function(function);
             self.emit_line("");
         }
 
         self.output.clone()
+    }
+
+    fn generate_class(&mut self, class: &crate::IrClass) {
+        self.emit_line(&format!("struct {} {{", class.name));
+        self.indent_level += 1;
+
+        for field in &class.fields {
+            let field_type = field.ty.c_type();
+            self.emit_line(&format!("{} {};", field_type, field.name));
+        }
+
+        self.indent_level -= 1;
+        self.emit_line("};");
     }
 
     fn generate_function(&mut self, func: &IrFunction) {

@@ -49,6 +49,13 @@ pub struct IrParam {
     pub ty: IrType,
 }
 
+/// A struct field definition
+#[derive(Debug, Clone)]
+pub struct IrField {
+    pub name: String,
+    pub ty: IrType,
+}
+
 /// IR types for code generation
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IrType {
@@ -109,7 +116,7 @@ pub struct MethodDispatch {
 #[derive(Debug, Clone)]
 pub struct IrClass {
     pub name: String,
-    pub fields: Vec<(String, IrType)>,
+    pub fields: Vec<IrField>,
     pub methods: Vec<MethodDispatch>,
 }
 
