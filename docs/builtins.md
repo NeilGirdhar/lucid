@@ -57,9 +57,10 @@
   Python's `vars()` (no `__dict__` to return) and `dir()` (an ordered,
   documented walk instead of an unordered list of bare names).
 * [`asdict`](collections.md#anonymous-record-shapes) — flattens a
-  record, anonymous or a named class instance, into a plain
-  `dict[str, object]` by walking `fields()`; also the concise way to
-  write a `dict` with identifier-shaped keys, `asdict((x=0, y=0))`.
+  record you already have, anonymous or a named class instance, into a
+  plain `dict[str, object]` by walking `fields()`; not a way to
+  originate one — the linter prefers `{"x": 0}` over
+  `asdict((x=0))` whenever nothing else uses the record itself.
 * `zip` — always strict. Mismatched-length iterables are a runtime
   error, never silent truncation to the shortest — the same class of
   mistake `assert`'s required parentheses closes elsewhere, just for
