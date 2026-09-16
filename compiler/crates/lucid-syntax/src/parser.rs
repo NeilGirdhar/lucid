@@ -761,7 +761,7 @@ TokenKind::Public
         if self.match_tok(&TokenKind::Getter) {
             let name = self.expect_ident()?;
             self.expect(&TokenKind::LParen)?;
-            self.expect_ident()?; // self
+            self.parse_receiver()?;
             self.expect(&TokenKind::RParen)?;
             let return_type = if self.match_tok(&TokenKind::Arrow) {
                 Some(self.parse_type_expr()?)
@@ -780,7 +780,7 @@ TokenKind::Public
         if self.match_tok(&TokenKind::Setter) {
             let name = self.expect_ident()?;
             self.expect(&TokenKind::LParen)?;
-            self.expect_ident()?; // self
+            self.parse_receiver()?;
             self.expect(&TokenKind::Comma)?;
             let param_name = self.expect_ident()?;
             let type_annotation = if self.match_tok(&TokenKind::Colon) {
@@ -939,7 +939,7 @@ TokenKind::Public
                 let g_start = self.peek().span;
                 let name = self.expect_ident()?;
                 self.expect(&TokenKind::LParen)?;
-                self.expect_ident()?; // self
+                self.parse_receiver()?;
                 self.expect(&TokenKind::RParen)?;
                 let return_type = if self.match_tok(&TokenKind::Arrow) {
                     Some(self.parse_type_expr()?)
@@ -962,7 +962,7 @@ TokenKind::Public
                 let s_start = self.peek().span;
                 let setter_name = self.expect_ident()?;
                 self.expect(&TokenKind::LParen)?;
-                self.expect_ident()?;
+                self.parse_receiver()?;
                 self.expect(&TokenKind::Comma)?;
                 let param_name = self.expect_ident()?;
                 self.expect(&TokenKind::Colon)?;
@@ -1037,6 +1037,21 @@ TokenKind::Public
                     doc: None,
                     span: f_start,
                 }));
+            } else if self.match_tok(&TokenKind::ContextManager) {
+                let modifier_span = self.peek().span;
+                let decorators = vec![Expr::Ident {
+                    name: "contextmanager".to_string(),
+                    span: modifier_span,
+                }];
+                if self.match_tok(&TokenKind::ClassMethod) {
+                    self.match_tok(&TokenKind::Def);
+                    let func = self.parse_raw_function(false, decorators)?;
+                    body.push(TraitMember::ClassMethod(func));
+                } else {
+                    self.expect(&TokenKind::Def)?;
+                    let func = self.parse_raw_function(false, decorators)?;
+                    body.push(TraitMember::Method(func));
+                }
             } else {
                 self.expect(&TokenKind::Def)?;
                 let is_dispatch = self.match_tok(&TokenKind::Dispatch);
@@ -3406,6 +3421,17 @@ TokenKind::Public
             message: format!("unexpected token in type expression: {}", tok.kind),
             span: tok.span,
         })
+    }
+
+    /// The `self` of a getter or setter, with an optional view annotation
+    /// such as `self: ~Self`.  A getter is read-only by construction, so the
+    /// annotation is accepted for consistency and not recorded.
+    fn parse_receiver(&mut self) -> Result<(), ParseError> {
+        self.expect_ident()?;
+        if self.match_tok(&TokenKind::Colon) {
+            self.parse_type_expr()?;
+        }
+        Ok(())
     }
 
     fn parse_optional_type_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {

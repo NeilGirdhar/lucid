@@ -735,6 +735,33 @@ def register(handler: class[Handler]) -> none:
     }
 
     #[test]
+    fn getters_and_setters_accept_an_annotated_receiver() {
+        let module = parse(
+            "class Animal:\n    getter offspring(self: ~Self) -> Animal:\n        return self\n    setter name(self: Self, value: str):\n        pass\ntrait Named:\n    getter label(self: ~Self) -> str\n    setter label(self, value: str)\n",
+        )
+        .unwrap();
+        assert_eq!(module.statements.len(), 2);
+    }
+
+    #[test]
+    fn contextmanager_stacks_on_trait_members() {
+        let module = parse(
+            "trait Managed[in out T = Self]:\n    contextmanager def __cm__(self) -> T\n    contextmanager classmethod open(cls) -> T:\n        yield cls()\n",
+        )
+        .unwrap();
+        let Stmt::TraitDef { body, .. } = &module.statements[0] else {
+            panic!("expected trait definition");
+        };
+        let TraitMember::Method(method) = &body[0] else {
+            panic!("expected method member");
+        };
+        assert!(method.decorators.iter().any(|decorator| {
+            matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager")
+        }));
+        assert!(matches!(&body[1], TraitMember::ClassMethod(_)));
+    }
+
+    #[test]
     fn obsolete_variance_sigils_are_rejected() {
         for spelling in ["+K", "-K", "=K", "+=K", "-=K"] {
             assert!(
