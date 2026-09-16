@@ -5415,6 +5415,11 @@ static inline void lucid_print_val(LucidVal v) {
             Expr::Dict { .. } | Expr::DictComp { .. } => "LucidDict*".to_string(),
             Expr::Record { .. } => "LucidDict*".to_string(),
             Expr::Set { .. } | Expr::SetComp { .. } => "LucidSet*".to_string(),
+            Expr::Construct { class_name, .. }
+                if !class_name.is_empty() && self.known_classes.contains_key(class_name) =>
+            {
+                format!("{class_name}*")
+            }
             Expr::Call { func, args, .. } => {
                 if args.iter().any(|arg| {
                     matches!(arg.value, Expr::Skip(_))
