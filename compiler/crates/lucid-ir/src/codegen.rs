@@ -248,7 +248,9 @@ impl CCodegenBackend {
                 let args_code = all_args.join(", ");
 
                 // Check for builtin list methods
-                let is_list_method = matches!(method.as_str(), "append" | "pop" | "length" | "get");
+                let is_list_method = matches!(method.as_str(),
+                    "append" | "pop" | "length" | "get" | "first" | "last" |
+                    "map" | "filter" | "foreach" | "reverse" | "sort");
 
                 if is_list_method {
                     let func_name = format!("lucid_list_{}", method);

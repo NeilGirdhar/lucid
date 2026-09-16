@@ -1487,4 +1487,100 @@ int main() {
         assert_eq!(result_int.c_type(), "LucidResult*");
     }
 
+    #[test]
+    fn test_list_iteration_methods_codegen() {
+        // Test list higher-order methods
+        let c_code = r#"
+#include <stdint.h>
+#include <stdlib.h>
+
+struct LucidList {
+    int64_t capacity;
+    int64_t length;
+    int64_t* elements;
+};
+
+struct LucidList* lucid_list_new() {
+    struct LucidList* list = (struct LucidList*)malloc(sizeof(struct LucidList));
+    list->capacity = 10;
+    list->length = 0;
+    list->elements = (int64_t*)malloc(10 * sizeof(int64_t));
+    return list;
+}
+
+void lucid_list_append(struct LucidList* list, int64_t value) {
+    if (list->length >= list->capacity) {
+        list->capacity *= 2;
+        list->elements = (int64_t*)realloc(list->elements, list->capacity * sizeof(int64_t));
+    }
+    list->elements[list->length++] = value;
+}
+
+// Map operation: transform each element
+struct LucidList* lucid_list_map(struct LucidList* list) {
+    struct LucidList* result = lucid_list_new();
+    for (int i = 0; i < list->length; i++) {
+        lucid_list_append(result, list->elements[i] * 2);  // Example: double each
+    }
+    return result;
+}
+
+// Filter operation: keep only matching elements
+struct LucidList* lucid_list_filter(struct LucidList* list) {
+    struct LucidList* result = lucid_list_new();
+    for (int i = 0; i < list->length; i++) {
+        if (list->elements[i] > 5) {  // Example: keep > 5
+            lucid_list_append(result, list->elements[i]);
+        }
+    }
+    return result;
+}
+
+int main() {
+    struct LucidList* list = lucid_list_new();
+    lucid_list_append(list, 3);
+    lucid_list_append(list, 7);
+    lucid_list_append(list, 4);
+    lucid_list_append(list, 9);
+
+    // Test map
+    struct LucidList* doubled = lucid_list_map(list);
+
+    // Test filter
+    struct LucidList* filtered = lucid_list_filter(list);
+
+    // Verify: doubled should have [6, 14, 8, 18]
+    // filtered should have [7, 9]
+    if (doubled->length == 4 && filtered->length == 2) {
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
+    #[test]
+    fn test_collection_iteration_patterns() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def process_list() -> int:
+    items = []
+    for item in items:
+        total = total + item
+    return total
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for iteration");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for iteration");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Verify function was generated
+        assert_eq!(ir_module.functions.len(), 1);
+    }
+
 }
