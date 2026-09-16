@@ -543,3 +543,47 @@ impl AbiInfo {
         false
     }
 }
+
+/// Stack frame layout for function calls
+#[derive(Debug, Clone)]
+pub struct StackFrame {
+    /// Return address storage (8 bytes on 64-bit)
+    pub return_addr_offset: usize,
+    /// Previous frame pointer (8 bytes on 64-bit)
+    pub prev_frame_ptr_offset: usize,
+    /// Local variables offset
+    pub locals_offset: usize,
+    /// Total frame size
+    pub frame_size: usize,
+}
+
+impl StackFrame {
+    /// Create a new stack frame layout
+    pub fn new(pointer_size: usize) -> Self {
+        Self {
+            return_addr_offset: 0,
+            prev_frame_ptr_offset: pointer_size,
+            locals_offset: pointer_size * 2,
+            frame_size: pointer_size * 2,
+        }
+    }
+
+    /// Add a local variable to the frame
+    pub fn add_local(&mut self, size: usize) -> usize {
+        let offset = self.frame_size;
+        self.frame_size += size;
+        offset
+    }
+
+    /// Align frame size to boundary (typically 16 bytes for System V AMD64)
+    pub fn align_frame(&mut self, alignment: usize) {
+        if alignment > 0 {
+            self.frame_size = ((self.frame_size + alignment - 1) / alignment) * alignment;
+        }
+    }
+
+    /// Get the total stack frame size including alignment
+    pub fn total_size(&self) -> usize {
+        self.frame_size
+    }
+}

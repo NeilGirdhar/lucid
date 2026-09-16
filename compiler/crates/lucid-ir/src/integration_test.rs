@@ -542,4 +542,41 @@ mod tests {
         assert!(l.field_offset("arg1").is_some(), "arg1 field should exist");
         assert!(l.field_offset("arg2").is_some(), "arg2 field should exist");
     }
+
+    #[test]
+    fn test_stack_frame_layout_generation() {
+        use lucid_abi::StackFrame;
+
+        // Create a stack frame (System V AMD64: 16-byte alignment)
+        let mut frame = StackFrame::new(8);
+
+        // System V AMD64 stack layout:
+        // Offset 0: Return address (pushed by CALL)
+        // Offset 8: Previous RBP
+        // Offset 16: Local variables start here
+        assert_eq!(frame.return_addr_offset, 0);
+        assert_eq!(frame.prev_frame_ptr_offset, 8);
+        assert_eq!(frame.locals_offset, 16);
+        assert_eq!(frame.total_size(), 16);
+
+        // Add local variables to the frame
+        let local1_offset = frame.add_local(8); // int
+        assert_eq!(local1_offset, 16);
+
+        let local2_offset = frame.add_local(8); // int
+        assert_eq!(local2_offset, 24);
+
+        let local3_offset = frame.add_local(1); // bool
+        assert_eq!(local3_offset, 32);
+
+        // Total unaligned size: 33 bytes
+        assert_eq!(frame.total_size(), 33);
+
+        // Align to 16-byte boundary (System V requirement)
+        frame.align_frame(16);
+        assert_eq!(frame.total_size(), 48);
+
+        // Verify frame layout
+        assert!(frame.total_size() % 16 == 0, "Frame should be 16-byte aligned");
+    }
 }
