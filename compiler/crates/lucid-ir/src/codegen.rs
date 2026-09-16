@@ -428,6 +428,48 @@ impl CCodegenBackend {
                     ));
                 }
             }
+            IrInstruction::FileOpen { dest, path, mode } => {
+                let path_code = self.value_to_c(path);
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "LucidFile {} = fopen({}, \"{}\");",
+                        dest, path_code, mode
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "{} = fopen({}, \"{}\");",
+                        dest, path_code, mode
+                    ));
+                }
+            }
+            IrInstruction::FileWrite { file, content } => {
+                let file_code = self.value_to_c(file);
+                let content_code = self.value_to_c(content);
+                self.emit_line(&format!(
+                    "fprintf({}, \"%s\", {});",
+                    file_code, content_code
+                ));
+            }
+            IrInstruction::FileRead { dest, file } => {
+                let file_code = self.value_to_c(file);
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "char {}[4096]; fgets({}, 4096, {});",
+                        dest, dest, file_code
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "fgets({}, 4096, {});",
+                        dest, file_code
+                    ));
+                }
+            }
+            IrInstruction::FileClose { file } => {
+                let file_code = self.value_to_c(file);
+                self.emit_line(&format!("fclose({});", file_code));
+            }
         }
     }
 
@@ -517,6 +559,7 @@ impl CCodegenBackend {
         self.emit_line("#include <stdlib.h>");
         self.emit_line("#include <math.h>");
         self.emit_line("#include <string.h>");
+        self.emit_line("typedef FILE* LucidFile;");  // File handle type
     }
 
     fn emit_line(&mut self, line: &str) {

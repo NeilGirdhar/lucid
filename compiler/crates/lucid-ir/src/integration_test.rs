@@ -1609,4 +1609,67 @@ int main() {
         assert_eq!(ir_module.functions[0].name, "process");
     }
 
+    #[test]
+    fn test_file_io_codegen() {
+        // Test file I/O operations
+        let c_code = r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef FILE* LucidFile;
+
+int main() {
+    // File write test
+    LucidFile f = fopen("test.txt", "w");
+    if (f) {
+        fprintf(f, "%s", "Hello, World!");
+        fclose(f);
+    }
+
+    // File read test
+    LucidFile read_f = fopen("test.txt", "r");
+    if (read_f) {
+        char buffer[4096];
+        fgets(buffer, 4096, read_f);
+        fclose(read_f);
+
+        // Verify
+        if (buffer[0] == 'H') {
+            return 0;  // Success
+        }
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
+    #[test]
+    fn test_trait_ir_generation() {
+        // Test trait support in IR
+        let trait_obj = crate::IrTrait {
+            name: "Reader".to_string(),
+            methods: vec![
+                crate::TraitMethod {
+                    name: "read".to_string(),
+                    params: vec![crate::IrParam {
+                        name: "self".to_string(),
+                        ty: crate::IrType::Ptr,
+                    }],
+                    return_type: crate::IrType::Str,
+                },
+            ],
+        };
+
+        let mut module = crate::IrModule::new();
+        module.traits.push(trait_obj);
+
+        assert_eq!(module.traits.len(), 1);
+        assert_eq!(module.traits[0].name, "Reader");
+        assert_eq!(module.traits[0].methods.len(), 1);
+        assert_eq!(module.traits[0].methods[0].name, "read");
+    }
+
 }

@@ -21,6 +21,7 @@ pub struct IrModule {
     pub types: HashMap<String, IrType>,
     pub globals: Vec<IrGlobal>,
     pub classes: Vec<IrClass>,
+    pub traits: Vec<IrTrait>,
 }
 
 /// An IR function with control flow graph
@@ -150,6 +151,21 @@ pub struct MethodDispatch {
     pub impl_function: String,
 }
 
+/// Trait definition in IR
+#[derive(Debug, Clone)]
+pub struct IrTrait {
+    pub name: String,
+    pub methods: Vec<TraitMethod>,
+}
+
+/// Trait method signature
+#[derive(Debug, Clone)]
+pub struct TraitMethod {
+    pub name: String,
+    pub params: Vec<IrParam>,
+    pub return_type: IrType,
+}
+
 /// Class definition in IR
 #[derive(Debug, Clone)]
 pub struct IrClass {
@@ -251,6 +267,26 @@ pub enum IrInstruction {
         dict: IrValue,
         key: IrValue,
     },
+    /// File I/O: open file
+    FileOpen {
+        dest: String,
+        path: IrValue,
+        mode: String,  // "r", "w", "a"
+    },
+    /// File I/O: write to file
+    FileWrite {
+        file: IrValue,
+        content: IrValue,
+    },
+    /// File I/O: read from file
+    FileRead {
+        dest: String,
+        file: IrValue,
+    },
+    /// File I/O: close file
+    FileClose {
+        file: IrValue,
+    },
 }
 
 /// Values in IR (operands)
@@ -325,6 +361,7 @@ impl IrModule {
             types: HashMap::new(),
             globals: Vec::new(),
             classes: Vec::new(),
+            traits: Vec::new(),
         }
     }
 
