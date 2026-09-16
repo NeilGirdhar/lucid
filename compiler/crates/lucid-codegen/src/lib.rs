@@ -16448,7 +16448,11 @@ pub fn compile_to_native_entry(
 
     let opt_flag = format!("-O{opt_level}");
     let mut cmd = Command::new("gcc");
+    // The generated code relies on C23 semantics: `true` and `false` have
+    // type bool, which the _Generic wrappers select on.  Older gcc releases
+    // default to gnu17, where they are int, so the standard is explicit.
     cmd.arg(&opt_flag)
+        .arg("-std=gnu2x")
         .arg("-march=native")
         .arg("-fomit-frame-pointer")
         .arg("-ffp-contract=off")
