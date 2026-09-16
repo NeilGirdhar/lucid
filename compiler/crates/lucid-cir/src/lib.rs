@@ -18200,7 +18200,8 @@ impl Function {
                         _ => Err(LowerError::UnsupportedExpression),
                     }
                 }
-                lucid_syntax::Stmt::ClassDef { .. }
+                lucid_syntax::Stmt::Module { .. }
+                | lucid_syntax::Stmt::ClassDef { .. }
                 | lucid_syntax::Stmt::InterfaceDef { .. }
                 | lucid_syntax::Stmt::TraitDef { .. }
                 | lucid_syntax::Stmt::ImplementDef { .. }

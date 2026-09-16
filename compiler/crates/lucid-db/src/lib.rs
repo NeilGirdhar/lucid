@@ -8676,7 +8676,8 @@ fn import_path(file_path: &str, import: &str) -> String {
 fn statement_span(statement: &lucid_syntax::Stmt) -> lucid_syntax::Span {
     match statement {
         lucid_syntax::Stmt::Export(inner) => statement_span(inner),
-        lucid_syntax::Stmt::ClassDef { span, .. }
+        lucid_syntax::Stmt::Module { span, .. }
+        | lucid_syntax::Stmt::ClassDef { span, .. }
         | lucid_syntax::Stmt::InterfaceDef { span, .. }
         | lucid_syntax::Stmt::TraitDef { span, .. }
         | lucid_syntax::Stmt::ImplementDef { span, .. }

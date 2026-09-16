@@ -657,6 +657,11 @@ pub enum Stmt {
     Break(Span),
     Continue(Span),
     Pass(Span),
+    Module {
+        name: String,
+        body: Vec<Stmt>,
+        span: Span,
+    },
     Import {
         module: String,
         alias: Option<String>,

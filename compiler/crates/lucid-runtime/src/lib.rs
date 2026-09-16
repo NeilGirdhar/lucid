@@ -5762,6 +5762,7 @@ impl Interpreter {
     pub fn eval_statement(&mut self, stmt: &Stmt) -> Result<Value, RuntimeError> {
         match stmt {
             Stmt::Export(inner) => self.eval_statement(inner),
+            Stmt::Module { .. } => Ok(Value::None),
             Stmt::ClassDef { .. } => {
                 if let Stmt::ClassDef {
                     name,

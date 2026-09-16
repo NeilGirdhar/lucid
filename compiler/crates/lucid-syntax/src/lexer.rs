@@ -843,6 +843,7 @@ impl<'a> Lexer<'a> {
             "export" => TokenKind::Export,
             "public" => TokenKind::Public,
             "private" => TokenKind::Private,
+            "module" => TokenKind::Module,
             "factory" => TokenKind::Factory,
             "construct" => TokenKind::Construct,
             "getter" => TokenKind::Getter,

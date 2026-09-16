@@ -198,6 +198,7 @@ impl Parser {
             TokenKind::Export
                 | TokenKind::Public
                 | TokenKind::Private
+                | TokenKind::Module
                 | TokenKind::Class
                 | TokenKind::Sealed
                 | TokenKind::Final
@@ -234,7 +235,8 @@ impl Parser {
     fn reserved_module_binding(stmt: &Stmt) -> Option<(&str, Span)> {
         match stmt {
             Stmt::Export(inner) => Self::reserved_module_binding(inner),
-            Stmt::ClassDef { name, span, .. }
+            Stmt::Module { name, span, .. }
+            | Stmt::ClassDef { name, span, .. }
             | Stmt::InterfaceDef { name, span, .. }
             | Stmt::TraitDef { name, span, .. }
             | Stmt::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
@@ -298,6 +300,7 @@ impl Parser {
                     span: start,
                 })
             }
+            TokenKind::Module => self.parse_module_def(),
             TokenKind::Class | TokenKind::Sealed | TokenKind::Final => self.parse_class_def(),
             TokenKind::Interface => self.parse_interface_def(),
             TokenKind::Trait => self.parse_trait_def(),
@@ -1314,6 +1317,30 @@ impl Parser {
         Ok(Stmt::ImplementDef {
             interface,
             target,
+            body,
+            span: start.merge(end),
+        })
+    }
+
+    fn parse_module_def(&mut self) -> Result<Stmt, ParseError> {
+        let start = self.peek().span;
+        self.expect(&TokenKind::Module)?;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Colon)?;
+        self.expect(&TokenKind::Newline)?;
+        self.expect(&TokenKind::Indent)?;
+
+        let mut body = Vec::new();
+        self.skip_newlines();
+
+        while !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::Eof) {
+            body.push(self.parse_statement()?);
+            self.skip_newlines();
+        }
+
+        let end = self.expect(&TokenKind::Dedent)?.span;
+        Ok(Stmt::Module {
+            name,
             body,
             span: start.merge(end),
         })
@@ -3910,6 +3937,10 @@ impl Parser {
             TokenKind::Trait => {
                 self.advance();
                 Ok("trait".into())
+            }
+            TokenKind::Module => {
+                self.advance();
+                Ok("module".into())
             }
             _ => Err(ParseError {
                 message: format!("expected identifier, found {}", self.peek_kind()),
