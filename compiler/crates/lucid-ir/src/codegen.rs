@@ -1,6 +1,6 @@
 //! Code generation from IR to C
 
-use crate::{IrModule, IrFunction, IrBlock, IrInstruction, IrValue, IrTerminator, IrType};
+use crate::{IrModule, IrFunction, IrBlock, IrInstruction, IrValue, IrTerminator};
 
 /// Generates C code from IR
 pub struct CCodegenBackend {
@@ -79,7 +79,7 @@ impl CCodegenBackend {
         // For List[T], generate a specialized struct and operations
         // Struct: struct List__T__ { void** items; int64_t length; int64_t capacity; }
         let type_name = &spec.specialized_name;
-        let elem_type = if spec.type_args.len() > 0 {
+        let elem_type = if !spec.type_args.is_empty() {
             spec.type_args[0].c_type()
         } else {
             "void*"
@@ -326,7 +326,7 @@ impl CCodegenBackend {
     fn generate_specialized_dict(&mut self, spec: &crate::TypeSpecialization) {
         // For Dict[K,V], generate a specialized struct and operations
         let type_name = &spec.specialized_name;
-        let key_type = if spec.type_args.len() > 0 {
+        let key_type = if !spec.type_args.is_empty() {
             spec.type_args[0].c_type()
         } else {
             "void*"
@@ -1812,7 +1812,7 @@ impl Default for CCodegenBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IrFunction, IrParam};
+    use crate::{IrFunction, IrParam, IrType};
 
     #[test]
     fn test_codegen_simple_function() {

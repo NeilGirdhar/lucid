@@ -666,6 +666,12 @@ pub enum IrTerminator {
     Unreachable,
 }
 
+impl Default for IrModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IrModule {
     pub fn new() -> Self {
         Self::with_name("main", "main")
@@ -734,7 +740,7 @@ impl IrModule {
         }
 
         // Check imported modules
-        for (_, imported) in &self.imported_modules {
+        for imported in self.imported_modules.values() {
             if imported.functions.iter().any(|f| f.name == symbol)
                 || imported.classes.iter().any(|c| c.name == symbol)
                 || imported.types.contains_key(symbol)
@@ -1032,14 +1038,13 @@ impl IrModule {
     /// Validate that a type satisfies all where clause predicates
     pub fn validate_where_clause(&self, where_clause: &WhereClause, type_name: &str) -> Result<(), String> {
         for predicate in &where_clause.predicates {
-            if predicate.type_name == type_name {
-                if !self.type_satisfies_bounds(type_name, &predicate.required_traits) {
+            if predicate.type_name == type_name
+                && !self.type_satisfies_bounds(type_name, &predicate.required_traits) {
                     return Err(format!(
                         "Type {} does not satisfy where clause constraints: {:?}",
                         type_name, predicate.required_traits
                     ));
                 }
-            }
         }
         Ok(())
     }

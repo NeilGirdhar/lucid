@@ -20,7 +20,7 @@ mod tests {
         fs::write(&source, c_code).ok();
 
         let compile = Command::new("gcc")
-            .args(&["-o", &exe, &source, "-lm"])
+            .args(["-o", &exe, &source, "-lm"])
             .output();
 
         if let Ok(out) = compile {
@@ -402,8 +402,6 @@ mod tests {
 
     #[test]
     fn test_abi_layout_verification() {
-        use lucid_abi::{AbiInfo, CInteropType};
-
         let mut module = IrModule::new();
 
         // Create Point class
@@ -597,7 +595,7 @@ mod tests {
 
         // Test System V AMD64 calling convention parameter passing
         let cc = CallingConvention::current();
-        let mut abi = AbiInfo::new(cc, 8);
+        let _abi = AbiInfo::new(cc, 8);
 
         // Verify we can retrieve calling convention
         assert!(matches!(cc, CallingConvention::SystemVAmd64 |
@@ -660,7 +658,7 @@ mod tests {
         assert_eq!(frame.total_size(), 48);
 
         // Verify frame layout
-        assert!(frame.total_size() % 16 == 0, "Frame should be 16-byte aligned");
+        assert!(frame.total_size().is_multiple_of(16), "Frame should be 16-byte aligned");
     }
 
     #[test]
@@ -668,7 +666,7 @@ mod tests {
         let mut module = IrModule::new();
 
         // Create a Point class
-        let mut point_class = IrClass {
+        let point_class = IrClass {
             generic_params: Vec::new(),
             parent: None,
             name: "Point".to_string(),
@@ -789,7 +787,7 @@ mod tests {
     #[test]
     fn test_method_call_ir_generation() {
         // Verify that MethodCall IR instruction exists and is part of the IR
-        let mut module = IrModule::new();
+        let _module = IrModule::new();
         let mut func = IrFunction::new(
             "test".to_string(),
             vec![],
@@ -809,7 +807,7 @@ mod tests {
         assert!(matches!(
             &func.blocks[0].instructions[0],
             IrInstruction::MethodCall { dest, method, .. }
-            if dest.as_ref().map_or(false, |d| d == "result") && method == "foo"
+            if dest.as_ref().is_some_and(|d| d == "result") && method == "foo"
         ));
     }
 
@@ -2246,7 +2244,7 @@ int main() {
             alias: None,
         };
 
-        let mut module_def = crate::ModuleDef {
+        let module_def = crate::ModuleDef {
             name: "math".to_string(),
             path: "std.math".to_string(),
             imports: vec![import],
@@ -2339,7 +2337,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create List[i64] specialization
-        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2398,7 +2396,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create List[i64] specialization
-        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2416,7 +2414,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create Dict[str, i64] specialization
-        let specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
+        let _specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2461,7 +2459,7 @@ int main() {
             pattern: crate::Pattern::Wildcard,
             target_block: 1,
         };
-        assert!(module.is_result_match_exhaustive(&vec![wildcard_arm]), "Wildcard should cover all cases");
+        assert!(module.is_result_match_exhaustive(&[wildcard_arm]), "Wildcard should cover all cases");
     }
 
     #[test]
@@ -2578,7 +2576,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create Dict[str, i64] specialization
-        let specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
+        let _specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2638,7 +2636,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create List[i64] specialization
-        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2660,7 +2658,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create List[i64] specialization
-        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();
@@ -2692,8 +2690,6 @@ int main() {
         assert!(code.contains("lucid_random_int"), "random_int should be generated");
         assert!(code.contains("lucid_random_double"), "random_double should be generated");
     }
-
-    #[test]
 
     #[test]
     fn test_where_clause_creation_and_modification() {
@@ -2766,7 +2762,7 @@ int main() {
         let mut module = IrModule::new();
 
         // Create List[i64] specialization
-        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        let _specialized_name = module.specialize_type("List", vec![IrType::I64]);
 
         // Generate C code
         let mut codegen = CCodegenBackend::new();

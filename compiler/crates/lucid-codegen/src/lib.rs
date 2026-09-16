@@ -295,7 +295,6 @@ pub struct CCodeGenerator {
     temp_var_id: usize,
     anonymous_adapter_id: usize,
     source_map: SourceMap,
-    current_source_file: String,
     in_function: bool,
     current_fn_ret_type: Option<String>,
     current_fn_async: bool,
@@ -707,7 +706,6 @@ impl CCodeGenerator {
             temp_var_id: 0,
             anonymous_adapter_id: 0,
             source_map: SourceMap::new(),
-            current_source_file: String::new(),
             in_function: false,
             current_fn_ret_type: None,
             current_fn_async: false,
@@ -1268,7 +1266,6 @@ impl CCodeGenerator {
         }
         // First pass: collect class metadata and function signatures
         for stmt in &module.statements {
-            let stmt = stmt;
             if let Stmt::ClassDef {
                 name,
                 bases,
@@ -1844,7 +1841,6 @@ impl CCodeGenerator {
             .statements
             .iter()
             .filter(|s| {
-                let s = s;
                 !matches!(
                     s,
                     Stmt::Function(_)
@@ -6686,10 +6682,9 @@ static inline void lucid_print_val(LucidVal v) {
                 .is_some_and(|ty| ty == "int64_t")
         });
         let eq_owner = self.method_owner(name, "__eq__").and_then(|owner| {
-            if !self
+            if self
                 .known_method_return_types
-                .get(&(owner.clone(), "__eq__".to_string()))
-                .is_some_and(|ty| ty == "bool")
+                .get(&(owner.clone(), "__eq__".to_string())).is_none_or(|ty| ty != "bool")
             {
                 return None;
             }
@@ -6709,10 +6704,9 @@ static inline void lucid_print_val(LucidVal v) {
         });
         let comparison_owner = |method: &str| {
             self.method_owner(name, method).and_then(|owner| {
-                if !self
+                if self
                     .known_method_return_types
-                    .get(&(owner.clone(), method.to_string()))
-                    .is_some_and(|ty| ty == "bool")
+                    .get(&(owner.clone(), method.to_string())).is_none_or(|ty| ty != "bool")
                 {
                     return None;
                 }

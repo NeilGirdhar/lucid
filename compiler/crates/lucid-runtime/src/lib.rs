@@ -22,20 +22,20 @@ fn declaration_only_module(path: &std::path::Path) -> bool {
         return false;
     };
     fn is_declaration(statement: &Stmt) -> bool {
-        match statement {
+        matches!(
+            statement,
             Stmt::ClassDef { .. }
-            | Stmt::TraitDef { .. }
-            | Stmt::ImplementDef { .. }
-            | Stmt::TypeAlias { .. }
-            | Stmt::Function(_)
-            | Stmt::Import { .. }
-            | Stmt::FromImport { .. }
-            | Stmt::Pass(_)
-            | Stmt::Break(_)
-            | Stmt::Continue(_)
-            | Stmt::VarDef { value: None, .. } => true,
-            _ => false,
-        }
+                | Stmt::TraitDef { .. }
+                | Stmt::ImplementDef { .. }
+                | Stmt::TypeAlias { .. }
+                | Stmt::Function(_)
+                | Stmt::Import { .. }
+                | Stmt::FromImport { .. }
+                | Stmt::Pass(_)
+                | Stmt::Break(_)
+                | Stmt::Continue(_)
+                | Stmt::VarDef { value: None, .. }
+        )
     }
     module.statements.iter().all(is_declaration)
 }
@@ -5818,10 +5818,9 @@ impl Interpreter {
                 }
                 for function in body {
                     let mut function = function.clone();
-                    if !function
+                    if function
                         .params
-                        .first()
-                        .is_some_and(|param| param.name == "self")
+                        .first().is_none_or(|param| param.name != "self")
                     {
                         function.params.insert(
                             0,

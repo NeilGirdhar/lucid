@@ -530,16 +530,15 @@ impl AbiInfo {
         if alignment == 0 {
             return offset;
         }
-        ((offset + alignment - 1) / alignment) * alignment
+        offset.div_ceil(alignment) * alignment
     }
 
     /// Validate that a field access is within bounds
     pub fn validate_field_access(&self, class_name: &str, field_name: &str, size: usize) -> bool {
-        if let Some(layout) = self.layout(class_name) {
-            if let Some(offset) = layout.field_offset(field_name) {
+        if let Some(layout) = self.layout(class_name)
+            && let Some(offset) = layout.field_offset(field_name) {
                 return offset + size <= layout.total_size;
             }
-        }
         false
     }
 }
@@ -578,7 +577,7 @@ impl StackFrame {
     /// Align frame size to boundary (typically 16 bytes for System V AMD64)
     pub fn align_frame(&mut self, alignment: usize) {
         if alignment > 0 {
-            self.frame_size = ((self.frame_size + alignment - 1) / alignment) * alignment;
+            self.frame_size = self.frame_size.div_ceil(alignment) * alignment;
         }
     }
 

@@ -1457,6 +1457,10 @@ pub struct TypeChecker {
     pub warnings: Vec<TypeWarning>,
 }
 
+/// The narrowing a condition establishes on its true and false branches:
+/// `(name, narrowed type)` for each, when the condition narrows anything.
+type NarrowingPair = (Option<(String, Type)>, Option<(String, Type)>);
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeWarning {
     pub message: String,
@@ -2719,27 +2723,24 @@ impl TypeChecker {
             classes: &HashMap<String, Type>,
             traits: &HashMap<String, Type>,
         ) {
-            match stmt {
-                Stmt::ClassDef {
+            if let Stmt::ClassDef {
                     name, bases, span, ..
-                } => {
-                    spans.insert(name.clone(), *span);
-                    if let Some(parent) = bases.iter().find_map(|base| match base {
-                        TypeExpr::Named {
-                            name: base_name, ..
-                        } if classes.contains_key(base_name) => Some(base_name.clone()),
-                        TypeExpr::Named {
-                            name: base_name, ..
-                        } if !traits.contains_key(base_name) =>
-                        {
-                            Some(base_name.clone())
-                        }
-                        _ => None,
-                    }) {
-                        parents.insert(name.clone(), parent);
+                } = stmt {
+                spans.insert(name.clone(), *span);
+                if let Some(parent) = bases.iter().find_map(|base| match base {
+                    TypeExpr::Named {
+                        name: base_name, ..
+                    } if classes.contains_key(base_name) => Some(base_name.clone()),
+                    TypeExpr::Named {
+                        name: base_name, ..
+                    } if !traits.contains_key(base_name) =>
+                    {
+                        Some(base_name.clone())
                     }
+                    _ => None,
+                }) {
+                    parents.insert(name.clone(), parent);
                 }
-                _ => {}
             }
         }
         for stmt in &module.statements {
@@ -2799,15 +2800,12 @@ impl TypeChecker {
     }
 
     fn collect_class_modifiers(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::ClassDef {
+        if let Stmt::ClassDef {
                 name,
                 is_final: true,
                 ..
-            } => {
-                self.env.final_classes.insert(name.clone());
-            }
-            _ => {}
+            } = stmt {
+            self.env.final_classes.insert(name.clone());
         }
     }
 
@@ -5291,7 +5289,7 @@ impl TypeChecker {
                     // If all branches exit, the whole if exits
                     let then_exits = Self::branch_exits(then_branch);
                     let elif_all_exit = elif_branches.iter().all(|(_, b)| Self::branch_exits(b));
-                    let else_exits = else_branch.as_ref().map_or(false, |eb| Self::branch_exits(eb));
+                    let else_exits = else_branch.as_ref().is_some_and(|eb| Self::branch_exits(eb));
 
                     if then_exits && elif_all_exit && else_exits {
                         return true;
@@ -5327,7 +5325,7 @@ impl TypeChecker {
     }
 
     // Extract attribute narrowing constraints (e.g., "node.left is None")
-    fn extract_attribute_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
+    fn extract_attribute_narrowing(&self, condition: &Expr) -> NarrowingPair {
         // Handle binary operations (is/is not) on attribute expressions
         if let Expr::Binary {
             op: op_type,
@@ -5338,8 +5336,8 @@ impl TypeChecker {
         {
             // Check if left is an attribute expression (but not a simple variable)
             if !matches!(&**left, Expr::Ident { .. }) {
-                if let Some(attr_path) = self.expr_to_path(&**left) {
-                    if let Ok(current_type) = self.type_of_expr(&**left) {
+                if let Some(attr_path) = self.expr_to_path(left) {
+                    if let Ok(current_type) = self.type_of_expr(left) {
                         // Check if right side is None
                         if let Expr::Literal {
                             value: LiteralValue::None,
@@ -5406,8 +5404,8 @@ impl TypeChecker {
             } = &**expr
             {
                 if !matches!(&**left, Expr::Ident { .. }) {
-                    if let Some(attr_path) = self.expr_to_path(&**left) {
-                        if let Ok(current_type) = self.type_of_expr(&**left) {
+                    if let Some(attr_path) = self.expr_to_path(left) {
+                        if let Ok(current_type) = self.type_of_expr(left) {
                             if let Expr::Literal {
                                 value: LiteralValue::None,
                                 ..
@@ -5439,7 +5437,7 @@ impl TypeChecker {
         (None, None)
     }
 
-    fn extract_type_narrowing(&self, condition: &Expr) -> (Option<(String, Type)>, Option<(String, Type)>) {
+    fn extract_type_narrowing(&self, condition: &Expr) -> NarrowingPair {
         // Extract type narrowing from conditions like:
         // - "x is None" / "x is not None" / "not (x is None)"
         // - "x" (truthiness check: narrows union types containing None)
@@ -6232,7 +6230,7 @@ impl TypeChecker {
                         }
                     }
                     let mut params = function.params.clone();
-                    if !params.first().is_some_and(|param| param.name == "self") {
+                    if params.first().is_none_or(|param| param.name != "self") {
                         params.insert(
                             0,
                             Param {
@@ -6391,7 +6389,7 @@ impl TypeChecker {
                 let old_exact_vars =
                     std::mem::replace(&mut self.env.exact_variables, local_exact_vars);
                 let old_narrowing_constraints =
-                    std::mem::replace(&mut self.narrowing_constraints, HashMap::new());
+                    std::mem::take(&mut self.narrowing_constraints);
 
                 for s in &func.body {
                     self.check_statement(s)?;
@@ -7403,7 +7401,7 @@ impl TypeChecker {
                 }
 
                 // Check if then_branch has an exit (return/break/continue)
-                let then_branch_exits = Self::branch_exits(&then_branch);
+                let then_branch_exits = Self::branch_exits(then_branch);
 
                 // Track variables defined in then branch BEFORE restoring
                 let vars_after_then = self.env.variables.clone();
@@ -7440,7 +7438,7 @@ impl TypeChecker {
                     }
                 }
 
-                let else_branch_exits = else_branch.as_ref().map_or(false, |eb| Self::branch_exits(eb));
+                let else_branch_exits = else_branch.as_ref().is_some_and(|eb| Self::branch_exits(eb));
 
                 if let Some(ref eb) = else_branch {
                     for s in eb {
@@ -10420,7 +10418,7 @@ impl TypeChecker {
                     let receiver_type = self.type_of_expr(value)?;
                     if attr == "replace"
                         && matches!(&**value, Expr::Ident { name, .. } if self.env.classes.contains_key(name))
-                        && !args.first().is_some_and(|argument| argument.name.is_none())
+                        && args.first().is_none_or(|argument| argument.name.is_some())
                     {
                         return Err(TypeError {
                             message: "replace() requires an instance argument".into(),
@@ -14678,16 +14676,15 @@ fn yield_guaranteed(statements: &[Stmt]) -> bool {
                 elif_branches,
                 else_branch: Some(else_branch),
                 ..
-            } => {
+            }
                 if yield_guaranteed(then_branch)
                     && elif_branches
                         .iter()
                         .all(|(_, branch)| yield_guaranteed(branch))
                     && yield_guaranteed(else_branch)
-                {
+                => {
                     return true;
                 }
-            }
             Stmt::Try {
                 finally_body: Some(finally_body),
                 ..
@@ -20536,18 +20533,16 @@ pub mod specialization {
 
         fn collect_from_statement(&mut self, stmt: &Stmt) {
             match stmt {
-                Stmt::VarDef { value, .. } => {
-                    if let Some(expr) = value {
-                        self.collect_from_expr(expr);
-                    }
+                Stmt::VarDef {
+                    value: Some(expr), ..
+                }
+                | Stmt::Return {
+                    value: Some(expr), ..
+                } => {
+                    self.collect_from_expr(expr);
                 }
                 Stmt::Assignment { value, .. } => {
                     self.collect_from_expr(value);
-                }
-                Stmt::Return { value, .. } => {
-                    if let Some(expr) = value {
-                        self.collect_from_expr(expr);
-                    }
                 }
                 Stmt::Expr(expr) => {
                     self.collect_from_expr(expr);
@@ -20563,7 +20558,7 @@ pub mod specialization {
                     if let Expr::Index { value, index, .. } = &**func {
                         if let Expr::Ident { name, .. } = &**value {
                             // Extract type arguments from index
-                            if let Some(type_str) = self.index_to_type_string(&**index) {
+                            if let Some(type_str) = self.index_to_type_string(index) {
                                 let inst = Instantiation {
                                     name: name.clone(),
                                     type_args: vec![type_str],
@@ -20717,7 +20712,7 @@ pub mod specialization {
                     if let Expr::Index { value, index, span: _index_span } = &**func {
                         if let Expr::Ident { name, span: name_span } = &**value {
                             // Extract type from index
-                            if let Some(type_str) = self.expr_to_type_string(&**index) {
+                            if let Some(type_str) = self.expr_to_type_string(index) {
                                 let specialized_name = format!("{}__{}",name, type_str);
                                 // Rewrite to Call with Ident using specialized name
                                 return Expr::Call {
@@ -21008,15 +21003,8 @@ pub mod specialization {
             for stmt in stmts {
                 match stmt {
                     Stmt::Expr(expr) => Self::collect_calls_in_expr(expr, calls),
-                    Stmt::Return { value, .. } => {
-                        if let Some(v) = value {
-                            Self::collect_calls_in_expr(v, calls);
-                        }
-                    }
-                    Stmt::VarDef { value, .. } => {
-                        if let Some(v) = value {
-                            Self::collect_calls_in_expr(v, calls);
-                        }
+                    Stmt::Return { value: Some(v), .. } | Stmt::VarDef { value: Some(v), .. } => {
+                        Self::collect_calls_in_expr(v, calls);
                     }
                     Stmt::Assignment { value, .. } => {
                         Self::collect_calls_in_expr(value, calls);

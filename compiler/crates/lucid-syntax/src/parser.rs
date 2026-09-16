@@ -1197,7 +1197,7 @@ impl Parser {
         if self.match_tok(&TokenKind::Dispatch) {
             is_dispatch = true;
         }
-        let mut func = self.parse_raw_function(is_dispatch, decorators)?;
+        let func = self.parse_raw_function(is_dispatch, decorators)?;
         Ok(Stmt::Function(func))
     }
 
@@ -2070,7 +2070,7 @@ impl Parser {
                 // Check if this is a class instantiation (Ident with capital letter)
                 if let Expr::Ident { name, .. } = &expr {
                     // Heuristic: if identifier starts with capital letter, treat as class instantiation
-                    if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                    if name.chars().next().is_some_and(|c| c.is_uppercase()) {
                         expr = Expr::Construct {
                             class_name: name.clone(),
                             args,

@@ -2,7 +2,7 @@
 
 use lucid_syntax::ast::*;
 use crate::{
-    IrModule, IrFunction, IrBlock, IrInstruction, IrValue, IrTerminator, IrType, IrParam, IrBinOp, IrUnaryOp,
+    IrModule, IrFunction, IrInstruction, IrValue, IrTerminator, IrType, IrParam, IrBinOp, IrUnaryOp,
 };
 use std::collections::HashMap;
 
@@ -48,15 +48,6 @@ impl IrBuilder {
             func.new_block(label.to_string())
         } else {
             0
-        }
-    }
-
-    fn current_block_mut(&mut self) -> Option<&mut IrBlock> {
-        if let Some(func_idx) = self.current_function {
-            let func = &mut self.module.functions[func_idx];
-            Some(func.current_block_mut())
-        } else {
-            None
         }
     }
 
@@ -132,29 +123,29 @@ impl IrBuilder {
             }
             Stmt::VarDef {
                 pattern: Pattern::Ident(name, _),
+                value: Some(expr),
+                ..
+            } => {
+                let ir_val = self.expr_to_ir_value(expr);
+                let ty = self.infer_expr_type(expr);
+                let name_clone = name.clone();
+                self.var_types.insert(name_clone.clone(), ty);
+                self.emit(IrInstruction::Assign {
+                    dest: name_clone,
+                    value: ir_val,
+                });
+            }
+            Stmt::Assignment {
+                target: Expr::Ident { name, .. },
                 value,
                 ..
             } => {
-                if let Some(expr) = value {
-                    let ir_val = self.expr_to_ir_value(expr);
-                    let ty = self.infer_expr_type(expr);
-                    let name_clone = name.clone();
-                    self.var_types.insert(name_clone.clone(), ty);
-                    self.emit(IrInstruction::Assign {
-                        dest: name_clone,
-                        value: ir_val,
-                    });
-                }
-            }
-            Stmt::Assignment { target, value, .. } => {
-                if let Expr::Ident { name, .. } = target {
-                    let ir_val = self.expr_to_ir_value(value);
-                    let name_clone = name.clone();
-                    self.emit(IrInstruction::Assign {
-                        dest: name_clone,
-                        value: ir_val,
-                    });
-                }
+                let ir_val = self.expr_to_ir_value(value);
+                let name_clone = name.clone();
+                self.emit(IrInstruction::Assign {
+                    dest: name_clone,
+                    value: ir_val,
+                });
             }
             Stmt::Expr(expr) => {
                 let _ = self.expr_to_ir_value(expr);
@@ -180,7 +171,7 @@ impl IrBuilder {
                     });
 
                     // Build then branch
-                    let saved_block = self.current_block;
+                    let _saved_block = self.current_block;
                     self.current_block = then_id;
                     for stmt in then_branch {
                         self.build_stmt_recursive(stmt);
@@ -223,7 +214,7 @@ impl IrBuilder {
                     self.terminate(IrTerminator::Jump { target: loop_cond_id });
 
                     // Loop condition block
-                    let saved_block = self.current_block;
+                    let _saved_block = self.current_block;
                     self.current_block = loop_cond_id;
                     let cond_val = self.expr_to_ir_value(condition);
                     self.terminate(IrTerminator::Branch {
@@ -270,7 +261,7 @@ impl IrBuilder {
                     self.terminate(IrTerminator::Jump { target: try_body_id });
 
                     // Try body block
-                    let saved_block = self.current_block;
+                    let _saved_block = self.current_block;
                     self.current_block = try_body_id;
                     for stmt in body {
                         self.build_stmt_recursive(stmt);
@@ -730,7 +721,7 @@ impl IrBuilder {
                     }
 
                     let return_type = self.lucid_type_to_ir_type(func_def.return_type.as_ref());
-                    let mut method_func = IrFunction::new(func_name.clone(), method_params, return_type);
+                    let method_func = IrFunction::new(func_name.clone(), method_params, return_type);
 
                     // Build the method body
                     self.current_function = Some(self.module.functions.len());

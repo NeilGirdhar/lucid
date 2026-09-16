@@ -240,20 +240,20 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
             return false;
         };
         fn is_declaration(statement: &Stmt) -> bool {
-            match statement {
+            matches!(
+                statement,
                 Stmt::ClassDef { .. }
-                | Stmt::TraitDef { .. }
-                | Stmt::ImplementDef { .. }
-                | Stmt::TypeAlias { .. }
-                | Stmt::Function(_)
-                | Stmt::Import { .. }
-                | Stmt::FromImport { .. }
-                | Stmt::Pass(_)
-                | Stmt::Break(_)
-                | Stmt::Continue(_)
-                | Stmt::VarDef { value: None, .. } => true,
-                _ => false,
-            }
+                    | Stmt::TraitDef { .. }
+                    | Stmt::ImplementDef { .. }
+                    | Stmt::TypeAlias { .. }
+                    | Stmt::Function(_)
+                    | Stmt::Import { .. }
+                    | Stmt::FromImport { .. }
+                    | Stmt::Pass(_)
+                    | Stmt::Break(_)
+                    | Stmt::Continue(_)
+                    | Stmt::VarDef { value: None, .. }
+            )
         }
         module.statements.iter().all(is_declaration)
     }
@@ -1216,11 +1216,10 @@ fn check_multiline_continuation(buffer: &str, line: &str, is_continuation: bool)
 
     while let Some(c) = chars.next() {
         match c {
-            '\\' => {
-                if in_single_quote || in_double_quote {
+            '\\'
+                if (in_single_quote || in_double_quote) => {
                     let _ = chars.next();
                 }
-            }
             '\'' if !in_double_quote => in_single_quote = !in_single_quote,
             '"' if !in_single_quote => in_double_quote = !in_double_quote,
             '#' if !in_single_quote && !in_double_quote => {

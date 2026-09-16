@@ -2772,9 +2772,8 @@ pub fn lower_function_body(
             return lower_match_bindings_to_void(&[], &[]);
         }
         if let Some((live_index, live_arm)) = arms.iter().enumerate().find(|(_, arm)| {
-            !arm.guard
-                .as_ref()
-                .is_some_and(|guard| static_truth(guard) == Some(false))
+            arm.guard
+                .as_ref().is_none_or(|guard| static_truth(guard) != Some(false))
         }) && live_index > 0
             && arms[..live_index].iter().all(|arm| {
                 arm.guard
