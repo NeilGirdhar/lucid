@@ -18,6 +18,37 @@ pub struct Lexer<'a> {
     pending_dedents: usize,
 }
 
+/// Strips the smallest leading-whitespace count shared by every line after
+/// the first from all of them, so a triple-quoted string reads the same
+/// regardless of how deeply the surrounding code is indented. Matches
+/// Python's `textwrap.dedent`: a line that is empty or all whitespace is
+/// excluded from the shared-indent computation and normalized to empty in
+/// the result, rather than pulling the shared indent down to zero.
+fn dedent_triple_quoted(content: &str) -> String {
+    let mut lines: Vec<&str> = content.split('\n').collect();
+    if lines.len() <= 1 {
+        return content.to_string();
+    }
+    let first = lines.remove(0);
+    let indent_of = |line: &str| line.len() - line.trim_start_matches([' ', '\t']).len();
+    let min_indent = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| indent_of(line))
+        .min();
+    let mut result = String::with_capacity(content.len());
+    result.push_str(first);
+    for line in lines {
+        result.push('\n');
+        if line.trim().is_empty() {
+            continue;
+        }
+        let strip = min_indent.unwrap_or(0).min(indent_of(line));
+        result.push_str(&line[strip..]);
+    }
+    result
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
         let chars: Vec<(usize, char)> = source.char_indices().collect();
@@ -669,6 +700,12 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
+
+        let content = if is_triple {
+            dedent_triple_quoted(&content)
+        } else {
+            content
+        };
 
         let (end_pos, _, _) = self.current_pos();
         Ok(Some(Token::new(

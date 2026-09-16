@@ -84,6 +84,61 @@ mod tests {
     }
 
     #[test]
+    fn triple_quoted_strings_are_dedented() {
+        let expected =
+            "\nMove money between two accounts.\n\nRaises if either account does not exist.\n";
+
+        let src = "def transfer():\n    return \"\"\"\n    Move money between two accounts.\n\n    Raises if either account does not exist.\n    \"\"\"\n";
+        let module = parse(src).unwrap();
+        let Stmt::Function(function) = &module.statements[0] else {
+            panic!("expected a function definition");
+        };
+        let Stmt::Return {
+            value: Some(value), ..
+        } = &function.body[0]
+        else {
+            panic!("expected a return statement");
+        };
+        assert!(
+            matches!(value, Expr::Literal { value: LiteralValue::Str(s), .. } if s == expected)
+        );
+
+        // Re-indenting the whole block changes nothing about the string's
+        // value -- only the source's own indentation moved.
+        let reindented = "class Config:\n    def transfer():\n        return \"\"\"\n        Move money between two accounts.\n\n        Raises if either account does not exist.\n        \"\"\"\n";
+        let module = parse(reindented).unwrap();
+        let Stmt::ClassDef { body, .. } = &module.statements[0] else {
+            panic!("expected a class definition");
+        };
+        let ClassMember::Method(function) = &body[0] else {
+            panic!("expected a method definition");
+        };
+        let Stmt::Return {
+            value: Some(value), ..
+        } = &function.body[0]
+        else {
+            panic!("expected a return statement");
+        };
+        assert!(
+            matches!(value, Expr::Literal { value: LiteralValue::Str(s), .. } if s == expected)
+        );
+
+        // A triple-quoted string with no shared indent is unchanged after
+        // its first line.
+        let tokens = Lexer::new("\"\"\"a\nb\nc\"\"\"").tokenize().unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Str("a\nb\nc".to_string()));
+
+        // An ordinary, non-triple-quoted string is never dedented.
+        let tokens = Lexer::new("\"  indented\\nstill  indented\"")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens[0].kind,
+            TokenKind::Str("  indented\nstill  indented".to_string())
+        );
+    }
+
+    #[test]
     fn python_spelled_constants_are_identifiers_not_literals() {
         let mut lexer = Lexer::new("True False None");
         let tokens = lexer.tokenize().unwrap();
