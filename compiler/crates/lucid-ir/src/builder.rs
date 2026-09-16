@@ -520,6 +520,59 @@ impl IrBuilder {
 
                 IrValue::Var(dest)
             }
+            Expr::List { elements, .. } => {
+                // List literal: [1, 2, 3]
+                // For MVP, generate a call to create list
+                let dest = self.fresh_var("list");
+
+                // Create an empty list (TODO: initialize with elements)
+                self.emit(IrInstruction::Call {
+                    dest: Some(dest.clone()),
+                    func: "lucid_list_new".to_string(),
+                    args: vec![],
+                });
+
+                IrValue::Var(dest)
+            }
+            Expr::Index { value, index, .. } => {
+                // Array/list indexing: list[index]
+                let obj_value = self.expr_to_ir_value(value);
+                let idx_value = self.expr_to_ir_value(index);
+                let dest = self.fresh_var("elem");
+
+                // Generate: dest = lucid_list_get(list, index)
+                self.emit(IrInstruction::Call {
+                    dest: Some(dest.clone()),
+                    func: "lucid_list_get".to_string(),
+                    args: vec![obj_value, idx_value],
+                });
+
+                IrValue::Var(dest)
+            }
+            Expr::Dict { entries, .. } => {
+                // Dictionary literal: {key: value, ...}
+                let dest = self.fresh_var("dict");
+
+                // Create an empty dictionary
+                self.emit(IrInstruction::Call {
+                    dest: Some(dest.clone()),
+                    func: "lucid_dict_new".to_string(),
+                    args: vec![],
+                });
+
+                // Add entries to the dictionary
+                for (key_expr, val_expr) in entries {
+                    let key_val = self.expr_to_ir_value(key_expr);
+                    let val_val = self.expr_to_ir_value(val_expr);
+                    self.emit(IrInstruction::Call {
+                        dest: None,
+                        func: "lucid_dict_set".to_string(),
+                        args: vec![IrValue::Var(dest.clone()), key_val, val_val],
+                    });
+                }
+
+                IrValue::Var(dest)
+            }
             _ => IrValue::Null,
         }
     }

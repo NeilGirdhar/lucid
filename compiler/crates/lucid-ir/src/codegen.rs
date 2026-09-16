@@ -216,9 +216,13 @@ impl CCodegenBackend {
                 all_args.extend(args.iter().map(|a| self.value_to_c(a)));
                 let args_code = all_args.join(", ");
 
-                // Translate receiver.method(args) to method(receiver, args)
-                // In a real implementation, we'd look up the class type to generate the right function name
-                let func_name = format!("method_{}", method);
+                // Check for builtin list methods
+                let is_list_method = matches!(method.as_str(), "append" | "pop" | "length" | "get");
+                let func_name = if is_list_method {
+                    format!("lucid_list_{}", method)
+                } else {
+                    format!("method_{}", method)
+                };
 
                 if let Some(d) = dest {
                     if !self.declared_vars.contains(d) {
@@ -228,7 +232,12 @@ impl CCodegenBackend {
                         self.emit_line(&format!("{} = {}({});", d, func_name, args_code));
                     }
                 } else {
-                    self.emit_line(&format!("{}({});", func_name, args_code));
+                    // For append, which typically doesn't return a value
+                    if method == "append" {
+                        self.emit_line(&format!("{}({});", func_name, args_code));
+                    } else {
+                        self.emit_line(&format!("{}({});", func_name, args_code));
+                    }
                 }
             }
             IrInstruction::Load { dest, addr } => {

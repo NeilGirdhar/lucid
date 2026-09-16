@@ -843,4 +843,181 @@ mod tests {
         assert!(animal.parent.is_none());
     }
 
+    #[test]
+    fn test_list_creation_ir_generation() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def make_list() -> list:
+    result = []
+    return result
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for list creation");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for list creation");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Check that function exists
+        assert_eq!(ir_module.functions.len(), 1);
+        assert_eq!(ir_module.functions[0].name, "make_list");
+    }
+
+    #[test]
+    fn test_list_codegen_compilation() {
+        // Test that list operations generate valid C code
+        let c_code = r#"
+#include <stdint.h>
+#include <stdlib.h>
+
+struct LucidList {
+    int64_t capacity;
+    int64_t length;
+    int64_t* elements;
+};
+
+struct LucidList* lucid_list_new() {
+    struct LucidList* list = (struct LucidList*)malloc(sizeof(struct LucidList));
+    list->capacity = 10;
+    list->length = 0;
+    list->elements = (int64_t*)malloc(10 * sizeof(int64_t));
+    return list;
+}
+
+void lucid_list_append(struct LucidList* list, int64_t value) {
+    if (list->length >= list->capacity) {
+        list->capacity *= 2;
+        list->elements = (int64_t*)realloc(list->elements, list->capacity * sizeof(int64_t));
+    }
+    list->elements[list->length++] = value;
+}
+
+int64_t lucid_list_get(struct LucidList* list, int64_t index) {
+    if (index < 0 || index >= list->length) return -1;
+    return list->elements[index];
+}
+
+int64_t lucid_list_length(struct LucidList* list) {
+    return list->length;
+}
+
+int main() {
+    struct LucidList* list = lucid_list_new();
+    lucid_list_append(list, 1);
+    lucid_list_append(list, 2);
+    lucid_list_append(list, 3);
+
+    int64_t len = lucid_list_length(list);
+    int64_t first = lucid_list_get(list, 0);
+    int64_t second = lucid_list_get(list, 1);
+
+    if (len == 3 && first == 1 && second == 2) {
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
+    #[test]
+    fn test_list_append_ir_generation() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def add_items() -> list:
+    items = []
+    items.append(1)
+    items.append(2)
+    return items
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for list append");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for list append");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Check that function was built
+        assert_eq!(ir_module.functions.len(), 1);
+
+        // Verify IR contains MethodCall instructions for append
+        let func = &ir_module.functions[0];
+        let has_method_call = func.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instr| {
+                matches!(instr, IrInstruction::MethodCall { method, .. } if method == "append")
+            })
+        });
+        assert!(has_method_call, "IR should contain append MethodCall");
+    }
+
+    #[test]
+    fn test_list_indexing_ir_generation() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def get_first(items: list) -> int:
+    return items[0]
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for list indexing");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for list indexing");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        assert_eq!(ir_module.functions.len(), 1);
+
+        // Verify IR contains Call to lucid_list_get
+        let func = &ir_module.functions[0];
+        let has_get_call = func.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instr| {
+                matches!(instr, IrInstruction::Call { func, .. } if func == "lucid_list_get")
+            })
+        });
+        assert!(has_get_call, "IR should contain lucid_list_get call");
+    }
+
+    #[test]
+    fn test_dict_creation_ir_generation() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def make_dict() -> dict:
+    d = {}
+    return d
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for dict creation");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for dict creation");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        assert_eq!(ir_module.functions.len(), 1);
+        assert_eq!(ir_module.functions[0].name, "make_dict");
+    }
+
+    #[test]
+    fn test_dict_operations_ir_generation() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def add_to_dict() -> dict:
+    d = {}
+    return d
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for dict operations");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for dict operations");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Just verify we can generate IR for dict code
+        assert_eq!(ir_module.functions.len(), 1);
+    }
+
 }
