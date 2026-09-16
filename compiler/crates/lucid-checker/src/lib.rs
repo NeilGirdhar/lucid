@@ -7581,6 +7581,12 @@ impl TypeChecker {
                 self.type_of_expr(expr)?;
                 Ok(())
             }
+            Stmt::Module { name: _, body, .. } => {
+                for stmt in body {
+                    self.check_statement(stmt)?;
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -7588,7 +7594,8 @@ impl TypeChecker {
     fn reserved_module_binding(stmt: &Stmt) -> Option<(&str, Span)> {
         match stmt {
             Stmt::Export(inner) => Self::reserved_module_binding(inner),
-            Stmt::ClassDef { name, span, .. }
+            Stmt::Module { name, span, .. }
+            | Stmt::ClassDef { name, span, .. }
             | Stmt::InterfaceDef { name, span, .. }
             | Stmt::TraitDef { name, span, .. }
             | Stmt::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
