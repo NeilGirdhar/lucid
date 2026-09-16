@@ -2006,4 +2006,100 @@ int main() {
         assert!(code.contains("Dict__str__i64___clear"), "clear should be generated");
     }
 
+    #[test]
+    fn test_exhaustive_pattern_matching_result() {
+        let module = IrModule::new();
+
+        // Create match arms for Result
+        let ok_arm = crate::MatchArm {
+            pattern: crate::Pattern::Variant("Ok".to_string(), vec![]),
+            target_block: 1,
+        };
+
+        let err_arm = crate::MatchArm {
+            pattern: crate::Pattern::Variant("Err".to_string(), vec![]),
+            target_block: 2,
+        };
+
+        // Test exhaustive Result match
+        let arms = vec![ok_arm, err_arm];
+        assert!(module.is_result_match_exhaustive(&arms), "Result match should be exhaustive");
+
+        // Test non-exhaustive (only Ok)
+        let partial_arms = vec![crate::MatchArm {
+            pattern: crate::Pattern::Variant("Ok".to_string(), vec![]),
+            target_block: 1,
+        }];
+        assert!(!module.is_result_match_exhaustive(&partial_arms), "Partial Result match should not be exhaustive");
+
+        // Test wildcard covers all
+        let wildcard_arm = crate::MatchArm {
+            pattern: crate::Pattern::Wildcard,
+            target_block: 1,
+        };
+        assert!(module.is_result_match_exhaustive(&vec![wildcard_arm]), "Wildcard should cover all cases");
+    }
+
+    #[test]
+    fn test_exhaustive_pattern_matching_error_enum() {
+        let mut module = IrModule::new();
+
+        // Create an error type
+        let error_type = crate::ErrorType {
+            name: "FileError".to_string(),
+            variants: vec![
+                crate::ErrorVariant { name: "NotFound".to_string(), code: 1 },
+                crate::ErrorVariant { name: "PermissionDenied".to_string(), code: 2 },
+                crate::ErrorVariant { name: "IOError".to_string(), code: 3 },
+            ],
+        };
+        module.error_types.push(error_type);
+
+        // Create exhaustive match (all variants covered)
+        let arms_exhaustive = vec![
+            crate::MatchArm {
+                pattern: crate::Pattern::Variant("NotFound".to_string(), vec![]),
+                target_block: 1,
+            },
+            crate::MatchArm {
+                pattern: crate::Pattern::Variant("PermissionDenied".to_string(), vec![]),
+                target_block: 2,
+            },
+            crate::MatchArm {
+                pattern: crate::Pattern::Variant("IOError".to_string(), vec![]),
+                target_block: 3,
+            },
+        ];
+
+        assert!(module.is_error_match_exhaustive("FileError", &arms_exhaustive), "Should be exhaustive");
+
+        // Test non-exhaustive (missing PermissionDenied)
+        let arms_partial = vec![
+            crate::MatchArm {
+                pattern: crate::Pattern::Variant("NotFound".to_string(), vec![]),
+                target_block: 1,
+            },
+            crate::MatchArm {
+                pattern: crate::Pattern::Variant("IOError".to_string(), vec![]),
+                target_block: 3,
+            },
+        ];
+
+        assert!(!module.is_error_match_exhaustive("FileError", &arms_partial), "Should be non-exhaustive");
+
+        // Test wildcard covers all
+        let arms_wildcard = vec![
+            crate::MatchArm {
+                pattern: crate::Pattern::Variant("NotFound".to_string(), vec![]),
+                target_block: 1,
+            },
+            crate::MatchArm {
+                pattern: crate::Pattern::Wildcard,
+                target_block: 99,
+            },
+        ];
+
+        assert!(module.is_error_match_exhaustive("FileError", &arms_wildcard), "Wildcard should make it exhaustive");
+    }
+
 }

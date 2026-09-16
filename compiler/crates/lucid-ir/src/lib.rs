@@ -221,6 +221,35 @@ pub struct MethodImpl {
     pub impl_function: String,
 }
 
+/// Pattern for match statement
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    /// Wildcard pattern (_)
+    Wildcard,
+    /// Literal pattern (integer, string, boolean)
+    Literal(IrValue),
+    /// Enum variant pattern (e.g., Result::Ok, Result::Err)
+    Variant(String, Vec<String>),  // variant_name, captured_bindings
+    /// Tuple pattern (for multiple values)
+    Tuple(Vec<Pattern>),
+}
+
+/// Pattern match arm
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub target_block: usize,  // Block to execute if pattern matches
+}
+
+/// Pattern match with exhaustiveness tracking
+#[derive(Debug, Clone)]
+pub struct MatchExpr {
+    pub scrutinee: String,           // Value being matched
+    pub arms: Vec<MatchArm>,         // All match arms
+    pub exhaustive: bool,            // Whether all cases are covered
+    pub covered_patterns: Vec<String>, // Which patterns are covered
+}
+
 /// Class definition in IR
 #[derive(Debug, Clone)]
 pub struct IrClass {
@@ -513,6 +542,84 @@ impl IrModule {
             }
         }
         true
+    }
+
+    /// Check if a match expression on a Result type is exhaustive
+    pub fn is_result_match_exhaustive(&self, arms: &[MatchArm]) -> bool {
+        let mut has_ok = false;
+        let mut has_err = false;
+        let mut has_wildcard = false;
+
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Variant(name, _) if name == "Ok" => has_ok = true,
+                Pattern::Variant(name, _) if name == "Err" => has_err = true,
+                Pattern::Wildcard => has_wildcard = true,
+                _ => {}
+            }
+        }
+
+        has_wildcard || (has_ok && has_err)
+    }
+
+    /// Check if a match expression on an error type is exhaustive
+    pub fn is_error_match_exhaustive(&self, error_type_name: &str, arms: &[MatchArm]) -> bool {
+        // Find the error type definition
+        for error_type in &self.error_types {
+            if error_type.name == error_type_name {
+                let mut has_wildcard = false;
+                let mut covered_variants = Vec::new();
+
+                for arm in arms {
+                    match &arm.pattern {
+                        Pattern::Variant(name, _) => covered_variants.push(name.clone()),
+                        Pattern::Wildcard => has_wildcard = true,
+                        _ => {}
+                    }
+                }
+
+                if has_wildcard {
+                    return true;
+                }
+
+                // Check if all variants are covered
+                for variant in &error_type.variants {
+                    if !covered_variants.contains(&variant.name) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Get all variants of an enum type
+    pub fn get_enum_variants(&self, enum_name: &str) -> Vec<String> {
+        for error_type in &self.error_types {
+            if error_type.name == enum_name {
+                return error_type.variants.iter().map(|v| v.name.clone()).collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Check if pattern match covers all required cases
+    pub fn validate_match_exhaustiveness(&self, type_name: &str, arms: &[MatchArm]) -> Result<(), String> {
+        if type_name == "Result" {
+            if !self.is_result_match_exhaustive(arms) {
+                return Err("Match on Result must cover Ok and Err or use wildcard".to_string());
+            }
+        } else {
+            // Check for error type
+            if !self.is_error_match_exhaustive(type_name, arms) {
+                let variants = self.get_enum_variants(type_name);
+                return Err(format!("Match on {} must cover all variants: {:?}", type_name, variants));
+            }
+        }
+        Ok(())
     }
 }
 
