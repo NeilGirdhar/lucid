@@ -449,17 +449,24 @@ impl IrBuilder {
                 }
             }
             Expr::Construct { class_name, args, .. } => {
-                // Construct a new object: allocate memory, initialize
                 let dest = self.fresh_var("obj");
-                // TODO: Get actual size from class definition
-                // For now: allocate 64 bytes (enough for most small objects)
-                self.emit(IrInstruction::Malloc {
+
+                // Build field value pairs from arguments
+                let mut field_values = Vec::new();
+                for (idx, arg) in args.iter().enumerate() {
+                    let field_name = arg.name.clone()
+                        .unwrap_or_else(|| format!("field_{}", idx));
+                    let value = self.expr_to_ir_value(&arg.value);
+                    field_values.push((field_name, value));
+                }
+
+                // Emit NewInstance instruction which handles allocation + initialization
+                self.emit(IrInstruction::NewInstance {
                     dest: dest.clone(),
-                    size: IrValue::Int(64),
+                    class_name: class_name.clone(),
+                    field_values,
                 });
-                // TODO: Call constructor if it exists
-                // TODO: Initialize fields from args
-                // For now, just return the allocated pointer
+
                 IrValue::Var(dest)
             }
             _ => IrValue::Null,

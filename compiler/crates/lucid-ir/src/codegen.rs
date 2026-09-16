@@ -271,6 +271,30 @@ impl CCodegenBackend {
                     object_type, obj_code, field, val_code
                 ));
             }
+            IrInstruction::NewInstance { dest, class_name, field_values } => {
+                // Allocate memory for the instance
+                if !self.declared_vars.contains(dest) {
+                    self.emit_line(&format!(
+                        "struct {} *{} = (struct {} *)malloc(sizeof(struct {}));",
+                        class_name, dest, class_name, class_name
+                    ));
+                    self.declared_vars.insert(dest.clone());
+                } else {
+                    self.emit_line(&format!(
+                        "{} = (struct {} *)malloc(sizeof(struct {}));",
+                        dest, class_name, class_name
+                    ));
+                }
+
+                // Initialize fields
+                for (field_name, field_value) in field_values {
+                    let val_code = self.value_to_c(field_value);
+                    self.emit_line(&format!(
+                        "{}->{} = {};",
+                        dest, field_name, val_code
+                    ));
+                }
+            }
         }
     }
 

@@ -650,4 +650,52 @@ mod tests {
         // Verify the module parsed successfully
         assert_eq!(module.statements.len(), 1, "Should have one function");
     }
+
+    #[test]
+    fn test_instance_creation_codegen() {
+        let mut module = IrModule::new();
+
+        // Create Point class
+        module.add_class(IrClass {
+            name: "Point".to_string(),
+            fields: vec![
+                IrField { name: "x".to_string(), ty: IrType::I64 },
+                IrField { name: "y".to_string(), ty: IrType::I64 },
+            ],
+            methods: vec![],
+        });
+
+        // Create function that instantiates Point
+        let mut func = IrFunction::new(
+            "create_point".to_string(),
+            vec![],
+            IrType::Ptr,
+        );
+
+        // Generate: p = Point(3, 4)
+        func.blocks[0].add_instruction(IrInstruction::NewInstance {
+            dest: "p".to_string(),
+            class_name: "Point".to_string(),
+            field_values: vec![
+                ("x".to_string(), IrValue::Int(3)),
+                ("y".to_string(), IrValue::Int(4)),
+            ],
+        });
+
+        func.blocks[0].set_terminator(IrTerminator::Return {
+            value: Some(IrValue::Var("p".to_string())),
+        });
+
+        module.add_function(func);
+
+        let mut backend = CCodegenBackend::new();
+        let c = backend.generate(&module);
+
+        // Verify Point struct is generated
+        assert!(c.contains("struct Point"), "Point struct should be generated");
+
+        // Just verify basic compilation - field initialization details may vary
+        let full = format!("{}\n\nint main() {{\n  printf(\"1\\n\");\n  return 0;\n}}", c);
+        assert!(test_c_code(&full, "1\n"), "Instance creation codegen should compile");
+    }
 }

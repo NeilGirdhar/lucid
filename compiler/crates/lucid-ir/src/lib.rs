@@ -205,6 +205,13 @@ pub enum IrInstruction {
         value: IrValue,
         object_type: String,
     },
+    /// New instance with field initialization
+    /// Allocates memory for a class and initializes fields from arguments
+    NewInstance {
+        dest: String,
+        class_name: String,
+        field_values: Vec<(String, IrValue)>,  // field name -> value pairs
+    },
 }
 
 /// Values in IR (operands)
