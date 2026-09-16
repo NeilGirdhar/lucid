@@ -79,6 +79,47 @@ impl SourceMap {
     pub fn entries(&self) -> &[SourceMapEntry] {
         &self.entries
     }
+
+    /// Export source map to JSON format
+    pub fn to_json(&self) -> String {
+        let mut json = String::from("{\n  \"version\": 3,\n  \"sources\": [\n");
+        let mut sources = std::collections::BTreeSet::new();
+        for entry in &self.entries {
+            sources.insert(entry.source_file.clone());
+        }
+        for (i, source) in sources.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push('\n');
+            json.push_str("    \"");
+            json.push_str(&source.replace('\\', "\\\\").replace('"', "\\\""));
+            json.push('"');
+        }
+        json.push_str("\n  ],\n  \"mappings\": [\n");
+        for (i, entry) in self.entries.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push('\n');
+            json.push_str("    {\n");
+            json.push_str(&format!("      \"generated\": {},\n", entry.generated_line));
+            json.push_str(&format!("      \"source\": \"{}\",\n",
+                entry.source_file.replace('\\', "\\\\").replace('"', "\\\"")));
+            json.push_str(&format!("      \"original_line\": {},\n", entry.source_line));
+            json.push_str(&format!("      \"original_column\": {}\n", entry.source_column));
+            json.push_str("    }");
+        }
+        json.push_str("\n  ]\n}\n");
+        json
+    }
+
+    /// Write source map to file
+    pub fn write_to_file(&self, path: &Path) -> std::io::Result<()> {
+        let mut file = fs::File::create(path)?;
+        file.write_all(self.to_json().as_bytes())?;
+        Ok(())
+    }
 }
 
 fn bigint_literal_decimal(text: &str) -> String {
@@ -2274,6 +2315,19 @@ impl CCodeGenerator {
         self.buffer.push_str(&main_buffer);
 
         Ok(self.buffer.clone())
+    }
+
+    /// Export the source map to JSON format
+    pub fn export_source_map_json(&self) -> String {
+        self.source_map.to_json()
+    }
+
+    /// Write the source map to a file
+    pub fn write_source_map(&self, path: &Path) -> Result<(), CodegenError> {
+        self.source_map.write_to_file(path)
+            .map_err(|e| CodegenError {
+                message: format!("failed to write source map: {}", e),
+            })
     }
 
     fn emit_preamble(&mut self) {
