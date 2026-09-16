@@ -1,0 +1,6 @@
+# The toolchain the checks are verified with. Clippy gains lints with every
+# release, and CI denies warnings, so the version is pinned rather than
+# floating with stable.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
