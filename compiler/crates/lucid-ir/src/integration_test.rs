@@ -398,4 +398,22 @@ mod tests {
 
         assert!(test_c_code(&full, "30\n"));
     }
+
+    #[test]
+    fn test_exception_handling_try_except() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        // Test: try/except exception handling
+        let lucid_code = "def safe_divide(a: int, b: int) -> int:\n  try:\n    if b == 0:\n      raise 1\n    return a / b\n  except:\n    return -1\n";
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for try/except");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for try/except");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+        let mut backend = CCodegenBackend::new();
+        let c_code = backend.generate(&ir_module);
+        let full_c = format!("{}\n\nint main() {{\n  printf(\"%ld\\n\", safe_divide(10, 0));\n  return 0;\n}}", c_code);
+        assert!(test_c_code(&full_c, "-1\n"), "safe_divide(10, 0) should return -1 (exception caught)");
+    }
 }

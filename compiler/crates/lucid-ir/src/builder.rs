@@ -13,6 +13,7 @@ pub struct IrBuilder {
     next_var_id: usize,
     current_function: Option<usize>,
     current_block: usize,
+    exception_handler_stack: Vec<usize>, // Stack of exception handler block IDs
 }
 
 impl IrBuilder {
@@ -23,6 +24,7 @@ impl IrBuilder {
             next_var_id: 0,
             current_function: None,
             current_block: 0,
+            exception_handler_stack: Vec::new(),
         }
     }
 
@@ -242,6 +244,83 @@ impl IrBuilder {
 
                     // Continue after loop
                     self.current_block = loop_exit_id;
+                }
+            }
+            Stmt::Try { body, handlers, finally_body, .. } => {
+                if let Some(func_idx) = self.current_function {
+                    let try_body_id = self.fresh_block("try_body");
+                    let merge_id = self.fresh_block("try_merge");
+                    let finally_id = if finally_body.is_some() {
+                        self.fresh_block("try_finally")
+                    } else {
+                        merge_id
+                    };
+
+                    // Create handler block BEFORE processing try body
+                    let handler_id = if !handlers.is_empty() {
+                        self.fresh_block("try_handler")
+                    } else {
+                        merge_id
+                    };
+
+                    // Push handler onto stack so raises can find it
+                    self.exception_handler_stack.push(handler_id);
+
+                    // Jump to try body
+                    self.terminate(IrTerminator::Jump { target: try_body_id });
+
+                    // Try body block
+                    let saved_block = self.current_block;
+                    self.current_block = try_body_id;
+                    for stmt in body {
+                        self.build_stmt_recursive(stmt);
+                    }
+                    // Jump to finally/merge on success
+                    if matches!(self.module.functions[func_idx].blocks[try_body_id].terminator, IrTerminator::Unreachable) {
+                        self.terminate(IrTerminator::Jump { target: finally_id });
+                    }
+
+                    // Exception handlers (simplified: first handler for all exceptions)
+                    if !handlers.is_empty() {
+                        self.current_block = handler_id;
+
+                        // Build first handler's body
+                        for stmt in &handlers[0].body {
+                            self.build_stmt_recursive(stmt);
+                        }
+                        // Jump to finally/merge
+                        if matches!(self.module.functions[func_idx].blocks[handler_id].terminator, IrTerminator::Unreachable) {
+                            self.terminate(IrTerminator::Jump { target: finally_id });
+                        }
+                    }
+
+                    // Pop handler from stack
+                    self.exception_handler_stack.pop();
+
+                    // Finally block
+                    if let Some(finally_stmts) = finally_body {
+                        self.current_block = finally_id;
+                        for stmt in finally_stmts {
+                            self.build_stmt_recursive(stmt);
+                        }
+                        // Jump to merge
+                        if matches!(self.module.functions[func_idx].blocks[finally_id].terminator, IrTerminator::Unreachable) {
+                            self.terminate(IrTerminator::Jump { target: merge_id });
+                        }
+                    }
+
+                    // Continue after try/except
+                    self.current_block = merge_id;
+                }
+            }
+            Stmt::Raise { exception, .. } => {
+                // Jump to the current exception handler
+                if let Some(&handler_id) = self.exception_handler_stack.last() {
+                    self.terminate(IrTerminator::Jump { target: handler_id });
+                } else {
+                    // No handler available, return the exception value
+                    let ex_val = self.expr_to_ir_value(exception);
+                    self.terminate(IrTerminator::Return { value: Some(ex_val) });
                 }
             }
             _ => {
