@@ -229,6 +229,20 @@ impl CCodegenBackend {
             "void {0}_clear(struct {0}* dict) {{\n  dict->length = 0;\n}}",
             type_name
         ));
+        self.emit_line("");
+
+        // Generate keys function (returns array of keys)
+        self.emit_line(&format!(
+            "{1}* {0}_keys(struct {0}* dict) {{\n  {1}* keys_array = malloc(dict->length * sizeof({1}));\n  for (int64_t i = 0; i < dict->length; i++) {{\n    keys_array[i] = dict->keys[i];\n  }}\n  return keys_array;\n}}",
+            type_name, key_type
+        ));
+        self.emit_line("");
+
+        // Generate values function (returns array of values)
+        self.emit_line(&format!(
+            "{1}* {0}_values(struct {0}* dict) {{\n  {1}* values_array = malloc(dict->length * sizeof({1}));\n  for (int64_t i = 0; i < dict->length; i++) {{\n    values_array[i] = dict->values[i];\n  }}\n  return values_array;\n}}",
+            type_name, val_type
+        ));
     }
 
     fn generate_class(&mut self, class: &crate::IrClass) {

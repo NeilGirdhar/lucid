@@ -25,6 +25,7 @@ pub struct IrModule {
     pub trait_impls: Vec<TraitImpl>,
     pub specializations: Vec<TypeSpecialization>,
     pub error_types: Vec<ErrorType>,
+    pub iterator_traits: Vec<IteratorTrait>,  // Iterator support for collections
 }
 
 /// An IR function with control flow graph
@@ -168,6 +169,24 @@ pub struct TraitMethod {
     pub name: String,
     pub params: Vec<IrParam>,
     pub return_type: IrType,
+}
+
+/// Associated type in a trait (e.g., Iterator::Item)
+#[derive(Debug, Clone)]
+pub struct AssociatedType {
+    pub name: String,                 // e.g., "Item"
+    pub ty: IrType,                   // The concrete type
+}
+
+/// Iterator trait support
+#[derive(Debug, Clone)]
+pub struct IteratorTrait {
+    pub collection_type: String,      // "List" or "Dict"
+    pub item_type: IrType,           // Element type being iterated
+    pub key_type: Option<IrType>,    // For Dict: key type
+    pub has_keys_method: bool,        // Dict has keys() method
+    pub has_values_method: bool,      // Dict has values() method
+    pub has_items_method: bool,       // Dict has items() method
 }
 
 /// Trait bound for generic type parameters
@@ -450,6 +469,7 @@ impl IrModule {
             trait_impls: Vec::new(),
             specializations: Vec::new(),
             error_types: Vec::new(),
+            iterator_traits: Vec::new(),
         }
     }
 
@@ -620,6 +640,43 @@ impl IrModule {
             }
         }
         Ok(())
+    }
+
+    /// Register an iterator trait for a collection type
+    pub fn register_iterator(&mut self, collection_type: String, item_type: IrType, key_type: Option<IrType>) -> IteratorTrait {
+        let has_keys = key_type.is_some();
+        let iterator = IteratorTrait {
+            collection_type,
+            item_type,
+            key_type,
+            has_keys_method: has_keys,
+            has_values_method: has_keys,
+            has_items_method: has_keys,
+        };
+        self.iterator_traits.push(iterator.clone());
+        iterator
+    }
+
+    /// Get iterator for a collection type
+    pub fn get_iterator(&self, collection_type: &str) -> Option<&IteratorTrait> {
+        self.iterator_traits.iter().find(|it| it.collection_type == collection_type)
+    }
+
+    /// Check if a type supports iteration
+    pub fn is_iterable(&self, type_name: &str) -> bool {
+        self.iterator_traits.iter().any(|it| it.collection_type == type_name) ||
+        type_name == "List" || type_name == "Dict" || type_name == "Range" ||
+        type_name == "String"
+    }
+
+    /// Get the item type for iteration
+    pub fn get_iteration_type(&self, type_name: &str) -> Option<IrType> {
+        match type_name {
+            "List" => Some(IrType::I64), // Default for now
+            "Range" => Some(IrType::I64),
+            "String" => Some(IrType::Str),
+            _ => self.get_iterator(type_name).map(|it| it.item_type.clone()),
+        }
     }
 }
 

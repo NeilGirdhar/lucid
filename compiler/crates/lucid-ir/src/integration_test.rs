@@ -2124,4 +2124,70 @@ int main() {
         assert!(code.contains("case '\\\\'"), "Should handle escaped backslashes");
     }
 
+    #[test]
+    fn test_iterator_support_registration() {
+        let mut module = IrModule::new();
+
+        // Register iterators for List and Dict
+        let list_iterator = module.register_iterator("List".to_string(), IrType::I64, None);
+        let dict_iterator = module.register_iterator("Dict".to_string(), IrType::Str, Some(IrType::I64));
+
+        assert_eq!(list_iterator.collection_type, "List");
+        assert_eq!(list_iterator.item_type, IrType::I64);
+        assert!(!list_iterator.has_keys_method, "List shouldn't have keys()");
+
+        assert_eq!(dict_iterator.collection_type, "Dict");
+        assert!(dict_iterator.has_keys_method, "Dict should have keys()");
+        assert!(dict_iterator.has_values_method, "Dict should have values()");
+        assert!(dict_iterator.has_items_method, "Dict should have items()");
+
+        // Verify iterators are registered
+        assert!(module.get_iterator("List").is_some());
+        assert!(module.get_iterator("Dict").is_some());
+        assert!(module.is_iterable("List"));
+        assert!(module.is_iterable("Dict"));
+    }
+
+    #[test]
+    fn test_dict_iterator_methods_codegen() {
+        // Test that Dict iterator methods (keys, values) are generated
+        let mut module = IrModule::new();
+
+        // Create Dict[str, i64] specialization
+        let _specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify iterator methods are generated
+        assert!(code.contains("Dict__str__i64___keys"), "keys() should be generated");
+        assert!(code.contains("Dict__str__i64___values"), "values() should be generated");
+
+        // Verify method implementations return arrays
+        assert!(code.contains("keys_array = malloc"), "keys() should allocate array");
+        assert!(code.contains("values_array = malloc"), "values() should allocate array");
+    }
+
+    #[test]
+    fn test_iterable_type_checking() {
+        let mut module = IrModule::new();
+
+        // Register iterators
+        module.register_iterator("List".to_string(), IrType::I64, None);
+        module.register_iterator("Dict".to_string(), IrType::Str, Some(IrType::I64));
+
+        // Check iterable status
+        assert!(module.is_iterable("List"));
+        assert!(module.is_iterable("Dict"));
+        assert!(module.is_iterable("Range"));
+        assert!(module.is_iterable("String"));
+        assert!(!module.is_iterable("i64"));
+
+        // Check iteration types
+        assert_eq!(module.get_iteration_type("List"), Some(IrType::I64));
+        assert_eq!(module.get_iteration_type("Range"), Some(IrType::I64));
+        assert_eq!(module.get_iteration_type("String"), Some(IrType::Str));
+    }
+
 }
