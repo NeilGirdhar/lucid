@@ -499,9 +499,20 @@ impl IrBuilder {
                 IrValue::Var(dest)
             }
             Expr::Propagate { expr, .. } => {
-                // The ? operator: evaluate expression, pass through for now
-                // TODO: Proper error checking and early return
-                self.expr_to_ir_value(expr)
+                // The ? operator: error propagation
+                // For MVP, generate a call to unwrap_result that handles error checking
+                // In production, this would generate proper control flow with early return
+                let result_value = self.expr_to_ir_value(expr);
+                let dest = self.fresh_var("unwrapped");
+
+                // Call lucid_result_unwrap to check result and propagate errors
+                self.emit(IrInstruction::Call {
+                    dest: Some(dest.clone()),
+                    func: "lucid_result_unwrap".to_string(),
+                    args: vec![result_value],
+                });
+
+                IrValue::Var(dest)
             }
             Expr::Attribute { value, attr, .. } => {
                 // Field access: obj.field

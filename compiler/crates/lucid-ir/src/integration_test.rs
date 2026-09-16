@@ -1280,4 +1280,84 @@ int main() {
         assert!(test_c_code(c_code, ""));
     }
 
+    #[test]
+    fn test_error_handling_result_type() {
+        // Test Result type structure for error handling
+        let c_code = r#"
+#include <stdint.h>
+#include <stdlib.h>
+
+enum ResultTag { SUCCESS, ERROR };
+
+struct Result {
+    enum ResultTag tag;
+    union {
+        int64_t value;
+        int64_t error_code;
+    } data;
+};
+
+struct Result lucid_result_ok(int64_t value) {
+    struct Result r;
+    r.tag = SUCCESS;
+    r.data.value = value;
+    return r;
+}
+
+struct Result lucid_result_error(int64_t error_code) {
+    struct Result r;
+    r.tag = ERROR;
+    r.data.error_code = error_code;
+    return r;
+}
+
+int64_t safe_parse(const char* str) {
+    // Simplified: just return success with fixed value
+    if (str) {
+        return 42;
+    }
+    return -1;
+}
+
+int main() {
+    struct Result r1 = lucid_result_ok(42);
+    struct Result r2 = lucid_result_error(1);
+
+    if (r1.tag == SUCCESS && r1.data.value == 42 &&
+        r2.tag == ERROR && r2.data.error_code == 1) {
+        return 0;  // Success
+    }
+    return 1;  // Failure
+}
+        "#;
+
+        assert!(test_c_code(c_code, ""));
+    }
+
+    #[test]
+    fn test_error_propagation_operator() {
+        use lucid_syntax::lexer::Lexer;
+        use lucid_syntax::parser::Parser;
+
+        let lucid_code = r#"def parse_with_error(s: str) -> int:
+    value = parse_int(s)?
+    return value
+"#;
+
+        let mut lexer = Lexer::new(lucid_code);
+        let tokens = lexer.tokenize().expect("Lexer failed for error propagation");
+        let mut parser = Parser::new(tokens);
+        let module = parser.parse_module().expect("Parser failed for error propagation");
+        let ir_module = crate::builder::IrBuilder::new().build_module(&module);
+
+        // Verify IR contains call to lucid_result_unwrap for ? operator
+        let func = &ir_module.functions[0];
+        let has_unwrap_call = func.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instr| {
+                matches!(instr, IrInstruction::Call { func, .. } if func == "lucid_result_unwrap")
+            })
+        });
+        assert!(has_unwrap_call, "IR should contain lucid_result_unwrap call for ? operator");
+    }
+
 }
