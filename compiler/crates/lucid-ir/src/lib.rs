@@ -22,6 +22,7 @@ pub struct IrModule {
     pub globals: Vec<IrGlobal>,
     pub classes: Vec<IrClass>,
     pub traits: Vec<IrTrait>,
+    pub trait_impls: Vec<TraitImpl>,
     pub specializations: Vec<TypeSpecialization>,
     pub error_types: Vec<ErrorType>,
 }
@@ -188,6 +189,21 @@ pub struct ErrorType {
 pub struct ErrorVariant {
     pub name: String,
     pub code: i64,
+}
+
+/// Trait implementation
+#[derive(Debug, Clone)]
+pub struct TraitImpl {
+    pub trait_name: String,
+    pub impl_type: String,
+    pub methods: Vec<MethodImpl>,
+}
+
+/// Method implementation for a trait
+#[derive(Debug, Clone)]
+pub struct MethodImpl {
+    pub method_name: String,
+    pub impl_function: String,
 }
 
 /// Class definition in IR
@@ -386,6 +402,7 @@ impl IrModule {
             globals: Vec::new(),
             classes: Vec::new(),
             traits: Vec::new(),
+            trait_impls: Vec::new(),
             specializations: Vec::new(),
             error_types: Vec::new(),
         }

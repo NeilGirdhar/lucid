@@ -1732,4 +1732,29 @@ int main() {
         assert_eq!(module.error_types[0].variants[0].code, 1);
     }
 
+    #[test]
+    fn test_trait_implementations() {
+        // Test trait implementations on types
+        let mut module = crate::IrModule::new();
+
+        // Implement Reader trait for String
+        let string_reader = crate::TraitImpl {
+            trait_name: "Reader".to_string(),
+            impl_type: "String".to_string(),
+            methods: vec![
+                crate::MethodImpl {
+                    method_name: "read".to_string(),
+                    impl_function: "String__read".to_string(),
+                },
+            ],
+        };
+
+        module.trait_impls.push(string_reader);
+
+        // Verify trait implementation registered
+        assert_eq!(module.trait_impls.len(), 1);
+        assert_eq!(module.trait_impls[0].trait_name, "Reader");
+        assert_eq!(module.trait_impls[0].impl_type, "String");
+    }
+
 }
