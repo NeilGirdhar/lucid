@@ -24,6 +24,10 @@ impl CCodegenBackend {
         self.emit_includes();
         self.emit_line("");
 
+        // Generate specialized type definitions (List[T], Dict[K,V])
+        self.generate_specialized_types(module);
+        self.emit_line("");
+
         // Generate struct definitions for classes
         for class in &module.classes {
             self.generate_class(class);
@@ -37,6 +41,117 @@ impl CCodegenBackend {
         }
 
         self.output.clone()
+    }
+
+    fn generate_specialized_types(&mut self, module: &IrModule) {
+        // Generate C structs and helper functions for specialized generic types
+        for spec in &module.specializations {
+            match spec.generic_name.as_str() {
+                "List" => self.generate_specialized_list(spec),
+                "Dict" => self.generate_specialized_dict(spec),
+                _ => {}
+            }
+            self.emit_line("");
+        }
+    }
+
+    fn generate_specialized_list(&mut self, spec: &crate::TypeSpecialization) {
+        // For List[T], generate a specialized struct and operations
+        // Struct: struct List__T__ { void** items; int64_t length; int64_t capacity; }
+        let type_name = &spec.specialized_name;
+        let elem_type = if spec.type_args.len() > 0 {
+            spec.type_args[0].c_type()
+        } else {
+            "void*"
+        };
+
+        self.emit_line(&format!("struct {} {{", type_name));
+        self.indent_level += 1;
+        self.emit_line(&format!("{}* items;", elem_type));
+        self.emit_line("int64_t length;");
+        self.emit_line("int64_t capacity;");
+        self.indent_level -= 1;
+        self.emit_line("};");
+        self.emit_line("");
+
+        // Generate constructor function
+        self.emit_line(&format!(
+            "struct {0} {0}_new(void) {{\n  struct {0} list;\n  list.items = NULL;\n  list.length = 0;\n  list.capacity = 0;\n  return list;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate append function
+        self.emit_line(&format!(
+            "void {0}_append(struct {0}* list, {1} item) {{\n  if (list->length >= list->capacity) {{\n    list->capacity = list->capacity > 0 ? list->capacity * 2 : 10;\n    list->items = realloc(list->items, list->capacity * sizeof({1}));\n  }}\n  list->items[list->length++] = item;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate pop function
+        self.emit_line(&format!(
+            "{1} {0}_pop(struct {0}* list) {{\n  if (list->length > 0) return list->items[--list->length];\n  return ({1})0;\n}}",
+            type_name, elem_type
+        ));
+        self.emit_line("");
+
+        // Generate length function
+        self.emit_line(&format!(
+            "int64_t {0}_length(struct {0}* list) {{\n  return list->length;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate index access function
+        self.emit_line(&format!(
+            "{1} {0}_get(struct {0}* list, int64_t index) {{\n  if (index >= 0 && index < list->length) return list->items[index];\n  return ({1})0;\n}}",
+            type_name, elem_type
+        ));
+    }
+
+    fn generate_specialized_dict(&mut self, spec: &crate::TypeSpecialization) {
+        // For Dict[K,V], generate a specialized struct and operations
+        let type_name = &spec.specialized_name;
+        let key_type = if spec.type_args.len() > 0 {
+            spec.type_args[0].c_type()
+        } else {
+            "void*"
+        };
+        let val_type = if spec.type_args.len() > 1 {
+            spec.type_args[1].c_type()
+        } else {
+            "void*"
+        };
+
+        self.emit_line(&format!("struct {} {{", type_name));
+        self.indent_level += 1;
+        self.emit_line(&format!("{}* keys;", key_type));
+        self.emit_line(&format!("{}* values;", val_type));
+        self.emit_line("int64_t length;");
+        self.emit_line("int64_t capacity;");
+        self.indent_level -= 1;
+        self.emit_line("};");
+        self.emit_line("");
+
+        // Generate constructor
+        self.emit_line(&format!(
+            "struct {0} {0}_new(void) {{\n  struct {0} dict;\n  dict.keys = NULL;\n  dict.values = NULL;\n  dict.length = 0;\n  dict.capacity = 0;\n  return dict;\n}}",
+            type_name
+        ));
+        self.emit_line("");
+
+        // Generate set function
+        self.emit_line(&format!(
+            "void {0}_set(struct {0}* dict, {1} key, {2} value) {{\n  for (int64_t i = 0; i < dict->length; i++) {{\n    if (dict->keys[i] == key) {{\n      dict->values[i] = value;\n      return;\n    }}\n  }}\n  if (dict->length >= dict->capacity) {{\n    dict->capacity = dict->capacity > 0 ? dict->capacity * 2 : 10;\n    dict->keys = realloc(dict->keys, dict->capacity * sizeof({1}));\n    dict->values = realloc(dict->values, dict->capacity * sizeof({2}));\n  }}\n  dict->keys[dict->length] = key;\n  dict->values[dict->length] = value;\n  dict->length++;\n}}",
+            type_name, key_type, val_type
+        ));
+        self.emit_line("");
+
+        // Generate get function
+        self.emit_line(&format!(
+            "{2} {0}_get(struct {0}* dict, {1} key) {{\n  for (int64_t i = 0; i < dict->length; i++) {{\n    if (dict->keys[i] == key) return dict->values[i];\n  }}\n  return ({2})0;\n}}",
+            type_name, key_type, val_type
+        ));
     }
 
     fn generate_class(&mut self, class: &crate::IrClass) {

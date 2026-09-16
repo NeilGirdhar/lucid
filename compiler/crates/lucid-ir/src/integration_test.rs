@@ -1757,4 +1757,56 @@ int main() {
         assert_eq!(module.trait_impls[0].impl_type, "String");
     }
 
+    #[test]
+    fn test_specialized_list_codegen() {
+        // Test that List[i64] specialization generates proper C struct and functions
+        let mut module = IrModule::new();
+
+        // Create List[i64] specialization
+        let specialized_name = module.specialize_type("List", vec![IrType::I64]);
+        assert_eq!(specialized_name, "List__i64__");
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify struct definition
+        assert!(code.contains("struct List__i64__"));
+        assert!(code.contains("int64_t* items;"));
+        assert!(code.contains("int64_t length;"));
+        assert!(code.contains("int64_t capacity;"));
+
+        // Verify generated functions
+        assert!(code.contains("List__i64___new"));
+        assert!(code.contains("List__i64___append"));
+        assert!(code.contains("List__i64___pop"));
+        assert!(code.contains("List__i64___length"));
+        assert!(code.contains("List__i64___get"));
+    }
+
+    #[test]
+    fn test_specialized_dict_codegen() {
+        // Test that Dict[str, i64] specialization generates proper C struct and functions
+        let mut module = IrModule::new();
+
+        // Create Dict[str, i64] specialization
+        let specialized_name = module.specialize_type("Dict", vec![IrType::Str, IrType::I64]);
+        assert_eq!(specialized_name, "Dict__str__i64__");
+
+        // Generate C code
+        let mut codegen = CCodegenBackend::new();
+        let code = codegen.generate(&module);
+
+        // Verify struct definition
+        assert!(code.contains("struct Dict__str__i64__"));
+        assert!(code.contains("const char** keys;"));
+        assert!(code.contains("int64_t* values;"));
+        assert!(code.contains("int64_t length;"));
+
+        // Verify generated functions
+        assert!(code.contains("Dict__str__i64___new"));
+        assert!(code.contains("Dict__str__i64___set"));
+        assert!(code.contains("Dict__str__i64___get"));
+    }
+
 }
