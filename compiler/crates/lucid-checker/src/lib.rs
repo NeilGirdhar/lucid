@@ -2346,7 +2346,17 @@ impl TypeChecker {
             (
                 Type::Function {
                     params: vec![Type::Str, Type::Str],
-                    return_type: Box::new(Type::None),
+                    return_type: Box::new(Type::make_union(vec![
+                        Type::None,
+                        Type::Class {
+                            name: "ParseError".into(),
+                            type_args: Vec::new(),
+                            parent: Some("Exception".into()),
+                            traits: vec!["Eq".into()],
+                            fields: HashMap::new(),
+                            is_sealed: false,
+                        },
+                    ])),
                 },
                 MutabilityView::ReadOnly,
             ),

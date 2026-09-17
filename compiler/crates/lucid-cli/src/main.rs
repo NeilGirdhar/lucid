@@ -7,6 +7,45 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 fn main() {
+    // The reference interpreter walks the AST recursively (one Rust stack
+    // frame per nested expression/statement), so source with deep nesting —
+    // a long chain of binary operators, a deeply recursive function, a
+    // recursive-descent parser written in Lucid — can overflow the default
+    // 8 MiB thread stack well before it exhausts anything the language
+    // itself considers a limit. Run on a dedicated thread with a much
+    // larger stack instead of tuning individual recursion limits.
+    // A memory-constrained environment (a container with a low `ulimit -v`,
+    // overcommit disabled) can fail to reserve the full 4 GiB even though
+    // it is never mostly touched. Fall back to smaller reservations rather
+    // than refusing to start.
+    const STACK_SIZES: [usize; 3] = [
+        4 * 1024 * 1024 * 1024,
+        1024 * 1024 * 1024,
+        256 * 1024 * 1024,
+    ];
+    let mut spawned = None;
+    for stack_size in STACK_SIZES {
+        match std::thread::Builder::new()
+            .stack_size(stack_size)
+            .spawn(run_cli)
+        {
+            Ok(handle) => {
+                spawned = Some(handle);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+    let handle = spawned.unwrap_or_else(|| {
+        eprintln!("warning: could not reserve an enlarged stack; deep recursion may overflow it");
+        std::thread::Builder::new()
+            .spawn(run_cli)
+            .expect("failed to spawn main thread")
+    });
+    handle.join().unwrap_or_else(|_| exit(101));
+}
+
+fn run_cli() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         start_repl();
