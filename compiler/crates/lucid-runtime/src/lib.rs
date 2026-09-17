@@ -1130,7 +1130,9 @@ impl Interpreter {
                     (&field.name, field.span)
                 }
                 ClassMember::TypeAlias { name, span, .. } => (name, *span),
-                ClassMember::Pass(_) | ClassMember::Ellipsis(_) => continue,
+                ClassMember::Pass(_) | ClassMember::Ellipsis(_) | ClassMember::Metadata(..) => {
+                    continue
+                }
             };
             if let Some(message) = Self::removed_member_message(name) {
                 return Err(RuntimeError {
@@ -1463,7 +1465,7 @@ impl Interpreter {
             ClassMember::Getter(getter) => getter.name == member_name,
             ClassMember::Setter(setter) => setter.name == member_name,
             ClassMember::TypeAlias { name, .. } => name == member_name,
-            ClassMember::Pass(_) | ClassMember::Ellipsis(_) => false,
+            ClassMember::Pass(_) | ClassMember::Ellipsis(_) | ClassMember::Metadata(..) => false,
         });
         if declared {
             return Some(class_name.to_string());
@@ -7096,6 +7098,7 @@ impl Interpreter {
                 Ok(Value::None)
             }
             Stmt::Pass(_) => Ok(Value::None),
+            Stmt::Metadata(..) => Ok(Value::None),
             Stmt::Expr(expr) => {
                 let value = self.eval_expr(expr)?;
                 Self::reject_skip_value(&value, "expression statement", expr.span())?;

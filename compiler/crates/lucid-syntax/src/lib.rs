@@ -126,7 +126,7 @@ mod tests {
         // A triple-quoted string with no shared indent is unchanged after
         // its first line.
         let tokens = Lexer::new("\"\"\"a\nb\nc\"\"\"").tokenize().unwrap();
-        assert_eq!(tokens[0].kind, TokenKind::Str("a\nb\nc".to_string()));
+        assert_eq!(tokens[0].kind, TokenKind::TripleStr("a\nb\nc".to_string()));
 
         // An ordinary, non-triple-quoted string is never dedented.
         let tokens = Lexer::new("\"  indented\\nstill  indented\"")
@@ -136,6 +136,118 @@ mod tests {
             tokens[0].kind,
             TokenKind::Str("  indented\nstill  indented".to_string())
         );
+    }
+
+    #[test]
+    fn semicolon_no_longer_separates_statements() {
+        // `;` used to end a statement the way a newline does. Now it only
+        // introduces a metadata block, so a second statement after it is a
+        // parse error, not two statements on one line.
+        let error = parse("x = 5; y = 10\n").unwrap_err();
+        assert!(
+            error.contains("metadata block")
+                || error.contains("string")
+                || error.contains("dict")
+                || error.contains("ignore"),
+            "{error}"
+        );
+
+        // A non-string, non-dict, non-`ignore` payload is rejected too.
+        let error = parse("x = 5; 42\n").unwrap_err();
+        assert!(error.contains("metadata block"), "{error}");
+    }
+
+    #[test]
+    fn metadata_blocks_attach_trailing_and_standalone() {
+        // Trailing: one or more `;`-chained directives on the same line as
+        // the statement they attach to.
+        let module = parse("x: int = 5; ignore: unused_variable; ignore: shadowed_name\n").unwrap();
+        assert_eq!(module.statements.len(), 2);
+        assert!(matches!(module.statements[0], Stmt::VarDef { .. }));
+        let Stmt::Metadata(directives, _) = &module.statements[1] else {
+            panic!(
+                "expected a metadata statement, got {:?}",
+                module.statements[1]
+            );
+        };
+        assert_eq!(directives.len(), 2);
+        assert!(matches!(
+            &directives[0].payload,
+            MetadataPayload::Ignore(names) if names == &["unused_variable".to_string()]
+        ));
+        assert!(matches!(
+            &directives[1].payload,
+            MetadataPayload::Ignore(names) if names == &["shadowed_name".to_string()]
+        ));
+
+        // Standalone: the same two directives as separate lines instead --
+        // two separate `Stmt::Metadata` nodes, both attaching to `x`.
+        let module =
+            parse("x: int = 5\n; ignore: unused_variable\n; ignore: shadowed_name\n").unwrap();
+        assert_eq!(module.statements.len(), 3);
+        assert!(matches!(module.statements[0], Stmt::VarDef { .. }));
+        assert!(matches!(module.statements[1], Stmt::Metadata(..)));
+        assert!(matches!(module.statements[2], Stmt::Metadata(..)));
+    }
+
+    #[test]
+    fn metadata_block_payloads_parse_doc_meta_and_ignore() {
+        let module = parse("x: int = 5\n; \"a doc string\"\n").unwrap();
+        let Stmt::Metadata(directives, _) = &module.statements[1] else {
+            panic!("expected a metadata statement");
+        };
+        assert!(matches!(
+            &directives[0].payload,
+            MetadataPayload::Doc(doc) if doc == "a doc string"
+        ));
+
+        let module = parse("x: int = 5\n; {\"cli_flag\": \"--x\"}\n").unwrap();
+        let Stmt::Metadata(directives, _) = &module.statements[1] else {
+            panic!("expected a metadata statement");
+        };
+        assert!(matches!(
+            &directives[0].payload,
+            MetadataPayload::Meta(Expr::Dict { .. })
+        ));
+    }
+
+    #[test]
+    fn triple_quoted_string_alone_on_its_own_line_is_docstring_shorthand() {
+        let src = "def transfer():\n    \"\"\"Move money between two accounts.\"\"\"\n    pass\n";
+        let module = parse(src).unwrap();
+        let Stmt::Function(function) = &module.statements[0] else {
+            panic!("expected a function definition");
+        };
+        let Stmt::Metadata(directives, _) = &function.body[0] else {
+            panic!(
+                "expected the docstring shorthand to produce a metadata statement, got {:?}",
+                function.body[0]
+            );
+        };
+        assert!(matches!(
+            &directives[0].payload,
+            MetadataPayload::Doc(doc) if doc == "Move money between two accounts."
+        ));
+        assert!(matches!(function.body[1], Stmt::Pass(_)));
+
+        // A triple-quoted string that isn't standing alone -- part of a
+        // larger expression -- is not shorthand, and (being a bare string
+        // statement) is rejected by the checker, not silently accepted.
+        let src = "\"\"\"a\"\"\" + \"b\"\n";
+        let module = parse(src).unwrap();
+        assert!(matches!(module.statements[0], Stmt::Expr(_)));
+    }
+
+    #[test]
+    fn class_body_metadata_blocks_attach_to_fields_and_class_header() {
+        let src = "class Config:\n    ; \"Application configuration.\"\n    name: str\n    ; \"the user's display name\"\n";
+        let module = parse(src).unwrap();
+        let Stmt::ClassDef { body, .. } = &module.statements[0] else {
+            panic!("expected a class definition");
+        };
+        assert!(matches!(body[0], ClassMember::Metadata(..)));
+        assert!(matches!(body[1], ClassMember::Field(_)));
+        assert!(matches!(body[2], ClassMember::Metadata(..)));
     }
 
     #[test]

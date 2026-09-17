@@ -53,6 +53,12 @@ pub enum TokenKind {
     Float(f64),
     Complex(f64),
     Str(String),
+    /// A bare (unprefixed) triple-quoted string. Lexed and dedented
+    /// exactly like `Str`, but kept distinct so the parser can recognize a
+    /// standalone triple-quoted string statement as docstring shorthand
+    /// (metadata blocks) without treating every other bare string
+    /// statement the same way.
+    TripleStr(String),
     Bytes(String),
     True,
     False,
@@ -186,6 +192,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Float(n) => write!(f, "float {n}"),
             TokenKind::Complex(n) => write!(f, "complex {n}j"),
             TokenKind::Str(s) => write!(f, "string \"{s}\""),
+            TokenKind::TripleStr(s) => write!(f, "string \"\"\"{s}\"\"\""),
             TokenKind::Bytes(s) => write!(f, "bytes \"{s}\""),
             TokenKind::True => write!(f, "'true'"),
             TokenKind::False => write!(f, "'false'"),

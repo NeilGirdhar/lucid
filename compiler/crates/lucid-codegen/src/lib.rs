@@ -448,7 +448,7 @@ impl CCodeGenerator {
                 ClassMember::TypeAlias { name, .. } => {
                     Self::validate_removed_member(name)?;
                 }
-                ClassMember::Pass(_) | ClassMember::Ellipsis(_) => {}
+                ClassMember::Pass(_) | ClassMember::Ellipsis(_) | ClassMember::Metadata(..) => {}
             }
         }
         Ok(())
@@ -10440,7 +10440,8 @@ static inline void lucid_print_val(LucidVal v) {
             Stmt::Import { .. }
             | Stmt::FromImport { .. }
             | Stmt::TypeAlias { .. }
-            | Stmt::Pass(_) => Ok(()),
+            | Stmt::Pass(_)
+            | Stmt::Metadata(..) => Ok(()),
             other => Err(CodegenError {
                 message: format!("native backend does not support statement form: {other:?}"),
             }),

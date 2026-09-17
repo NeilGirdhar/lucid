@@ -12,6 +12,11 @@ pub struct ParseError {
 pub struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
+    /// Trailing metadata directives parsed by `consume_stmt_end` for the
+    /// statement just finished, waiting to be turned into a following
+    /// `Stmt::Metadata`/`ClassMember::Metadata` sibling by whichever loop
+    /// is building the enclosing statement/member list.
+    pending_metadata: Vec<MetadataDirective>,
 }
 
 impl Parser {
@@ -25,7 +30,11 @@ impl Parser {
             let span = tokens.last().map(|token| token.span).unwrap_or_default();
             tokens.push(Token::new(TokenKind::Eof, span));
         }
-        Self { tokens, cursor: 0 }
+        Self {
+            tokens,
+            cursor: 0,
+            pending_metadata: Vec::new(),
+        }
     }
 
     fn peek(&self) -> &Token {
@@ -86,6 +95,9 @@ impl Parser {
             let stmt = self.parse_statement()?;
             Self::reject_reserved_module_binding(&stmt)?;
             statements.push(stmt);
+            if let Some(metadata) = self.take_pending_metadata_stmt() {
+                statements.push(metadata);
+            }
             self.skip_newlines();
         }
 
@@ -117,6 +129,9 @@ impl Parser {
                         errors.push(error);
                     } else {
                         statements.push(statement);
+                        if let Some(metadata) = self.take_pending_metadata_stmt() {
+                            statements.push(metadata);
+                        }
                     }
                 }
                 Err(error) => {
@@ -465,6 +480,15 @@ impl Parser {
                         .into(),
                 span: start,
             }),
+            // A standalone metadata block: `; "doc"`, `; {meta}`, or
+            // `; ignore: name, ...`, alone on its own line, possibly
+            // chained with further `;`-directives on the same line.
+            TokenKind::Semi => {
+                let directives = self.parse_metadata_directive_chain()?;
+                let span = Self::merged_directive_span(&directives);
+                self.consume_stmt_end()?;
+                Ok(Stmt::Metadata(directives, span))
+            }
             _ => self.parse_expr_or_assign_stmt(),
         }
     }
@@ -496,14 +520,24 @@ impl Parser {
         })
     }
 
+    /// Consumes whatever ends a statement: a trailing metadata block (one
+    /// or more `;`-chained directives, attached to the statement just
+    /// parsed), then the newline/EOF/dedent that actually terminates it.
+    /// `;` is never a second-statement separator the way Python's is.
     fn consume_stmt_end(&mut self) -> Result<(), ParseError> {
+        if self.check(&TokenKind::Semi) {
+            let directives = self.parse_metadata_directive_chain()?;
+            self.pending_metadata.extend(directives);
+        }
         if self.match_tok(&TokenKind::Newline)
-            || self.match_tok(&TokenKind::Semi)
             || self.check(&TokenKind::Eof)
             || self.check(&TokenKind::Dedent)
         {
             Ok(())
-        } else if matches!(self.peek_kind(), TokenKind::Str(_) | TokenKind::Bytes(_)) {
+        } else if matches!(
+            self.peek_kind(),
+            TokenKind::Str(_) | TokenKind::TripleStr(_) | TokenKind::Bytes(_)
+        ) {
             Err(ParseError {
                 message: "adjacent string literals are not supported; use explicit + concatenation"
                     .into(),
@@ -512,11 +546,99 @@ impl Parser {
         } else {
             Err(ParseError {
                 message: format!(
-                    "expected newline or semicolon at statement end, found {}",
+                    "expected newline or a metadata block (`;`) at statement end, found {}",
                     self.peek_kind()
                 ),
                 span: self.peek().span,
             })
+        }
+    }
+
+    /// Parses one or more `;`-separated metadata directives — `; "doc"`,
+    /// `; {meta}`, or `; ignore: name, ...` — stopping at the first token
+    /// that doesn't start another directive. Does not consume the
+    /// newline/EOF/dedent that follows; that's `consume_stmt_end`'s job.
+    fn parse_metadata_directive_chain(&mut self) -> Result<Vec<MetadataDirective>, ParseError> {
+        let mut directives = Vec::new();
+        while self.match_tok(&TokenKind::Semi) {
+            directives.push(self.parse_metadata_directive()?);
+        }
+        Ok(directives)
+    }
+
+    /// Parses a single directive's payload, the token right after `;` has
+    /// already been consumed up to (not including) the payload itself.
+    fn parse_metadata_directive(&mut self) -> Result<MetadataDirective, ParseError> {
+        let start = self.peek().span;
+        if let TokenKind::Ident(word) = self.peek_kind()
+            && word == "ignore"
+            && self
+                .peek_next()
+                .map(|token| token.kind == TokenKind::Colon)
+                .unwrap_or(false)
+        {
+            self.advance(); // "ignore"
+            self.advance(); // ":"
+            let mut names = vec![self.expect_ident()?];
+            while self.match_tok(&TokenKind::Comma) {
+                names.push(self.expect_ident()?);
+            }
+            return Ok(MetadataDirective {
+                payload: MetadataPayload::Ignore(names),
+                span: start,
+            });
+        }
+        let expr = self.parse_expr()?;
+        let span = start.merge(expr.span());
+        match expr {
+            Expr::Literal {
+                value: LiteralValue::Str(value),
+                ..
+            } => Ok(MetadataDirective {
+                payload: MetadataPayload::Doc(value),
+                span,
+            }),
+            dict @ Expr::Dict { .. } => Ok(MetadataDirective {
+                payload: MetadataPayload::Meta(dict),
+                span,
+            }),
+            _ => Err(ParseError {
+                message: "a metadata block must be a string, a dict, or `ignore: name, ...`".into(),
+                span,
+            }),
+        }
+    }
+
+    fn merged_directive_span(directives: &[MetadataDirective]) -> Span {
+        directives
+            .iter()
+            .map(|directive| directive.span)
+            .reduce(Span::merge)
+            .unwrap_or_default()
+    }
+
+    /// Drains any metadata directives collected while parsing the
+    /// statement that just ended, wrapping them as a `Stmt::Metadata`
+    /// sibling for the caller's statement list, if there were any.
+    fn take_pending_metadata_stmt(&mut self) -> Option<Stmt> {
+        if self.pending_metadata.is_empty() {
+            None
+        } else {
+            let directives = std::mem::take(&mut self.pending_metadata);
+            let span = Self::merged_directive_span(&directives);
+            Some(Stmt::Metadata(directives, span))
+        }
+    }
+
+    /// The `ClassMember` counterpart of `take_pending_metadata_stmt`, for
+    /// class-body member lists.
+    fn take_pending_metadata_member(&mut self) -> Option<ClassMember> {
+        if self.pending_metadata.is_empty() {
+            None
+        } else {
+            let directives = std::mem::take(&mut self.pending_metadata);
+            let span = Self::merged_directive_span(&directives);
+            Some(ClassMember::Metadata(directives, span))
         }
     }
 
@@ -531,6 +653,9 @@ impl Parser {
             while !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::Eof) {
                 let stmt = self.parse_statement()?;
                 stmts.push(stmt);
+                if let Some(metadata) = self.take_pending_metadata_stmt() {
+                    stmts.push(metadata);
+                }
                 self.skip_newlines();
             }
 
@@ -538,7 +663,11 @@ impl Parser {
             Ok(stmts)
         } else {
             let stmt = self.parse_statement()?;
-            Ok(vec![stmt])
+            let mut stmts = vec![stmt];
+            if let Some(metadata) = self.take_pending_metadata_stmt() {
+                stmts.push(metadata);
+            }
+            Ok(stmts)
         }
     }
 
@@ -629,6 +758,9 @@ impl Parser {
 
             while !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::Eof) {
                 body.push(self.parse_class_member()?);
+                if let Some(metadata) = self.take_pending_metadata_member() {
+                    body.push(metadata);
+                }
                 self.skip_newlines();
             }
 
@@ -636,8 +768,12 @@ impl Parser {
             (body, end)
         } else {
             let member = self.parse_class_member()?;
+            let mut body = vec![member];
+            if let Some(metadata) = self.take_pending_metadata_member() {
+                body.push(metadata);
+            }
             let end = self.peek().span;
-            (vec![member], end)
+            (body, end)
         };
 
         Ok(Stmt::ClassDef {
@@ -661,6 +797,13 @@ impl Parser {
             self.consume_stmt_end()?;
             decorators.push(dec);
             self.skip_newlines();
+        }
+
+        if self.check(&TokenKind::Semi) {
+            let directives = self.parse_metadata_directive_chain()?;
+            let span = Self::merged_directive_span(&directives);
+            self.consume_stmt_end()?;
+            return Ok(ClassMember::Metadata(directives, span));
         }
 
         let is_override = self.match_tok(&TokenKind::Override);
@@ -1547,7 +1690,30 @@ impl Parser {
 
     fn parse_expr_or_assign_stmt(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek().span;
+        let is_bare_triple_str = matches!(self.peek_kind(), TokenKind::TripleStr(_));
         let expr = self.parse_expr()?;
+
+        // A triple-quoted string standing alone on its own line is
+        // shorthand for `; "..."` -- a docstring, attached the same way
+        // any other standalone metadata block is. The span check confirms
+        // nothing beyond that one token was consumed (no concatenation,
+        // indexing, or other expression built from it).
+        if is_bare_triple_str
+            && let Expr::Literal {
+                value: LiteralValue::Str(value),
+                span,
+            } = &expr
+            && *span == start
+        {
+            self.consume_stmt_end()?;
+            return Ok(Stmt::Metadata(
+                vec![MetadataDirective {
+                    payload: MetadataPayload::Doc(value.clone()),
+                    span: *span,
+                }],
+                *span,
+            ));
+        }
 
         if self.match_tok(&TokenKind::Colon) {
             let type_annotation = self.parse_type_expr()?;
@@ -2268,7 +2434,7 @@ impl Parser {
                     span: tok.span,
                 })
             }
-            TokenKind::Str(s) => {
+            TokenKind::Str(s) | TokenKind::TripleStr(s) => {
                 self.advance();
                 Ok(Expr::Literal {
                     value: LiteralValue::Str(s.clone()),
@@ -3120,7 +3286,7 @@ impl Parser {
             });
         }
 
-        if let TokenKind::Str(s) = &tok.kind {
+        if let TokenKind::Str(s) | TokenKind::TripleStr(s) = &tok.kind {
             let s = s.clone();
             self.advance();
             return Ok(TypeExpr::Literal {
@@ -3683,7 +3849,7 @@ impl Parser {
                 self.advance();
                 Ok(Pattern::Literal(LiteralValue::Complex(*value), tok.span))
             }
-            TokenKind::Str(s) => {
+            TokenKind::Str(s) | TokenKind::TripleStr(s) => {
                 self.advance();
                 Ok(Pattern::Literal(LiteralValue::Str(s.clone()), tok.span))
             }

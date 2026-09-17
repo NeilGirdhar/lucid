@@ -8643,6 +8643,7 @@ fn statement_span(statement: &lucid_syntax::Stmt) -> lucid_syntax::Span {
         | lucid_syntax::Stmt::Assert { span, .. }
         | lucid_syntax::Stmt::Delete { span, .. }
         | lucid_syntax::Stmt::Pass(span)
+        | lucid_syntax::Stmt::Metadata(_, span)
         | lucid_syntax::Stmt::Import { span, .. }
         | lucid_syntax::Stmt::FromImport { span, .. } => *span,
         lucid_syntax::Stmt::Break(span) | lucid_syntax::Stmt::Continue(span) => *span,

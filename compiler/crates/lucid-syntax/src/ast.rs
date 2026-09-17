@@ -123,6 +123,22 @@ impl TypeExpr {
     }
 }
 
+/// One `;`-introduced directive's payload: a docstring, a metadata dict,
+/// or a linter `ignore` list. Held by `Stmt::Metadata` and
+/// `ClassMember::Metadata`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MetadataPayload {
+    Doc(String),
+    Meta(Expr),
+    Ignore(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetadataDirective {
+    pub payload: MetadataPayload,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LiteralValue {
     Int(i64),
@@ -466,6 +482,10 @@ pub enum ClassMember {
     },
     Pass(Span),
     Ellipsis(Span),
+    /// A `;`-introduced metadata block. Attaches to the preceding sibling
+    /// member, or to the enclosing class itself when it is the first
+    /// member in the body (see `docs/metadata.md`).
+    Metadata(Vec<MetadataDirective>, Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -622,6 +642,11 @@ pub enum Stmt {
         span: Span,
     },
     Expr(Expr),
+    /// A `;`-introduced metadata block. Attaches to the preceding sibling
+    /// statement, or to the enclosing suite's own header (a function,
+    /// class, or the module itself) when it is the first statement in the
+    /// body (see `docs/metadata.md`).
+    Metadata(Vec<MetadataDirective>, Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]

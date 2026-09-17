@@ -18187,7 +18187,8 @@ impl Function {
                 | lucid_syntax::Stmt::Function(_)
                 | lucid_syntax::Stmt::Import { .. }
                 | lucid_syntax::Stmt::FromImport { .. }
-                | lucid_syntax::Stmt::Pass(_) => Ok(()),
+                | lucid_syntax::Stmt::Pass(_)
+                | lucid_syntax::Stmt::Metadata(..) => Ok(()),
             }
         }
 

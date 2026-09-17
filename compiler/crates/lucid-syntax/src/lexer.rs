@@ -584,7 +584,7 @@ impl<'a> Lexer<'a> {
 
         // String literals: "...", '...', """...""", '''...'''
         if c == '"' || c == '\'' {
-            return self.lex_string(c, start_pos, start_line, start_col);
+            return self.lex_string(c, start_pos, start_line, start_col, true);
         }
 
         // Number literals
@@ -599,7 +599,7 @@ impl<'a> Lexer<'a> {
                 && let Some(quote @ ('"' | '\'')) = self.peek_next_char()
             {
                 self.advance_char(); // advance prefix
-                let token = self.lex_string(quote, start_pos, start_line, start_col)?;
+                let token = self.lex_string(quote, start_pos, start_line, start_col, false)?;
                 if c == 'b' {
                     return Ok(token.map(|token| {
                         let value = match token.kind {
@@ -639,6 +639,7 @@ impl<'a> Lexer<'a> {
         start_pos: usize,
         start_line: usize,
         start_col: usize,
+        bare: bool,
     ) -> Result<Option<Token>, LexerError> {
         self.advance_char(); // consume first quote
 
@@ -708,8 +709,13 @@ impl<'a> Lexer<'a> {
         };
 
         let (end_pos, _, _) = self.current_pos();
+        let kind = if is_triple && bare {
+            TokenKind::TripleStr(content)
+        } else {
+            TokenKind::Str(content)
+        };
         Ok(Some(Token::new(
-            TokenKind::Str(content),
+            kind,
             Span::new(start_pos, end_pos, start_line, start_col),
         )))
     }

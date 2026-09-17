@@ -135,7 +135,7 @@ pub fn token_kind_name(kind: &TokenKind) -> &'static str {
         TokenKind::Int(_) | TokenKind::BigInt(_) => "integer",
         TokenKind::Float(_) => "float",
         TokenKind::Complex(_) => "complex",
-        TokenKind::Str(_) => "string",
+        TokenKind::Str(_) | TokenKind::TripleStr(_) => "string",
         _ => "token",
     }
 }

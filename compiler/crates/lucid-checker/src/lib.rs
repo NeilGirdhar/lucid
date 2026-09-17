@@ -226,6 +226,48 @@ fn receiver_view(annotation: Option<&TypeExpr>) -> MutabilityView {
     }
 }
 
+/// Groups consecutive `Stmt::Metadata` entries into runs -- each run is
+/// every `;`-directive attaching to the same target, whether they came
+/// from one chained line or several standalone ones in a row.
+fn metadata_stmt_runs(stmts: &[Stmt]) -> impl Iterator<Item = Vec<&MetadataDirective>> {
+    let mut runs = Vec::new();
+    let mut index = 0;
+    while index < stmts.len() {
+        if let Stmt::Metadata(directives, _) = &stmts[index] {
+            let mut run: Vec<&MetadataDirective> = directives.iter().collect();
+            index += 1;
+            while let Some(Stmt::Metadata(more, _)) = stmts.get(index) {
+                run.extend(more.iter());
+                index += 1;
+            }
+            runs.push(run);
+        } else {
+            index += 1;
+        }
+    }
+    runs.into_iter()
+}
+
+/// The `ClassMember` counterpart of `metadata_stmt_runs`.
+fn metadata_member_runs(members: &[ClassMember]) -> impl Iterator<Item = Vec<&MetadataDirective>> {
+    let mut runs = Vec::new();
+    let mut index = 0;
+    while index < members.len() {
+        if let ClassMember::Metadata(directives, _) = &members[index] {
+            let mut run: Vec<&MetadataDirective> = directives.iter().collect();
+            index += 1;
+            while let Some(ClassMember::Metadata(more, _)) = members.get(index) {
+                run.extend(more.iter());
+                index += 1;
+            }
+            runs.push(run);
+        } else {
+            index += 1;
+        }
+    }
+    runs.into_iter()
+}
+
 fn trait_extends(source: &str, target: &str, env: &TypeEnvironment) -> bool {
     env.trait_bases
         .get(source)
@@ -2732,6 +2774,7 @@ impl TypeChecker {
     }
 
     pub fn check_module(&mut self, module: &Module) -> Result<(), TypeError> {
+        self.validate_metadata_blocks(&module.statements)?;
         // Record modifiers before resolving bases so inheritance constraints do
         // not depend on source declaration order.
         for stmt in &module.statements {
@@ -4007,8 +4050,59 @@ impl TypeChecker {
             ClassMember::Getter(getter) => Some((getter.name.as_str(), getter.span)),
             ClassMember::Setter(setter) => Some((setter.name.as_str(), setter.span)),
             ClassMember::TypeAlias { name, span, .. } => Some((name.as_str(), *span)),
-            ClassMember::Pass(_) | ClassMember::Ellipsis(_) => None,
+            ClassMember::Pass(_) | ClassMember::Ellipsis(_) | ClassMember::Metadata(..) => None,
         }
+    }
+
+    /// A binding may have at most one docstring and at most one metadata
+    /// dict (`ignore` has no such limit). All the `;`-directives that
+    /// attach to the same target -- one `Stmt::Metadata` from a chained
+    /// line, or several consecutive standalone ones -- form one run;
+    /// checking within each run is enough, since a run's target is always
+    /// either the statement right before it or the enclosing suite's own
+    /// header, never something a later, non-adjacent run could also reach.
+    fn validate_metadata_directive_runs<'a>(
+        runs: impl Iterator<Item = Vec<&'a MetadataDirective>>,
+    ) -> Result<(), TypeError> {
+        for run in runs {
+            let mut saw_doc = false;
+            let mut saw_meta = false;
+            for directive in run {
+                match &directive.payload {
+                    MetadataPayload::Doc(_) => {
+                        if saw_doc {
+                            return Err(TypeError {
+                                message: "a binding may have at most one docstring".into(),
+                                span: directive.span,
+                            });
+                        }
+                        saw_doc = true;
+                    }
+                    MetadataPayload::Meta(_) => {
+                        if saw_meta {
+                            return Err(TypeError {
+                                message: "a binding may have at most one metadata dict".into(),
+                                span: directive.span,
+                            });
+                        }
+                        saw_meta = true;
+                    }
+                    MetadataPayload::Ignore(_) => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_metadata_blocks(&self, stmts: &[Stmt]) -> Result<(), TypeError> {
+        Self::validate_metadata_directive_runs(metadata_stmt_runs(stmts))
+    }
+
+    fn validate_metadata_blocks_in_members(
+        &self,
+        members: &[ClassMember],
+    ) -> Result<(), TypeError> {
+        Self::validate_metadata_directive_runs(metadata_member_runs(members))
     }
 
     /// The receiver view a method of `class_name` declares, looking through
@@ -6135,6 +6229,7 @@ impl TypeChecker {
             Stmt::ClassDef {
                 name, body, span, ..
             } => {
+                self.validate_metadata_blocks_in_members(body)?;
                 let class_type = self
                     .env
                     .classes
@@ -6397,6 +6492,7 @@ impl TypeChecker {
                 result
             }
             Stmt::Function(func) => {
+                self.validate_metadata_blocks(&func.body)?;
                 if func.decorators.iter().any(
                     |decorator| matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"),
                 ) {
@@ -7947,6 +8043,25 @@ impl TypeChecker {
                 Ok(())
             }
             Stmt::Expr(expr) => {
+                // A standalone triple-quoted string is docstring shorthand
+                // and never reaches here as `Stmt::Expr` -- the parser
+                // turns it into `Stmt::Metadata` instead. Any other bare
+                // string literal statement looks like a Python-style
+                // docstring but silently isn't one, the same way the
+                // parenthesized-`assert` requirement catches a
+                // conventional-but-unchecked mistake elsewhere.
+                if let Expr::Literal {
+                    value: LiteralValue::Str(_),
+                    span,
+                } = expr
+                {
+                    return Err(TypeError {
+                        message:
+                            "a bare string literal is a pointless statement, not a docstring; use a metadata block (`; \"...\"`) or a standalone triple-quoted string"
+                                .into(),
+                        span: *span,
+                    });
+                }
                 // Expression statements still need full type checking.  The
                 // result is intentionally discarded, but evaluating the
                 // expression can expose invalid operators, calls, and
@@ -7957,6 +8072,7 @@ impl TypeChecker {
                 Ok(())
             }
             Stmt::Module { name: _, body, .. } => {
+                self.validate_metadata_blocks(body)?;
                 for stmt in body {
                     self.check_statement(stmt)?;
                 }
@@ -7988,6 +8104,7 @@ impl TypeChecker {
     }
 
     fn check_member_function(&mut self, func: &FunctionDef) -> Result<(), TypeError> {
+        self.validate_metadata_blocks(&func.body)?;
         let yields = count_yields(&func.body);
         let is_contextmanager = func.decorators.iter().any(
             |decorator| matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"),
@@ -15784,6 +15901,66 @@ xs.extend(["bad"])
             "class Point:\n    x: int\n    y: int\np = Point(x=1, y=2)\nfrom_instance: dict[str, object] = asdict(p)\ntype Point2D = (x: int, y: int)\norigin: Point2D = (x=3, y=4)\nfrom_record: dict[str, object] = asdict(origin)\n",
         )
         .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn metadata_blocks_document_functions_fields_and_modules() {
+        let module = parse(
+            "def transfer(amount: float, from_account: str, to_account: str) -> none:\n    \"\"\"Move money between two accounts.\"\"\"\n    pass\n\nclass Config:\n    ; \"Application configuration.\"\n    name: str\n    ; \"the user's display name\"\n    retries: int = 3\n    ; \"how many times to retry a failed request\"\n    ; {\"cli_flag\": \"--retries\"}\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(
+            checker.check_module(&module).is_ok(),
+            "{:?}",
+            checker.check_module(&module)
+        );
+    }
+
+    #[test]
+    fn a_bare_string_statement_is_a_pointless_statement() {
+        let module =
+            parse("def f() -> none:\n    \"just a string, not a docstring\"\n    pass\n").unwrap();
+        let error = TypeChecker::new()
+            .check_module(&module)
+            .expect_err("a non-triple bare string statement should be rejected");
+        assert!(error.message.contains("pointless statement"));
+    }
+
+    #[test]
+    fn a_standalone_triple_quoted_string_is_not_a_pointless_statement() {
+        let module =
+            parse("def f() -> none:\n    \"\"\"an actual docstring\"\"\"\n    pass\n").unwrap();
+        let mut checker = TypeChecker::new();
+        assert!(checker.check_module(&module).is_ok());
+    }
+
+    #[test]
+    fn a_binding_may_have_at_most_one_docstring() {
+        let module = parse("x: int = 5\n; \"first doc\"\n; \"second doc\"\n").unwrap();
+        let error = TypeChecker::new()
+            .check_module(&module)
+            .expect_err("a second docstring on the same binding should be rejected");
+        assert!(error.message.contains("at most one docstring"));
+    }
+
+    #[test]
+    fn a_binding_may_have_at_most_one_metadata_dict() {
+        let module = parse(
+            "retries: int = 3\n; {\"cli_flag\": \"--retries\"}\n; {\"cli_flag2\": \"--x\"}\n",
+        )
+        .unwrap();
+        let error = TypeChecker::new()
+            .check_module(&module)
+            .expect_err("a second metadata dict on the same binding should be rejected");
+        assert!(error.message.contains("at most one metadata dict"));
+    }
+
+    #[test]
+    fn ignore_directives_may_repeat_freely() {
+        let module = parse("x: int = 5; ignore: unused_variable; ignore: shadowed_name\n").unwrap();
         let mut checker = TypeChecker::new();
         assert!(checker.check_module(&module).is_ok());
     }
