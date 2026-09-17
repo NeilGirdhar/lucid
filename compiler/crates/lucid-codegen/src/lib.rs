@@ -1398,7 +1398,7 @@ impl CCodeGenerator {
                 } else {
                     self.map_type_expr(f.return_type.as_ref())
                 };
-                self.known_fns.insert(f.name.clone(), ret_ty);
+                self.known_fns.insert(f.name.clone(), ret_ty.clone());
                 self.known_fn_params.insert(
                     f.name.clone(),
                     f.params
@@ -1443,6 +1443,12 @@ impl CCodeGenerator {
                         {
                             let emitted_name = self.dispatch_name(f, type_name);
                             let dispatch_key = Self::dispatch_operator_key(&f.name);
+                            // infer_expr_type looks up a binary op's return
+                            // type by the operator symbol (dispatch_key), not
+                            // the dunder name a dispatch def is declared
+                            // with, so the C return type must be reachable
+                            // under both keys.
+                            self.known_fns.insert(dispatch_key.clone(), ret_ty.clone());
                             self.dispatch_fns
                                 .entry(dispatch_key.clone())
                                 .or_default()
