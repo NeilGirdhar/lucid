@@ -7,6 +7,23 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 fn main() {
+    // The reference interpreter walks the AST recursively (one Rust stack
+    // frame per nested expression/statement), so source with deep nesting —
+    // a long chain of binary operators, a deeply recursive function, a
+    // recursive-descent parser written in Lucid — can overflow the default
+    // 8 MiB thread stack well before it exhausts anything the language
+    // itself considers a limit. Run on a dedicated thread with a much
+    // larger stack instead of tuning individual recursion limits.
+    const STACK_SIZE: usize = 4 * 1024 * 1024 * 1024;
+    std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(run_cli)
+        .expect("failed to spawn main thread with a larger stack")
+        .join()
+        .unwrap_or_else(|_| exit(101));
+}
+
+fn run_cli() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         start_repl();
