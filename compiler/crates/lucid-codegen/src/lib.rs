@@ -5403,6 +5403,29 @@ static inline void lucid_print_val(LucidVal v) {
         .to_string()
     }
 
+    /// A checker-approved call may pass a subclass pointer (e.g. `Num*`)
+    /// into a slot declared with an ancestor class's pointer type (e.g.
+    /// `Expr*`); C treats the two as unrelated pointer types. Route the
+    /// value through the same box-then-unbox-with-cast round trip
+    /// `Stmt::Return` already applies unconditionally to every non-primitive
+    /// return value, so the emitted pointer type always matches the
+    /// declared slot type instead of only when the two already happen to
+    /// agree. Subclass structs are laid out with their parent's fields
+    /// first, so the cast is always valid once the checker has approved the
+    /// assignment.
+    fn coerce_to_declared_type(&self, rendered: String, declared_ty: &str) -> String {
+        match declared_ty {
+            "LucidVal" => format!("lucid_wrap({rendered})"),
+            other
+                if other.ends_with('*')
+                    && self.known_classes.contains_key(other.trim_end_matches('*')) =>
+            {
+                format!("({other})lucid_as_ptr(lucid_wrap({rendered}))")
+            }
+            _ => rendered,
+        }
+    }
+
     fn infer_expr_type(&self, expr: &Expr, vars: &HashMap<String, String>) -> String {
         match expr {
             Expr::Literal { value, .. } => match value {
@@ -13754,18 +13777,29 @@ static inline void lucid_print_val(LucidVal v) {
 
                         let mut c_args = Vec::new();
                         for fname in &field_names {
+                            eprintln!(
+                                "DEBUG constructor {name}.{fname} -> {:?}",
+                                self.known_field_types.get(&(name.clone(), fname.clone()))
+                            );
+                            let field_ty = self
+                                .known_field_types
+                                .get(&(name.clone(), fname.clone()))
+                                .cloned()
+                                .unwrap_or_default();
                             if let Some(val_expr) = arg_map.get(fname) {
                                 if is_none_expr(val_expr) {
                                     c_args.push("NULL".to_string());
                                 } else {
-                                    c_args.push(self.emit_expr(val_expr)?);
+                                    let rendered = self.emit_expr(val_expr)?;
+                                    c_args.push(self.coerce_to_declared_type(rendered, &field_ty));
                                 }
                             } else if let Some(Some(default)) = self
                                 .known_field_defaults
                                 .get(&(name.clone(), fname.clone()))
                                 .cloned()
                             {
-                                c_args.push(self.emit_expr(&default)?);
+                                let rendered = self.emit_expr(&default)?;
+                                c_args.push(self.coerce_to_declared_type(rendered, &field_ty));
                             } else {
                                 c_args.push("NULL".to_string());
                             }
@@ -14589,13 +14623,34 @@ static inline void lucid_print_val(LucidVal v) {
                                 .get(&resolved_name)
                                 .cloned()
                                 .unwrap_or_default();
+                            let known_class_names: HashSet<String> =
+                                self.known_classes.keys().cloned().collect();
                             let adapt_argument = |rendered: String, index: usize| {
-                                if parameter_types.get(index).map(String::as_str)
-                                    == Some("LucidVal")
-                                {
-                                    format!("lucid_wrap({rendered})")
-                                } else {
-                                    rendered
+                                match parameter_types.get(index).map(String::as_str) {
+                                    Some("LucidVal") => format!("lucid_wrap({rendered})"),
+                                    // A checker-approved call may pass a
+                                    // subclass pointer (e.g. Num*) where the
+                                    // parameter's declared class (Expr*) is
+                                    // an ancestor. Subclass structs are laid
+                                    // out with their parent's fields first
+                                    // (field emission walks the base class
+                                    // chain), so this is exactly the same
+                                    // box-then-unbox-with-cast round trip
+                                    // `Stmt::Return` already does
+                                    // unconditionally for every non-primitive
+                                    // return type, applied here so the
+                                    // pointer type at the call site always
+                                    // matches the callee's declared
+                                    // parameter type instead of only when
+                                    // the two already happen to agree.
+                                    Some(other)
+                                        if other.ends_with('*')
+                                            && known_class_names
+                                                .contains(other.trim_end_matches('*')) =>
+                                    {
+                                        format!("({other})lucid_as_ptr(lucid_wrap({rendered}))")
+                                    }
+                                    _ => rendered,
                                 }
                             };
                             let mut slots: Vec<Option<&Arg>> = vec![None; param_names.len()];
@@ -15760,8 +15815,16 @@ static inline void lucid_print_val(LucidVal v) {
                 }
                 let mut rendered = Vec::with_capacity(values.len());
                 for (index, value) in values.into_iter().enumerate() {
+                    let field_ty = fields
+                        .get(index)
+                        .and_then(|field| {
+                            self.known_field_types
+                                .get(&(class_name.clone(), field.clone()))
+                        })
+                        .cloned()
+                        .unwrap_or_default();
                     if let Some(value) = value {
-                        rendered.push(value);
+                        rendered.push(self.coerce_to_declared_type(value, &field_ty));
                     } else if let Some(field) = fields.get(index) {
                         if let Some(default) = self
                             .known_field_defaults
@@ -15769,7 +15832,8 @@ static inline void lucid_print_val(LucidVal v) {
                             .cloned()
                             .flatten()
                         {
-                            rendered.push(self.emit_expr(&default)?);
+                            let value = self.emit_expr(&default)?;
+                            rendered.push(self.coerce_to_declared_type(value, &field_ty));
                         } else {
                             rendered.push("NULL".to_string());
                         }
@@ -17824,6 +17888,41 @@ print(c.x, c.y)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "4 6\n");
+    }
+
+    #[test]
+    fn native_subclass_pointer_passes_where_base_class_expected() {
+        let source = "sealed class Expr:\n    pass\nclass Num(Expr):\n    v: int\ndef f(node: Expr) -> int:\n    return 0\nprint(f(Num(1)))\n";
+        let module = parse(source).expect("subclass source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_subclass_param_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("passing a subclass pointer to a base-class parameter should compile");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n");
+    }
+
+    #[test]
+    fn native_subclass_hierarchy_matches_and_recurses() {
+        let source = "sealed class Expr:\n    pass\nclass Num(Expr):\n    v: int\nclass Add(Expr):\n    left: Expr\n    right: Expr\ndef eval(node: Expr) -> int:\n    match node as result:\n        case Num:\n            return result.v\n        case Add:\n            return eval(result.left) + eval(result.right)\ntree = Add(Num(1), Add(Num(2), Num(3)))\nprint(eval(tree))\n";
+        let module = parse(source).expect("AST hierarchy source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_subclass_hierarchy_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect(
+            "constructing a subclass field typed as its base class, and matching on it, should compile",
+        );
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "6\n");
     }
 
     #[test]
