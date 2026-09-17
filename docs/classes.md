@@ -77,6 +77,21 @@ assigning an undeclared one already is:
 p = Point(1.0, 2.0)
 del p.x  # error: fields are fixed, not deletable
 ```
+## No `__new__`
+
+Python splits construction into `__new__`, which allocates and returns
+the instance, and `__init__`, which receives that instance and mutates it
+in place — two methods that must agree on their parameters, in an order
+nothing checks, so a subclass overriding one without the other drifts out
+of sync silently. The split also decides which method to override for a
+reason unrelated to the class being written: subclassing an immutable
+builtin like `int` or `tuple` has to put its logic in `__new__`, since
+`__init__` runs after the value already exists and can no longer be
+mutated. Lucid has one construction hook, not two: a factory already
+returns a fully built object in a single step — see
+[Factory construction](construction.md#factory-construction) — so there
+is no separate allocation phase for `__new__` to occupy.
+
 ## No descriptors
 
 Python descriptors can make attribute access programmable from many places.
