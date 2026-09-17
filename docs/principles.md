@@ -65,14 +65,18 @@ ones — a bodyless member is an obligation, a bodied one is a default,
 no marker keyword for either. See [Traits](traits.md) and
 [One class parent](class-inheritance.md).
 
-## Scala-style type information
+## Checked type relationships
 
-Definition-site type relationships are checked and versioned; inferred
-variance can flip unintentionally, and a docstring's mutation promise
-isn't checked at all. Generic parameters carry definition-site variance
-with `out K`, `in K`, `in out K`; mutable, read-only, and immutable views are
-visible with `T`, `~T`, `!T`. See [Generics](generics.md),
-[Mutability](mutability.md), and
+A docstring's mutation promise isn't checked at all, and a variance
+annotation an author writes by hand can be wrong in a way nothing catches
+until a caller depends on it. Lucid's generic parameters carry variance
+the checker derives directly from how each is used in its class or
+trait's own body — covariant where only produced, contravariant where
+only consumed, invariant where both — and re-derives on every check, so
+an edit that changes it is caught at whichever call site relied on the
+old one, not learned later at runtime. Mutable, read-only, and immutable
+views stay visible in the type spelling itself, with `T`, `~T`, `!T`. See
+[Generics](generics.md), [Mutability](mutability.md), and
 [Modern type specification](type-specification.md).
 
 ## Julia-style dynamic dispatch

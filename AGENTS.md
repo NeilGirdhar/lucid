@@ -53,8 +53,9 @@ document first, in its own commit, then the compiler.
 - Two kinds of user-defined type: `trait` (obligations, reusable bodies,
   or both, no state) and `class` (owned state, construction, at most one
   class parent).
-- Definition-site variance—`out K`, `in K`, `in out K`, and the
-  view-specific `in ~out K`/`~in out K` (see
+- Inferred variance—covariant, contravariant, or invariant, derived by
+  the checker directly from how each parameter is used in its class or
+  trait's own body, never written by the author (see
   `docs/generics.md`)—and mutability views (`T`/`~T`/`!T`) visible in
   the type spelling.
 - Julia-style multiple dispatch for binary operators; no reflected methods,

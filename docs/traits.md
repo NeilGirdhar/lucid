@@ -17,7 +17,7 @@ freely — nothing marks the difference except whether a body follows:
 trait Sized:
     def __len__(self: ~Self) -> int
 
-trait Cache[in out K, in out V]:
+trait Cache[K, V]:
     def get(self: ~Self, key: K) -> V | none
     def put(self, key: K, value: V) -> none
     def is_fresh(self: ~Self, key: K) -> bool
@@ -286,9 +286,11 @@ class Document(Timestamped):
         super.save()
         write_to_disk(self)
 ```
-The same rule governs `override` as governs variance markers: the checker
-warns and offers an autofix while drafting, but the marker must be written
-into the source before the API is accepted. That protects against both
+The same rule governs `override` as governs a higher-kinded parameter's
+arity ([Higher-kinded parameters](generics.md#higher-kinded-parameters)):
+the checker warns and offers an autofix while drafting, but the marker
+must be written into the source before the API is accepted. That
+protects against both
 directions of the same mistake — a parent or trait gaining a method that
 silently starts shadowing an unrelated method of the same name with no
 signal anywhere, and an intended override whose name or signature no longer

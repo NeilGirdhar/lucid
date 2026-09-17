@@ -76,11 +76,10 @@ Mutable types are usually invariant, because they both produce and
 consume their type parameters — but a read-only or immutable view drops
 every mutating member, and often loses whichever use forced invariance
 in the first place. That is exactly the covariance the parameter dilemma
-above needed, made sound because the view itself blocks writes. One
-marker on the mutable declaration, `InferenceModel[in ~out K]`, settles
-the variance of all three views; see
-[Variance under ~T and !T](generics.md) for what the marker means and
-why it never needs more than one.
+above needed, made sound because the view itself blocks writes.
+`InferenceModel`'s own members settle the variance of all three views;
+see [Variance under ~T and !T](generics.md) for how the checker derives
+each one.
 
 The payoff shows up at the call site: passing a `Cat`-labeled model
 where an `Animal`-labeled read-only view is expected type-checks, and
@@ -106,8 +105,8 @@ This avoids the old split between mutable dictionaries and read-only mapping
 interfaces. A mutable `dict[str, Cat]` should not be usable as a
 `dict[str, Animal]` because the receiver could write a `Dog` into it. But a
 read-only view can safely widen the produced value type, the same way
-[Safe covariance](#safe-covariance) does above; one declaration,
-`dict[in out K, in ~out V]`, governs all three views — see
+[Safe covariance](#safe-covariance) does above; `dict[K, V]`'s own
+members govern all three views — see
 [Variance under ~T and !T](generics.md) for why `K` stays invariant while
 `V` alone loosens.
 
@@ -277,7 +276,7 @@ A key or set member has to survive being hashed once and looked up again
 later, so both bound their element parameter to `!Hashable`:
 
 ```text
-dict[K: !Hashable, out V]
+dict[K: !Hashable, V]
 set[K: !Hashable]
 ```
 `!Hashable` reads the same way `!InferenceModel` does — the immutable

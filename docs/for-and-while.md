@@ -17,7 +17,7 @@ import iteration
 
 type IterResult[T] = T | Literal[iteration.done]
 
-trait Iterator[out T]:
+trait Iterator[T]:
     def next(self) -> IterResult[T]
 ```
 Python's own protocol method is `__next__`; Lucid drops the dunder in
@@ -65,7 +65,7 @@ all (a value read once from a stream, say). `Reversible` names that
 narrower promise:
 
 ```python
-trait Reversible[out T](Iterable[T]):
+trait Reversible[T](Iterable[T]):
     def __reversed__(self: ~Self) -> Iterator[T]
 ```
 

@@ -1,58 +1,67 @@
 # Generics
 
 Generic parameters carry more than an ordinary type in Lucid: variance is
-part of the declaration, a parameter can stand for a type constructor
-instead of a type, and a type can be quantified over an unnamed
-implementer instead of a named one.
+computed from how each parameter is actually used, a parameter can stand
+for a type constructor instead of a type, and a type can be quantified
+over an unnamed implementer instead of a named one.
 
-## Definition-site variance
+## Inferred variance
 
-Lucid writes variance on the generic parameter where it is declared:
-`out K` for covariant, `in K` for contravariant — the same keywords
-Kotlin and C# already use for the same jobs — and both together, `in
-out K`, for invariant. If a parameter is written with no marker at
-all, the checker warns and the linter fills in whichever of the three
-is correct — keeping most of the convenience of inferred variance
-during drafting, while still requiring the marker to be written into
-the source, and preserved or intentionally changed on future edits,
-before the API is accepted.
+A generic parameter's variance is never written down: the checker derives
+it directly from how the parameter is used across the class or trait's
+own body. A parameter that appears only in *output* positions — a return
+type, a readable field — is covariant. One that appears only in *input*
+positions — a method parameter, a writable field — is contravariant. One
+used both ways is invariant, and one that appears nowhere in the public
+interface is unconstrained either way, so the checker treats it as
+covariant, the same default an omitted type argument already gets (see
+[Leaving a type parameter unspecified](#leaving-a-type-parameter-unspecified)).
 
 ```python
-trait Producer[out K]:
-    def get(self: ~Self) -> K
+trait Producer[K]:
+    def get(self: ~Self) -> K   # output only: covariant
 
-trait Consumer[in K]:
-    def put(self, value: K) -> none
+trait Consumer[K]:
+    def put(self, value: K) -> none   # input only: contravariant
 
-class Cell[in out K]:
-    value: K
+class Cell[K]:
+    value: K   # read and written: invariant
 ```
-`in out K` means invariant: no subtyping relationship between
+`Cell[K]` is invariant: there is no subtyping relationship between
 `Cell[A]` and `Cell[B]` at all, unless `A` and `B` already have one of
 their own — not bivariance, which would claim the opposite, that
-`Cell[A] <: Cell[B]` and `Cell[B] <: Cell[A]` both hold regardless of
-how `A` and `B` relate. That second claim is unsound — it would let a
-`Cell[Cat]` and a `Cell[Dog]` each stand in for the other — and
-Lucid's grammar has no way to write it: `in` and `out` together only
-ever mean "no promise either way," never "a promise both ways."
+`Cell[A] <: Cell[B]` and `Cell[B] <: Cell[A]` both hold regardless of how
+`A` and `B` relate. That second claim is unsound: it would let a
+`Cell[Cat]` and a `Cell[Dog]` each stand in for the other. A parameter
+used both ways derives to invariance instead, never bivariance — "read
+back out somewhere, fed in somewhere else" is a promise that holds in
+neither direction alone, not a promise that holds in both at once.
 
-Python's generic variance is often hidden in library declarations or stubs,
-inferred from the current member set rather than written down. Lucid puts
-variance on the definition instead because variance is part of the public
-contract: if a checker infers it from the current members, an ordinary edit
-to a trait can silently change assignability for downstream code —
-adding a method that consumes `K` can turn an inferred covariant trait
-into an invariant one, breaking users who never touched their code. Writing
-the marker up front makes the author choose the intended contract, rather
-than letting it shift underneath callers as the trait evolves.
+Kotlin, C#, and basedpython instead ask the author to write `out K`/
+`in K` on the declaration, treating variance as a contract the author
+states rather than a fact the compiler can already see from the body.
+That guards against a checker whose inference runs once, at whatever
+moment a library's stub is written, and is never rechecked against how
+the class is actually used afterward — the real risk behind Python's own
+stub-inferred variance: an ordinary edit that adds a consuming method can
+turn a covariant class invariant, and nothing re-verifies the stub
+against its real callers to catch it. Lucid's checker has no such gap:
+it re-derives a parameter's variance from the same class body on every
+check, in the same pass that re-verifies every consumer against the
+result, so a member that flips a parameter's variance surfaces as a
+compile error at whichever call site depended on the old one — caught
+where the class changed, not learned later at a caller three files away.
 
-## Getting variance wrong
+## Only one direction is sound
 
-Marking a parameter with the wrong keyword does not fail to compile —
-it type-checks right up until something depends on the mistake. Suppose
-`Consumer` above were declared covariant instead of contravariant:
+A parameter used only as an input can be assigned in exactly one safe
+direction, and Lucid's checker derives that direction instead of trusting
+an author to choose it. In Kotlin, C#, or basedpython, marking such a
+parameter with the wrong keyword does not fail to compile — it
+type-checks right up until something depends on the mistake:
 
 ```python
+# hypothetical: Consumer marked covariant, as a Kotlin/C#/basedpython author might do by mistake
 trait Consumer[out K]:      # wrong: put(value: K) only consumes K
     def put(self, value: K) -> none
 
@@ -66,94 +75,74 @@ dog_feeder: Consumer[Dog] = ...
 feed(dog_feeder)  # accepted under out K: Consumer[Dog] <: Consumer[Animal]
 ```
 `dog_feeder` only knows how to `put` a `Dog`, but `out K` makes
-`Consumer[Dog]` a subtype of `Consumer[Animal]`, so `feed` can pass
-it a `Cat`. Covariance is sound only for a parameter that appears in
-*output* positions; `put`'s `value: K` is a pure input, so the
-soundness direction runs the other way. `in K` gives the checker the
-subtyping relation that actually matches the capability on offer:
-`Consumer[Animal] <: Consumer[Dog]`, since something that can consume
-any `Animal` can stand in wherever something that consumes only `Dog`
-is needed — the same shape as a function parameter itself.
+`Consumer[Dog]` a subtype of `Consumer[Animal]`, so `feed` can pass it a
+`Cat`. Covariance is sound only for a parameter that appears in *output*
+positions; `put`'s `value: K` is a pure input, so the soundness direction
+runs the other way.
 
-A parameter used both ways — read back out somewhere, fed in somewhere
-else — cannot be sound at either keyword alone and needs both,
-`in out K`, the same reasoning `Cell[in out K]` above already applies
-to a field that is both read and written.
+Lucid has no keyword here to get wrong. [Inferred variance](#inferred-variance)
+sees that `Consumer[K]`'s only member consumes `K` and derives
+contravariance directly: `Consumer[Animal] <: Consumer[Dog]`, since
+something that can consume any `Animal` can stand in wherever something
+that consumes only `Dog` is needed — the same shape as a function
+parameter itself, and the only direction `feed`'s call above could ever
+type-check under. A parameter used both ways — read back out somewhere,
+fed in somewhere else — can't be sound at either extreme, which is
+exactly why [Inferred variance](#inferred-variance) derives `Cell[K]` as
+invariant instead.
 
 ## Variance under `~T` and `!T`
 
-A variance keyword is written once, on the mutable type, but a type
-with [mutable, read-only, and immutable views](mutability.md) has
-three variances to account for, not one. `~T`'s members are always a
-subset of `T`'s — every mutating method drops out, nothing is ever
-added — so removing members can only remove a use of the parameter,
-never introduce one. That gives a directional result: if `T[K]` is
-`out K` or `in K`, `~T[K]` and `!T[K]` are forced to match it exactly,
-since a subset of "no member consumes `K`" is still "no member
-consumes `K`," and the same holds for "no member produces it." There
-is nothing left to compute or declare in either case.
+A type with [mutable, read-only, and immutable views](mutability.md) has
+three variances to account for, not one, and [Inferred variance](#inferred-variance)'s
+analysis runs again for each: once against `T`'s full member set, and
+again against whichever subset of it survives on `~T` and `!T`. `~T`'s
+members are always a subset of `T`'s — every mutating method drops out,
+nothing is ever added — so removing members can only remove a use of the
+parameter, never introduce one. That gives a directional result: if `T`
+is covariant or contravariant, `~T` and `!T` are forced to match it
+exactly, since a subset of "no member consumes `K`" is still "no member
+consumes `K`," and the same holds for "no member produces it."
+[`Producer`](#inferred-variance) stays covariant on every view;
+[`Consumer`](#inferred-variance) stays contravariant on every view.
 
-Only `in out K`, invariant, leaves the views open. Invariance means
-some member produces `K` and some member consumes it — possibly the
-same member, possibly two different ones — and whether those survive
-onto `~T` depends on whether they happen to be mutating:
+Only an invariant `T` can genuinely diverge, since invariance means some
+member produces `K` and some member consumes it — possibly the same
+member, possibly two different ones — and whether those survive onto
+`~T` depends on whether they happen to be mutating:
 
 ```python
-class Bag[in out K]:
+class Bag[K]:
     def contains(self: ~Self, item: K) -> bool:   # non-mutating, consumes K
         ...
 
     def pop(self) -> K:                             # mutating, produces K
         ...
 ```
-`Bag` is invariant: `pop` produces `K`, `contains` consumes it.
-`~Bag` drops `pop` — mutating — and keeps `contains` — it doesn't
-mutate anything — so the only surviving use of `K` is as an input.
-That leftover `in` use is sound: something that can check membership
-against any `Animal` can stand in wherever checking membership
-against only `Dog` is needed. [Read-only dictionaries](mutability.md)
-shows the opposite outcome for the same reason in reverse — a
-mutating consumer drops out, leaving only a producer behind, and the
-view loosens to covariant instead.
+`Bag` is invariant: `pop` produces `K`, `contains` consumes it. `~Bag`
+drops `pop` — mutating — and keeps `contains` — it doesn't mutate
+anything — so the only surviving use of `K` is as an input, and
+[Inferred variance](#inferred-variance)'s own analysis, run again against
+that reduced set, derives `~Bag[K]` as contravariant. That leftover use
+is sound: something that can check membership against any `Animal` can
+stand in wherever checking membership against only `Dog` is needed.
 
-Since an invariant mutable type can loosen to covariant, to
-contravariant, or stay invariant under its views, and which of the
-three isn't knowable from `in out` alone, a `~` on one of the two
-keywords names the outcome directly — it marks the half that
-survives to the read-only and immutable views, the same way `~T`
-itself names a view that still exists, never one that's been
-negated away. `Bag` above is really `class Bag[~in out K]`: `in`
-survives, `out` drops. [Safe covariance](mutability.md#safe-covariance)'s
-`InferenceModel` is the opposite case, `in ~out K`: both `in` and `out`
-apply while mutable — `score` writes to `self._scores`, consuming `K`,
-that's the `in` use — but only `out` survives once read-only or
-immutable, since the write that forced invariance is gone and only
-`labels: list[K]`'s read remains. Together with
-plain `out K` and `in K`, this covers every reachable combination —
-the other four of the nine naively possible (mutable, view) pairings,
-such as a covariant mutable type with an invariant view, can never
-happen, so there is no marker for them:
+[Safe covariance](mutability.md#safe-covariance)'s `InferenceModel` shows
+the opposite outcome: `score` writes to `self._scores`, consuming `K`, so
+it drops out of `~InferenceModel`, leaving only `labels: list[K]`'s read
+behind — the checker derives `~InferenceModel[K]` as covariant even
+though `InferenceModel[K]` itself is invariant.
 
-| Marker | Mutable | `~T` / `!T` |
-| --- | --- | --- |
-| `out K` | covariant | covariant (forced) |
-| `in K` | contravariant | contravariant (forced) |
-| `in out K` | invariant | invariant |
-| `in ~out K` | invariant | covariant |
-| `~in out K` | invariant | contravariant |
-
-The same per-parameter rule applies when a type has more than one type
-parameter: [Read-only dictionaries](mutability.md#read-only-dictionaries)'
-declaration, `dict[in out K, in ~out V]`, puts `K` on the `in out K` row
-and `V` on the `in ~out K` row, independently. `K` stays invariant
-everywhere: both of its uses — `get`'s lookup and `keys()`'s enumeration
-— are non-mutating, so both survive onto the read-only view unchanged,
-and invariance survives with them. `V` is only ever produced by a
-non-mutating member (`get`) — the `out` use — and only ever consumed by
-a mutating one (`__setitem__`) — the `in` use — so the read-only view
-drops `in` and loosens to `out` alone. A narrower view that exposes only
-keys or only values can land on different variance again, for the same
-reason.
+[Read-only dictionaries](mutability.md#read-only-dictionaries)'s
+`dict[K, V]` shows two parameters diverging independently in the same
+declaration. `K` stays invariant everywhere: both of its uses — `get`'s
+lookup and `keys()`'s enumeration — are non-mutating, so both survive
+onto the read-only view unchanged, and invariance survives with them. `V`
+is only ever produced by a non-mutating member (`get`) and only ever
+consumed by a mutating one (`__setitem__`), so the read-only view drops
+the consuming use and `V` derives as covariant alone. A narrower view
+that exposes only keys or only values can land on different variance
+again, for the same reason.
 
 `~T` and `!T` land on the same variance as each other whenever every
 method reachable only through `!Self` leaves `K` alone — true of
@@ -163,8 +152,8 @@ unrelated reason, a stable hash, and never mentions `K` in its own
 signature. A `self: !Self`-only method that did use `K` would be
 callable on `!T` but not on `~T`, so the two could in principle
 disagree; nothing here rules that out, but no example needs it, so
-it stays unaddressed until one does. One keyword pair on the mutable
-declaration settles all three views for every case in this document.
+it stays unaddressed until one does. The class body settles all three
+views for every case in this document — nothing else needs writing.
 
 A private field or method never enters this computation at all,
 regardless of how it uses `K`. Variance is a promise about the
@@ -177,69 +166,6 @@ relies on exactly this: `score` mutates a private `_scores` cache, but
 that write only has to be reconciled with whatever `score` and
 `labels` themselves expose publicly, not treated as a use in its own
 right.
-
-## Use-site projection
-
-`~T` and `!T` narrow *every* parameter's role at once: they drop any
-method that needs mutable `self`, for any reason, regardless of what
-it touches. Sometimes only one parameter's role needs narrowing,
-leaving the rest exactly as declared. `list` is invariant in its
-element type — it has both `__getitem__` and `__setitem__` — but a
-caller who only ever wants to *fill* a `list` in, never read it back,
-can say so directly at the annotation, without asking for `~list` or
-`!list` and without `list` needing a second, purpose-built type:
-
-```python
-def recv_into(sock: Socket, buf: list[in int]) -> int:
-    ...   # can write ints into buf; cannot read buf's existing contents
-```
-`list[in int]` drops every method that *reads* `int` back out —
-`__getitem__` — while `__setitem__`, `append`, and `__len__` stay
-exactly as `list` already declares them, mutable and all. `out` runs
-the same rule the other way, dropping methods that *consume* the
-named parameter instead of producing it — the projection this
-recovers is the read-only one `~list[int]` already gives, for a
-single-parameter container whose only mutable state is the parameter
-itself.
-
-For a class with more than one parameter, the projection restricts
-just the one named, positionally, the same way the parameter itself
-is written — leaving every other parameter at whatever `Node` itself
-declares for it:
-
-```python
-class Node[Data, Children]:
-    data: Data
-    children: list[Children]
-
-    def set_data(self, d: Data) -> none:
-        self.data = d
-
-    def add_child(self, c: Children) -> none:
-        self.children.append(c)
-
-def update_payloads(nodes: list[Node[int, out str]]) -> none:
-    for node in nodes:
-        node.set_data(5)      # fine: Data is unrestricted
-        node.add_child("x")   # error: add_child consumes Children, and Children is out here
-```
-`Node[int, out str]` leaves `Data` exactly as declared — fully
-mutable — while dropping every method that writes `Children`. `~T`
-and `!T` cannot express this at all: they are whole-object operators,
-with no way to restrict one parameter while leaving another
-untouched. Use-site projection is the narrower, complementary tool
-for exactly that case, not a replacement for `~T`/`!T`, which stay
-the right choice whenever the restriction really is "no mutation, for
-any reason."
-
-For a single-parameter type whose only mutable state is the
-parameter itself — true of `list`, `dict`, `set`, and any ordinary
-container — `T[out X]` and `~T[X]` land on the same callable set,
-since "mutating" and "produces/consumes `X`" happen to be the same
-fact there, and `~T[X]` is the one to reach for. The projection earns
-its keep once a class has mutable state unrelated to the parameter
-being restricted, or more than one parameter to restrict
-independently, as `Node` does above.
 
 ## Leaving a type parameter unspecified
 
@@ -374,9 +300,8 @@ trait Bad[T: Self]: ...   # error: Self cannot bound a type parameter of the cla
 A bound, `T: X`, lets `T` be `X` or any subtype of it. Sometimes the
 intent is narrower still: `T` should be exactly one member of a fixed,
 small set, chosen fresh each call, never a subtype of one member and
-never their union. `in`, written *after* the parameter's name — the
-same position-based split [variance's own `in`/`out`](#definition-site-variance)
-already relies on, just on the other side of the name — declares that:
+never their union. `in`, written *after* the parameter's name, declares
+that:
 
 ```python
 def concat[T in (str, bytes)](a: T, b: T) -> T:
@@ -407,10 +332,11 @@ A set needs at least two members — one leaves nothing to choose
 between — and it is an alternative to an ordinary bound, not an
 addition to one: a parameter takes either `T: X` or `T in (X, Y, ...)`,
 never both, since a set of alternatives has no single upper bound to
-layer a subtype constraint onto. It composes with variance the same
-way basedpython's own version does, since the two markers sit on
-opposite sides of the name: `class Container[in out T in (int, str)]:`
-declares `T` both invariant and restricted to exactly `int` or `str`.
+layer a subtype constraint onto. It composes with inferred variance
+without conflict, since the two are independent facts about a
+parameter: `class Container[T in (int, str)]:` restricts `T` to
+exactly `int` or `str`, while the checker still derives whatever
+variance `Container`'s own members give it.
 
 ## Member types
 
@@ -441,7 +367,7 @@ def check(n1: Nursery[Animal], n2: Nursery[Dog]) -> none:
     n2.latest   # Dog
 ```
 `offspring` narrows covariantly in `Dog` — a `getter` is read-only, so
-this is the same safe narrowing [Getting variance wrong](#getting-variance-wrong)
+this is the same safe narrowing [Only one direction is sound](#only-one-direction-is-sound)
 already establishes for any output-only position; a plain, mutable
 field couldn't narrow this way; a caller holding `resident` through
 its `Animal`-typed slot could otherwise write an `Animal` into what is
@@ -494,12 +420,12 @@ name either.
 def tree_map[F[_]: Functor, A, B](tree: F[A], f: (A) -> B) -> F[B]:
     return F.map(tree, f)
 ```
-The same rule that governs variance markers governs `F[_]`: it must be
-written explicitly on a free-standing generic parameter like `F` above,
-even though the checker could infer the arity from `tree: F[A]` during
-drafting, because an unrelated later edit to `tree_map`'s body could
-otherwise silently change what `F` is required to be — exactly the danger
-explicit variance markers already exist to rule out.
+`F[_]` must be written explicitly on a free-standing generic parameter
+like `F` above, even though the checker could infer the arity from
+`tree: F[A]` during drafting, because an unrelated later edit to
+`tree_map`'s body could otherwise silently change what `F` is required
+to be — the same danger [Explicit overrides](traits.md#explicit-overrides)
+already exists to rule out for `override`.
 
 ## Existential types
 
