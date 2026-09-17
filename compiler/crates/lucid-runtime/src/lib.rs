@@ -1033,6 +1033,14 @@ pub struct Interpreter {
     capture_assignment: Option<String>,
     setter_depth: usize,
     loop_depth: usize,
+    /// The value most recently passed to `raise`, still in flight. `Err`
+    /// propagation carries only a `RuntimeError` (a message and a span), so
+    /// this is the side channel `except X as e:` reads to bind `e` to the
+    /// actual raised object instead of its stringified message. Taken (and
+    /// so cleared) the moment a handler consumes it; a later, unrelated
+    /// raise simply overwrites it before that happens, which matches the
+    /// error it is standing in for also being overwritten in that case.
+    last_raised: Option<Value>,
 }
 
 impl Default for Interpreter {
@@ -1333,6 +1341,7 @@ impl Interpreter {
             capture_assignment: None,
             setter_depth: 0,
             loop_depth: 0,
+            last_raised: None,
         };
 
         interp.register_builtins();
@@ -6952,8 +6961,10 @@ class ZeroDivisionError(Exception):
             Stmt::Raise { exception, span } => {
                 let value = self.eval_expr(exception)?;
                 Self::reject_skip_value(&value, "raised value", exception.span())?;
+                let message = format!("raised invariant ({}): {value:?}", value.type_name());
+                self.last_raised = Some(value);
                 Err(RuntimeError {
-                    message: format!("raised invariant ({}): {value:?}", value.type_name()),
+                    message,
                     span: *span,
                 })
             }
@@ -7100,9 +7111,32 @@ class ZeroDivisionError(Exception):
                             self.error_matches_handler(&error, &handler.exception_type)
                         }) {
                             if let Some(name) = &handler.name {
-                                self.env
-                                    .borrow_mut()
-                                    .set(name.clone(), Value::Str(error.message.clone()));
+                                let bound = self.last_raised.take().unwrap_or_else(|| {
+                                    // An error the interpreter raised
+                                    // internally (division by zero, an
+                                    // out-of-range index, ...) never went
+                                    // through `Stmt::Raise`, so there is no
+                                    // real object to hand back. Synthesize
+                                    // one of the handler's declared type so
+                                    // `e.message` still works instead of
+                                    // binding the bare message string.
+                                    let class_name =
+                                        Self::exception_type_name(&handler.exception_type)
+                                            .unwrap_or_else(|| "Exception".to_string());
+                                    let mut fields = HashMap::new();
+                                    fields.insert(
+                                        "message".to_string(),
+                                        Value::Str(error.message.clone()),
+                                    );
+                                    Value::Object {
+                                        class_name,
+                                        fields: Rc::new(RefCell::new(fields)),
+                                        is_frozen: Rc::new(RefCell::new(false)),
+                                    }
+                                });
+                                self.env.borrow_mut().set(name.clone(), bound);
+                            } else {
+                                self.last_raised = None;
                             }
                             self.eval_block(&handler.body)
                         } else {
@@ -11021,6 +11055,17 @@ class ZeroDivisionError(Exception):
             _ => false,
         }
     }
+
+    /// A single concrete exception class name from a handler's declared
+    /// type, for synthesizing a placeholder exception object when no real
+    /// one was raised. A union has no single right answer here, so it falls
+    /// back to the generic `Exception` base rather than guessing a member.
+    fn exception_type_name(exception_type: &TypeExpr) -> Option<String> {
+        match exception_type {
+            TypeExpr::Named { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -11990,6 +12035,30 @@ except str:
         assert_eq!(
             interp.env.borrow().get("result"),
             Some(Value::Str("right".into()))
+        );
+    }
+
+    #[test]
+    fn test_except_as_binds_the_raised_object_not_its_message() {
+        let src = r#"
+class Exception:
+    message: str
+
+class ValueError(Exception):
+    pass
+
+caught = ""
+try:
+    raise ValueError("boom")
+except ValueError as err:
+    caught = err.message
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(
+            interp.env.borrow().get("caught"),
+            Some(Value::Str("boom".into()))
         );
     }
 
