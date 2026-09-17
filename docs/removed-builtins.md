@@ -59,8 +59,9 @@ that decision:
 * [`delattr`](classes.md#no-del-on-fields) — the same rule `del
   obj.field` already breaks on; a declared field is part of a class's
   fixed shape, not an optional slot a call can remove
-* `open` — not a bare builtin; `Path.open(...)` already exists
-  alongside it in Python, so keeping both is one spelling too many
+* [`open`](files.md) — not a bare builtin; `Path.open(...)` already
+  exists alongside it in Python, so keeping both is one spelling too
+  many
 * [`bin`, `oct`, `hex`](strings.md#base-formatted-string-factories) —
   not bare builtins; they move to `str.bin`, `str.oct`, and `str.hex`,
   named factories instead of three unrelated top-level names for the

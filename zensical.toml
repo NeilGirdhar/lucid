@@ -55,6 +55,7 @@ nav = [
     { "Call-site captured values" = "call-site-captured-values.md" },
     { "Context managers" = "context-managers.md" },
     { "Results" = "results.md" },
+    { "Files" = "files.md" },
     { "Decorators" = "decorators.md" },
   ] },
   { "Containers" = [
