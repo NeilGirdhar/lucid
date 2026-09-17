@@ -62,8 +62,9 @@ document first, in its own commit, then the compiler.
 - Recoverable errors as ordinary return types, checked exhaustively via
   `match`; the `?` operator to propagate them; `raise` narrowed to broken
   invariants.
-- `Arguments`/`Parameters` and the anonymous class shape replace `*args`/
-  `**kwargs` and `ParamSpec`.
+- Typed `*name`/`**name` gather leftover arguments directly; `Arguments`/
+  `Parameters` and the anonymous class shape replace `ParamSpec` for a
+  decorator forwarding an unknown signature as one bundle.
 - Zero-deprecation: a one-year release cadence with LLM-driven upgrade
   instructions, which is the standing justification for choosing the
   cleaner rule over the Python-compatible one throughout the spec.

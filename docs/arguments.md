@@ -10,16 +10,21 @@ keyword arguments — the same two operations
 [Positional arguments precede keyword arguments](calls.md) assumes throughout its
 examples.
 
-Python collects a function's own leftover arguments the same way, but
-splits them into two separate, untyped catch-alls: `*args` for the
-leftover positional values, `**kwargs` for the leftover keyword values.
-The keyword half stayed essentially `Any`-typed for most of Python's
-history, and forwarding both together to another call — the entire point
-of a decorator or a proxy — means carrying two separate names everywhere
-they travel.
+Python collects a function's own leftover arguments the same way, but as
+two separate, untyped catch-alls: `*args` for the leftover positional
+values, `**kwargs` for the leftover keyword values, both essentially
+`Any`-typed for most of Python's history. [Gather](gather.md) keeps
+that same split for the ordinary case — `*name: T`/`**name: T`, but
+checked against `T`, never `Any`.
 
-Lucid gathers leftover arguments into one typed class instead of two
-untyped catch-alls:
+The split form doesn't help a decorator or a proxy that needs to
+forward an *unknown* signature's entire overflow to another call,
+though: it still needs to carry `*args` and `**kwargs` as two separate,
+unrelated names everywhere they travel, exactly the case Python's own
+`ParamSpec` exists to type and still can't fully close ([Decorators](decorators.md)).
+
+Lucid gathers leftover arguments meant for forwarding into one typed
+class instead:
 
 ```python
 class Arguments[Y, Z: ~dict[str, object]]:

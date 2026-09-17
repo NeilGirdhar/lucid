@@ -164,9 +164,6 @@ def dispatch fields(trait: type Trait) -> Iterable[(name: str, obligation: bool,
 
 def dispatch fields(mod: Module) -> Iterable[(name: str, doc: str | none)]:
     ...
-
-def dispatch fields(fn: Callable) -> Iterable[(name: str, doc: str | none, metadata: dict[str, object])]:
-    ...
 ```
 The instance and class forms yield fields in declaration order — the
 instance form pairs each field's name with its current value; the
@@ -184,18 +181,13 @@ c = Config("Ada")
 list(fields(c))[0]      # (name="name", value="Ada", doc="the user's display name", metadata={:})
 list(fields(Config))[0]  # (name="name", doc="the user's display name", metadata={:})
 ```
-The function form walks a callable's own parameters, in declaration
-order, carrying whatever [metadata blocks](metadata.md) they declare —
-the mechanism that makes a parameter's metadata dict readable at all,
-for a use like a `jit`-style decorator branching on which arguments are
-static:
+A function isn't one of `fields`'s receivers — it's neither a class,
+a trait, nor a module, and giving it a fifth, differently-shaped
+dispatch case would bolt on a special case rather than reuse one.
+Reading a function's own parameters, metadata included, is
+[`Callable`'s `.parameters` property](types.md#reading-a-signatures-own-parameters)
+instead.
 
-```python
-def transfer(amount: float, from_account: str; {"static": true}) -> none:
-    ...
-
-list(fields(transfer))[1]  # (name="from_account", doc=none, metadata={"static": true})
-```
 The trait form walks a trait's own declared members — fields,
 getters, setters, methods, classmethods, and factories alike —
 reporting whether each one is a bodyless obligation or a default with

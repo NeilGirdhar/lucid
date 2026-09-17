@@ -129,6 +129,50 @@ narrow job `is class` answers for classes
 ([`is trait` and `is class`](identity-checks.md#is-trait-and-is-class)) —
 a bare capability check, never a substitute for a real signature.
 
+### Reading a signature's own parameters
+
+None of this stops a function *value* from being asked about its own
+parameters at runtime — a different question from what `Callable`
+answers, the way [`fields()`](construction.md#field-reflection-with-fields)
+reflects on a class's members without that being part of the class's
+*type*. Every `Callable` has a `.parameters` property, one entry per
+fixed, individually-named parameter, in declaration order:
+
+```python
+class PositionalOnly: ...
+class PositionalOrKeyword: ...
+class KeywordOnly: ...
+class Gathered: ...
+type ParameterKind = PositionalOnly | PositionalOrKeyword | KeywordOnly | Gathered
+
+type Parameter = (
+    name: str,
+    kind: ParameterKind,
+    type_: type[object],
+    default: object | Sentinel,
+    doc: str | none,
+    metadata: dict[str, object],
+)
+```
+`type_` is spelled with a trailing underscore because `type` itself is
+the reifying keyword ([Reifying a type expression](#reifying-a-type-expression)).
+`default` uses [`Sentinel`](call-site-captured-values.md#name-captured-identifiers)
+the same way Python's own `inspect.Parameter.empty` does — a shared
+marker distinct from every real value a default could be, `none`
+included. `kind` covers only the fixed prefix's three zones plus
+`Gathered`, the `***name` parameter itself when a signature has one
+([Gather](gather.md)); the open-ended tail a `***` bundle catches has
+no individual parameters of its own to report:
+
+```python
+def transfer(amount: float, from_account: str; {"static": true}) -> none:
+    ...
+
+transfer.parameters[1]  # (name="from_account", kind=PositionalOrKeyword,
+                         #  type_=str, default=Sentinel(), doc=none,
+                         #  metadata={"static": true})
+```
+
 ## Type expressions
 
 Wherever a type is expected — variable, parameter, and return annotations,
