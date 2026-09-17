@@ -14,6 +14,11 @@ Class bodies contain a closed set of member kinds:
 | setter | `setter x(self, value: T): ...` |
 | class member variable | `classvar count: int = 0` |
 
+The set stays closed because [descriptors are gone](classes.md#no-descriptors):
+Python's `__get__`/`__set__`/`__delete__` protocol lets a class invent an
+eighth kind of member with its own attribute-access behavior, and Lucid
+has no such hook for one to plug into.
+
 ## Read-only methods with `~Self`
 
 `Self` is a builtin type, referring to the enclosing class. A method's
