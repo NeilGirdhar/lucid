@@ -1336,8 +1336,68 @@ impl Interpreter {
         };
 
         interp.register_builtins();
+        interp.register_builtin_exceptions();
         interp.builtin_names = interp.env.borrow().bindings.keys().cloned().collect();
         interp
+    }
+
+    /// `Exception` and its standard subclasses are hardcoded into the
+    /// checker's type environment (see `lucid-checker`'s builtin class
+    /// list) so that `raise`/`except`/dispatch signatures can name them
+    /// without a user ever declaring them. The runtime has no equivalent
+    /// preloaded environment, so without this they type-check but do not
+    /// exist as constructible, matchable values: `ParseError("...")` was an
+    /// "undefined variable" error even though `read_file`'s declared return
+    /// type promises one on failure. Defining them as ordinary Lucid source
+    /// and evaluating it once, up front, gives them exactly the same
+    /// construction, field-access, and pattern-matching behavior as any
+    /// user-defined class hierarchy, for free.
+    fn register_builtin_exceptions(&mut self) {
+        const PRELUDE: &str = "\
+class Exception:
+    message: str
+
+class AssertionError(Exception):
+    pass
+
+class IndexError(Exception):
+    pass
+
+class NameError(Exception):
+    pass
+
+class ParseError(Exception):
+    pass
+
+class RuntimeError(Exception):
+    pass
+
+class TypeError(Exception):
+    pass
+
+class ValueError(Exception):
+    pass
+
+class ZeroDivisionError(Exception):
+    pass
+";
+        let module = lucid_syntax::parse(PRELUDE).expect("builtin exception prelude must parse");
+        self.eval_module(&module)
+            .expect("builtin exception prelude must evaluate");
+    }
+
+    /// Build a `ParseError` value the way constructing one from Lucid source
+    /// would, for builtins (`read_file`, `write_file`) whose checker-declared
+    /// return type promises one on a recoverable failure. `register_builtin_exceptions`
+    /// guarantees the class exists before any builtin can be called.
+    fn make_parse_error(message: String) -> Value {
+        let mut fields = HashMap::new();
+        fields.insert("message".to_string(), Value::Str(message));
+        Value::Object {
+            class_name: "ParseError".to_string(),
+            fields: Rc::new(RefCell::new(fields)),
+            is_frozen: Rc::new(RefCell::new(false)),
+        }
     }
 
     pub fn set_current_file(&mut self, path: Option<std::path::PathBuf>) {
@@ -3548,6 +3608,11 @@ impl Interpreter {
                                         if interp.builtin_names.contains(*name)
                                             && value.to_bits()
                                                 == std::f64::consts::PI.to_bits()
+                                ) && !matches!(
+                                    value,
+                                    Value::ClassRef(class_name)
+                                        if interp.builtin_names.contains(*name)
+                                            && class_name == *name
                                 )
                             })
                             .map(|(name, value)| (name.clone(), value.clone()))
@@ -4030,10 +4095,9 @@ impl Interpreter {
             };
             match std::fs::read_to_string(path) {
                 Ok(contents) => Ok(Value::Str(contents)),
-                Err(e) => Err(RuntimeError {
-                    message: format!("read_file('{path}') failed: {e}"),
-                    span: Span::default(),
-                }),
+                Err(e) => Ok(Self::make_parse_error(format!(
+                    "read_file('{path}') failed: {e}"
+                ))),
             }
         });
         self.env.borrow_mut().set(
@@ -4072,10 +4136,9 @@ impl Interpreter {
             };
             match std::fs::write(path, content) {
                 Ok(()) => Ok(Value::None),
-                Err(e) => Err(RuntimeError {
-                    message: format!("write_file('{path}') failed: {e}"),
-                    span: Span::default(),
-                }),
+                Err(e) => Ok(Self::make_parse_error(format!(
+                    "write_file('{path}') failed: {e}"
+                ))),
             }
         });
         self.env.borrow_mut().set(
