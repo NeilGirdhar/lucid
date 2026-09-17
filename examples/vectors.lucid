@@ -4,10 +4,10 @@ class Vector2D:
     x: int
     y: int
 
-dispatch def +(a: Vector2D, b: Vector2D) -> Vector2D:
+dispatch def __add__(a: Vector2D, b: Vector2D) -> Vector2D:
     return Vector2D(a.x + b.x, a.y + b.y)
 
-dispatch def *(v: Vector2D, scalar: int) -> Vector2D:
+dispatch def __mul__(v: Vector2D, scalar: int) -> Vector2D:
     return Vector2D(v.x * scalar, v.y * scalar)
 
 v1 = Vector2D(2, 4)
