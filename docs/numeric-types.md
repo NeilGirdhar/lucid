@@ -245,11 +245,24 @@ the imaginary one — rather than reached for as a classvar.
 
 ## `pow` dispatches per type
 
+Python's own type stubs cannot give `**` a real return type. `int ** int`
+returns `int` for a non-negative exponent but silently becomes `float`
+for a negative one (`2 ** -1 == 0.5`), a choice that depends on the
+*value* of the exponent, not its type — so typeshed types it `Any`.
+`float ** float` is worse: a negative base with a non-integer exponent
+doesn't raise or return `nan`, it silently becomes a `complex` number
+at runtime, another value-dependent type change typeshed again papers
+over with `Any`. Either way, the one line that actually computes the
+power is the one line a type checker has stopped checking, no matter
+how precisely the operands were annotated.
+
 `pow`'s zero-base, negative-exponent case is the same undefined-answer
 problem floor division and modulo already had — `pow(0, -1)` is
 `1 / 0` written differently, not a new kind of question. `pow` is
 multiple-dispatch, one case per base type, and each returns the
-`inf`/`nan` its own type already has instead of raising:
+`inf`/`nan` its own type already has instead of raising *or changing
+type*, so the return type is exactly what the signature already
+says:
 
 ```python
 def dispatch pow(base: int, exponent: int) -> int:
