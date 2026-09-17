@@ -9134,7 +9134,9 @@ impl TypeChecker {
         argument_types: &[Type],
         span: Span,
     ) -> Result<Option<Type>, TypeError> {
-        if !self.env.overloaded_functions.contains(name) && !self.env.dispatch_functions.contains(name) {
+        if !self.env.overloaded_functions.contains(name)
+            && !self.env.dispatch_functions.contains(name)
+        {
             return Ok(None);
         }
         let candidates =

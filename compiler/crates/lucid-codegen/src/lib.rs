@@ -1448,8 +1448,7 @@ impl CCodeGenerator {
                             // the dunder name a dispatch def is declared
                             // with, so the C return type must be reachable
                             // under both keys.
-                            self.known_fns
-                                .insert(dispatch_key.clone(), ret_ty.clone());
+                            self.known_fns.insert(dispatch_key.clone(), ret_ty.clone());
                             self.dispatch_fns
                                 .entry(dispatch_key.clone())
                                 .or_default()
