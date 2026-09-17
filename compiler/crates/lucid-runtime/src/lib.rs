@@ -87,6 +87,27 @@ fn int_or_bigint_to_bigint(value: &Value) -> Option<BigInt> {
     }
 }
 
+/// `int ** int` with a negative exponent has no exact integer answer
+/// unless the base is `0`, `1`, or `-1` — the same undefined-answer
+/// problem `pow`'s zero-base case already has, generalized: `int.inf`
+/// when the base is `0` (division by zero in different clothes),
+/// `int.nan` otherwise, rather than silently promoting to `float`.
+fn int_pow_negative_exponent(base: &BigInt, exponent_is_even: bool) -> i64 {
+    if base.is_zero() {
+        INT_POS_INF
+    } else if base == &BigInt::one() {
+        1
+    } else if base == &-BigInt::one() {
+        if exponent_is_even {
+            1
+        } else {
+            -1
+        }
+    } else {
+        INT_NAN
+    }
+}
+
 thread_local! {
     static FROZEN_CONTAINERS: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
 }
@@ -2032,10 +2053,24 @@ impl Interpreter {
             BinaryOp::Pow => match (&lval, &rval) {
                 (Value::Complex(ar, ai), Value::Complex(br, bi)) => {
                     let radius = ar.hypot(*ai);
-                    let angle = ai.atan2(*ar);
-                    let scale = (br * radius.ln() - bi * angle).exp();
-                    let phase = bi * radius.ln() + br * angle;
-                    Ok(Value::Complex(scale * phase.cos(), scale * phase.sin()))
+                    if radius == 0.0 {
+                        // The general formula below takes `radius.ln()`,
+                        // `-inf` here, and multiplying that by a zero
+                        // exponent component produces a spurious `NaN`
+                        // instead of the well-defined `0`/`1`/`inf` cases.
+                        Ok(if *br == 0.0 && *bi == 0.0 {
+                            Value::Complex(1.0, 0.0)
+                        } else if *br < 0.0 {
+                            Value::Complex(f64::INFINITY, 0.0)
+                        } else {
+                            Value::Complex(0.0, 0.0)
+                        })
+                    } else {
+                        let angle = ai.atan2(*ar);
+                        let scale = (br * radius.ln() - bi * angle).exp();
+                        let phase = bi * radius.ln() + br * angle;
+                        Ok(Value::Complex(scale * phase.cos(), scale * phase.sin()))
+                    }
                 }
                 (Value::Complex(ar, ai), Value::Int(exp)) => {
                     let radius = ar.hypot(*ai).powi(*exp as i32);
@@ -2081,8 +2116,8 @@ impl Interpreter {
                     }
                     Ok(Value::BigInt(result))
                 }
-                (Value::BigInt(base), Value::BigInt(exp)) => Ok(Value::Float(
-                    bigint_to_float(base).powf(bigint_to_float(exp)),
+                (Value::BigInt(base), Value::BigInt(exp)) => Ok(Value::Int(
+                    int_pow_negative_exponent(base, (exp % BigInt::from(2)).is_zero()),
                 )),
                 (Value::BigInt(base), Value::Int(exp)) if *exp >= 0 => {
                     let mut power = base.clone();
@@ -2100,7 +2135,7 @@ impl Interpreter {
                     Ok(Value::BigInt(result))
                 }
                 (Value::BigInt(base), Value::Int(exp)) => {
-                    Ok(Value::Float(bigint_to_float(base).powi(*exp as i32)))
+                    Ok(Value::Int(int_pow_negative_exponent(base, exp % 2 == 0)))
                 }
                 (Value::Int(base), Value::BigInt(exp)) if exp.sign() != num_bigint::Sign::Minus => {
                     let mut power = BigInt::from(*base);
@@ -2118,7 +2153,10 @@ impl Interpreter {
                     Ok(Value::BigInt(result))
                 }
                 (Value::Int(base), Value::BigInt(exp)) => {
-                    Ok(Value::Float((*base as f64).powf(bigint_to_float(exp))))
+                    Ok(Value::Int(int_pow_negative_exponent(
+                        &BigInt::from(*base),
+                        (exp % BigInt::from(2)).is_zero(),
+                    )))
                 }
                 (Value::Int(a), Value::Int(b)) => {
                     if *b >= 0 {
@@ -2133,7 +2171,10 @@ impl Interpreter {
                             span: *span,
                         })
                     } else {
-                        Ok(Value::Float((*a as f64).powi(*b as i32)))
+                        Ok(Value::Int(int_pow_negative_exponent(
+                            &BigInt::from(*a),
+                            b % 2 == 0,
+                        )))
                     }
                 }
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.powf(*b))),
@@ -3629,7 +3670,9 @@ impl Interpreter {
                     } else {
                         match (&args[0], &args[1]) {
                             (Value::Int(base), Value::Int(exp)) if *exp >= 0 => Ok(Value::Int(base.pow(*exp as u32))),
-                            (Value::Int(base), Value::Int(exp)) => Ok(Value::Float((*base as f64).powi(*exp as i32))),
+                            (Value::Int(base), Value::Int(exp)) => Ok(Value::Int(
+                                int_pow_negative_exponent(&BigInt::from(*base), exp % 2 == 0),
+                            )),
                             (Value::Float(base), Value::Int(exp)) => Ok(Value::Float(base.powi(*exp as i32))),
                             (Value::Float(base), Value::Float(exp)) => Ok(Value::Float(base.powf(*exp))),
                             _ => Err(RuntimeError { message: "pow() arguments must be numeric".into(), span: Span::default() }),
@@ -12208,6 +12251,46 @@ s = sum(r)
     }
 
     #[test]
+    fn test_pow_stays_within_its_operand_type() {
+        let module = parse(
+            "a = 2 ** -1\nb = 0 ** -1\nc = 1 ** -5\nd = (-1) ** -3\ne = (-1) ** -4\nf = 2 ** 10\ng = pow(2, -1)\nh = pow(0, -1)\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("a"), Some(Value::Int(INT_NAN)));
+        assert_eq!(interp.env.borrow().get("b"), Some(Value::Int(INT_POS_INF)));
+        assert_eq!(interp.env.borrow().get("c"), Some(Value::Int(1)));
+        assert_eq!(interp.env.borrow().get("d"), Some(Value::Int(-1)));
+        assert_eq!(interp.env.borrow().get("e"), Some(Value::Int(1)));
+        assert_eq!(interp.env.borrow().get("f"), Some(Value::Int(1024)));
+        assert_eq!(interp.env.borrow().get("g"), Some(Value::Int(INT_NAN)));
+        assert_eq!(interp.env.borrow().get("h"), Some(Value::Int(INT_POS_INF)));
+
+        let module = parse(
+            "a: complex = complex(0) ** complex(2)\nb: complex = complex(0) ** complex(-1)\nc: complex = complex(0) ** complex(0)\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("a"), Some(Value::Complex(0.0, 0.0)));
+        assert_eq!(
+            interp.env.borrow().get("b"),
+            Some(Value::Complex(f64::INFINITY, 0.0))
+        );
+        assert_eq!(interp.env.borrow().get("c"), Some(Value::Complex(1.0, 0.0)));
+
+        let module = parse("a: float = (-8.0) ** (1.0 / 3.0)\nb: float = 0.0 ** -1.0\n").unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert!(matches!(interp.env.borrow().get("a"), Some(Value::Float(v)) if v.is_nan()));
+        assert_eq!(
+            interp.env.borrow().get("b"),
+            Some(Value::Float(f64::INFINITY))
+        );
+    }
+
+    #[test]
     fn range_materialization_stops_at_integer_overflow() {
         let values = materialize_range(i64::MAX - 1, i64::MAX, 2);
         assert_eq!(values, vec![Value::Int(i64::MAX - 1)]);
@@ -14186,9 +14269,10 @@ result = len(a) + len(b) + c["x"] + len(empty_s) + len(empty_d)
         assert!(
             matches!(interp.env.borrow().get("j"), Some(Value::Float(value)) if value.is_finite())
         );
-        assert!(
-            matches!(interp.env.borrow().get("k"), Some(Value::Float(value)) if value.is_finite())
-        );
+        // A negative exponent on an int (however large) has no exact
+        // integer answer unless the base is 0, 1, or -1: int.nan, not a
+        // promotion to float.
+        assert_eq!(interp.env.borrow().get("k"), Some(Value::Int(INT_NAN)));
     }
 
     #[test]

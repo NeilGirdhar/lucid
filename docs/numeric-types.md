@@ -270,6 +270,31 @@ def dispatch pow(base: complex, exponent: complex) -> complex:
 `0 ** 0` stays `1`, the ordinary convention, in every case — only a
 negative exponent on a zero base has no defined answer to give.
 
+Each dispatch case's result stays the type it was called with — `pow`
+never widens `int` to `float` or `float` to `complex` to make room for
+an answer the input type can't represent, the same trade the zero-base
+case already makes. A negative exponent on an `int` base other than
+`0`, `1`, or `-1` has no exact `int` answer either — `2 ** -1` is
+`0.5`, not an integer — so it returns `int.nan` rather than silently
+becoming a `float`:
+
+```python
+2 ** -1      # int.nan, not 0.5
+1 ** -5      # 1
+(-1) ** -4   # 1
+```
+A negative `float` base with a non-integer exponent has the same
+problem one level up: `(-8.0) ** (1.0 / 3.0)` has a real cube root,
+`-2.0`, but also two complex ones, and nothing about a `float` result
+says which the caller wanted, so it's `float.nan`. A caller who wants
+the complex answer casts to `complex` first, the same way any other
+narrowing is asked for explicitly rather than inferred from context:
+
+```python
+(-8.0) ** (1.0 / 3.0)              # float.nan
+complex(-8.0) ** complex(1.0 / 3.0)  # a defined complex result
+```
+
 A third parameter changes the job, not just the answer: Python's own
 three-argument `pow(base, exponent, modulus)` computes `(base **
 exponent) % modulus` by modular exponentiation, without ever
