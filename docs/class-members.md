@@ -77,13 +77,13 @@ A field's docstring and metadata are [metadata blocks](metadata.md),
 standalone `;` lines right after the field:
 
 ```python
-class Config:
-    name: str
-    ; "the user's display name"
+class Layer:
+    weights: Array
+    ; "the layer's learnable weight matrix"
 
-    retries: int = 3
-    ; "how many times to retry a failed request"
-    ; {"cli_flag": "--retries"}
+    activation: str = "relu"
+    ; "the nonlinearity applied after the affine transform"
+    ; {"static": true}
 ```
 No new keyword or builtin call is needed — a checked, structured
 replacement for what a leading string literal only conventionally means

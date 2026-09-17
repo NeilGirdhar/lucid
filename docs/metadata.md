@@ -34,13 +34,14 @@ string or dict doesn't end the block early:
 
 ```python
 ; "the amount to move, in the account's currency"   # a docstring
-; {"cli_flag": "--retries"}                          # metadata
+; {"static": true}                                   # metadata
 ; ignore: unused_import                              # a linter directive
 ```
 
 A bare string is a docstring. A bare dict is metadata — arbitrary,
-tool-facing data, the way `{"cli_flag": "--retries"}` might drive an
-argument-parser generator; Lucid never looks inside it. `ignore` is the
+tool-facing data, the way `{"static": true}` might tell a JAX-style
+pytree flattener to treat a field as static auxiliary data instead of a
+traced array leaf; Lucid never looks inside it. `ignore` is the
 one word a metadata block itself recognizes, naming a check the linter
 should not report here; `unused_import` is not checked by the compiler
 at all — it's validated against the linter's own registry of known
@@ -110,13 +111,13 @@ def transfer(amount: float, from_account: str, to_account: str) -> none:
     ; "Move money between two accounts."
     ...
 
-class Config:
-    ; "Application configuration."
-    name: str
-    ; "the user's display name"
-    retries: int = 3
-    ; "how many times to retry a failed request"
-    ; {"cli_flag": "--retries"}
+class Layer:
+    ; "A single feed-forward layer."
+    weights: Array
+    ; "the layer's learnable weight matrix"
+    activation: str = "relu"
+    ; "the nonlinearity applied after the affine transform"
+    ; {"static": true}
 ```
 
 ## Triple-quoted strings are docstring shorthand
