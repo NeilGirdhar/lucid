@@ -10736,10 +10736,18 @@ static inline void lucid_print_val(LucidVal v) {
                         message: message.into(),
                     });
                 }
-                if self
-                    .from_imports
-                    .get(name)
-                    .is_some_and(|module| module == "math")
+                // A local variable or parameter shadows every case below,
+                // the same way plain lexical scoping shadows an import
+                // everywhere else: `def f(e: Expr) -> ...` must read its own
+                // parameter, not silently become the math constant `e`
+                // (M_E) just because nothing named `e` exists at module
+                // scope.
+                let shadowed_by_local = self.var_types.contains_key(name);
+                if !shadowed_by_local
+                    && self
+                        .from_imports
+                        .get(name)
+                        .is_some_and(|module| module == "math")
                 {
                     match name.as_str() {
                         "pi" => return Ok("M_PI".to_string()),
@@ -10751,18 +10759,22 @@ static inline void lucid_print_val(LucidVal v) {
                     "true" => Ok("true".to_string()),
                     "false" => Ok("false".to_string()),
                     "none" => Ok("lucid_none()".to_string()),
-                    "pi" if !self.global_vars.contains_key(name) => Ok("M_PI".to_string()),
-                    "e" if !self.global_vars.contains_key(name) => Ok("M_E".to_string()),
-                    "platform" if !self.global_vars.contains_key(name) => {
+                    "pi" if !shadowed_by_local && !self.global_vars.contains_key(name) => {
+                        Ok("M_PI".to_string())
+                    }
+                    "e" if !shadowed_by_local && !self.global_vars.contains_key(name) => {
+                        Ok("M_E".to_string())
+                    }
+                    "platform" if !shadowed_by_local && !self.global_vars.contains_key(name) => {
                         Ok("lucid_sys_platform()".to_string())
                     }
-                    "version" if !self.global_vars.contains_key(name) => {
+                    "version" if !shadowed_by_local && !self.global_vars.contains_key(name) => {
                         Ok("lucid_sys_version()".to_string())
                     }
-                    "argv" if !self.global_vars.contains_key(name) => {
+                    "argv" if !shadowed_by_local && !self.global_vars.contains_key(name) => {
                         Ok("lucid_sys_argv()".to_string())
                     }
-                    "done" if !self.global_vars.contains_key(name) => {
+                    "done" if !shadowed_by_local && !self.global_vars.contains_key(name) => {
                         Ok("lucid_str(\"iteration.done\")".to_string())
                     }
                     "self" => Ok("self".to_string()),
@@ -17905,6 +17917,21 @@ print(c.x, c.y)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n");
+    }
+
+    #[test]
+    fn native_parameter_named_e_shadows_the_math_constant() {
+        let source = "sealed class Expr:\n    tag: int\nclass Num(Expr):\n    v: int\ndef f(e: Expr) -> int:\n    return e.tag\nprint(f(Num(1, 2)))\n";
+        let module = parse(source).expect("shadowing source should parse");
+        let output =
+            std::env::temp_dir().join(format!("lucid_codegen_e_shadow_{}", std::process::id()));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0)
+            .expect("a parameter named 'e' should read its own value, not the math constant M_E");
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
     }
 
     #[test]
