@@ -13285,6 +13285,7 @@ impl TypeChecker {
                     }
                     match &val_t {
                         Type::View { ref inner, .. } => match inner.as_ref() {
+                            Type::Str | Type::LiteralStr(_) => Ok(val_t.clone()),
                             Type::Class { name, .. }
                                 if matches!(
                                     name.as_str(),
@@ -13300,6 +13301,14 @@ impl TypeChecker {
                             }),
                         },
                         Type::TypeVar(name) if name == "Any" => Ok(Type::TypeVar("Any".into())),
+                        // A literal string, unlike every other builtin
+                        // container, gets its own primitive Type variant
+                        // (Type::Str / Type::LiteralStr) rather than being
+                        // modeled as Type::Class{name: "str", ..} the way
+                        // list/range/Bytes/etc. are, so it needs its own arm
+                        // here instead of falling through to "not
+                        // sliceable".
+                        Type::Str | Type::LiteralStr(_) => Ok(Type::Str),
                         Type::Class { name, .. }
                             if matches!(
                                 name.as_str(),
@@ -18741,6 +18750,14 @@ def reject(value: not int) -> none:
             checker.resolve_type_expr(&expr).unwrap(),
             Type::Shape(vec![Some(2), Some(3)])
         );
+    }
+
+    #[test]
+    fn test_str_literal_is_sliceable() {
+        let module =
+            parse("s = \"hello world\"\nfirst: str = s[0:5]\nrest: str = s[6:]\n").unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module).unwrap();
     }
 
     #[test]
