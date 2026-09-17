@@ -43,7 +43,12 @@ nav = [
     { "With" = "with.md" },
     { "Import" = "import.md" },
   ] },
-  { "Metadata blocks" = "metadata.md" },
+  { "Metadata blocks" = [
+    { "Overview" = "metadata.md" },
+    { "Statement metadata" = "metadata-statements.md" },
+    { "Member metadata" = "metadata-members.md" },
+    { "Parameter metadata" = "metadata-parameters.md" },
+  ] },
   { "Argument bundles" = [
     { "Arguments" = "arguments.md" },
     { "Parameters" = "parameters.md" },

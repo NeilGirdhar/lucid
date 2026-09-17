@@ -80,45 +80,21 @@ nothing wrong with suppressing several unrelated checks on one line.
 ## Where a block attaches
 
 Trailing on the same line, a metadata block attaches to whatever
-precedes it:
+precedes it on that line — the same "attaches to what's immediately to
+its left" reading a trailing `# comment` already has, just checked
+instead of merely conventional. Standing alone on its own line, it
+attaches to the statement immediately above it, at the same
+indentation; if nothing at that indentation precedes it — it's the
+first line of a suite a compound statement just opened — it attaches to
+that statement's own header instead, since a metadata block is legal
+content for a suite the same way an ordinary statement is.
 
-```python
-def clamp(value: int, low: int; "inclusive lower bound", high: int) -> int:
-    ...
-```
-
-Here the block attaches to the parameter `low`, not to `clamp` as a
-whole — the same "attaches to what's immediately to its left" reading a
-trailing `# comment` already has, just checked instead of merely
-conventional.
-
-Standing alone on its own line, a metadata block attaches to the
-statement immediately above it, at the same indentation:
-
-```python
-x: int = 5
-; ignore: unused_variable
-```
-
-If nothing at that indentation precedes it — it's the first line of a
-suite a compound statement just opened — it attaches to that
-statement's own header instead, since a line ending in `:` already
-requires an indented block to follow, and a metadata block is legal
-content for that block the same way an ordinary statement is:
-
-```python
-def transfer(amount: float, from_account: str, to_account: str) -> none:
-    ; "Move money between two accounts."
-    ...
-
-class Layer:
-    ; "A single feed-forward layer."
-    weights: Array
-    ; "the layer's learnable weight matrix"
-    activation: str = "relu"
-    ; "the nonlinearity applied after the affine transform"
-    ; {"static": true}
-```
+Three contexts put this rule to work: [Statement
+metadata](metadata-statements.md) covers an ordinary statement or a
+compound one's own header, [Member metadata](metadata-members.md)
+covers a field inside a class or trait, and [Parameter
+metadata](metadata-parameters.md) covers one parameter inside a
+signature.
 
 ## Triple-quoted strings are docstring shorthand
 
@@ -157,9 +133,13 @@ worth catching, not a convention worth recognizing.
 
 ## Reading metadata blocks back
 
-`fields()` ([Field reflection with `fields`](construction.md#field-reflection-with-fields)) is how code reads a docstring or metadata
-dict back at runtime, for a field, a class, a trait, or a module — and,
-since parameters can carry the same two payloads, for a function's own
-parameters too. `ignore` is different: it exists only for the linter,
-never appears in `fields()`'s output, and has no runtime meaning at
-all.
+Two properties read a docstring or metadata dict back at runtime,
+depending on what carries it: `fields()` ([Field reflection with
+`fields`](construction.md#field-reflection-with-fields)) covers a
+field, a class, a trait, or a module — see [Member
+metadata](metadata-members.md). A function's own parameters go through
+`Callable`'s own [`.parameters`](types.md#reading-a-signatures-own-parameters)
+property instead, since a function is not one of `fields()`'s receivers
+— see [Parameter metadata](metadata-parameters.md). `ignore` is
+different from both: it exists only for the linter, never appears in
+either one's output, and has no runtime meaning at all.
