@@ -1375,6 +1375,15 @@ pub struct TypeEnvironment {
     pub function_positional_only: HashMap<String, HashSet<String>>,
     pub function_keyword_only: HashMap<String, HashSet<String>>,
     pub function_required_params: HashMap<String, Vec<String>>,
+    /// The `*name: T` parameter's own position and element type `T`, keyed
+    /// by function name, when the function declares one — lets a call
+    /// check overflow positional arguments against `T` instead of the
+    /// `list[T]` the parameter itself is typed as (see [Gather](gather.md)).
+    pub function_variadic_positional: HashMap<String, (usize, Type)>,
+    /// The `**name: T` parameter's own element type `T`, keyed by function
+    /// name, when the function declares one — lets a call accept any
+    /// keyword name instead of only the fixed, named parameters.
+    pub function_variadic_keyword: HashMap<String, Type>,
     pub function_overloads: HashMap<String, Vec<Type>>,
     pub dispatch_functions: HashSet<String>,
     pub overloaded_functions: HashSet<String>,
@@ -3609,6 +3618,19 @@ impl TypeChecker {
                             span: gather.span,
                         });
                     }
+                    if let Some(split) = func
+                        .params
+                        .iter()
+                        .find(|param| param.is_variadic_positional || param.is_variadic_keyword)
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "'{}' and '{}' both claim the function's leftover arguments; use one or the other, never both",
+                                split.name, gather.name
+                            ),
+                            span: gather.span,
+                        });
+                    }
                 }
                 if func.decorators.iter().any(
                     |decorator| matches!(decorator, Expr::Ident { name, .. } if name == "contextmanager"),
@@ -3617,11 +3639,34 @@ impl TypeChecker {
                 }
                 let mut param_types = Vec::new();
                 for p in &func.params {
-                    let pt = if let Some(ref t) = p.type_annotation {
+                    let mut pt = if let Some(ref t) = p.type_annotation {
                         self.resolve_type_expr(t)?
                     } else {
                         Type::TypeVar("Any".to_string())
                     };
+                    // Keep this function's own value type consistent with
+                    // how `*name`/`**name` are typed inside its own body
+                    // (see [Gather](gather.md)): `list[T]`/`dict[str, T]`,
+                    // not the bare element type.
+                    if p.is_variadic_positional {
+                        pt = Type::Class {
+                            name: "list".into(),
+                            type_args: vec![pt],
+                            parent: None,
+                            traits: Vec::new(),
+                            fields: HashMap::new(),
+                            is_sealed: false,
+                        };
+                    } else if p.is_variadic_keyword {
+                        pt = Type::Class {
+                            name: "dict".into(),
+                            type_args: vec![Type::Str, pt],
+                            parent: None,
+                            traits: Vec::new(),
+                            fields: HashMap::new(),
+                            is_sealed: false,
+                        };
+                    }
                     param_types.push(pt);
                 }
                 let ret = if let Some(ref r) = func.return_type {
@@ -3731,6 +3776,31 @@ impl TypeChecker {
                 self.env
                     .function_arity
                     .insert(func.name.clone(), (required, maximum));
+                if let Some((variadic_index, param)) = func
+                    .params
+                    .iter()
+                    .enumerate()
+                    .find(|(_, p)| p.is_variadic_positional)
+                {
+                    let element_type = if let Some(ref t) = param.type_annotation {
+                        self.resolve_type_expr(t)?
+                    } else {
+                        Type::TypeVar("Any".to_string())
+                    };
+                    self.env
+                        .function_variadic_positional
+                        .insert(func.name.clone(), (variadic_index, element_type));
+                }
+                if let Some(param) = func.params.iter().find(|p| p.is_variadic_keyword) {
+                    let element_type = if let Some(ref t) = param.type_annotation {
+                        self.resolve_type_expr(t)?
+                    } else {
+                        Type::TypeVar("Any".to_string())
+                    };
+                    self.env
+                        .function_variadic_keyword
+                        .insert(func.name.clone(), element_type);
+                }
                 self.env.function_param_names.insert(
                     func.name.clone(),
                     func.params.iter().map(|param| param.name.clone()).collect(),
@@ -6405,11 +6475,23 @@ impl TypeChecker {
                     } else {
                         Type::TypeVar("Any".to_string())
                     };
-                    // Wrap variadic parameters in Arguments[T]
+                    // A `*name: T` parameter gathers the leftover
+                    // positional arguments into `list[T]`; `**name: T`
+                    // gathers the leftover keyword arguments into
+                    // `dict[str, T]` — see [Gather](gather.md).
                     if param.is_variadic_positional {
                         pt = Type::Class {
-                            name: "Arguments".into(),
+                            name: "list".into(),
                             type_args: vec![pt],
+                            parent: None,
+                            traits: Vec::new(),
+                            fields: HashMap::new(),
+                            is_sealed: false,
+                        };
+                    } else if param.is_variadic_keyword {
+                        pt = Type::Class {
+                            name: "dict".into(),
+                            type_args: vec![Type::Str, pt],
                             parent: None,
                             traits: Vec::new(),
                             fields: HashMap::new(),
@@ -10729,6 +10811,8 @@ impl TypeChecker {
                                         .last()
                                         .is_some_and(Self::is_argument_bundle_type)
                             );
+                            let accepts_any_keyword =
+                                self.env.function_variadic_keyword.contains_key(name);
                             if let Some(parameter_names) = self.env.function_param_names.get(name) {
                                 let mut seen_named = HashSet::new();
                                 let mut saw_named = false;
@@ -10740,7 +10824,10 @@ impl TypeChecker {
                                         let known_parameter = parameter_names
                                             .iter()
                                             .any(|parameter_name| parameter_name == argument_name);
-                                        if !known_parameter && !accepts_gather_bundle {
+                                        if !known_parameter
+                                            && !accepts_gather_bundle
+                                            && !accepts_any_keyword
+                                        {
                                             return Err(TypeError {
                                                 message: format!(
                                                     "function '{}' has no parameter named '{}'",
@@ -11514,6 +11601,10 @@ impl TypeChecker {
                                 let mut seen_named = HashSet::new();
                                 let accepts_gather_bundle =
                                     params.last().is_some_and(Self::is_argument_bundle_type);
+                                let variadic_positional =
+                                    self.env.function_variadic_positional.get(name).cloned();
+                                let accepts_any_keyword =
+                                    self.env.function_variadic_keyword.contains_key(name);
                                 for argument in args {
                                     let index = if let Some(argument_name) = &argument.name {
                                         saw_named = true;
@@ -11522,6 +11613,9 @@ impl TypeChecker {
                                                 parameter_name == argument_name
                                             });
                                         if index.is_none() && !accepts_gather_bundle {
+                                            if accepts_any_keyword {
+                                                continue;
+                                            }
                                             return Err(TypeError {
                                                 message: format!(
                                                     "callable has no parameter named '{}'",
@@ -11585,17 +11679,48 @@ impl TypeChecker {
                                                 span: argument.value.span(),
                                             });
                                         }
-                                        index
+                                        // Every positional argument at or
+                                        // beyond `*name`'s own position
+                                        // feeds that one variadic slot —
+                                        // nothing else can consume it
+                                        // positionally past that point.
+                                        match &variadic_positional {
+                                            Some((variadic_index, _)) => index.min(*variadic_index),
+                                            None => index,
+                                        }
                                     };
+                                    if matches!(&argument.value, Expr::Ident { name, .. } if name == "_")
+                                    {
+                                        continue;
+                                    }
+                                    if let Some((variadic_index, element_type)) =
+                                        &variadic_positional
+                                    {
+                                        if index == *variadic_index {
+                                            let argument_type = self
+                                                .argument_type_against_parameter(
+                                                    argument,
+                                                    element_type,
+                                                )?;
+                                            if !argument_type.is_subtype_of(element_type, &self.env)
+                                            {
+                                                return Err(TypeError {
+                                                    message: format!(
+                                                        "argument {} to '{}' has incompatible type",
+                                                        index + 1,
+                                                        name
+                                                    ),
+                                                    span: argument.value.span(),
+                                                });
+                                            }
+                                            continue;
+                                        }
+                                    }
                                     let Some(parameter) = params.get(index) else {
                                         continue;
                                     };
                                     if index + 1 == params.len()
                                         && Self::is_argument_bundle_type(parameter)
-                                    {
-                                        continue;
-                                    }
-                                    if matches!(&argument.value, Expr::Ident { name, .. } if name == "_")
                                     {
                                         continue;
                                     }
@@ -15410,11 +15535,61 @@ class Child(Base):
     }
 
     #[test]
-    fn variadic_positional_parameters_type_as_arguments() {
-        let module = parse("def greet(*names: str):\n    for name in names:\n        print(name)\n\ngreet(\"Alice\", \"Bob\")\n").unwrap();
+    fn variadic_positional_parameters_type_as_lists() {
+        let module = parse("def greet(*names: str):\n    length: int = len(names)\n    for name in names:\n        print(name)\n\ngreet(\"Alice\", \"Bob\")\n").unwrap();
         let mut checker = TypeChecker::new();
         let result = checker.check_module(&module);
         assert!(result.is_ok(), "{result:?}");
+
+        // A `*name: T` parameter's own function type is `list[T]` too, not
+        // some other wrapper -- consistent with how it types inside the
+        // function's own body.
+        let module =
+            parse("def greet(*names: str):\n    ...\ngreeter: (str) -> none = greet\n").unwrap();
+        let error = TypeChecker::new()
+            .check_module(&module)
+            .expect_err("*names: str should type as list[str], not str");
+        assert!(error.message.contains("list"));
+    }
+
+    #[test]
+    fn variadic_keyword_parameters_type_as_dicts() {
+        let module = parse(
+            "def render(template: str, **fields: str) -> str:\n    name: str = fields[\"name\"]\n    return template + name\n\nrender(\"Hello \", name=\"Ada\")\n",
+        )
+        .unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_module(&module);
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn split_and_bundled_gather_forms_never_mix() {
+        let module =
+            parse("def f(*x: int, ***rest: Arguments[int, dict[str, str]]) -> none:\n    ...\n")
+                .unwrap();
+        let error = TypeChecker::new()
+            .check_module(&module)
+            .expect_err("*x and ***rest both claim the leftover arguments");
+        assert!(error.message.contains("never both"));
+
+        let module =
+            parse("def g(**y: str, ***rest: Arguments[int, dict[str, str]]) -> none:\n    ...\n")
+                .unwrap();
+        let error = TypeChecker::new()
+            .check_module(&module)
+            .expect_err("**y and ***rest both claim the leftover arguments");
+        assert!(error.message.contains("never both"));
+    }
+
+    #[test]
+    fn variadic_positional_overflow_checks_element_type() {
+        let module =
+            parse("def total(*values: int) -> int:\n    return 0\ntotal(1, \"bad\", 3)\n").unwrap();
+        let error = TypeChecker::new()
+            .check_module(&module)
+            .expect_err("a str argument should not satisfy *values: int");
+        assert!(error.message.contains("incompatible type"));
     }
 
     #[test]
