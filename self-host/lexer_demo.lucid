@@ -1,0 +1,42 @@
+# Exercises self-host/lexer.lucid against a small real Lucid snippet, then
+# against the lexer's own source -- if the lexer can tokenize itself
+# without a LexError, that's the first real self-hosting milestone: Lucid
+# source a human wrote, run by the reference interpreter, correctly
+# lexing Lucid source (including its own).
+
+from .lexer import tokenize, Token, LexError
+
+def describe(tok: Token) -> str:
+    if tok.text == "":
+        return tok.kind
+    return tok.kind + "(" + tok.text + ")"
+
+def dump(source: str) -> int | LexError:
+    tokens = tokenize(source)?
+    for tok in tokens:
+        print(describe(tok))
+    return len(tokens)
+
+sample = "def greet(name: str) -> str:\n    return \"Hello, \" + name\n\nclass Point:\n    x: int\n    y: int\n\np = Point(1, 2)\nprint(p.x + p.y)\n"
+
+print("--- tokenizing a sample program ---")
+match dump(sample) as result:
+    case int:
+        print("token count:", result)
+    case LexError:
+        print("LEX ERROR:", result.message, "at", result.line, result.column)
+
+def self_tokenize_count(path: str) -> int | ParseError | LexError:
+    own_source = read_file(path)?
+    tokens = tokenize(own_source)?
+    return len(tokens)
+
+print("")
+print("--- tokenizing the lexer's own source ---")
+match self_tokenize_count("self-host/lexer.lucid") as result:
+    case int:
+        print("self-tokenize succeeded:", result, "tokens")
+    case ParseError:
+        print("could not read own source:", result.message)
+    case LexError:
+        print("LEX ERROR in self-tokenize:", result.message, "at", result.line, result.column)
