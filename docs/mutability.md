@@ -77,55 +77,61 @@ consume their type parameters — but a read-only or immutable view drops
 every mutating member, and often loses whichever use forced invariance
 in the first place. That is exactly the covariance the parameter dilemma
 above needed, made sound because the view itself blocks writes. One
-marker on the mutable declaration settles the variance of all three
-views; see [Variance under ~T and !T](generics.md) for the full rule
-and why it never needs more than one:
+marker on the mutable declaration, `InferenceModel[in ~out K]`, settles
+the variance of all three views; see
+[Variance under ~T and !T](generics.md) for what the marker means and
+why it never needs more than one.
 
-```text
-InferenceModel[in ~out K]
+The payoff shows up at the call site: passing a `Cat`-labeled model
+where an `Animal`-labeled read-only view is expected type-checks, and
+no mutable reference could ever safely permit the same substitution:
+
+```python
+def summarize(model: ~InferenceModel[Animal]) -> Animal:
+    return model.labels[0]
+
+cats: InferenceModel[Cat] = InferenceModel.from_checkpoint("model.bin", [Cat("felix")])
+summarize(cats)   # fine: InferenceModel[Cat] <: ~InferenceModel[Animal], covariant in K
 ```
-which reads as: both `in` and `out` apply while mutable — `score`
-writes to `self._scores`, consuming `K`, that's the `in` use — but
-only `out` survives once read-only or immutable, since the write that
-forced invariance is gone and only `labels: list[K]`'s read remains.
+Passing `cats` where a mutable `InferenceModel[Animal]` parameter was
+expected would not type-check: that binding would let `summarize` call
+`model.score(Dog("fido"))`, writing a `Dog` key into `cats`'s actual
+`dict[Cat, float]` cache. `~InferenceModel[Animal]` forecloses exactly
+that — `score` mutates, so it drops out of the read-only view, leaving
+only the covariant read of `labels` that `summarize` relies on.
 
 ### Read-only dictionaries
 
 This avoids the old split between mutable dictionaries and read-only mapping
 interfaces. A mutable `dict[str, Cat]` should not be usable as a
 `dict[str, Animal]` because the receiver could write a `Dog` into it. But a
-read-only view can safely widen the produced value type:
+read-only view can safely widen the produced value type, the same way
+[Safe covariance](#safe-covariance) does above; one declaration,
+`dict[in out K, in ~out V]`, governs all three views — see
+[Variance under ~T and !T](generics.md) for why `K` stays invariant while
+`V` alone loosens.
 
 ```python
-cats: dict[str, Cat] = {:}
-animals: ~dict[str, Animal] = cats
+def oldest_pet(pets: ~dict[str, Animal]) -> Animal:
+    return pets.get("felix")
 
-animal = animals["ada"]
-animals["turing"] = Dog()  # error: read-only view
+cats: dict[str, Cat] = {"felix": Cat()}
+oldest_pet(cats)   # fine: dict[str, Cat] <: ~dict[str, Animal], V is covariant read-only
 ```
+A parameter typed as the mutable `dict[str, Animal]` would not type-check
+for the same call: `oldest_pet` could then write `pets["mimi"] = Dog()`,
+corrupting `cats`'s actual `dict[str, Cat]`. `~dict[str, Animal]` exposes
+no `__setitem__` at all, so there is nothing left for the substitution to
+endanger.
+
 Python's `Mapping` does not fully solve this. It is a separate abstraction
 from `dict`, and its key parameter is still invariant because the mapping API
 both accepts keys for lookup and produces keys through views such as
 `keys()`. Library authors still have to choose a different name and API
-surface to ask for read-only dictionary access, and they only get the variance
-that `Mapping` happened to declare.
-
-Lucid keeps these as views of the same collection abstraction instead,
-with one declaration governing all three:
-
-```text
-dict[in out K, in ~out V]
-```
-`K` stays invariant everywhere: both of its uses — `get`'s lookup and
-`keys()`'s enumeration — are non-mutating, so both survive onto the
-read-only view unchanged, and invariance survives with them. `V` is
-only ever produced by a non-mutating member (`get`) — the `out` use —
-and only ever consumed by a mutating one (`__setitem__`) — the `in`
-use — so the read-only view drops `in` and loosens to `out` alone. A
-narrower view that exposes only keys or only values can land on
-different variance again, for the same reason. Code does not need a
-separate `Mapping` type just to ask for a read-only dictionary-shaped
-view.
+surface to ask for read-only dictionary access, and they only get the
+variance that `Mapping` happened to declare. Lucid keeps these as views of
+the same collection abstraction instead — no separate `Mapping` type is
+needed just to ask for a read-only dictionary-shaped view.
 
 ## Immutable view
 

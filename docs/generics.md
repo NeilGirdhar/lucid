@@ -124,8 +124,11 @@ survives to the read-only and immutable views, the same way `~T`
 itself names a view that still exists, never one that's been
 negated away. `Bag` above is really `class Bag[~in out K]`: `in`
 survives, `out` drops. [Safe covariance](mutability.md#safe-covariance)'s
-`InferenceModel` is the opposite case, `in ~out K`: `out` survives,
-`in` drops. Together with
+`InferenceModel` is the opposite case, `in ~out K`: both `in` and `out`
+apply while mutable — `score` writes to `self._scores`, consuming `K`,
+that's the `in` use — but only `out` survives once read-only or
+immutable, since the write that forced invariance is gone and only
+`labels: list[K]`'s read remains. Together with
 plain `out K` and `in K`, this covers every reachable combination —
 the other four of the nine naively possible (mutable, view) pairings,
 such as a covariant mutable type with an invariant view, can never
@@ -138,6 +141,19 @@ happen, so there is no marker for them:
 | `in out K` | invariant | invariant |
 | `in ~out K` | invariant | covariant |
 | `~in out K` | invariant | contravariant |
+
+The same per-parameter rule applies when a type has more than one type
+parameter: [Read-only dictionaries](mutability.md#read-only-dictionaries)'
+declaration, `dict[in out K, in ~out V]`, puts `K` on the `in out K` row
+and `V` on the `in ~out K` row, independently. `K` stays invariant
+everywhere: both of its uses — `get`'s lookup and `keys()`'s enumeration
+— are non-mutating, so both survive onto the read-only view unchanged,
+and invariance survives with them. `V` is only ever produced by a
+non-mutating member (`get`) — the `out` use — and only ever consumed by
+a mutating one (`__setitem__`) — the `in` use — so the read-only view
+drops `in` and loosens to `out` alone. A narrower view that exposes only
+keys or only values can land on different variance again, for the same
+reason.
 
 `~T` and `!T` land on the same variance as each other whenever every
 method reachable only through `!Self` leaves `K` alone — true of
