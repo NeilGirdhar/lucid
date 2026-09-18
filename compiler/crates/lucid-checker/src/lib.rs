@@ -2948,6 +2948,26 @@ impl TypeChecker {
 
     pub fn check_module(&mut self, module: &Module) -> Result<(), TypeError> {
         self.validate_metadata_blocks(&module.statements)?;
+        // Merge imported declarations before anything else, including the
+        // "Pass 1" declaration pass below: a function's own signature
+        // (`def make() -> list[Stmt]`) is resolved there, in file order,
+        // and resolving `Stmt` before its import has merged in falls back
+        // to treating it as an unknown forward reference -- fields empty,
+        // not sealed -- which then permanently disagrees with every later,
+        // correctly-resolved use of the same imported name (a variable
+        // annotated `list[Stmt]` lower in the file, resolved after the
+        // merge, sees the real one). This mirrors why class modifiers and
+        // declarations are collected up front below: none of this can
+        // depend on source order, and an import is a declaration like any
+        // other.
+        for stmt in &module.statements {
+            let Stmt::FromImport { module, names, .. } = stmt else {
+                continue;
+            };
+            if let Some(source_env) = self.imported_envs.get(module).cloned() {
+                self.merge_import_from(&source_env, names);
+            }
+        }
         // Record modifiers before resolving bases so inheritance constraints do
         // not depend on source declaration order.
         for stmt in &module.statements {
@@ -15303,6 +15323,39 @@ mod tests {
         assert!(
             unimported_checker.check_module(&unimported_module).is_err(),
             "a name not in the import list should not be visible"
+        );
+    }
+
+    #[test]
+    fn imported_envs_merge_before_the_declaration_pass_resolves_signatures() {
+        // check_module resolves every top-level function's signature (Pass
+        // 1, collect_declaration) before it sequentially reaches and
+        // processes a Stmt::FromImport statement later in the file (Pass
+        // 3). Without an up-front merge, a function whose own signature
+        // names an imported type -- `def make() -> list[Stmt]` -- has that
+        // type resolved before the import merges in, permanently caching
+        // an "unknown forward reference" placeholder (empty fields, not
+        // sealed) that then disagrees with the same name resolved
+        // correctly everywhere after the import statement.
+        let source_module =
+            parse("sealed class Stmt:\n    span: int\nclass Pass(Stmt):\n    pass\n")
+                .expect("source module should parse");
+        let mut source_checker = TypeChecker::new();
+        source_checker
+            .check_module(&source_module)
+            .expect("source module should check");
+
+        let importer_module = parse(
+            "from .stmt import Stmt, Pass\n\ndef make() -> list[Stmt]:\n    return [Pass(1)]\n\nclass Runner:\n    x: int\n\n    def run(self) -> int:\n        body: list[Stmt] = []\n        body = make()\n        return len(body)\n",
+        )
+        .expect("importer module should parse");
+        let mut importer = TypeChecker::new();
+        importer
+            .imported_envs
+            .insert(".stmt".to_string(), source_checker.env.clone());
+        importer.check_module(&importer_module).expect(
+            "a function's own return type naming an imported class, checked against a later \
+             variable of the same imported type, should agree",
         );
     }
 
