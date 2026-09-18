@@ -1217,7 +1217,8 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: return statement outside a function",
         "ERROR: if condition must be bool, got int",
         "ERROR: while condition must be bool, got str",
-        "ERROR: function 'bad' must have an explicit return type annotation in this subset",
+        "--- an omitted return type means -> none ---\n(no errors)",
+        "ERROR: return type mismatch: expected none, got int",
         "ERROR: function 'bad' can fall off its end without returning a int",
         "--- if/elif/else that all return still passes ---\n(no errors)",
         "ERROR: break statement outside a loop",
@@ -1234,6 +1235,14 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: cannot determine the type of 'xs'",
         "--- a list-typed class field is supported ---\n(no errors)",
         "ERROR: print() of a 'Bag' value is not supported in this subset (it has a field whose type is itself a class or a list)",
+        "--- attribute assignment is supported ---\n(no errors)",
+        "ERROR: field 'x' expects int, got str",
+        "ERROR: 'P' has no field 'z'",
+        "ERROR: attribute assignment is only supported on a class value in this subset",
+        "ERROR: 'x' cannot be bound to a none-typed value in this subset",
+        "ERROR: print() of a none-typed value is not supported in this subset",
+        "ERROR: parameter 'x' has an unsupported type (none isn't a valid parameter type)",
+        "ERROR: field 'x' has an unsupported type (none isn't a valid field type)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1308,7 +1317,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 10] = [
+    let cases: [(&str, &str); 11] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1321,6 +1330,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         ("records", "self-host/compile_demo_programs/records.lucid"),
         ("strings", "self-host/compile_demo_programs/strings.lucid"),
         ("lists", "self-host/compile_demo_programs/lists.lucid"),
+        ("mutation", "self-host/compile_demo_programs/mutation.lucid"),
         ("vectors", "examples/vectors.lucid"),
     ];
 

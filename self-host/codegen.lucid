@@ -38,7 +38,7 @@
 # own more permissive same-function visibility.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, type_name, mangle_component, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, NoneType, type_name, mangle_component, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
 
 runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
 
@@ -197,6 +197,8 @@ def c_type_of(t: LType) -> str:
             return result.name + " *"
         case ListType:
             return "lucid_list_" + mangle_component(result.element_type) + " *"
+        case NoneType:
+            return "void"
         case _:
             return "long"
 
@@ -259,12 +261,18 @@ class Codegen:
                                 param_types.append(pt)
                             case none:
                                 pass
-                    return_type: LType = IntType()
-                    match resolve_type_expr(fn.return_type) as rt:
-                        case LType:
-                            return_type = rt
-                        case none:
-                            pass
+                    # An omitted return-type annotation means `-> none`
+                    # (see checker.lucid's collect_function_signature
+                    # for why) -- codegen.lucid keeps its own copy of
+                    # this table rather than reusing checker.lucid's,
+                    # so it needs the same default.
+                    return_type: LType = NoneType()
+                    if fn.return_type != none:
+                        match resolve_type_expr(fn.return_type) as rt:
+                            case LType:
+                                return_type = rt
+                            case none:
+                                pass
                     register_signature(self.functions, FuncSig(fn.name, param_types, return_type))
                 case _:
                     pass
@@ -706,13 +714,21 @@ class Codegen:
                 return indent + name + " = " + value_code + ";"
             case Assignment:
                 value_code = self.codegen_expr(result.value, known)
-                name = self.ident_target_name(result.target)
-                match self.infer_expr_type(result.value, known) as it:
-                    case LType:
-                        known[name] = it
-                    case none:
-                        pass
-                return indent + name + " = " + value_code + ";"
+                match result.target as target:
+                    case Attribute:
+                        # A field write, not a local binding -- `known`
+                        # is untouched (there's no local name here to
+                        # register a type for).
+                        receiver_code = self.codegen_expr(target.value, known)
+                        return indent + receiver_code + "->" + target.attr + " = " + value_code + ";"
+                    case _:
+                        name = self.ident_target_name(result.target)
+                        match self.infer_expr_type(result.value, known) as it:
+                            case LType:
+                                known[name] = it
+                            case none:
+                                pass
+                        return indent + name + " = " + value_code + ";"
             case If:
                 cond = self.codegen_expr(result.condition, known)
                 then_code = self.codegen_block(result.then_branch, indent + "    ", known, broken_flag)
@@ -897,7 +913,13 @@ class Codegen:
                 case VarDef:
                     names.add(self.ident_pattern_name(result.pattern))
                 case Assignment:
-                    names.add(self.ident_target_name(result.target))
+                    match result.target as target:
+                        case Attribute:
+                            # A field write, not a local -- nothing to
+                            # hoist a declaration for.
+                            pass
+                        case _:
+                            names.add(self.ident_target_name(result.target))
                 case If:
                     self.collect_local_names(result.then_branch, names)
                     for branch in result.elif_branches:
@@ -948,11 +970,15 @@ class Codegen:
                         case none:
                             pass
                 case Assignment:
-                    match self.infer_expr_type(result.value, known) as it:
-                        case LType:
-                            known[self.ident_target_name(result.target)] = it
-                        case none:
+                    match result.target as target:
+                        case Attribute:
                             pass
+                        case _:
+                            match self.infer_expr_type(result.value, known) as it:
+                                case LType:
+                                    known[self.ident_target_name(result.target)] = it
+                                case none:
+                                    pass
                 case If:
                     self.infer_local_types(result.then_branch, known)
                     for branch in result.elif_branches:
@@ -1040,12 +1066,6 @@ class Codegen:
                     param_types.append(pt)
                 case none:
                     return none
-        return_type: LType = IntType()
-        match resolve_type_expr(fn.return_type) as rt:
-            case LType:
-                return_type = rt
-            case none:
-                pass
         return find_signature(self.functions, fn.name, param_types)
 
     def codegen_module(self, stmts: list[Stmt]) -> str:

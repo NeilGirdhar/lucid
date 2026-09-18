@@ -46,7 +46,7 @@
 # else checker.lucid's header comment's Rust counterpart covers.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, NoneType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
     message: str
@@ -120,6 +120,16 @@ class Checker:
     # `x` as `long` from the first). Every VarDef/Assignment/for-loop
     # target binds through here instead of writing `known` directly.
     def bind(self, known: dict[str, LType], name: str, t: LType, span: Span):
+        match t as nt:
+            case NoneType:
+                # `none` is only ever a return type in this subset --
+                # never a value a variable can hold. A call to a
+                # `-> none` function is only meaningful as its own
+                # statement (`some_none_fn()`), not assigned anywhere.
+                self.error("'" + name + "' cannot be bound to a none-typed value in this subset (a call to a function returning none is only supported as a statement on its own)", span)
+                return
+            case _:
+                pass
         match known.get(name, none) as existing:
             case LType:
                 if not types_equal(existing, t):
@@ -147,6 +157,8 @@ class Checker:
             match member as m:
                 case FieldMember:
                     match resolve_type_expr(m.field.type_annotation) as ft:
+                        case NoneType:
+                            self.error("field '" + m.field.name + "' has an unsupported type (none isn't a valid field type)", cd.span)
                         case LType:
                             fields.append(FieldSig(m.field.name, ft))
                         case none:
@@ -171,16 +183,25 @@ class Checker:
         ok = true
         for p in fn.params:
             match resolve_type_expr(p.type_annotation) as pt:
+                case NoneType:
+                    self.error("parameter '" + p.name + "' has an unsupported type (none isn't a valid parameter type)", fn.span)
+                    ok = false
                 case LType:
                     param_types.append(pt)
                 case none:
                     self.error("parameter '" + p.name + "' has an unsupported type", fn.span)
                     ok = false
-        return_type: LType = IntType()
-        if fn.return_type == none:
-            self.error("function '" + fn.name + "' must have an explicit return type annotation in this subset", fn.span)
-            ok = false
-        else:
+        # An omitted return-type annotation means `-> none`, exactly
+        # like writing `-> none` explicitly -- verified directly
+        # against the reference interpreter (`def f(): print(1)` and
+        # `def f() -> none: print(1)` behave identically there, and
+        # calling either and printing the result gives `none`). This
+        # subset used to reject an omitted annotation outright, back
+        # when there was no NoneType to represent it correctly and
+        # silently defaulting to `int` was the alternative (a real
+        # miscompile, fixed before this).
+        return_type: LType = NoneType()
+        if fn.return_type != none:
             match resolve_type_expr(fn.return_type) as rt:
                 case LType:
                     return_type = rt
@@ -222,18 +243,24 @@ class Checker:
                     known[p.name] = pt
                 case none:
                     pass
-        # `resolve_type_expr(fn.return_type)` can come back `none` here
-        # even for a function whose header genuinely IS a function --
-        # an unsupported return-type annotation, already reported once
-        # by collect_function_signature. `in_function` (passed
-        # separately, always `true` from here) is what actually
-        # distinguishes "return outside any function" from "inside a
-        # function whose return type this subset couldn't resolve" --
-        # collapsing them into one `LType | none` would make a return
-        # inside the latter wrongly report "outside a function" too.
-        expected_return: LType | none = resolve_type_expr(fn.return_type)
+        # An omitted annotation means `-> none`, same as
+        # collect_function_signature. `resolve_type_expr(fn.return_type)`
+        # can still come back `none` for a function whose header
+        # genuinely IS a function -- an unsupported return-type
+        # annotation, already reported once by
+        # collect_function_signature. `in_function` (passed separately,
+        # always `true` from here) is what actually distinguishes
+        # "return outside any function" from "inside a function whose
+        # return type this subset couldn't resolve" -- collapsing them
+        # into one `LType | none` would make a return inside the latter
+        # wrongly report "outside a function" too.
+        expected_return: LType | none = NoneType()
+        if fn.return_type != none:
+            expected_return = resolve_type_expr(fn.return_type)
         self.check_block(fn.body, known, expected_return, true, false)
         match expected_return as rt:
+            case NoneType:
+                pass
             case LType:
                 if not definitely_returns(fn.body):
                     self.error("function '" + fn.name + "' can fall off its end without returning a " + type_name(rt), fn.span)
@@ -303,8 +330,30 @@ class Checker:
                                 self.bind(known, target.name, vt, result.span)
                             case none:
                                 pass
+                    case Attribute:
+                        receiver_type = self.check_expr(target.value, known)
+                        match receiver_type as rt:
+                            case ClassType:
+                                match self.classes.get(rt.name, none) as cls:
+                                    case ClassSig:
+                                        match field_type(cls, target.attr) as ft:
+                                            case LType:
+                                                match value_type as vt:
+                                                    case LType:
+                                                        if not types_equal(ft, vt):
+                                                            self.error("field '" + target.attr + "' expects " + type_name(ft) + ", got " + type_name(vt), result.span)
+                                                    case none:
+                                                        pass
+                                            case none:
+                                                self.error("'" + rt.name + "' has no field '" + target.attr + "'", result.span)
+                                    case none:
+                                        self.error("unknown class '" + rt.name + "'", result.span)
+                            case LType:
+                                self.error("attribute assignment is only supported on a class value in this subset", result.span)
+                            case none:
+                                pass
                     case _:
-                        self.error("only a plain name is supported as an assignment target", result.span)
+                        self.error("only a plain name or a class attribute is supported as an assignment target", result.span)
             case If:
                 self.check_condition(result.condition, known, "if")
                 self.check_block(result.then_branch, known, expected_return, in_function, in_loop)
@@ -365,7 +414,11 @@ class Checker:
                                 pass
                     case none:
                         if in_function:
-                            self.error("bare return is not supported in this subset (every checked function returns a value)", result.span)
+                            match expected_return as rt:
+                                case NoneType:
+                                    pass
+                                case _:
+                                    self.error("bare return is not supported in this subset (a function must return a value, unless its return type is none)", result.span)
             case Break:
                 if not in_loop:
                     self.error("break statement outside a loop", result.span)
@@ -684,6 +737,8 @@ class Checker:
                                         pass
                             case ListType:
                                 self.error("print() of a list value is not supported in this subset", call.span)
+                            case NoneType:
+                                self.error("print() of a none-typed value is not supported in this subset (a call to a function returning none produces nothing to print)", call.span)
                             case _:
                                 pass
                     return none

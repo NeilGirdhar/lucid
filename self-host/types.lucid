@@ -27,6 +27,15 @@ class StrType(LType):
 class ClassType(LType):
     name: str
 
+# A function/method's return type only, never a parameter, field, local
+# variable, or list element type -- `none` isn't a value this subset
+# can hold in a variable, only the type of "this call has nothing
+# useful to hoist a declaration for". `resolve_type_expr` only produces
+# it for a `-> none` (or omitted, see collect_function_signature)
+# return-type annotation.
+class NoneType(LType):
+    pass
+
 # `list[T]` for T in int/bool/str/a class -- no nested list[list[T]]
 # (resolve_type_expr rejects it), and no other collection type in this
 # subset. Reference semantics, not by-value: Value::List in
@@ -49,6 +58,8 @@ def type_name(t: LType) -> str:
             return result.name
         case ListType:
             return "list[" + type_name(result.element_type) + "]"
+        case NoneType:
+            return "none"
         case _:
             return "?"
 
@@ -94,6 +105,12 @@ def types_equal(a: LType, b: LType) -> bool:
                     return types_equal(left.element_type, right.element_type)
                 case _:
                     return false
+        case NoneType:
+            match b as right:
+                case NoneType:
+                    return true
+                case _:
+                    return false
         case _:
             return false
 
@@ -118,9 +135,13 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
                 return BoolType()
             if result.name == "str":
                 return StrType()
+            if result.name == "none":
+                return NoneType()
             if result.name == "list" and len(result.args) == 1:
                 match resolve_type_expr(result.args[0]) as et:
                     case ListType:
+                        return none
+                    case NoneType:
                         return none
                     case LType:
                         return ListType(et)

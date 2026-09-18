@@ -98,7 +98,9 @@ report("if condition must be bool", "def bad() -> int:\n    if 5:\n        pass\
 
 report("while condition must be bool", "def bad() -> int:\n    while \"s\":\n        pass\n    return 0\n")
 
-report("unannotated function return type rejected", "def bad():\n    return 1\n")
+report("an omitted return type means -> none", "def ok():\n    print(1)\n\ndef bad() -> int:\n    ok()\n    return 1\n")
+
+report("returning a value from an (implicitly -> none) unannotated function rejected", "def bad():\n    return 1\n")
 
 report("function falling off its end without returning rejected", "def bad() -> int:\n    x = 1\n")
 
@@ -135,3 +137,19 @@ report("nested list[list[int]] rejected", "def bad() -> int:\n    xs: list[list[
 report("a list-typed class field is supported", "class Bag:\n    items: list[int]\n\ndef ok() -> int:\n    return 0\n")
 
 report("print() of a class with a list-typed field rejected", "class Bag:\n    items: list[int]\n\ndef bad() -> int:\n    xs: list[int] = []\n    b = Bag(xs)\n    print(b)\n    return 0\n")
+
+report("attribute assignment is supported", "class P:\n    x: int\n\ndef ok() -> int:\n    p = P(1)\n    p.x = 2\n    print(p.x)\n    return 0\n")
+
+report("attribute assignment with the wrong field type rejected", "class P:\n    x: int\n\ndef bad() -> int:\n    p = P(1)\n    p.x = \"s\"\n    return 0\n")
+
+report("attribute assignment to an unknown field rejected", "class P:\n    x: int\n\ndef bad() -> int:\n    p = P(1)\n    p.z = 2\n    return 0\n")
+
+report("attribute assignment on a non-class value rejected", "def bad() -> int:\n    x = 5\n    x.y = 2\n    return 0\n")
+
+report("binding a none-typed call result rejected", "def foo():\n    print(1)\n\ndef bad() -> int:\n    x = foo()\n    return 0\n")
+
+report("printing a none-typed call result rejected", "def foo():\n    print(1)\n\ndef bad() -> int:\n    print(foo())\n    return 0\n")
+
+report("a none parameter type rejected", "def bad(x: none) -> int:\n    return 0\n")
+
+report("a none field type rejected", "class Bad:\n    x: none\n\ndef ok() -> int:\n    return 0\n")

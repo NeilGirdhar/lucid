@@ -194,13 +194,19 @@ pieces is close to feature parity with its Rust counterpart.
   reused a name at two different types would compile to a single
   wrongly-typed declaration. `if`/`elif`/`while` conditions must be
   `bool` (C accepts any scalar there and would silently apply its own
-  truthiness instead of rejecting, say, `if 5:`). Every function needs
-  an explicit return-type annotation (an unannotated one used to
-  default silently to `int`, so a function actually returning `str`
-  would compile as if it returned `int`, handing codegen a garbage
-  value); every `return` is checked against that type, bare `return` is
-  rejected (there's no `none`/void type in this subset for it to mean),
-  and a `return` outside any function is rejected too. A function whose
+  truthiness instead of rejecting, say, `if 5:`). A function's return
+  type is either an explicit annotation or, if omitted, `-> none`
+  (verified directly against the reference interpreter: `def f():
+  print(1)` and `def f() -> none: print(1)` behave identically there —
+  this subset used to reject an omitted annotation outright, back when
+  there was no way to represent `none` correctly and silently
+  defaulting to `int` was the alternative, a real miscompile, fixed
+  before this); every `return` is checked against that type — bare
+  `return` is allowed only when the function's return type is `none`,
+  rejected otherwise — and a `return` outside any function is rejected
+  too. `none` itself is only ever a return type here, never a value: a
+  call to a `-> none` function can only appear as its own statement,
+  never assigned to a variable or passed to `print(...)`. A function whose
   body can fall off its end without returning is rejected as well — a
   conservative "definitely returns" predicate (an `if` only counts if
   its then-branch, every `elif`, and a *present* `else` all definitely
@@ -216,7 +222,16 @@ pieces is close to feature parity with its Rust counterpart.
   enclosing the one that just ran the clause, not the clause's own
   loop (which has already exited by the time `if_broken` runs) — the
   same "outer context" rule `codegen.lucid`'s `broken_flag` threading
-  uses for the identical case.
+  uses for the identical case. `p.field = value` (attribute
+  assignment, not just attribute *read*) is checked against the
+  field's declared type the same way a plain field access already was
+  — required for a class method to mutate its own state, since a class
+  became a heap-allocated pointer (see `codegen.lucid`'s entry below)
+  specifically so a mutation through one alias is visible through
+  every other alias of the same object, matching `lucid-runtime`'s own
+  `Value::Object` semantics (verified directly: a function taking a
+  class argument and assigning to one of its fields changes the
+  *caller's* object, not a copy).
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -316,7 +331,7 @@ pieces is close to feature parity with its Rust counterpart.
   `%s`), not `1`/`0`, matching the reference interpreter; a class value
   whose fields are all int/bool/str prints as `ClassName({"field":
   value, ...})`, matching lucid-runtime's own default repr, through a
-  `static void lucid_print_<ClassName>(<ClassName> value)` emitted
+  `static void lucid_print_<ClassName>(<ClassName> *value)` emitted
   right after the class's struct, fields sorted by name (matching a
   fix to lucid-runtime's own repr — see below); mixing a class-typed
   `print` argument with ordinary ones switches from one combined
@@ -344,7 +359,15 @@ pieces is close to feature parity with its Rust counterpart.
   loop (nested loops each get their own flag, or none, matching
   docs/for-and-while.md's "an if_broken clause belongs to the loop
   immediately before it"), checked in an `if` right after the loop
-  exits. Lucid has no subprocess/exec builtin, so codegen stops
+  exits. `p.field = value` compiles to `p->field = value;` — a plain C
+  field write through the pointer, not a local-variable declaration, so
+  it's the one `Assignment` shape `collect_local_names`/
+  `infer_local_types` deliberately skip (there's no local name here to
+  hoist a declaration for). A function whose return type is `none`
+  compiles to a `void` C function; a bare `return;` inside one compiles
+  to a bare `return;` in C, same as it always could have, now that
+  `none` is checked as a real return type instead of being rejected
+  outright. Lucid has no subprocess/exec builtin, so codegen stops
   at emitting C text — invoking a system C compiler on it is necessarily
   a driver step outside Lucid, the same role
   `compiler/crates/lucid-codegen` itself plays (it also just shells out
@@ -355,7 +378,7 @@ pieces is close to feature parity with its Rust counterpart.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles nine hand-written programs, each a
+  `codegen.lucid`. Also compiles ten hand-written programs, each a
   real file under `self-host/compile_demo_programs/` (recursion,
   iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
   semantics on all four sign combinations, `bools` — bool literals,
@@ -368,13 +391,17 @@ pieces is close to feature parity with its Rust counterpart.
   one field of mixed str/int/bool type — `strings` — `==`/`!=`/
   `<`/`<=`/`>`/`>=`, `len()`, and `+` concatenation on `str`, standalone,
   assigned to a variable, and through user functions, plus `s[i]`
-  indexing, negative indices, and indexing inside a loop — and `lists`
+  indexing, negative indices, and indexing inside a loop — `lists`
   — a `list[int]` built with a typed empty literal and `append`,
   indexed (including negatively), `len()`'d, iterated with `for`, a
   non-empty list literal iterated directly, a function taking and
   returning `list[int]`, the aliasing case (`b = a; b.append(3)`
   changes `len(a)` too, verified against the interpreter first), and
-  `list[bool]`/`list[str]`), plus one
+  `list[bool]`/`list[str]` — and `mutation` — attribute assignment
+  (`p.x = 2`), a `-> none` function that mutates a class argument's
+  field in place and is called only for effect, and reading the
+  mutated field back afterward, proving the caller's own object
+  changed, not a copy), plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
