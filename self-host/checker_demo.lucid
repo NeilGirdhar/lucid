@@ -47,3 +47,5 @@ report("wrong field type", "class Point:\n    x: int\n    y: int\n\ndef bad() ->
 report("unknown field", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, 2)\n    return p.z\n")
 
 report("no matching dispatch overload", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, 2)\n    q = p + 1\n    return 0\n")
+
+report("keyword construct arguments rejected", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(x=1, y=2)\n    return 0\n")

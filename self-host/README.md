@@ -139,8 +139,13 @@ pieces is close to feature parity with its Rust counterpart.
   codegen's first draft got wrong); a binary operator on two class-typed
   operands, or a call to a name with more than one `dispatch def`,
   resolves to one specific C function chosen by the static argument
-  types and name-mangled by them (`__add___Vector2D_Vector2D`), since C
-  has no overloading of its own; a Lucid function literally named `main`
+  types and name-mangled by them (`lucid___add___Vector2D_Vector2D`,
+  always `lucid_`-prefixed — C reserves every identifier starting with
+  two underscores, or one underscore and an uppercase letter, which
+  Lucid's own dunder convention for dispatch operators collides with
+  directly enough that the *un*-mangled single-overload case, `__add__`
+  alone, needs exactly the same prefix), since C has no overloading of
+  its own; a Lucid function literally named `main`
   becomes C's own `int main(void)`, and a script with no `main` at all
   (the way every real `examples/*.lucid` program is actually written)
   has its top-level statements wrapped into a synthesized one; `print`

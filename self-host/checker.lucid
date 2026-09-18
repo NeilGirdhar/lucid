@@ -321,6 +321,9 @@ class Checker:
             case ClassSig:
                 if len(args) != len(cls.fields):
                     self.error("construct for '" + class_name + "' expects " + str(len(cls.fields)) + " field value(s), got " + str(len(args)), span)
+                for a in args:
+                    if a.name != none:
+                        self.error("construct arguments must be positional (no name=value form) in this subset", span)
                 i = 0
                 while i < len(args) and i < len(cls.fields):
                     arg_type = self.check_expr(args[i].value, known)
@@ -342,6 +345,8 @@ class Checker:
                 arg_types: list[LType] = []
                 any_unknown = false
                 for a in call.args:
+                    if a.name != none:
+                        self.error("call arguments must be positional (no name=value form) in this subset", call.span)
                     match self.check_expr(a.value, known) as at:
                         case LType:
                             arg_types.append(at)

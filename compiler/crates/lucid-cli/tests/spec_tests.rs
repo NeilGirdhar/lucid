@@ -1192,6 +1192,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: field 'y' expects int, got str",
         "ERROR: 'Point' has no field 'z'",
         "ERROR: no '__add__' overload for (Point, int)",
+        "ERROR: construct arguments must be positional (no name=value form)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1239,8 +1240,8 @@ fn self_hosted_self_hosting_demo_runs_lexer_and_parser_through_the_interpreter()
 
 /// The full self-hosted compile pipeline, end to end: `lucid run
 /// self-host/compile_demo.lucid` lexes, parses, checks, and generates C
-/// for three real Lucid programs -- entirely through self-host/lexer.
-/// lucid, parser.lucid, checker.lucid, and codegen.lucid -- writing each
+/// for several programs -- entirely through self-host/lexer.lucid,
+/// parser.lucid, checker.lucid, and codegen.lucid -- writing each
 /// program's C output to self-host/compile_demo_<name>.c (gitignored;
 /// regenerated here). Lucid has no subprocess/exec builtin, so the one
 /// step that can't happen from inside the Lucid program itself is
@@ -1250,6 +1251,19 @@ fn self_hosted_self_hosting_demo_runs_lexer_and_parser_through_the_interpreter()
 /// human would use, runs the resulting native binary, and checks its
 /// output against the actual correct sequence -- proving the generated C
 /// isn't merely well-formed, it's correct.
+///
+/// `vectors` is the actual milestone this whole pipeline was built
+/// toward, checked differently from the rest: examples/vectors.lucid is
+/// a real Lucid program that was never written for this pipeline, using
+/// classes and `dispatch def` operator overloading, so there's no fixed
+/// "correct sequence" to hardcode -- instead its compiled binary's
+/// output is compared, byte for byte, against `lucid run
+/// examples/vectors.lucid`'s own output from the reference interpreter,
+/// the same differential discipline self_hosting_demo.lucid already
+/// applies to the self-hosted lexer and parser. (All of this lives in
+/// one #[test]: a separate test compiling the same shared
+/// self-host/compile_demo_*.c files would race with this one whenever
+/// cargo test runs them in parallel.)
 #[test]
 fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::fs;
@@ -1274,6 +1288,16 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     assert!(
         stdout.contains("CHECK ERROR: undefined name 'missing_variable'"),
         "the broken program should fail checking with the expected error, not produce C: {stdout}"
+    );
+
+    let interpreted_vectors_output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "examples/vectors.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    assert!(
+        interpreted_vectors_output.status.success(),
+        "the reference interpreter should run examples/vectors.lucid cleanly"
     );
 
     let temp_dir = std::env::temp_dir().join(format!(
@@ -1320,83 +1344,35 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         );
     }
 
-    for name in ["fib", "factorial", "gcd", "divmod", "broken", "vectors"] {
-        let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
-    }
-    let _ = fs::remove_dir_all(&temp_dir);
-}
-
-/// The actual milestone this whole pipeline was built toward: compile a
-/// real Lucid program that was never written for this pipeline --
-/// examples/vectors.lucid, using classes and `dispatch def` operator
-/// overloading -- to a native binary, and check that its output matches
-/// `lucid run examples/vectors.lucid`'s own output exactly. Not a hint
-/// that the compiled program is probably right: a byte-for-byte
-/// comparison against the reference interpreter running the identical
-/// source, the same differential discipline self_hosting_demo.lucid
-/// already applies to the self-hosted lexer and parser.
-#[test]
-fn self_hosted_compile_demo_compiles_a_real_example_program() {
-    use std::fs;
-    use std::process::Command;
-    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
-    let c_path = format!("{repo_root}/self-host/compile_demo_vectors.c");
-    let _ = fs::remove_file(&c_path);
-
-    let compile_output = Command::new(env!("CARGO_BIN_EXE_lucid"))
-        .args(["run", "self-host/compile_demo.lucid"])
-        .current_dir(&repo_root)
-        .output()
-        .unwrap();
+    let vectors_c_path = format!("{repo_root}/self-host/compile_demo_vectors.c");
     assert!(
-        compile_output.status.success(),
-        "compile_demo.lucid should run cleanly: {}\n{}",
-        String::from_utf8_lossy(&compile_output.stdout),
-        String::from_utf8_lossy(&compile_output.stderr)
+        fs::metadata(&vectors_c_path).is_ok(),
+        "compile_demo.lucid should have written {vectors_c_path}"
     );
-    assert!(
-        fs::metadata(&c_path).is_ok(),
-        "compile_demo.lucid should have written {c_path}"
-    );
-
-    let interpreted_output = Command::new(env!("CARGO_BIN_EXE_lucid"))
-        .args(["run", "examples/vectors.lucid"])
-        .current_dir(&repo_root)
-        .output()
-        .unwrap();
-    assert!(
-        interpreted_output.status.success(),
-        "the reference interpreter should run examples/vectors.lucid cleanly"
-    );
-
-    let temp_dir = std::env::temp_dir().join(format!(
-        "lucid_self_hosted_compile_vectors_{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).unwrap();
-    let binary_path = temp_dir.join("vectors");
+    let vectors_binary_path = temp_dir.join("vectors");
     let gcc_status = Command::new("gcc")
         .args(["-std=c11", "-o"])
-        .arg(&binary_path)
-        .arg(&c_path)
+        .arg(&vectors_binary_path)
+        .arg(&vectors_c_path)
         .status()
         .unwrap();
     assert!(
         gcc_status.success(),
         "gcc should compile the generated C for examples/vectors.lucid without error"
     );
-    let native_output = Command::new(&binary_path).output().unwrap();
+    let native_vectors_output = Command::new(&vectors_binary_path).output().unwrap();
     assert!(
-        native_output.status.success(),
+        native_vectors_output.status.success(),
         "the compiled examples/vectors.lucid binary should exit successfully"
     );
     assert_eq!(
-        String::from_utf8_lossy(&native_output.stdout),
-        String::from_utf8_lossy(&interpreted_output.stdout),
+        String::from_utf8_lossy(&native_vectors_output.stdout),
+        String::from_utf8_lossy(&interpreted_vectors_output.stdout),
         "the compiled native binary's output should match the reference interpreter's exactly"
     );
 
-    let _ = fs::remove_file(&c_path);
+    for name in ["fib", "factorial", "gcd", "divmod", "broken", "vectors"] {
+        let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
+    }
     let _ = fs::remove_dir_all(&temp_dir);
 }
