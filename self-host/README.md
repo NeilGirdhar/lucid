@@ -126,7 +126,8 @@ pieces is close to feature parity with its Rust counterpart.
   with a specific message. A binary/unary operator on non-class operands
   has its own required operand types, checked explicitly rather than
   accepted for any two operands of the same non-class kind — arithmetic
-  needs two `int`, `and`/`or` need two `bool`, `==`/`!=` and ordered
+  needs two `int` (except `+`, which also accepts two `str`, as
+  concatenation), `and`/`or` need two `bool`, `==`/`!=` and ordered
   comparison need two `int` or two `str` (or two `bool`, `==`/`!=`
   only), `not` needs `bool`, unary `-` needs `int` — since
   `codegen.lucid` maps these straight to C's own operators, which
@@ -134,9 +135,9 @@ pieces is close to feature parity with its Rust counterpart.
   char *` operands rather than rejecting them (an earlier draft
   accepted any two non-class operands here, which `"a" + "b"` and
   `1 and 2` both slipped through, reaching codegen as real miscompiles
-  rather than "unsupported" — `"a" == "a"`/`"a" < "b"` and `len(s)`
-  came later, once codegen actually had a correct C translation for
-  them, `strcmp`/`strlen`). `for` is
+  rather than "unsupported" — `"a" == "a"`/`"a" < "b"`/`"a" + "b"` and
+  `len(s)` came later, once codegen actually had a correct C
+  translation for each, `strcmp`/`strlen`/`lucid_rt_str_concat`). `for` is
   checked over exactly two iterable
   shapes — a list literal (every element checked, all required to
   agree on one type) and `range(...)` (one or two arguments, always
@@ -194,8 +195,11 @@ pieces is close to feature parity with its Rust counterpart.
   Python's floored division, a real, easy-to-miss mismatch this
   codegen's first draft got wrong; `==`/`!=`/ordered comparison on two
   `str` operands go through `strcmp` instead, since two `const char *`
-  pointers being `==` in C compares addresses, not contents; `len()` of
-  a `str` is `strlen`, cast to `long`); a binary operator on two class-typed
+  pointers being `==` in C compares addresses, not contents; `str + str`
+  goes through `lucid_rt_str_concat`, another prelude helper
+  (`malloc`+`strcpy`+`strcat`, this subset's first heap allocation,
+  leaked like everything else here); `len()` of a `str` is `strlen`,
+  cast to `long`); a binary operator on two class-typed
   operands, or a call to a name with more than one `dispatch def`,
   resolves to one specific C function chosen by the static argument
   types and name-mangled by them (two `__add__` overloads, on `Vector2D`
@@ -276,7 +280,8 @@ pieces is close to feature parity with its Rust counterpart.
   miscompile cases described above — `records` — printing a class
   value, alone, mixed with other `print` arguments, and with more than
   one field of mixed str/int/bool type — and `strings` — `==`/`!=`/
-  `<`/`<=`/`>`/`>=` and `len()` on `str`), plus one Lucid string literal
+  `<`/`<=`/`>`/`>=`, `len()`, and `+` concatenation on `str`, standalone,
+  assigned to a variable, and through user functions), plus one Lucid string literal
   that's supposed to fail checking, proving a real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
   compiled here (yet) — it needs `freeze()`, rejected outright in this
@@ -316,11 +321,11 @@ pieces is close to feature parity with its Rust counterpart.
   support yet. Generated C programs never free anything they allocate —
   there is no garbage collector and no arena; each compiled program runs
   once and exits, so this is a deliberate simplification, the same kind
-  as skipping `?`'s checked-error ABI, not an oversight. `str` and
-  `list[T]` aren't compiled yet, so nothing exercises heap allocation in
-  the generated C today; once they are, this note will need revisiting,
-  since concatenation and `append` are where a real program would first
-  start to matter.
+  as skipping `?`'s checked-error ABI, not an oversight. `str + str`
+  (`lucid_rt_str_concat`, in the generated C's own prelude) is this
+  subset's first heap allocation, `malloc`+`strcpy`+`strcat`, leaked
+  same as everything else — `list[T]` isn't compiled yet, so `append`
+  is still the next place this note will need revisiting.
 
 Run them:
 

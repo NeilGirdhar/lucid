@@ -66,7 +66,9 @@ report("print() of a class with a class-typed field rejected", "class Inner:\n  
 
 report("freeze() rejected", "class Circle:\n    radius: int\n\ndef bad() -> int:\n    c = Circle(10)\n    frozen_c = freeze(c)\n    print(frozen_c)\n    return 0\n")
 
-report("str + str rejected", "def bad() -> int:\n    s = \"a\" + \"b\"\n    return 0\n")
+report("str + str is supported (str concatenation)", "def bad() -> int:\n    s = \"a\" + \"b\"\n    return 0\n")
+
+report("str - str is still rejected (only + is supported for str)", "def bad() -> int:\n    s = \"a\" - \"b\"\n    return 0\n")
 
 report("str == str and str < str are supported", "def ok() -> int:\n    b = \"a\" == \"a\"\n    c = \"a\" < \"b\"\n    n = len(\"abc\")\n    return 0\n")
 

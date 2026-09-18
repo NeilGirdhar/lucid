@@ -16,7 +16,17 @@ def is_empty(s: str) -> bool:
 def same(a: str, b: str) -> bool:
     return a == b
 
+def greet(name: str) -> str:
+    return "Hello, " + name + "!"
+
 print(is_empty(""))
 print(is_empty("x"))
 print(same("hello", "hello"))
 print(same("hello", "world"))
+
+print("a" + "b")
+print("" + "x")
+concatenated = "hello, " + "world"
+print(concatenated)
+print(greet("Alice"))
+print(len(greet("Bob")))
