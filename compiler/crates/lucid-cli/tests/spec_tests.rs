@@ -1243,6 +1243,13 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: print() of a none-typed value is not supported in this subset",
         "ERROR: parameter 'x' has an unsupported type (none isn't a valid parameter type)",
         "ERROR: field 'x' has an unsupported type (none isn't a valid field type)",
+        "--- a method reading and mutating self's fields is supported ---\n(no errors)",
+        "--- a method calling another method is supported ---\n(no errors)",
+        "ERROR: method 'foo' must take 'self' as its first parameter",
+        "ERROR: method 'foo' has an unsupported 'self' parameter",
+        "ERROR: 'P' has no method 'unknown_method'",
+        "ERROR: method 'add' on 'Adder' does not match the given argument types",
+        "ERROR: duplicate method 'foo' in class 'Bad'",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1317,7 +1324,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 11] = [
+    let cases: [(&str, &str); 12] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1331,6 +1338,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         ("strings", "self-host/compile_demo_programs/strings.lucid"),
         ("lists", "self-host/compile_demo_programs/lists.lucid"),
         ("mutation", "self-host/compile_demo_programs/mutation.lucid"),
+        ("methods", "self-host/compile_demo_programs/methods.lucid"),
         ("vectors", "examples/vectors.lucid"),
     ];
 

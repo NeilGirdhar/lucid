@@ -231,7 +231,22 @@ pieces is close to feature parity with its Rust counterpart.
   every other alias of the same object, matching `lucid-runtime`'s own
   `Value::Object` semantics (verified directly: a function taking a
   class argument and assigning to one of its fields changes the
-  *caller's* object, not a copy).
+  *caller's* object, not a copy). A class body can now have methods
+  (`def method(self, ...): ...`), not only fields — `self` must be
+  bare, never `self: ~Self`/`self: !Self` (matching every method in
+  `self-host/lexer.lucid` itself, the actual target this subset needs
+  to keep growing toward), and its type is always implicit, the
+  enclosing class's own `ClassType`, never stored in the method's own
+  `FuncSig.param_types` (which holds only the parameters *after*
+  `self`) — the receiver at each call site supplies it instead, the
+  same way `codegen.lucid` builds a method's C parameter list
+  (`ClassName *self` first, from the class's own name directly, then
+  the rest). No overloading for methods in this subset (one method per
+  name per class, `dispatch def` is a *function*-level, not a
+  *method*-level, feature here); a call `obj.method(args)` on a
+  class-typed `obj` resolves `method` against that class's own method
+  table and checks `args` against its parameter types, the same shape
+  `list[T].append` already used for its one supported method.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -378,7 +393,7 @@ pieces is close to feature parity with its Rust counterpart.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles ten hand-written programs, each a
+  `codegen.lucid`. Also compiles eleven hand-written programs, each a
   real file under `self-host/compile_demo_programs/` (recursion,
   iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
   semantics on all four sign combinations, `bools` — bool literals,
@@ -397,11 +412,14 @@ pieces is close to feature parity with its Rust counterpart.
   non-empty list literal iterated directly, a function taking and
   returning `list[int]`, the aliasing case (`b = a; b.append(3)`
   changes `len(a)` too, verified against the interpreter first), and
-  `list[bool]`/`list[str]` — and `mutation` — attribute assignment
+  `list[bool]`/`list[str]` — `mutation` — attribute assignment
   (`p.x = 2`), a `-> none` function that mutates a class argument's
   field in place and is called only for effect, and reading the
   mutated field back afterward, proving the caller's own object
-  changed, not a copy), plus one
+  changed, not a copy — and `methods` — a method reading and mutating
+  `self`'s own fields, one method calling another method on the same
+  `self`, a method taking a parameter beyond `self`, and `str`/`bool`
+  method return types), plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
@@ -794,21 +812,36 @@ work rather than a rushed fix bundled in here:
   (`if kind == "DISPATCH": self.advance(); self.expect("DEF")?; ...`) —
   a case of the AST/data plumbing already being ready for a feature the
   grammar-level entry point simply never wired up.
-- **A method call inside a large class sometimes reports the wrong
-  arity, for reasons not fully root-caused.** `codegen.lucid`'s
-  `Codegen` class (about 15 methods) had one method,
-  `self.codegen_struct(cls)` (one argument beyond `self`), rejected with
-  "method accepts fewer arguments than supplied" — renaming the method
-  changed nothing, and trimming its body to a one-line stub didn't
-  change the error either, so it wasn't about the name or what the body
-  did. `codegen_struct` doesn't actually touch any of `Codegen`'s own
-  fields, so moving the identical logic out to a plain module-level
-  function (`emit_struct(cls: ClassSig)`, called as `emit_struct(cls)`
-  rather than `self.emit_struct(cls)`) made the error disappear — the
-  fix this file keeps, and arguably the better design regardless, but
-  the underlying checker bug (something about this specific method, in
-  this specific class, in this specific position) is still unexplained
-  and worth a closer, dedicated investigation later.
+- **A method call sometimes reports the wrong arity — root-caused.**
+  First hit as `codegen.lucid`'s `self.codegen_struct(cls)` (one
+  argument beyond `self`) rejected with "method accepts fewer arguments
+  than supplied"; worked around at the time by moving the logic to a
+  free function (`emit_struct(cls: ClassSig)`), without knowing why.
+  Hit again while adding class methods (`Checker.check_method`,
+  `Codegen.codegen_method_param_list`, both taking a `ClassSig` as one
+  of two parameters beyond `self`), fixed the same way, which finally
+  gave enough data points to isolate it with a two-class, five-line
+  repro (`class Holder: def show(self, cls: Foo) -> str: ...`, called
+  with exactly the declared number of arguments, still rejected as
+  having "fewer arguments than supplied") — and, crucially, that
+  renaming the second parameter from `cls` to anything else made the
+  repro pass. The bug is in `compiler/crates/lucid-checker/src/lib.rs`,
+  not in anything self-hosted: eight call sites filter a method's
+  parameter list by `!matches!(param.name.as_str(), "self" | "cls")`
+  before counting/typing them for the method's registered signature —
+  intended to strip the implicit receiver (`self` for an instance
+  method, `cls` for a `classmethod`, per docs/class-members.md), but
+  applied as a name match across the *whole* parameter list rather than
+  a position check on *only* the first parameter. An ordinary instance
+  method with a *later* parameter that happens to be named `cls` (nothing
+  to do with `classmethod`) gets that parameter silently dropped from
+  its own registered arity, undercounting it — a real bug affecting any
+  Lucid program, not a self-hosting-specific gap, confirmed but not
+  fixed here (out of scope for this branch; flagged separately). This
+  self-hosted checker/codegen never hits it, since every method
+  parameter named `cls` in `self-host/*.lucid` belongs to a *free*
+  function, not a method — the bug is specific to a *method's* filtered
+  parameter list, and free functions never go through that filter.
 - **`print()`ing the same object twice produced two different
   strings.** Found while checking whether a compiled class-value
   printer could even be differential-tested against `lucid run`'s own

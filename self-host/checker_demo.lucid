@@ -153,3 +153,17 @@ report("printing a none-typed call result rejected", "def foo():\n    print(1)\n
 report("a none parameter type rejected", "def bad(x: none) -> int:\n    return 0\n")
 
 report("a none field type rejected", "class Bad:\n    x: none\n\ndef ok() -> int:\n    return 0\n")
+
+report("a method reading and mutating self's fields is supported", "class Counter:\n    value: int\n\n    def get(self) -> int:\n        return self.value\n\n    def increment(self):\n        self.value = self.value + 1\n\ndef ok() -> int:\n    c = Counter(0)\n    c.increment()\n    print(c.get())\n    return 0\n")
+
+report("a method calling another method is supported", "class Point:\n    x: int\n    y: int\n\n    def total(self) -> int:\n        return self.x + self.y\n\n    def doubled(self) -> int:\n        return self.total() * 2\n\ndef ok() -> int:\n    p = Point(1, 2)\n    print(p.doubled())\n    return 0\n")
+
+report("a method must take self as its first parameter", "class Bad:\n    x: int\n\n    def foo(n: int) -> int:\n        return n\n\ndef ok() -> int:\n    return 0\n")
+
+report("an explicit type annotation on self is rejected", "class Bad:\n    x: int\n\n    def foo(self: !Bad) -> int:\n        return self.x\n\ndef ok() -> int:\n    return 0\n")
+
+report("calling an unknown method is rejected", "class P:\n    x: int\n\ndef bad() -> int:\n    p = P(1)\n    p.unknown_method()\n    return 0\n")
+
+report("calling a method with the wrong argument type is rejected", "class Adder:\n    base: int\n\n    def add(self, n: int) -> int:\n        return self.base + n\n\ndef bad() -> int:\n    a = Adder(1)\n    a.add(\"s\")\n    return 0\n")
+
+report("a duplicate method name is rejected", "class Bad:\n    x: int\n\n    def foo(self) -> int:\n        return 1\n\n    def foo(self) -> int:\n        return 2\n\ndef ok() -> int:\n    return 0\n")

@@ -96,5 +96,6 @@ compile_path_to_file("records (print() of a class value: a single field, mixed a
 compile_path_to_file("strings (str ==, !=, <, <=, >, >=, and len())", "self-host/compile_demo_programs/strings.lucid", "self-host/compile_demo_strings.c")
 compile_path_to_file("lists (typed empty + append + index + len, non-empty literal, for over a list, aliasing, list[bool]/list[str])", "self-host/compile_demo_programs/lists.lucid", "self-host/compile_demo_lists.c")
 compile_path_to_file("mutation (attribute assignment, mutation through a function call, -> none)", "self-host/compile_demo_programs/mutation.lucid", "self-host/compile_demo_mutation.c")
+compile_path_to_file("methods (methods with self: reading/mutating fields, calling another method, parameters, str/bool return types)", "self-host/compile_demo_programs/methods.lucid", "self-host/compile_demo_methods.c")
 compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")
 compile_path_to_file("examples/vectors.lucid (classes, dispatch, strings -- a real Lucid program)", "examples/vectors.lucid", "self-host/compile_demo_vectors.c")

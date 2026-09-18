@@ -160,12 +160,24 @@ class FieldSig:
 class ClassSig:
     name: str
     fields: list[FieldSig]
+    # A method's own FuncSig never includes `self` in param_types --
+    # the receiver already supplies that type, at the call site, the
+    # same way it isn't repeated in the C signature codegen.lucid
+    # emits (`self` becomes the C function's own first parameter,
+    # `ClassName *self`, built from `cls.name` directly, not from
+    # anything stored here). No dispatch/overloading for methods in
+    # this subset -- one FuncSig per method name, unlike FuncTable's
+    # list[FuncSig] for free functions.
+    methods: dict[str, FuncSig]
 
 def field_type(cls: ClassSig, name: str) -> LType | none:
     for f in cls.fields:
         if f.name == name:
             return f.field_type
     return none
+
+def method_signature(cls: ClassSig, name: str) -> FuncSig | none:
+    return cls.methods.get(name, none)
 
 # A class is printable in this subset if every field is int/bool/str --
 # codegen.lucid's per-class printer only knows how to format those three

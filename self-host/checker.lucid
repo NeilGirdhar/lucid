@@ -12,9 +12,10 @@
 # ~20,000-line crate covering generics, traits, inferred variance,
 # exhaustiveness, and far more) -- what's covered is real, useful
 # checking over the subset self-host/codegen.lucid compiles:
-#   - int, bool, str, and plain classes with int/bool/str fields (no
-#     inheritance, no generics, no methods -- a class is only ever
-#     constructed and its fields read, never given behavior of its own)
+#   - int, bool, str, list[T] (T one of these, or a class), and classes
+#     with fields of these types and (now) methods taking a bare `self`
+#     -- no inheritance, no generics, no method overloading (one method
+#     per name per class; `dispatch def` is function-level only here)
 #   - every function/`dispatch def` registered once per distinct
 #     parameter-type signature (two `dispatch def`s sharing a name need
 #     different parameter types, not just different bodies); a call
@@ -41,12 +42,12 @@
 #     flow-sensitive definite-assignment analysis, a variable read after
 #     being assigned in only one branch of an `if` is accepted here, not
 #     rejected the way lucid-checker's own analysis would
-# Left for later: traits, inheritance, generics, methods with `self`,
-# collections, closures, exceptions, `?`, comprehensions -- everything
+# Left for later: traits, inheritance, generics, method overloading,
+# dict[K, V], closures, exceptions, `?`, comprehensions -- everything
 # else checker.lucid's header comment's Rust counterpart covers.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, NoneType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, NoneType, type_name, types_equal, type_list_equal, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
     message: str
@@ -153,6 +154,7 @@ class Checker:
         if self.classes.get(cd.name, none) != none:
             self.error("duplicate class '" + cd.name + "'", cd.span)
         fields: list[FieldSig] = []
+        methods: dict[str, FuncSig] = {:}
         for member in cd.body:
             match member as m:
                 case FieldMember:
@@ -163,9 +165,60 @@ class Checker:
                             fields.append(FieldSig(m.field.name, ft))
                         case none:
                             self.error("field '" + m.field.name + "' has an unsupported type", cd.span)
+                case MethodMember:
+                    match self.method_signature_for(cd.name, m.method) as sig:
+                        case FuncSig:
+                            if methods.get(m.method.name, none) != none:
+                                self.error("duplicate method '" + m.method.name + "' in class '" + cd.name + "'", m.method.span)
+                            else:
+                                methods[m.method.name] = sig
+                        case none:
+                            pass
                 case _:
-                    self.error("only plain fields are supported in a class body (no methods)", cd.span)
-        self.classes[cd.name] = ClassSig(cd.name, fields)
+                    self.error("only plain fields and methods with a bare 'self' first parameter are supported in a class body", cd.span)
+        self.classes[cd.name] = ClassSig(cd.name, fields, methods)
+
+    # `self` isn't a type-annotated parameter in this subset (matching
+    # every method in self-host/lexer.lucid: `def at_end(self) -> bool:`,
+    # never `self: ~Self`/`self: !Self`) -- its type is implicit, always
+    # `cls.name`'s own ClassType, supplied by the call site's receiver,
+    # not stored in the method's own FuncSig.param_types (which holds
+    # only the OTHER parameters, matching how codegen.lucid builds a
+    # method's C parameter list: `ClassName *self` first, built from
+    # `cls.name` directly, then the rest).
+    def method_signature_for(self, class_name: str, fn: FunctionDef) -> FuncSig | none:
+        if len(fn.params) == 0 or fn.params[0].name != "self":
+            self.error("method '" + fn.name + "' must take 'self' as its first parameter", fn.span)
+            return none
+        if fn.params[0].type_annotation != none:
+            self.error("method '" + fn.name + "' has an unsupported 'self' parameter (an explicit type annotation on self, e.g. self: ~Self, is not supported in this subset)", fn.span)
+            return none
+        param_types: list[LType] = []
+        ok = true
+        i = 1
+        while i < len(fn.params):
+            p = fn.params[i]
+            match resolve_type_expr(p.type_annotation) as pt:
+                case NoneType:
+                    self.error("parameter '" + p.name + "' has an unsupported type (none isn't a valid parameter type)", fn.span)
+                    ok = false
+                case LType:
+                    param_types.append(pt)
+                case none:
+                    self.error("parameter '" + p.name + "' has an unsupported type", fn.span)
+                    ok = false
+            i = i + 1
+        return_type: LType = NoneType()
+        if fn.return_type != none:
+            match resolve_type_expr(fn.return_type) as rt:
+                case LType:
+                    return_type = rt
+                case none:
+                    self.error("method '" + fn.name + "' has an unsupported return type", fn.span)
+                    ok = false
+        if not ok:
+            return none
+        return FuncSig(fn.name, param_types, return_type)
 
     def collect_function_signature(self, fn: FunctionDef):
         # print/range/len/freeze are recognized by NAME, ahead of
@@ -221,7 +274,7 @@ class Checker:
         for stmt in stmts:
             match stmt as result:
                 case ClassDef:
-                    pass
+                    self.check_class_methods(result)
                 case FunctionStmt:
                     self.check_function(result.function)
                 case _:
@@ -243,17 +296,34 @@ class Checker:
                     known[p.name] = pt
                 case none:
                     pass
-        # An omitted annotation means `-> none`, same as
-        # collect_function_signature. `resolve_type_expr(fn.return_type)`
-        # can still come back `none` for a function whose header
-        # genuinely IS a function -- an unsupported return-type
-        # annotation, already reported once by
-        # collect_function_signature. `in_function` (passed separately,
-        # always `true` from here) is what actually distinguishes
-        # "return outside any function" from "inside a function whose
-        # return type this subset couldn't resolve" -- collapsing them
-        # into one `LType | none` would make a return inside the latter
-        # wrongly report "outside a function" too.
+        self.check_function_body(fn, known)
+
+    def check_class_methods(self, cd: ClassDef):
+        match self.classes.get(cd.name, none) as cls:
+            case ClassSig:
+                for member in cd.body:
+                    match member as m:
+                        case MethodMember:
+                            check_method(self, cls, m.method)
+                        case _:
+                            pass
+            case none:
+                pass
+
+    # Shared by check_function and check_method: bind expected_return
+    # (an omitted annotation means `-> none`, same as
+    # collect_function_signature/method_signature_for), check the body,
+    # then require every path to return where NoneType doesn't apply.
+    # `resolve_type_expr(fn.return_type)` can still come back `none`
+    # for a function whose header genuinely IS a function -- an
+    # unsupported return-type annotation, already reported once by
+    # collect_function_signature/method_signature_for. `in_function`
+    # (passed separately, always `true` from here) is what actually
+    # distinguishes "return outside any function" from "inside a
+    # function whose return type this subset couldn't resolve" --
+    # collapsing them into one `LType | none` would make a return
+    # inside the latter wrongly report "outside a function" too.
+    def check_function_body(self, fn: FunctionDef, known: dict[str, LType]):
         expected_return: LType | none = NoneType()
         if fn.return_type != none:
             expected_return = resolve_type_expr(fn.return_type)
@@ -803,14 +873,52 @@ class Checker:
                             return none
                         self.error("'" + callee.attr + "' is not supported on list[T] in this subset", call.span)
                         return none
+                    case ClassType:
+                        match self.classes.get(rt.name, none) as cls:
+                            case ClassSig:
+                                match method_signature(cls, callee.attr) as sig:
+                                    case FuncSig:
+                                        if type_list_equal(checked_arg_types, sig.param_types):
+                                            return sig.return_type
+                                        if any_arg_unknown:
+                                            return none
+                                        self.error("method '" + callee.attr + "' on '" + rt.name + "' does not match the given argument types", call.span)
+                                        return none
+                                    case none:
+                                        self.error("'" + rt.name + "' has no method '" + callee.attr + "'", call.span)
+                                        return none
+                            case none:
+                                self.error("unknown class '" + rt.name + "'", call.span)
+                                return none
                     case LType:
-                        self.error("only 'list[T].append' is supported as a method call in this subset", call.span)
+                        self.error("only 'list[T].append' or a class method is supported as a method call in this subset", call.span)
                         return none
                     case none:
                         return none
             case _:
                 self.error("only calling a plain name is supported", call.span)
                 return none
+
+# A free function, not a `Checker` method -- a bound method taking a
+# `ClassSig` as its first parameter beyond `self` was rejected with
+# "method accepts fewer arguments than supplied" despite a correct
+# signature (the same unresolved checker bug self-host/README.md
+# documents for codegen.lucid's `emit_struct`; the workaround there was
+# identical: move the logic to a free function). `checker` stands in
+# for the `Checker` instance's own `self`.
+def check_method(checker: Checker, cls: ClassSig, fn: FunctionDef):
+    known: dict[str, LType] = {:}
+    known["self"] = ClassType(cls.name)
+    i = 1
+    while i < len(fn.params):
+        p = fn.params[i]
+        match resolve_type_expr(p.type_annotation) as pt:
+            case LType:
+                known[p.name] = pt
+            case none:
+                pass
+        i = i + 1
+    checker.check_function_body(fn, known)
 
 def new_checker() -> Checker:
     return Checker(new_func_table(), {:}, [])
