@@ -61,8 +61,8 @@
 # comprehensions -- everything else checker.lucid's header comment's
 # Rust counterpart covers.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, Propagate, FunctionDef, Param, Span
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, PassMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, Propagate, FunctionDef, Param, Span, FromImport, Import
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature, resolve_all_declarations
 
 class CheckError:
     message: str
@@ -246,8 +246,16 @@ class Checker:
                                 methods[m.method.name] = sig
                         case none:
                             pass
+                case PassMember:
+                    # `class Foo: pass` -- a zero-field, zero-method
+                    # class (a bare marker type, the same shape a
+                    # sealed hierarchy's own leaf cases often take --
+                    # self-host/ast.lucid alone has over a dozen, e.g.
+                    # `class Skip(Expr): pass`). Its own Construct call
+                    # takes no arguments, matching an empty `fields`.
+                    pass
                 case _:
-                    self.error("only plain fields and methods with a bare 'self' first parameter are supported in a class body", cd.span)
+                    self.error("only plain fields, methods with a bare 'self' first parameter, and 'pass' are supported in a class body", cd.span)
         self.classes[cd.name] = ClassSig(cd.name, fields, methods)
 
     # `self` isn't a type-annotated parameter in this subset (matching
@@ -347,8 +355,30 @@ class Checker:
                     register_signature(self.functions, FuncSig(fn.name, param_types, return_type))
 
     def check_module(self, stmts: list[Stmt]):
+        # Everything `stmts`' own `from .x import ...` statements pull
+        # in, read and parsed transitively (see resolve_all_
+        # declarations's own comment in types.lucid): a class/function
+        # declaration is registered here so a call/construct/attribute
+        # against an imported name resolves the same way one against a
+        # name declared directly in this module already does, not
+        # separately re-checked (their own file is checked on its own,
+        # when it's compiled directly) -- but a module-level
+        # VarDef/Assignment (self-host/lexer.lucid's own `keywords`,
+        # say) has to be checked, exactly like this module's own
+        # top-level statements are, since it's the only place its type
+        # ends up in self.module_scope at all.
+        imported = resolve_all_declarations(stmts, {})
+        self.collect_declarations(imported)
         self.collect_declarations(stmts)
         top_level: list[Stmt] = []
+        for stmt in imported:
+            match stmt as result:
+                case ClassDef:
+                    pass
+                case FunctionStmt:
+                    pass
+                case _:
+                    top_level.append(stmt)
         for stmt in stmts:
             match stmt as result:
                 case ClassDef:
@@ -612,6 +642,15 @@ class Checker:
                 self.check_expr(result.expr, known)
             case MetadataStmt:
                 pass
+            case FromImport:
+                # Already handled, once, by check_module's own call to
+                # resolve_all_declarations -- a no-op here the same way
+                # Pass is, so `from .lexer import is_digit, is_alpha`
+                # sitting among a module's own top-level statements
+                # doesn't hit "unsupported statement kind".
+                pass
+            case Import:
+                self.error("plain 'import x' is not supported in this subset (use 'from .module import name, ...' instead)", stmt.span)
             case MatchStmt:
                 self.check_match(result, known, expected_return, in_function, in_loop)
             case _:

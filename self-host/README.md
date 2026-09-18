@@ -37,33 +37,45 @@ _probe_selfcompile.lucid` (untracked, a standing local gauge, not
 committed) re-runs this check on demand.
 
 **Next target: `self-host/parser.lucid`**, probed the same way, does
-*not* compile yet — much further from it than `lexer.lucid` was, and a
-different shape of gap: not one or two missing checker/codegen
-features, but two structural ones this subset has never needed before.
-(1) **`?` appears far more often, and in positions this subset
-deliberately doesn't support**: `next_token()?`, `self.advance()?`, and
-similar appear as a `Call` argument, inside a larger expression, and
-(most often) as a `return`'s own value (`return
-self.parse_expr()?`) — `docs/question-mark-operator.md`'s own example
-shape, checked out by `check_propagate` but not desugared by
-`codegen.lucid`, which only ever implements the single
+*not* compile yet. Three of the four gaps the first probe found are
+closed as of this branch — cross-file imports (every "unknown class"
+error is gone), narrowing a declared union via a later plain
+assignment, and `pass`-bodied classes — leaving one confirmed gap and a
+newly-visible one underneath it, both real, both structural, neither
+attempted yet.
+(1) **`?` appears far more often than `self-host/lexer.lucid` needed,
+and mostly in positions this subset deliberately doesn't support**:
+`next_token()?`, `self.advance()?`, and similar appear as a `Call`
+argument, inside a larger expression, and (most often) as a `return`'s
+own value (`return self.parse_expr()?`) — `docs/question-mark-
+operator.md`'s own example shape, checked out by `check_propagate` but
+not desugared by `codegen.lucid`, which only ever implements the single
 plain-assignment shape `self-host/lexer.lucid` needed (see
 `check_rhs_expr`'s own comment). Closing this means at least a
 return-position desugaring (a temp, a tag check, two returns) — the
 nested-expression case may need declaring `?` unsupported there
 honestly instead, the same way this subset already is for several other
-constructs. (2) **`parser.lucid` imports `ast.lucid`'s node classes
-(`Token`, `Binary`, `LiteralExpr`, ...) and constructs/matches them
-directly** — this subset's checker/codegen have no cross-file import
-resolution at all yet: `self.classes`/`self.functions` are populated
-only from the single file being checked, so every imported class comes
-back "unknown class". A third, smaller gap: `parser.lucid` frequently
-declares a local as `T | none` (`value: Expr | none = none`), then
-later assigns it a plain `T` in a branch (`value = self.parse_expr()`)
-— `bind()`'s "one type per name per function" rule currently rejects
-that as changing type from `Expr | none` to `Expr`, even though
-narrowing a declared union down via a later assignment is a real,
-sensible pattern this subset doesn't recognize yet.
+constructs.
+(2) **Class inheritance** — invisible until cross-file imports started
+actually registering `self-host/ast.lucid`'s classes, since nothing
+compiled before this needed it: `ast.lucid`'s node classes all extend a
+`sealed class Expr:`/`sealed class Stmt:`/`sealed class Pattern:` (etc.)
+base with its own field (`span: Span`), and parser.lucid constructs
+them as `Binary(span, left, op, right)` — the base class's own field
+*first*, then the subclass's own, a real Lucid construction-order rule
+this subset's `ClassSig`/`collect_class` don't know about at all (they
+only ever look at a class's own body, never a parent's): `construct for
+'Binary' expects 3 field value(s), got 4` and `field 'op' expects str,
+got Span` are the same gap, not two. The same absence shows up as a
+type-compatibility gap too — `return type mismatch: expected Expr |
+ParserError, got LiteralExpr` fires because `LiteralExpr` is a *subtype*
+of `Expr` (extends it directly) but `types_equal`/`assignable_to` only
+ever compare class names for exact equality, with no notion of "is a
+subclass of" at all. Both need real inheritance support: field lists
+that include a parent's own fields (in order), and a subtyping check
+(`is_subtype_of` in the reference checker's own terms) used everywhere
+this subset currently uses `types_equal` for a class value against an
+expected type.
 
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
@@ -416,6 +428,42 @@ sensible pattern this subset doesn't recognize yet.
   (`value: Expr | none = none` then `value = self.parse_expr()` deeper
   in the same function) and was the next thing probing it surfaced after
   `self-host/lexer.lucid` itself started compiling (see Status above).
+  `check_module` now resolves `from .x import ...` too, the other thing
+  probing `self-host/parser.lucid` surfaced (it imports nearly every
+  class in `self-host/ast.lucid` and `tokenize` from `self-host/
+  lexer.lucid` directly) — every "unknown class" error checking it used
+  to produce is gone as of this. `types.lucid`'s new
+  `resolve_all_declarations` (shared with `codegen.lucid`, see its own
+  entry below) reads and parses every transitively-imported file
+  (`read_file`/`parse`, the same builtins `compile_demo.lucid` itself
+  already uses to drive this whole pipeline — deliberately not a real
+  module system, just "read the file, parse it, recurse", resolved
+  directly against `self-host/` since every self-hosted file only ever
+  imports a sibling in this same directory) and returns every one of
+  its top-level statements (a class/function declaration, registered
+  the same way one declared directly in this module already is; a
+  module-level `VarDef`/`Assignment` — `self-host/lexer.lucid`'s own
+  `keywords`, which several of its methods read — checked exactly like
+  this module's own top-level statements, since that's the only place
+  its type ends up in `module_scope` at all); the imported declarations
+  themselves aren't separately re-checked here (their own file is
+  checked on its own, when it's compiled directly). `collect_class`
+  also gained a `pass`-bodied class case (`class Skip(Expr): pass`, a
+  zero-field, zero-method marker type — `self-host/ast.lucid` alone has
+  over a dozen of these), a real gap surfaced the moment any import from
+  it pulled one in; previously rejected as "only plain fields and
+  methods ... are supported in a class body", now treated as a class
+  with an empty `fields`/`methods`, matching how `Construct` for one
+  already takes zero arguments. This resolution is deliberately
+  name-blind — every declaration in an imported file is registered,
+  not just the ones a `from .x import a, b` statement actually names —
+  simpler than tracking which imported names a program is allowed to
+  use, and codegen needs the *whole* transitively-imported file inlined
+  regardless (see below), so checker.lucid doing the same keeps the two
+  in step; the cost is a real but narrow honesty gap (a program that
+  constructs a class it never imported, but that its actual import
+  *did* transitively pull in, wouldn't be caught) — not a soundness
+  problem for what codegen can compile, just a missed diagnostic.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -661,6 +709,36 @@ sensible pattern this subset doesn't recognize yet.
   plain C11, so `?` never appears where only a single C expression is
   legal (nested in a larger expression, or a `return`'s own value); see
   checker.lucid's `check_rhs_expr`, which enforces the same restriction.
+  `codegen_module` now resolves `from .x import ...` too, via the same
+  `types.lucid` `resolve_all_declarations` checker.lucid's own
+  `check_module` uses (see its entry above) — but unlike
+  checker.lucid, codegen actually has to *emit* C for an imported
+  declaration, not just register its signature: `self-host/parser.lucid`
+  calls `tokenize`, imported from `self-host/lexer.lucid`, so the
+  generated C for `parser.lucid` needs `tokenize`'s own C function (and
+  everything it calls — `Lexer`'s methods, `Token`/`LexError`'s
+  structs, `keywords`, ...) inlined directly into the same file, the
+  same way it would need to be if there were no separate
+  compilation/linking step at all (there isn't one in this subset).
+  Every pass that already walks the module's own class/function
+  declarations to emit a struct, forward declaration, or body now walks
+  the imported declarations first, then this module's own, instead
+  (`all_decls`); a module-level `VarDef`/`Assignment` among the
+  imported statements is different — a real C global that needs
+  declaring *and* initializing, not a declaration these passes know how
+  to skip — so it's added to `top_level` instead, ahead of this
+  module's own (an imported global has to exist before anything in the
+  importing module's own top-level code could read it). Verified with
+  `self-host/imports_demo.lucid` — `from .lexer import is_digit,
+  is_alpha`, calling both — compiled, `gcc`-compiled, and diffed against
+  the reference interpreter: the generated C (about 40KB) inlines all of
+  `self-host/lexer.lucid`'s own classes, methods, and free functions,
+  including `keywords`, even though `imports_demo.lucid` itself only
+  ever calls two of `lexer.lucid`'s dozen-plus functions — the
+  name-blind resolution checker.lucid's own entry above explains, here
+  for the same reason (codegen needs the whole transitively-imported
+  file regardless of which names were actually imported, since anything
+  imported might call anything else in its own file).
   Lucid has no subprocess/exec builtin, so codegen stops
   at emitting C text — invoking a system C compiler on it is necessarily
   a driver step outside Lucid, the same role
@@ -672,8 +750,13 @@ sensible pattern this subset doesn't recognize yet.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles fourteen hand-written programs, each a
-  real file under `self-host/compile_demo_programs/` (recursion,
+  `codegen.lucid`. Also compiles fifteen hand-written programs — fourteen
+  real files under `self-host/compile_demo_programs/`, plus
+  `imports_demo.lucid`, which lives directly under `self-host/` instead
+  (see compile_demo.lucid's own header comment for why: its
+  `from .lexer import ...` has to resolve to `self-host/lexer.lucid`
+  under both the reference interpreter's real relative-import
+  resolution and this subset's own simplified one) — (recursion,
   iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
   semantics on all four sign combinations, `bools` — bool literals,
   comparisons, and `and`/`or` results printed as `true`/`false` —
@@ -726,7 +809,15 @@ sensible pattern this subset doesn't recognize yet.
   `self-host/lexer.lucid` itself needs, verified by actually compiling
   `self-host/lexer.lucid` standalone afterward: zero check errors, and
   the generated C compiles cleanly with `gcc` (see the Design notes
-  entry below for the two real bugs this surfaced) — plus one
+  entry below for the two real bugs this surfaced) — and
+  `imports_demo` — `from .lexer import is_digit, is_alpha`, calling
+  both, the exact cross-file shape `self-host/parser.lucid` needs
+  (`from .lexer import Token, LexError, tokenize`), exercising both
+  `resolve_all_declarations`' registration (checker.lucid's entry
+  above) and its full-file inlining (codegen.lucid's own entry) —
+  verified the generated C (about 40KB, inlining all of
+  `self-host/lexer.lucid`, not just the two imported functions) compiles
+  and matches the reference interpreter exactly — plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't

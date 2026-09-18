@@ -14,7 +14,8 @@
 # UnionLType's own comment for why the distinction is fields/parameters,
 # not "value vs. return type" the way NoneType's is).
 
-from .ast import TypeExpr, NamedType, UnionType
+from .ast import TypeExpr, NamedType, UnionType, Stmt, FromImport, Import, ParsedModule
+from .parser import parse, ParserError
 
 sealed class LType:
     pass
@@ -406,3 +407,78 @@ def has_any_signature(table: FuncTable, name: str) -> bool:
             return len(sigs) > 0
         case none:
             return false
+
+# `from .ast import ...`/`from .lexer import ...` -- this subset's
+# relative-import spelling is always one dot plus the file's own stem,
+# resolved directly against self-host/ (every self-hosted file imports
+# only its siblings in this same directory; nothing here needs a real
+# package/path search). `"." -> ""`, `".ast" -> "ast"`, so
+# `resolve_import_path(".ast")` is `"self-host/ast.lucid"`.
+def resolve_import_path(module_name: str) -> str:
+    stripped = module_name
+    while len(stripped) > 0 and stripped[0] == ".":
+        stripped = stripped[1:]
+    return "self-host/" + stripped + ".lucid"
+
+# checker.lucid/codegen.lucid each process one module's own `list[Stmt]`
+# in isolation -- `self.classes`/`self.functions` (or their own copies)
+# only ever come from collect_declarations(stmts), which never sees
+# anything a `from .x import ...` names. self-host/parser.lucid imports
+# nearly every class in self-host/ast.lucid and `tokenize` from
+# self-host/lexer.lucid directly, constructing/matching/calling them --
+# checking or compiling it needs their signatures too. self-host/
+# lexer.lucid's own `keywords`/`single` are real module-level
+# variables, not classes or functions, and next_token/lex_ident_or_
+# keyword read them -- so a module-level VarDef/Assignment has to come
+# along too, not just ClassDef/FunctionStmt (a first draft only
+# returned those two, on the assumption every importable file was a
+# "pure library" with no top-level statements at all; wrong the moment
+# self-host/lexer.lucid, which does have `keywords`, got imported by
+# anything).
+#
+# This is deliberately not a real module system: it reads (`read_file`,
+# a builtin, the same one compile_demo.lucid already uses) and parses
+# every transitively-imported file, and returns every one of its
+# top-level statements except its own `from .x import ...`/`import x`
+# (already resolved recursively, and meaningless re-emitted verbatim)
+# -- a class or function declaration is orderindependent, so it's fine
+# to end up alongside the importing file's own; a module-level
+# VarDef/Assignment, or any other bare top-level statement, isn't --
+# see check_module/codegen_module's own callers, which prepend these
+# to the importing file's own top-level statements (in encounter
+# order) before deriving `module_scope`/the synthesized entry point
+# from that combined list, so an imported global like `keywords` is
+# declared and initialized before anything in the importing file's own
+# top-level code could read it. `seen` (by resolved file path) is
+# threaded through the recursion so a diamond import (two files
+# importing the same third one) or an import cycle only reads/parses
+# each file once.
+def resolve_all_declarations(stmts: list[Stmt], seen: set[str]) -> list[Stmt]:
+    declarations: list[Stmt] = []
+    for stmt in stmts:
+        match stmt as result:
+            case FromImport:
+                path = resolve_import_path(result.module_name)
+                if path not in seen:
+                    seen.add(path)
+                    match read_file(path) as source:
+                        case str:
+                            match parse(source) as parsed:
+                                case ParsedModule:
+                                    for inner in resolve_all_declarations(parsed.statements, seen):
+                                        declarations.append(inner)
+                                    for decl in parsed.statements:
+                                        match decl as d:
+                                            case FromImport:
+                                                pass
+                                            case Import:
+                                                pass
+                                            case _:
+                                                declarations.append(d)
+                                case _:
+                                    pass
+                        case _:
+                            pass
+            case _:
+                pass
+    return declarations

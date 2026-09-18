@@ -46,8 +46,8 @@
 # variable declared inside one branch invisible after it, unlike Lucid's
 # own more permissive same-function visibility.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param, FromImport
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, resolve_all_declarations
 
 runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
 
@@ -1193,6 +1193,13 @@ class Codegen:
                 return indent + self.codegen_expr(result.expr, known) + ";"
             case MetadataStmt:
                 return ""
+            case FromImport:
+                # Already handled by codegen_module's own call to
+                # resolve_all_declarations -- emits nothing here, the
+                # same as Pass, so a `from .lexer import ...` statement
+                # among a module's own top-level statements doesn't
+                # reach codegen_entry_point's body as a real C statement.
+                return ""
             case MatchStmt:
                 return self.codegen_match(result, indent, known, broken_flag, expected_return)
             case _:
@@ -1716,8 +1723,45 @@ class Codegen:
         return sort_union_types(found)
 
     def codegen_module(self, stmts: list[Stmt]) -> str:
+        # Everything `stmts`' own `from .x import ...` statements pull
+        # in, transitively (see resolve_all_declarations's own comment
+        # in types.lucid) -- unlike checker.lucid's own check_module,
+        # codegen actually has to EMIT C for these too, not just
+        # register their signatures: self-host/parser.lucid calls
+        # `tokenize`, imported from self-host/lexer.lucid, so the
+        # generated C for parser.lucid needs tokenize's own C function
+        # (and everything it calls -- Lexer's methods, Token/LexError's
+        # structs, ...) inlined directly, the same way it would need to
+        # be if there were no separate compilation/linking step at all
+        # (there isn't one in this subset -- see the header comment).
+        # `all_decls` (imported class/function declarations, then this
+        # module's own) feeds every pass below that emits a
+        # struct/function/method body. A module-level VarDef/Assignment
+        # among the imported statements (self-host/lexer.lucid's own
+        # `keywords`) is different -- not a declaration these passes
+        # know how to skip cleanly, but a real C global that needs
+        # declaring *and* initializing, exactly like this module's own
+        # top-level statements -- so it goes into `top_level` instead,
+        # ahead of this module's own (an imported global must exist
+        # before anything in this module's own top-level code could
+        # read it).
+        imported: list[Stmt] = resolve_all_declarations(stmts, {})
+        self.collect_declarations(imported)
         self.collect_declarations(stmts)
+        all_decls: list[Stmt] = []
+        for d in imported:
+            all_decls.append(d)
+        for s in stmts:
+            all_decls.append(s)
         top_level: list[Stmt] = []
+        for stmt in imported:
+            match stmt as result:
+                case ClassDef:
+                    pass
+                case FunctionStmt:
+                    pass
+                case _:
+                    top_level.append(stmt)
         for stmt in stmts:
             match stmt as result:
                 case ClassDef:
@@ -1741,7 +1785,7 @@ class Codegen:
         # earlier or later in the same module (a named struct tag needs
         # only to have been forward-declared to be a valid pointer
         # target, unlike an anonymous by-value struct).
-        for stmt in stmts:
+        for stmt in all_decls:
             match stmt as result:
                 case ClassDef:
                     match self.classes.get(result.name, none) as cls:
@@ -1764,7 +1808,7 @@ class Codegen:
         parts.append("")
         parts.append(emit_dict_type(StrType()))
         parts.append("")
-        for stmt in stmts:
+        for stmt in all_decls:
             match stmt as result:
                 case ClassDef:
                     match self.classes.get(result.name, none) as cls:
@@ -1835,7 +1879,7 @@ class Codegen:
         # which matched neither the interpreter's nor the reference
         # compiler's actual behavior -- a real semantic divergence, not
         # just an unsupported feature.
-        for stmt in stmts:
+        for stmt in all_decls:
             match stmt as result:
                 case FunctionStmt:
                     match self.signature_for(result.function) as sig:
@@ -1851,7 +1895,7 @@ class Codegen:
         # declared later in the module), a free function can call a
         # method, and a method can call a free function, so none of
         # these bodies can assume the others are already declared.
-        for stmt in stmts:
+        for stmt in all_decls:
             match stmt as result:
                 case ClassDef:
                     match self.classes.get(result.name, none) as cls:
@@ -1871,7 +1915,7 @@ class Codegen:
                 case _:
                     pass
         parts.append("")
-        for stmt in stmts:
+        for stmt in all_decls:
             match stmt as result:
                 case FunctionStmt:
                     match self.signature_for(result.function) as sig:
@@ -1882,7 +1926,7 @@ class Codegen:
                             pass
                 case _:
                     pass
-        for stmt in stmts:
+        for stmt in all_decls:
             match stmt as result:
                 case ClassDef:
                     match self.classes.get(result.name, none) as cls:

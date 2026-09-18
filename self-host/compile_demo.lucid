@@ -26,6 +26,17 @@
 # the differential checks live in
 # self_hosted_compile_demo_produces_correct_native_binaries in
 # compiler/crates/lucid-cli/tests/spec_tests.rs.
+#
+# self-host/imports_demo.lucid (below) lives directly under self-host/,
+# not under self-host/compile_demo_programs/ like every other
+# hand-written program -- its own `from .lexer import ...` has to
+# resolve to self-host/lexer.lucid under both the reference
+# interpreter's real relative-import resolution (relative to the
+# importing file's own directory) and this subset's own simplified
+# resolve_import_path (types.lucid), which always resolves a
+# `from .x import ...` against self-host/ directly, regardless of the
+# importing file's own location (see its own comment for why that's an
+# accepted simplification, not a bug).
 
 from .parser import parse, ParserError
 from .lexer import LexError
@@ -100,5 +111,6 @@ compile_path_to_file("methods (methods with self: reading/mutating fields, calli
 compile_path_to_file("dicts (dict[str, V] literal + .get(), module-level and local, empty with a declared type)", "self-host/compile_demo_programs/dicts.lucid", "self-host/compile_demo_dicts.c")
 compile_path_to_file("module_scope (a module-level variable read by a function and by a class method, and shadowed by a same-named local)", "self-host/compile_demo_programs/module_scope.lucid", "self-host/compile_demo_module_scope.c")
 compile_path_to_file("union_types (a method returning T | none, a method returning T | ErrorClass narrowed by match, two chained '?' propagations including one through a list[T] | ErrorClass, mutation through self inside a match arm)", "self-host/compile_demo_programs/union_types.lucid", "self-host/compile_demo_union_types.c")
+compile_path_to_file("imports_demo (cross-file: from .lexer import is_digit, is_alpha, calling both, pulling in all of lexer.lucid's own declarations including its module-level keywords dict)", "self-host/imports_demo.lucid", "self-host/compile_demo_imports_demo.c")
 compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")
 compile_path_to_file("examples/vectors.lucid (classes, dispatch, strings -- a real Lucid program)", "examples/vectors.lucid", "self-host/compile_demo_vectors.c")

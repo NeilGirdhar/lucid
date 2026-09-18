@@ -1281,6 +1281,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: pattern type Other is not part of Item | none",
         "--- a name declared as a union type can be reassigned a narrower member, and back ---\n(no errors)",
         "ERROR: 'x' cannot change type from Item to Item | none in this subset",
+        "--- a class imported from another self-host/ file is a known type ---\n(no errors)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1355,7 +1356,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 15] = [
+    let cases: [(&str, &str); 16] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1379,6 +1380,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
             "union_types",
             "self-host/compile_demo_programs/union_types.lucid",
         ),
+        ("imports_demo", "self-host/imports_demo.lucid"),
         ("vectors", "examples/vectors.lucid"),
     ];
 

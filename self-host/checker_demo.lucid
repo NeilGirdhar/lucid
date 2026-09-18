@@ -231,3 +231,5 @@ report("a match pattern type that isn't part of the subject union is rejected", 
 report("a name declared as a union type can be reassigned a narrower member, and back", "class Item:\n    value: int\n\ndef ok() -> int:\n    x: Item | none = none\n    x = Item(1)\n    x = none\n    match x as r:\n        case Item:\n            print(r.value)\n        case none:\n            print(0)\n    return 0\n")
 
 report("reassigning a plain-typed name to a union value is still rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    x = Item(1)\n    x = maybe_item(true)\n    return 0\n")
+
+report("a class imported from another self-host/ file is a known type", "from .lexer import Token\n\ndef ok() -> int:\n    t = Token(\"INT\", \"5\", 1, 1)\n    print(t.kind, t.text)\n    return 0\n")
