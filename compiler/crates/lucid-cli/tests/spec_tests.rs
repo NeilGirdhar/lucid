@@ -938,6 +938,53 @@ fn test_native_local_from_imports() {
 }
 
 #[test]
+fn test_native_local_from_imports_construct_class() {
+    // test_native_local_from_imports above only imports a function and a
+    // plain variable, so it never exercised constructing an *imported
+    // class* -- the checker treated every from-import as Any regardless of
+    // what it named, so `Circle(...)` for an imported `Circle` failed with
+    // "unknown enclosing class" even though `lucid check` on the same
+    // project passed.
+    use std::fs;
+    use std::process::Command;
+    let temp_dir =
+        std::env::temp_dir().join(format!("lucid_native_imports_class_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let shapes_path = temp_dir.join("shapes.lucid");
+    let main_path = temp_dir.join("main.lucid");
+    let output_path = temp_dir.join("main_bin");
+    fs::write(
+        &shapes_path,
+        "sealed class Shape:\n    pass\nclass Circle(Shape):\n    radius: float\n    def area(self) -> float:\n        return 3.0 * self.radius * self.radius\ndef describe(s: Shape) -> str:\n    match s as result:\n        case Circle:\n            return \"circle\"\n",
+    )
+    .unwrap();
+    fs::write(
+        &main_path,
+        "from .shapes import Circle, describe\nc = Circle(2.0)\nprint(c.area())\nprint(describe(c))\n",
+    )
+    .unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "build",
+            main_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "native import build failed");
+    let run = Command::new(&output_path).output().unwrap();
+    assert!(
+        run.status.success(),
+        "native import program failed: {:?}",
+        run
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "12\ncircle\n");
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_native_declaration_only_import_cycle() {
     use std::fs;
     use std::process::Command;

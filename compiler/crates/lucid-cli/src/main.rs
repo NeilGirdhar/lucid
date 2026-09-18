@@ -332,18 +332,16 @@ fn load_native_project(entry: &Path) -> Result<Module, String> {
         })?;
         let mut database = lucid_db::CompilerDatabase::default();
         let file = database.add_file(canonical.display().to_string(), source);
-        let diagnostics = lucid_db::file_diagnostics(&database, file);
-        if diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
-        {
-            return Err(render_database_diagnostics(
-                &database,
-                file,
-                &canonical.display().to_string(),
-                diagnostics,
-            ));
-        }
+        // Type-checked already, as part of the whole project, by
+        // project_diagnostics() above -- in isolation (this function's own
+        // single-file CompilerDatabase, with no sibling files) a from-import
+        // would check against Stmt::FromImport's Any fallback and could
+        // reject an import project_diagnostics() already approved (an
+        // imported class construction, "unknown enclosing class") or miss
+        // one it would have caught (a wrong-typed call to an imported
+        // function). Just parse here; this pass exists to flatten the
+        // project's statements into one Module for codegen, not to check
+        // them again.
         let module = lucid_db::parse_ast(&database, file)
             .as_ref()
             .map(|module| module.as_ref().clone())
@@ -603,7 +601,7 @@ fn build_file(path_str: Option<&String>, output_path_str: Option<&String>, opt_l
         }
     };
     let path = Path::new(path_str);
-    validate_file_with_database(path);
+    validate_project_manifest(path);
     let module = match load_native_project(path) {
         Ok(m) => m,
         Err(e) => {
@@ -636,7 +634,7 @@ fn build_file(path_str: Option<&String>, output_path_str: Option<&String>, opt_l
 
 fn emit_c_file(path_str: &str) {
     let path = Path::new(path_str);
-    validate_file_with_database(path);
+    validate_project_manifest(path);
     let module = match load_native_project(path) {
         Ok(m) => m,
         Err(e) => {
@@ -847,7 +845,6 @@ fn run_native(path_str: &str, entry: Option<&str>) {
         exit(1);
     }
     let resolved_entry = resolve_entry_target(path, entry);
-    validate_file_with_database(path);
     let module = match load_native_project(path) {
         Ok(m) => m,
         Err(e) => {
@@ -910,27 +907,6 @@ fn check_file(path_str: &str) {
         exit(1);
     }
     println!("✓ Type check passed: no errors found in {path_str}");
-}
-
-fn validate_file_with_database(path: &Path) {
-    validate_project_manifest(path);
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("Error: failed to read file '{}': {error}", path.display());
-            exit(1);
-        }
-    };
-    let mut database = lucid_db::CompilerDatabase::default();
-    let file = database.add_file(path.to_string_lossy().into_owned(), source);
-    let diagnostics = lucid_db::file_diagnostics(&database, file);
-    if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == lucid_db::Severity::Error)
-    {
-        emit_database_diagnostics(&database, file, &path.display().to_string(), diagnostics);
-        exit(1);
-    }
 }
 
 fn collect_project_source_files(
