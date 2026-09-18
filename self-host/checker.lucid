@@ -1,0 +1,190 @@
+# A minimal static checker for self-host/ast.lucid, written in Lucid:
+# together with lexer.lucid and parser.lucid, this is the first genuinely
+# separate "check" phase in the self-hosted toolchain -- not the
+# tree-walking interpreter.lucid runs a program directly, this walks a
+# parsed program and reports errors WITHOUT running it, the way
+# compiler/crates/lucid-checker does before compiler/crates/lucid-runtime
+# or compiler/crates/lucid-codegen ever sees a program.
+#
+# Deliberately a small subset, not feature parity with lucid-checker (a
+# ~20,000-line crate covering generics, traits, variance, exhaustiveness,
+# and far more) -- what's covered is real, useful checking over the
+# subset self-host/codegen.lucid compiles: every function is registered
+# once (no duplicate names), every call resolves to a known function at
+# the right arity, every variable read resolves to something already in
+# scope (a parameter or an assignment earlier in the same function), and
+# every literal/parameter/return type is `int` or `bool` (the only types
+# codegen.lucid emits C for). Left for later, matching interpreter.lucid's
+# own documented scope: classes, traits, dispatch, exceptions, closures,
+# real numeric/string type inference, flow-sensitive definite-assignment
+# analysis (a variable read after being assigned in only one branch of an
+# `if` is accepted here, not rejected the way lucid-checker's own
+# definite-assignment analysis would).
+
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, IntLit, BoolLit, Stmt, FunctionStmt, VarDef, Assignment, If, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, TypeExpr, NamedType, Span
+
+class CheckError:
+    message: str
+    span: Span
+
+class FuncSig:
+    name: str
+    param_count: int
+
+def type_name_is_supported(t: TypeExpr | none) -> bool:
+    match t as te:
+        case none:
+            return true
+        case NamedType:
+            return te.name == "int" or te.name == "bool"
+        case _:
+            return false
+
+class Checker:
+    functions: dict[str, FuncSig]
+    errors: list[CheckError]
+
+    def error(self, message: str, span: Span):
+        self.errors.append(CheckError(message, span))
+
+    def collect_functions(self, stmts: list[Stmt]):
+        for stmt in stmts:
+            match stmt as result:
+                case FunctionStmt:
+                    fn = result.function
+                    match self.functions.get(fn.name, none) as existing:
+                        case FuncSig:
+                            self.error("duplicate function '" + fn.name + "'", fn.span)
+                        case none:
+                            pass
+                    self.functions[fn.name] = FuncSig(fn.name, len(fn.params))
+                case _:
+                    pass
+
+    def check_module(self, stmts: list[Stmt]):
+        self.collect_functions(stmts)
+        for stmt in stmts:
+            match stmt as result:
+                case FunctionStmt:
+                    self.check_function(result.function)
+                case _:
+                    self.error("only function definitions are supported at module level", result.span)
+
+    def check_function(self, fn: FunctionDef):
+        if not type_name_is_supported(fn.return_type):
+            self.error("function '" + fn.name + "' has an unsupported return type (only int/bool are compiled)", fn.span)
+        known: set[str] = {}
+        for p in fn.params:
+            if not type_name_is_supported(p.type_annotation):
+                self.error("parameter '" + p.name + "' has an unsupported type (only int/bool are compiled)", fn.span)
+            known.add(p.name)
+        self.check_block(fn.body, known)
+
+    def check_block(self, stmts: list[Stmt], known: set[str]):
+        for stmt in stmts:
+            self.check_stmt(stmt, known)
+
+    def check_stmt(self, stmt: Stmt, known: set[str]):
+        match stmt as result:
+            case VarDef:
+                if not type_name_is_supported(result.type_annotation):
+                    self.error("variable has an unsupported type (only int/bool are compiled)", result.span)
+                match result.value as value_expr:
+                    case Expr:
+                        self.check_expr(value_expr, known)
+                    case none:
+                        pass
+                match result.pattern as p:
+                    case IdentPattern:
+                        known.add(p.name)
+                    case _:
+                        self.error("only a plain name is supported as a variable-definition target", result.span)
+            case Assignment:
+                self.check_expr(result.value, known)
+                match result.target as target:
+                    case Ident:
+                        known.add(target.name)
+                    case _:
+                        self.error("only a plain name is supported as an assignment target", result.span)
+            case If:
+                self.check_expr(result.condition, known)
+                self.check_block(result.then_branch, known)
+                for branch in result.elif_branches:
+                    self.check_expr(branch.condition, known)
+                    self.check_block(branch.body, known)
+                match result.else_branch as else_body:
+                    case list[Stmt]:
+                        self.check_block(else_body, known)
+                    case none:
+                        pass
+            case While:
+                self.check_expr(result.condition, known)
+                self.check_block(result.body, known)
+            case Return:
+                match result.value as value_expr:
+                    case Expr:
+                        self.check_expr(value_expr, known)
+                    case none:
+                        pass
+            case Break:
+                pass
+            case Continue:
+                pass
+            case Pass:
+                pass
+            case ExprStmt:
+                self.check_expr(result.expr, known)
+            case MetadataStmt:
+                pass
+            case _:
+                self.error("unsupported statement kind", stmt.span)
+
+    def check_expr(self, expr: Expr, known: set[str]):
+        match expr as result:
+            case LiteralExpr:
+                match result.value as lit:
+                    case IntLit:
+                        pass
+                    case BoolLit:
+                        pass
+                    case _:
+                        self.error("unsupported literal kind (only int/bool are compiled)", result.span)
+            case Ident:
+                is_known = result.name in known
+                is_func = false
+                match self.functions.get(result.name, none) as sig:
+                    case FuncSig:
+                        is_func = true
+                    case none:
+                        pass
+                if not is_known and not is_func:
+                    self.error("undefined name '" + result.name + "'", result.span)
+            case Binary:
+                self.check_expr(result.left, known)
+                self.check_expr(result.right, known)
+            case Unary:
+                self.check_expr(result.expr, known)
+            case Call:
+                match result.func as callee:
+                    case Ident:
+                        match self.functions.get(callee.name, none) as sig:
+                            case FuncSig:
+                                if len(result.args) != sig.param_count:
+                                    self.error("function '" + callee.name + "' expects " + str(sig.param_count) + " arguments, got " + str(len(result.args)), result.span)
+                            case none:
+                                if callee.name != "print":
+                                    self.error("undefined function '" + callee.name + "'", result.span)
+                    case _:
+                        self.error("only calling a plain name is supported", result.span)
+                for a in result.args:
+                    self.check_expr(a.value, known)
+            case _:
+                self.error("unsupported expression kind", expr.span)
+
+def new_checker() -> Checker:
+    return Checker({:}, [])
+
+def check_program(stmts: list[Stmt]) -> list[CheckError]:
+    checker = new_checker()
+    checker.check_module(stmts)
+    return checker.errors

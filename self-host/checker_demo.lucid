@@ -1,0 +1,36 @@
+# Exercises self-host/checker.lucid against a handful of small programs:
+# one clean, and one for each kind of error it's supposed to catch.
+
+from .parser import parse, ParserError
+from .lexer import LexError
+from .checker import check_program, CheckError
+
+def check_source(source: str) -> list[CheckError] | ParserError | LexError:
+    parsed = parse(source)?
+    return check_program(parsed.statements)
+
+def report(label: str, source: str):
+    print("---", label, "---")
+    match check_source(source) as result:
+        case list[CheckError]:
+            if len(result) == 0:
+                print("(no errors)")
+            else:
+                for e in result:
+                    print("ERROR:", e.message)
+        case ParserError:
+            print("PARSE ERROR:", result.message)
+        case LexError:
+            print("LEX ERROR:", result.message)
+
+report("clean program", "def add(a: int, b: int) -> int:\n    return a + b\n\ndef main() -> int:\n    x = add(1, 2)\n    y = 0\n    while y < x:\n        y = y + 1\n    print(y)\n    return y\n")
+
+report("undefined variable", "def bad() -> int:\n    return missing\n")
+
+report("undefined function", "def bad() -> int:\n    return not_a_real_function(1)\n")
+
+report("wrong arity", "def add(a: int, b: int) -> int:\n    return a + b\n\ndef bad() -> int:\n    return add(1)\n")
+
+report("duplicate function", "def dup() -> int:\n    return 1\n\ndef dup() -> int:\n    return 2\n")
+
+report("unsupported type", "def bad() -> str:\n    return \"hi\"\n")

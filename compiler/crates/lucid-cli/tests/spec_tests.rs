@@ -1164,6 +1164,36 @@ fn self_hosted_interpreter_demo_runs_and_reports_errors() {
     );
 }
 
+#[test]
+fn self_hosted_checker_demo_catches_every_kind_of_error() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/checker_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "checker_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in [
+        "--- clean program ---\n(no errors)",
+        "ERROR: undefined name 'missing'",
+        "ERROR: undefined function 'not_a_real_function'",
+        "ERROR: function 'add' expects 2 arguments, got 1",
+        "ERROR: duplicate function 'dup'",
+        "ERROR: function 'bad' has an unsupported return type",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "checker_demo.lucid should report {expected:?}: {stdout}"
+        );
+    }
+}
+
 /// Slow: loads and interprets lexer.lucid, then loads and interprets
 /// ast.lucid + lexer.lucid + parser.lucid together and runs parser.lucid's
 /// own parse() through the self-hosted interpreter -- several minutes
@@ -1199,4 +1229,90 @@ fn self_hosted_self_hosting_demo_runs_lexer_and_parser_through_the_interpreter()
         !stdout.contains("FAIL"),
         "no differential check in either part should report a mismatch: {stdout}"
     );
+}
+
+/// The full self-hosted compile pipeline, end to end: `lucid run
+/// self-host/compile_demo.lucid` lexes, parses, checks, and generates C
+/// for three real Lucid programs -- entirely through self-host/lexer.
+/// lucid, parser.lucid, checker.lucid, and codegen.lucid -- writing each
+/// program's C output to self-host/compile_demo_<name>.c (gitignored;
+/// regenerated here). Lucid has no subprocess/exec builtin, so the one
+/// step that can't happen from inside the Lucid program itself is
+/// invoking the system C compiler -- this test is that external driver,
+/// the same role `compiler/crates/lucid-codegen` itself plays for its
+/// own generated C. Compiles each file with the same `gcc` invocation a
+/// human would use, runs the resulting native binary, and checks its
+/// output against the actual correct sequence -- proving the generated C
+/// isn't merely well-formed, it's correct.
+#[test]
+fn self_hosted_compile_demo_produces_correct_native_binaries() {
+    use std::fs;
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+
+    for name in ["fib", "factorial", "gcd", "broken"] {
+        let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/compile_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "compile_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("CHECK ERROR: undefined name 'missing_variable'"),
+        "the broken program should fail checking with the expected error, not produce C: {stdout}"
+    );
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "lucid_self_hosted_compile_demo_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let cases: [(&str, &str); 3] = [
+        ("fib", "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n"),
+        ("factorial", "1\n2\n6\n24\n120\n720\n5040\n"),
+        ("gcd", "6\n1\n1\n2\n3\n"),
+    ];
+    for (name, expected_stdout) in cases {
+        let c_path = format!("{repo_root}/self-host/compile_demo_{name}.c");
+        assert!(
+            fs::metadata(&c_path).is_ok(),
+            "compile_demo.lucid should have written {c_path}"
+        );
+        let binary_path = temp_dir.join(name);
+        let gcc_status = Command::new("gcc")
+            .args(["-std=c11", "-o"])
+            .arg(&binary_path)
+            .arg(&c_path)
+            .status()
+            .unwrap();
+        assert!(
+            gcc_status.success(),
+            "gcc should compile the generated C for '{name}' without error"
+        );
+        let run_output = Command::new(&binary_path).output().unwrap();
+        assert!(
+            run_output.status.success(),
+            "the compiled '{name}' binary should exit successfully"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run_output.stdout),
+            expected_stdout,
+            "the compiled '{name}' binary's output should match the correct sequence"
+        );
+    }
+
+    for name in ["fib", "factorial", "gcd", "broken"] {
+        let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
+    }
+    let _ = fs::remove_dir_all(&temp_dir);
 }

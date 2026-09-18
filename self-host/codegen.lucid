@@ -1,0 +1,252 @@
+# A minimal C code generator for self-host/ast.lucid, written in Lucid:
+# the code generation phase self-host/checker.lucid's own subset is
+# scoped for, mirroring compiler/crates/lucid-codegen (which also emits C
+# and shells out to a system C compiler -- Lucid has no subprocess/exec
+# builtin by design, so *invoking* that compiler is necessarily a driver
+# step outside Lucid, the same way it is a driver step outside the
+# Rust-implemented codegen's own Lucid-facing surface; see
+# compile_demo.lucid for the driver that writes this module's C output to
+# a file and actually compiles and runs it).
+#
+# Deliberately a small subset, not feature parity with lucid-codegen (a
+# ~16,000-line crate with dynamic LucidVal boxing, generic numeric
+# promotion, exception unwinding, and far more): every value here is a
+# plain C `long` (both `int` and `bool` -- codegen doesn't distinguish
+# them, matching checker.lucid's own scope), arithmetic and comparison
+# operators map straight to their C equivalents, a function becomes a C
+# function (a Lucid function literally named `main` becomes C's own
+# `int main(void)` entry point, taking no parameters), and `print(x)`
+# becomes `printf("%ld\n", x)`. Left for later: classes, strings, floats,
+# collections, closures, anything checker.lucid itself doesn't accept.
+# Also assumes (not yet enforced by checker.lucid) that every local
+# variable is declared once, at the top level of its function body, not
+# inside a nested if/while -- C's block scoping would otherwise make a
+# variable declared inside one branch invisible after it, unlike Lucid's
+# own more permissive same-function visibility.
+
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, IntLit, BoolLit, Stmt, FunctionStmt, VarDef, Assignment, If, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
+
+def join_with(parts: list[str], sep: str) -> str:
+    text = ""
+    i = 0
+    while i < len(parts):
+        if i > 0:
+            text = text + sep
+        text = text + parts[i]
+        i = i + 1
+    return text
+
+def c_binary_op(op: str) -> str:
+    if op == "ADD":
+        return "+"
+    if op == "SUB":
+        return "-"
+    if op == "MUL":
+        return "*"
+    if op == "FLOOR_DIV":
+        return "/"
+    if op == "MOD":
+        return "%"
+    if op == "LT":
+        return "<"
+    if op == "LT_EQ":
+        return "<="
+    if op == "GT":
+        return ">"
+    if op == "GT_EQ":
+        return ">="
+    if op == "EQ":
+        return "=="
+    if op == "NOT_EQ":
+        return "!="
+    if op == "AND":
+        return "&&"
+    if op == "OR":
+        return "||"
+    return "/* unsupported operator " + op + " */"
+
+def codegen_expr(e: Expr) -> str:
+    match e as result:
+        case LiteralExpr:
+            match result.value as lit:
+                case IntLit:
+                    return str(lit.value)
+                case BoolLit:
+                    if lit.value:
+                        return "1"
+                    return "0"
+                case _:
+                    return "0 /* unsupported literal */"
+        case Ident:
+            return result.name
+        case Binary:
+            left = codegen_expr(result.left)
+            right = codegen_expr(result.right)
+            return "(" + left + " " + c_binary_op(result.op) + " " + right + ")"
+        case Unary:
+            inner = codegen_expr(result.expr)
+            if result.op == "NEG":
+                return "(-" + inner + ")"
+            if result.op == "NOT":
+                return "(!" + inner + ")"
+            return inner
+        case Call:
+            match result.func as callee:
+                case Ident:
+                    args: list[str] = []
+                    for a in result.args:
+                        args.append(codegen_expr(a.value))
+                    joined = join_with(args, ", ")
+                    if callee.name == "print":
+                        return "printf(\"%ld\\n\", " + joined + ")"
+                    return callee.name + "(" + joined + ")"
+                case _:
+                    return "0 /* unsupported call target */"
+        case _:
+            return "0 /* unsupported expression */"
+
+def ident_pattern_name(p: Pattern) -> str:
+    match p as result:
+        case IdentPattern:
+            return result.name
+        case _:
+            return "_unsupported_pattern"
+
+def ident_target_name(e: Expr) -> str:
+    match e as result:
+        case Ident:
+            return result.name
+        case _:
+            return "_unsupported_target"
+
+def codegen_block(stmts: list[Stmt], indent: str) -> str:
+    lines: list[str] = []
+    for s in stmts:
+        lines.append(codegen_stmt(s, indent))
+    return join_with(lines, "\n")
+
+def codegen_stmt(s: Stmt, indent: str) -> str:
+    match s as result:
+        case VarDef:
+            value_code = "0"
+            match result.value as v:
+                case Expr:
+                    value_code = codegen_expr(v)
+                case none:
+                    pass
+            name = ident_pattern_name(result.pattern)
+            return indent + name + " = " + value_code + ";"
+        case Assignment:
+            name = ident_target_name(result.target)
+            return indent + name + " = " + codegen_expr(result.value) + ";"
+        case If:
+            cond = codegen_expr(result.condition)
+            then_code = codegen_block(result.then_branch, indent + "    ")
+            text = indent + "if (" + cond + ") {\n" + then_code + "\n" + indent + "}"
+            for branch in result.elif_branches:
+                elif_cond = codegen_expr(branch.condition)
+                elif_code = codegen_block(branch.body, indent + "    ")
+                text = text + " else if (" + elif_cond + ") {\n" + elif_code + "\n" + indent + "}"
+            match result.else_branch as else_body:
+                case list[Stmt]:
+                    else_code = codegen_block(else_body, indent + "    ")
+                    text = text + " else {\n" + else_code + "\n" + indent + "}"
+                case none:
+                    pass
+            return text
+        case While:
+            cond = codegen_expr(result.condition)
+            body = codegen_block(result.body, indent + "    ")
+            return indent + "while (" + cond + ") {\n" + body + "\n" + indent + "}"
+        case Return:
+            match result.value as v:
+                case Expr:
+                    return indent + "return " + codegen_expr(v) + ";"
+                case none:
+                    return indent + "return;"
+        case Break:
+            return indent + "break;"
+        case Continue:
+            return indent + "continue;"
+        case Pass:
+            return indent + ";"
+        case ExprStmt:
+            return indent + codegen_expr(result.expr) + ";"
+        case MetadataStmt:
+            return ""
+        case _:
+            return indent + "/* unsupported statement */"
+
+def c_param_list(params: list[Param]) -> str:
+    names: list[str] = []
+    for p in params:
+        names.append("long " + p.name)
+    joined = join_with(names, ", ")
+    if joined == "":
+        return "void"
+    return joined
+
+def collect_local_names(stmts: list[Stmt], names: set[str]):
+    # Every local Lucid names for the rest of its enclosing function, not
+    # just the block it's first assigned in (see the header comment) --
+    # so every VarDef/Assignment target anywhere in the body, including
+    # nested if/while blocks, becomes one C declaration hoisted to the
+    # top of the function, and codegen_stmt itself never declares one.
+    for s in stmts:
+        match s as result:
+            case VarDef:
+                names.add(ident_pattern_name(result.pattern))
+            case Assignment:
+                names.add(ident_target_name(result.target))
+            case If:
+                collect_local_names(result.then_branch, names)
+                for branch in result.elif_branches:
+                    collect_local_names(branch.body, names)
+                match result.else_branch as else_body:
+                    case list[Stmt]:
+                        collect_local_names(else_body, names)
+                    case none:
+                        pass
+            case While:
+                collect_local_names(result.body, names)
+            case _:
+                pass
+
+def codegen_function(fn: FunctionDef) -> str:
+    param_list = c_param_list(fn.params)
+    param_names: set[str] = {}
+    for p in fn.params:
+        param_names.add(p.name)
+    local_names: set[str] = {}
+    collect_local_names(fn.body, local_names)
+    declarations: list[str] = []
+    for name in local_names:
+        if name not in param_names:
+            declarations.append("    long " + name + ";")
+    body = codegen_block(fn.body, "    ")
+    full_body = join_with(declarations, "\n") + "\n" + body
+    if fn.name == "main":
+        return "int main(" + param_list + ") {\n" + full_body + "\n}"
+    return "long " + fn.name + "(" + param_list + ") {\n" + full_body + "\n}"
+
+def codegen_forward_decl(fn: FunctionDef) -> str:
+    return "long " + fn.name + "(" + c_param_list(fn.params) + ");"
+
+def codegen_module(stmts: list[Stmt]) -> str:
+    parts: list[str] = ["#include <stdio.h>", ""]
+    for stmt in stmts:
+        match stmt as result:
+            case FunctionStmt:
+                if result.function.name != "main":
+                    parts.append(codegen_forward_decl(result.function))
+            case _:
+                pass
+    parts.append("")
+    for stmt in stmts:
+        match stmt as result:
+            case FunctionStmt:
+                parts.append(codegen_function(result.function))
+                parts.append("")
+            case _:
+                pass
+    return join_with(parts, "\n")
