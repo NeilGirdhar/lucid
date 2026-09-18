@@ -2985,6 +2985,20 @@ impl TypeChecker {
         // exhaustiveness analysis can recurse through them.
         self.resolve_class_parents_and_check_cycles(module)?;
 
+        // A field's declared type is resolved once, in file order, inside
+        // Pass 1 above -- so a field typed as another class declared later
+        // in the same file (ordinary for a mutually recursive AST: a
+        // sealed Expr's own field holding `list[Stmt]` alongside Stmt
+        // holding an `Expr`) resolves before that class exists in
+        // `env.classes`. `resolve_type_expr` doesn't error on an unknown
+        // name; it returns a placeholder with no fields and
+        // `is_sealed: false` instead, and Pass 1 bakes that placeholder
+        // into the field permanently -- so it disagrees with the same
+        // class resolved correctly everywhere else, rejecting perfectly
+        // valid values. Re-resolve every field now that every class in the
+        // module is known, the same way class parents just did above.
+        self.refresh_forward_referenced_field_types(module)?;
+
         // Pass 2: Verify single-inheritance and trait constraints
         for stmt in &module.statements {
             self.verify_structure(stmt)?;
@@ -3094,6 +3108,43 @@ impl TypeChecker {
                     span,
                 });
             }
+        }
+        Ok(())
+    }
+
+    fn refresh_forward_referenced_field_types(&mut self, module: &Module) -> Result<(), TypeError> {
+        for stmt in &module.statements {
+            let Stmt::ClassDef {
+                name,
+                type_params,
+                body,
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            // Field types resolve against the class's own type parameters
+            // (a field typed `T` must stay `TypeVar("T")`, not resolve as
+            // a class named "T") -- collect_declaration binds these into
+            // `type_var_bounds` for the same reason while it resolves
+            // fields the first time, then restores the prior bounds
+            // afterward; mirror that scoping here.
+            let saved_type_var_bounds = self.env.type_var_bounds.clone();
+            for param in type_params {
+                self.env
+                    .type_var_bounds
+                    .insert(param.name.clone(), Type::TypeVar("Any".into()));
+            }
+            for member in body {
+                let ClassMember::Field(f) = member else {
+                    continue;
+                };
+                let resolved = self.resolve_type_expr(&f.type_annotation)?;
+                if let Some(Type::Class { fields, .. }) = self.env.classes.get_mut(name) {
+                    fields.insert(f.name.clone(), resolved);
+                }
+            }
+            self.env.type_var_bounds = saved_type_var_bounds;
         }
         Ok(())
     }
@@ -15356,6 +15407,49 @@ mod tests {
         importer.check_module(&importer_module).expect(
             "a function's own return type naming an imported class, checked against a later \
              variable of the same imported type, should agree",
+        );
+    }
+
+    #[test]
+    fn forward_referenced_same_file_field_types_refresh_after_every_class_is_known() {
+        // collect_declaration (Pass 1) resolves each field's declared type
+        // once, in file order -- so a field typed as a class declared
+        // later in the same file (ordinary for a mutually recursive AST:
+        // FunctionDef.body: list[Stmt], with Stmt declared afterward)
+        // resolves before that class exists in env.classes, and
+        // resolve_type_expr silently caches an "unknown forward
+        // reference" placeholder (no fields, not sealed) rather than
+        // erroring. refresh_forward_referenced_field_types re-resolves
+        // every field once every class in the module is registered, the
+        // same way class parents already get a dedicated second pass.
+        let module = parse(
+            "class Holder:\n    items: list[Stmt]\n\nsealed class Stmt:\n    pass\n\nclass Pass(Stmt):\n    pass\n\np: Stmt = Pass()\nitems: list[Stmt] = [p]\nh = Holder(items)\n",
+        )
+        .expect("module should parse");
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module).expect(
+            "a field typed as a same-file class declared later should accept that class's real \
+             instances, not reject them against a cached empty-fields placeholder",
+        );
+    }
+
+    #[test]
+    fn forward_referenced_field_refresh_keeps_generic_type_parameters_as_type_vars() {
+        // The refresh pass in the previous test must resolve fields in
+        // the same type-parameter scope collect_declaration used the
+        // first time -- otherwise a generic field typed `T` re-resolves
+        // as a class literally named "T" instead of staying TypeVar("T"),
+        // breaking every generic class with at least one field (variance
+        // views, projections, anything using its own type parameter in a
+        // field position).
+        let module = parse(
+            "class Box[T]:\n    value: T\n\n    def get(self) -> T:\n        return self.value\n\nb = Box(3)\nn: int = b.get()\n",
+        )
+        .expect("module should parse");
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module).expect(
+            "a generic class's own type parameter used as a field type should remain a type \
+             variable after the forward-reference refresh pass, not resolve as an unknown class",
         );
     }
 
