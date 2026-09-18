@@ -43,10 +43,6 @@ def c_binary_op(op: str) -> str:
         return "-"
     if op == "MUL":
         return "*"
-    if op == "FLOOR_DIV":
-        return "/"
-    if op == "MOD":
-        return "%"
     if op == "LT":
         return "<"
     if op == "LT_EQ":
@@ -82,6 +78,10 @@ def codegen_expr(e: Expr) -> str:
         case Binary:
             left = codegen_expr(result.left)
             right = codegen_expr(result.right)
+            if result.op == "FLOOR_DIV":
+                return "lucid_floordiv(" + left + ", " + right + ")"
+            if result.op == "MOD":
+                return "lucid_mod(" + left + ", " + right + ")"
             return "(" + left + " " + c_binary_op(result.op) + " " + right + ")"
         case Unary:
             inner = codegen_expr(result.expr)
@@ -232,8 +232,10 @@ def codegen_function(fn: FunctionDef) -> str:
 def codegen_forward_decl(fn: FunctionDef) -> str:
     return "long " + fn.name + "(" + c_param_list(fn.params) + ");"
 
+runtime_prelude = "#include <stdio.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}"
+
 def codegen_module(stmts: list[Stmt]) -> str:
-    parts: list[str] = ["#include <stdio.h>", ""]
+    parts: list[str] = [runtime_prelude, ""]
     for stmt in stmts:
         match stmt as result:
             case FunctionStmt:

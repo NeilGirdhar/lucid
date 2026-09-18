@@ -50,9 +50,12 @@ factorial_source = "def factorial(n: int) -> int:\n    result = 1\n    k = 1\n  
 
 gcd_source = "def gcd(a: int, b: int) -> int:\n    if b == 0:\n        return a\n    return gcd(b, a % b)\n\ndef classify(n: int) -> int:\n    if n > 0 and n % 2 == 0:\n        return 1\n    if n > 0 or n == 0:\n        return 2\n    return 3\n\ndef main() -> int:\n    print(gcd(48, 18))\n    print(gcd(17, 5))\n    print(classify(4))\n    print(classify(3))\n    print(classify(-1))\n    return 0\n"
 
+divmod_source = "def main() -> int:\n    print(7 // 2)\n    print(7 // -2)\n    print(-7 // 2)\n    print(-7 // -2)\n    print(7 % 2)\n    print(7 % -2)\n    print(-7 % 2)\n    print(-7 % -2)\n    return 0\n"
+
 broken_source = "def broken() -> int:\n    return missing_variable\n\ndef main() -> int:\n    return broken()\n"
 
 compile_to_file("fibonacci (recursion)", fib_source, "self-host/compile_demo_fib.c")
 compile_to_file("factorial (iteration)", factorial_source, "self-host/compile_demo_factorial.c")
 compile_to_file("gcd + classify (mod, and/or, comparisons)", gcd_source, "self-host/compile_demo_gcd.c")
+compile_to_file("divmod (Euclidean // and %, negative operands)", divmod_source, "self-host/compile_demo_divmod.c")
 compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")

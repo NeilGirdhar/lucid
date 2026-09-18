@@ -1250,7 +1250,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    for name in ["fib", "factorial", "gcd", "broken"] {
+    for name in ["fib", "factorial", "gcd", "divmod", "broken"] {
         let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
     }
 
@@ -1277,10 +1277,13 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
-    let cases: [(&str, &str); 3] = [
+    let cases: [(&str, &str); 4] = [
         ("fib", "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n"),
         ("factorial", "1\n2\n6\n24\n120\n720\n5040\n"),
         ("gcd", "6\n1\n1\n2\n3\n"),
+        // Euclidean // and %: the remainder is always in [0, |b|),
+        // unlike both C's truncating and Python's floored division.
+        ("divmod", "3\n-3\n-4\n4\n1\n1\n1\n1\n"),
     ];
     for (name, expected_stdout) in cases {
         let c_path = format!("{repo_root}/self-host/compile_demo_{name}.c");
@@ -1311,7 +1314,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         );
     }
 
-    for name in ["fib", "factorial", "gcd", "broken"] {
+    for name in ["fib", "factorial", "gcd", "divmod", "broken"] {
         let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
     }
     let _ = fs::remove_dir_all(&temp_dir);
