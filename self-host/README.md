@@ -36,6 +36,35 @@ other compiled program in this pipeline already gets); `self-host/
 _probe_selfcompile.lucid` (untracked, a standing local gauge, not
 committed) re-runs this check on demand.
 
+**Next target: `self-host/parser.lucid`**, probed the same way, does
+*not* compile yet — much further from it than `lexer.lucid` was, and a
+different shape of gap: not one or two missing checker/codegen
+features, but two structural ones this subset has never needed before.
+(1) **`?` appears far more often, and in positions this subset
+deliberately doesn't support**: `next_token()?`, `self.advance()?`, and
+similar appear as a `Call` argument, inside a larger expression, and
+(most often) as a `return`'s own value (`return
+self.parse_expr()?`) — `docs/question-mark-operator.md`'s own example
+shape, checked out by `check_propagate` but not desugared by
+`codegen.lucid`, which only ever implements the single
+plain-assignment shape `self-host/lexer.lucid` needed (see
+`check_rhs_expr`'s own comment). Closing this means at least a
+return-position desugaring (a temp, a tag check, two returns) — the
+nested-expression case may need declaring `?` unsupported there
+honestly instead, the same way this subset already is for several other
+constructs. (2) **`parser.lucid` imports `ast.lucid`'s node classes
+(`Token`, `Binary`, `LiteralExpr`, ...) and constructs/matches them
+directly** — this subset's checker/codegen have no cross-file import
+resolution at all yet: `self.classes`/`self.functions` are populated
+only from the single file being checked, so every imported class comes
+back "unknown class". A third, smaller gap: `parser.lucid` frequently
+declares a local as `T | none` (`value: Expr | none = none`), then
+later assigns it a plain `T` in a branch (`value = self.parse_expr()`)
+— `bind()`'s "one type per name per function" rule currently rejects
+that as changing type from `Expr | none` to `Expr`, even though
+narrowing a declared union down via a later assignment is a real,
+sensible pattern this subset doesn't recognize yet.
+
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
   the reference interpreter (`lucid run`) and successfully tokenizes its
