@@ -1514,6 +1514,14 @@ pub struct TypeChecker {
     /// Advice that does not stop checking, such as a type parameter left
     /// without a variance marker.
     pub warnings: Vec<TypeWarning>,
+    /// Other modules' fully checked environments, keyed by the module path
+    /// as a `from <module> import ...` statement spells it. The checker
+    /// does no file I/O of its own (see `merge_import_from`); a caller
+    /// that resolves imports to files -- `lucid-db`'s project pipeline,
+    /// today -- populates this before `check_module` runs, and
+    /// `Stmt::FromImport` merges from it instead of falling back to `Any`
+    /// when an entry is present.
+    pub imported_envs: HashMap<String, TypeEnvironment>,
 }
 
 /// The narrowing a condition establishes on its true and false branches:
@@ -2780,6 +2788,161 @@ impl TypeChecker {
             env,
             narrowing_constraints: HashMap::new(),
             warnings: Vec::new(),
+            imported_envs: HashMap::new(),
+        }
+    }
+
+    /// Merge another (already fully checked) module's declarations into
+    /// this checker's environment for a `from <module> import <names>`
+    /// statement, so an imported name resolves to its real type instead
+    /// of the `Any` `Stmt::FromImport` falls back to on its own.
+    ///
+    /// Classes, traits, and type aliases merge wholesale, unconditionally
+    /// of which names were actually listed: a class can be reached
+    /// transitively (a field typed as a class the importing file never
+    /// names directly, the way any AST node class references its own
+    /// family), so anything less than "the whole type graph is visible
+    /// once you import anything from this module" leaves transitive
+    /// lookups broken. Functions and plain variables merge only for the
+    /// names actually requested, matching "every import names its
+    /// targets explicitly" (see docs/import.md) -- callable helpers,
+    /// unlike types, are only ever reached by the name you imported them
+    /// under, so nothing beyond that name should leak in.
+    pub fn merge_import_from(
+        &mut self,
+        source: &TypeEnvironment,
+        names: &[(String, Option<String>)],
+    ) {
+        macro_rules! merge_all {
+            ($($field:ident),+ $(,)?) => {
+                $(self.env.$field.extend(source.$field.clone());)+
+            };
+        }
+        merge_all!(
+            classes,
+            traits,
+            type_aliases,
+            type_alias_params,
+            type_alias_bounds,
+            final_fields,
+            final_methods,
+            final_classes,
+            external_classes,
+            class_members,
+            class_implemented_members,
+            class_abstract_members,
+            class_methods,
+            class_method_params,
+            class_method_receivers,
+            trait_method_receivers,
+            class_getters,
+            trait_methods,
+            trait_method_params,
+            trait_getters,
+            trait_fields,
+            trait_bases,
+            class_trait_args,
+            class_vars,
+            class_field_order,
+            class_constructor_arity,
+            class_constructor_required,
+            class_parents,
+            class_variance,
+            class_type_params,
+            trait_type_params,
+            trait_variance,
+            class_bounds,
+            trait_bounds,
+            class_type_param_defaults,
+            trait_type_param_defaults,
+            class_type_param_alternatives,
+            trait_type_param_alternatives,
+            obligations,
+            final_obligations,
+            sealed_subclasses,
+        );
+
+        for (name, alias) in names {
+            let bound_name = alias.as_ref().unwrap_or(name).clone();
+
+            if let Some(ty) = source.functions.get(name) {
+                self.env.functions.insert(bound_name.clone(), ty.clone());
+                if let Some(params) = source.function_type_params.get(name) {
+                    self.env
+                        .function_type_params
+                        .insert(bound_name.clone(), params.clone());
+                }
+                if let Some(arity) = source.function_arity.get(name) {
+                    self.env.function_arity.insert(bound_name.clone(), *arity);
+                }
+                if let Some(params) = source.function_param_names.get(name) {
+                    self.env
+                        .function_param_names
+                        .insert(bound_name.clone(), params.clone());
+                }
+                if let Some(set) = source.function_positional_only.get(name) {
+                    self.env
+                        .function_positional_only
+                        .insert(bound_name.clone(), set.clone());
+                }
+                if let Some(set) = source.function_keyword_only.get(name) {
+                    self.env
+                        .function_keyword_only
+                        .insert(bound_name.clone(), set.clone());
+                }
+                if let Some(params) = source.function_required_params.get(name) {
+                    self.env
+                        .function_required_params
+                        .insert(bound_name.clone(), params.clone());
+                }
+                if let Some(v) = source.function_variadic_positional.get(name) {
+                    self.env
+                        .function_variadic_positional
+                        .insert(bound_name.clone(), v.clone());
+                }
+                if let Some(v) = source.function_variadic_keyword.get(name) {
+                    self.env
+                        .function_variadic_keyword
+                        .insert(bound_name.clone(), v.clone());
+                }
+                if let Some(overloads) = source.function_overloads.get(name) {
+                    self.env
+                        .function_overloads
+                        .insert(bound_name.clone(), overloads.clone());
+                }
+                if source.dispatch_functions.contains(name) {
+                    self.env.dispatch_functions.insert(bound_name.clone());
+                }
+                if source.overloaded_functions.contains(name) {
+                    self.env.overloaded_functions.insert(bound_name.clone());
+                }
+                if source.contextmanager_functions.contains(name) {
+                    self.env.contextmanager_functions.insert(bound_name.clone());
+                }
+                self.env
+                    .variables
+                    .insert(bound_name.clone(), (ty.clone(), MutabilityView::ReadOnly));
+                continue;
+            }
+
+            if let Some((ty, view)) = source.variables.get(name) {
+                self.env
+                    .variables
+                    .insert(bound_name.clone(), (ty.clone(), view.clone()));
+                continue;
+            }
+
+            // A class or trait imported by name is already visible under
+            // its own declared name from the wholesale merge above; alias
+            // it under the local binding too; so `from .ast import Expr as
+            // E` and a later `E(...)` construct call both resolve.
+            if let Some(ty) = source.classes.get(name).or_else(|| source.traits.get(name)) {
+                if &bound_name != name {
+                    self.env
+                        .variables
+                        .insert(bound_name.clone(), (ty.clone(), MutabilityView::ReadOnly));
+                }
+            }
         }
     }
 
@@ -7966,10 +8129,23 @@ impl TypeChecker {
                             span: *span,
                         });
                     }
-                    self.env.variables.insert(
-                        bound_name,
-                        (Type::TypeVar("Any".to_string()), MutabilityView::ReadOnly),
-                    );
+                }
+                if let Some(source_env) = self.imported_envs.get(module).cloned() {
+                    self.merge_import_from(&source_env, names);
+                } else {
+                    // No pre-resolved environment for this module (a
+                    // builtin like math/sys, or a caller that never wired
+                    // one up, e.g. a bare `check_module` call outside the
+                    // project pipeline). Fall back to the untyped stub so
+                    // these calls still type-check dynamically instead of
+                    // failing outright.
+                    for (name, alias) in names {
+                        let bound_name = alias.as_ref().unwrap_or(name).clone();
+                        self.env.variables.insert(
+                            bound_name,
+                            (Type::TypeVar("Any".to_string()), MutabilityView::ReadOnly),
+                        );
+                    }
                 }
                 Ok(())
             }
@@ -15080,6 +15256,55 @@ fn yield_guaranteed(statements: &[Stmt]) -> bool {
 mod tests {
     use super::*;
     use lucid_syntax::parse;
+
+    #[test]
+    fn merge_import_from_resolves_imported_class_and_function_types() {
+        let source_module = parse(
+            "sealed class Shape:\n    pass\nclass Circle(Shape):\n    radius: float\ndef add_one(n: int) -> int:\n    return n + 1\nkeywords = {\"if\": 1}\n",
+        )
+        .expect("source module should parse");
+        let mut source_checker = TypeChecker::new();
+        source_checker
+            .check_module(&source_module)
+            .expect("source module should check");
+
+        // Constructing the imported class works once its declaration is
+        // merged in -- this failed with "unknown enclosing class" before
+        // merge_import_from existed, since Stmt::FromImport bound every
+        // name to Any and never touched env.classes.
+        let importer_module = parse("c = Circle(1.0)\nn = add_one(41)\n").unwrap();
+        let mut importer = TypeChecker::new();
+        importer.merge_import_from(
+            &source_checker.env,
+            &[("Circle".to_string(), None), ("add_one".to_string(), None)],
+        );
+        importer
+            .check_module(&importer_module)
+            .expect("constructing an imported class and calling an imported function should check");
+
+        // A wrong-typed call to the imported function is still rejected
+        // -- proving the merged function keeps its real signature instead
+        // of falling back to Any.
+        let bad_call_module = parse("add_one(\"nope\")\n").unwrap();
+        let mut bad_call_checker = TypeChecker::new();
+        bad_call_checker.merge_import_from(&source_checker.env, &[("add_one".to_string(), None)]);
+        assert!(
+            bad_call_checker.check_module(&bad_call_module).is_err(),
+            "a wrong-typed argument to an imported function should be rejected, not accepted as Any"
+        );
+
+        // A name not in the explicit import list stays invisible, even
+        // though its module was merged from -- functions/variables merge
+        // only for names actually requested (classes/traits/aliases merge
+        // wholesale, for transitive type references).
+        let unimported_module = parse("k = keywords\n").unwrap();
+        let mut unimported_checker = TypeChecker::new();
+        unimported_checker.merge_import_from(&source_checker.env, &[("Circle".to_string(), None)]);
+        assert!(
+            unimported_checker.check_module(&unimported_module).is_err(),
+            "a name not in the import list should not be visible"
+        );
+    }
 
     #[test]
     fn pattern_bound_names_skips_type_like_identifiers() {
