@@ -1232,7 +1232,8 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "cannot infer the element type of an empty list literal in this subset",
         "ERROR: print() of a list value is not supported in this subset",
         "ERROR: cannot determine the type of 'xs'",
-        "ERROR: field 'items' has an unsupported type (list[T] fields are not supported in this subset)",
+        "--- a list-typed class field is supported ---\n(no errors)",
+        "ERROR: print() of a 'Bag' value is not supported in this subset (it has a field whose type is itself a class or a list)",
     ] {
         assert!(
             stdout.contains(expected),

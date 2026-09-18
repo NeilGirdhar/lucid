@@ -148,17 +148,25 @@ pieces is close to feature parity with its Rust counterpart.
   and `while` both accept an `if_broken` clause, checked as an ordinary
   extra block; `print(...)` accepts a class value whose fields are all
   int/bool/str — `codegen.lucid` has a per-class printer for those, see
-  below — but rejects one with a class-typed field (no nested printer
-  call yet) or a list value (no printer for those at all); `freeze(...)`
+  below — but rejects one with a class- or list-typed field (no nested
+  printer call for either yet) or a list value directly (no printer for
+  those at all); `freeze(...)`
   is rejected outright, not emulated (see
   `compile_demo.lucid`'s entry below for why); `s[i]`/`xs[i]` are
   checked for `s: str` or `xs: list[T]` with `i: int`, yielding `str`
   or `T` respectively — anything else is "indexing is only supported on
   str/list[T] in this subset". `list[T]` itself: `T` is int/bool/str/a
-  class (`list[list[T]]` is rejected — `resolve_type_expr` refuses to
-  resolve it — and so is a class field typed `list[T]`, since a class
-  holding a `list[LaterClass]` field raises a typedef-ordering question
-  this codegen doesn't handle for plain class fields either); an empty
+  class, including a class defined earlier or later in the same module
+  (`list[list[T]]` is rejected outright — `resolve_type_expr` refuses to
+  resolve it — a scope decision, not a technical one:
+  `mangle_component`/`emit_list_type` are written recursively and would
+  emit a `lucid_list_list_int` correctly if asked, but nothing in this
+  subset needs nested lists yet); a class-typed
+  field can itself be `list[T]` now too, once classes became
+  heap-allocated pointers (see `codegen.lucid`'s entry below) rather
+  than by-value structs, which is what made a class holding a
+  `list[LaterClass]` field a typedef-ordering problem in the first
+  place; an empty
   list literal `[]` can only appear where a declared type gives its
   element type away (`xs: list[int] = []`) — anywhere else, "cannot
   infer the element type of an empty list literal in this subset";
@@ -215,8 +223,31 @@ pieces is close to feature parity with its Rust counterpart.
   found.
 - `codegen.lucid` — a C code generator for the same subset
   `checker.lucid` accepts: `int`/`bool` are a C `long`, `str` a
-  `const char *`, a class a plain (not heap-allocated) C struct passed
-  and returned by value; arithmetic/comparison/logical operators map
+  `const char *`, a class a heap-allocated, *pointer*-typed C struct
+  (`ClassName *`), matching `lucid-runtime`'s own `Value::Object`
+  (`Rc<RefCell<HashMap>>` — reference semantics, an alias mutates every
+  alias's fields) — every class was a plain *by-value* struct through
+  the first several commits of this pipeline, safe only because
+  nothing could mutate a field after construction; `list[T]` needed
+  the same representation for the same reason (see below), and once
+  method bodies needed to mutate `self.field` in place (a later
+  commit), by-value classes stopped being representable at all, so
+  every class switched too. A class emits a `typedef struct Name Name;`
+  forward declaration before its full `struct Name { ... };` body — all
+  of a module's forward declarations come first, in one pass, so one
+  class's field can hold a pointer to another class declared earlier
+  *or later* in the same module, a typedef-ordering question a named
+  struct tag with a pointer field sidesteps entirely (an anonymous
+  by-value struct couldn't). `Construct` (`ClassName(args)`) compiles
+  to `lucid_new_ClassName(args)`, a generated constructor doing exactly
+  one `malloc` and one field assignment per argument — leaked, like
+  every other allocation in this subset. Attribute access is `->`, not
+  `.`. `list[T]` element types and class fields can both be another
+  class now (`Circle *` fits in a `lucid_list_Circle`'s `items` array,
+  or another struct's field, the same way any other pointer does) —
+  though `is_printable_class` still refuses to print one (a class- or
+  list-typed field needs its own nested printer call, not supported
+  yet); arithmetic/comparison/logical operators map
   straight to their C equivalents. `//`/`%` go through two `static` helper
   functions in the generated C's own prelude — Lucid's are *Euclidean*:
   the remainder is always in `[0, |b|)`, unlike both C's truncating and

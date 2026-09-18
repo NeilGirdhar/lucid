@@ -42,11 +42,35 @@ from .types import LType, IntType, BoolType, StrType, ClassType, ListType, type_
 
 runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
 
+# Every class gets a `typedef struct Name Name;` forward declaration,
+# emitted for every class before any class's full struct body -- a
+# named (not anonymous) struct tag is what lets one class's field hold
+# a pointer to another class declared earlier OR later in the same
+# module (codegen_module emits every forward decl first, in one pass,
+# specifically so field/struct declaration order never matters here).
+def emit_struct_forward_decl(cls: ClassSig) -> str:
+    return "typedef struct " + cls.name + " " + cls.name + ";"
+
 def emit_struct(cls: ClassSig) -> str:
     fields: list[str] = []
     for f in cls.fields:
         fields.append("    " + c_type_of(f.field_type) + " " + f.name + ";")
-    return "typedef struct {\n" + join_with(fields, "\n") + "\n} " + cls.name + ";"
+    return "struct " + cls.name + " {\n" + join_with(fields, "\n") + "\n};"
+
+# `Construct` (`ClassName(args)`) compiles to a call to this --
+# `malloc`, one field assignment per constructor argument, return the
+# pointer. Leaked, like every other allocation in this subset (see
+# self-host/README.md's no-GC/no-arena note).
+def emit_constructor(cls: ClassSig) -> str:
+    params: list[str] = []
+    assigns: list[str] = []
+    for f in cls.fields:
+        params.append(c_type_of(f.field_type) + " " + f.name)
+        assigns.append("    p->" + f.name + " = " + f.name + ";")
+    param_list = join_with(params, ", ")
+    if param_list == "":
+        param_list = "void"
+    return "static " + cls.name + " *lucid_new_" + cls.name + "(" + param_list + ") {\n    " + cls.name + " *p = malloc(sizeof(" + cls.name + "));\n" + join_with(assigns, "\n") + "\n    return p;\n}"
 
 # `print()` of a class value emits `ClassName({"field": value, ...})`,
 # matching lucid-runtime's own default repr -- fields sorted by name
@@ -68,19 +92,19 @@ def emit_print_function(cls: ClassSig) -> str:
         match field_type(cls, name) as ft:
             case StrType:
                 format_parts.append("\\\"" + name + "\\\": \\\"%s\\\"")
-                arg_exprs.append("value." + name)
+                arg_exprs.append("value->" + name)
             case BoolType:
                 format_parts.append("\\\"" + name + "\\\": %s")
-                arg_exprs.append("(value." + name + " ? \"true\" : \"false\")")
+                arg_exprs.append("(value->" + name + " ? \"true\" : \"false\")")
             case _:
                 format_parts.append("\\\"" + name + "\\\": %ld")
-                arg_exprs.append("value." + name)
+                arg_exprs.append("value->" + name)
     format_str = "\"" + cls.name + "({" + join_with(format_parts, ", ") + "})\""
     pieces: list[str] = [format_str]
     for a in arg_exprs:
         pieces.append(a)
     printf_call = "printf(" + join_with(pieces, ", ") + ");"
-    return "static void lucid_print_" + cls.name + "(" + cls.name + " value) {\n    " + printf_call + "\n}"
+    return "static void lucid_print_" + cls.name + "(" + cls.name + " *value) {\n    " + printf_call + "\n}"
 
 def join_with(parts: list[str], sep: str) -> str:
     text = ""
@@ -163,7 +187,14 @@ def c_type_of(t: LType) -> str:
         case StrType:
             return "const char *"
         case ClassType:
-            return result.name
+            # A pointer, not a by-value struct: lucid-runtime's
+            # Value::Object is Rc<RefCell<HashMap>> -- reference
+            # semantics, an alias mutates the same fields every other
+            # alias sees -- so a class here has to be heap-allocated
+            # and passed by pointer, the same representation list[T]
+            # already uses and for the same reason (see
+            # emit_constructor's header comment).
+            return result.name + " *"
         case ListType:
             return "lucid_list_" + mangle_component(result.element_type) + " *"
         case _:
@@ -475,12 +506,12 @@ class Codegen:
                         args: list[str] = []
                         for a in result.args:
                             args.append(self.codegen_expr(a.value, known))
-                        return "((" + result.class_name + "){" + join_with(args, ", ") + "})"
+                        return "lucid_new_" + result.class_name + "(" + join_with(args, ", ") + ")"
                     case none:
                         return "0 /* unknown class */"
             case Attribute:
                 receiver = self.codegen_expr(result.value, known)
-                return receiver + "." + result.attr
+                return receiver + "->" + result.attr
             case Index:
                 receiver_code = self.codegen_expr(result.value, known)
                 index_code = self.codegen_expr(result.index, known)
@@ -1029,6 +1060,23 @@ class Codegen:
                 case _:
                     top_level.append(stmt)
         parts: list[str] = [runtime_prelude, ""]
+        # Every class's forward decl (`typedef struct Name Name;`)
+        # first, in one pass, before any class's full struct body --
+        # this is what lets a field hold a pointer to a class declared
+        # earlier or later in the same module (a named struct tag needs
+        # only to have been forward-declared to be a valid pointer
+        # target, unlike an anonymous by-value struct).
+        for stmt in stmts:
+            match stmt as result:
+                case ClassDef:
+                    match self.classes.get(result.name, none) as cls:
+                        case ClassSig:
+                            parts.append(emit_struct_forward_decl(cls))
+                        case none:
+                            pass
+                case _:
+                    pass
+        parts.append("")
         parts.append(emit_list_type(IntType()))
         parts.append("")
         parts.append(emit_list_type(BoolType()))
@@ -1041,6 +1089,8 @@ class Codegen:
                     match self.classes.get(result.name, none) as cls:
                         case ClassSig:
                             parts.append(emit_struct(cls))
+                            parts.append("")
+                            parts.append(emit_constructor(cls))
                             parts.append("")
                             if is_printable_class(cls):
                                 parts.append(emit_print_function(cls))

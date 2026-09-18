@@ -155,6 +155,8 @@ def is_printable_class(cls: ClassSig) -> bool:
         match f.field_type as t:
             case ClassType:
                 return false
+            case ListType:
+                return false
             case _:
                 pass
     return true

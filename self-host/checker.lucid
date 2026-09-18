@@ -147,18 +147,6 @@ class Checker:
             match member as m:
                 case FieldMember:
                     match resolve_type_expr(m.field.type_annotation) as ft:
-                        case ListType:
-                            # Not attempted here: a list-typed field
-                            # means emit_struct/emit_print_function and
-                            # every C struct-literal construct site
-                            # need to know the field's own list element
-                            # type too, and a class holding a
-                            # list[LaterClass] field raises a typedef
-                            # ordering question (self-referential and
-                            # forward-referenced structs) this codegen
-                            # doesn't handle for plain class fields
-                            # either.
-                            self.error("field '" + m.field.name + "' has an unsupported type (list[T] fields are not supported in this subset)", cd.span)
                         case LType:
                             fields.append(FieldSig(m.field.name, ft))
                         case none:
@@ -691,7 +679,7 @@ class Checker:
                                 match self.classes.get(t.name, none) as cls:
                                     case ClassSig:
                                         if not is_printable_class(cls):
-                                            self.error("print() of a '" + t.name + "' value is not supported in this subset (it has a field whose type is itself a class)", call.span)
+                                            self.error("print() of a '" + t.name + "' value is not supported in this subset (it has a field whose type is itself a class or a list)", call.span)
                                     case none:
                                         pass
                             case ListType:

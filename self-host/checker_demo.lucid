@@ -132,4 +132,6 @@ report("print() of a list rejected", "def bad() -> int:\n    xs: list[int] = []\
 
 report("nested list[list[int]] rejected", "def bad() -> int:\n    xs: list[list[int]] = []\n    return 0\n")
 
-report("a list-typed class field rejected", "class Bag:\n    items: list[int]\n\ndef bad() -> int:\n    return 0\n")
+report("a list-typed class field is supported", "class Bag:\n    items: list[int]\n\ndef ok() -> int:\n    return 0\n")
+
+report("print() of a class with a list-typed field rejected", "class Bag:\n    items: list[int]\n\ndef bad() -> int:\n    xs: list[int] = []\n    b = Bag(xs)\n    print(b)\n    return 0\n")
