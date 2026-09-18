@@ -528,12 +528,14 @@ class For(Stmt):
     target: Pattern
     iterable: Expr
     body: list[Stmt]
-    on_exhausted: list[Stmt] | none
+    # Named if_broken_body, not if_broken: `if_broken` is itself a
+    # reserved keyword in Lucid, so it can't be used as a field name.
+    if_broken_body: list[Stmt] | none
 
 class While(Stmt):
     condition: Expr
     body: list[Stmt]
-    on_exhausted: list[Stmt] | none
+    if_broken_body: list[Stmt] | none
 
 class MatchStmt(Stmt):
     subject: Expr

@@ -37,7 +37,7 @@
 # collections, closures, exceptions, `?`, comprehensions -- everything
 # else checker.lucid's header comment's Rust counterpart covers.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
 from .types import LType, IntType, BoolType, StrType, ClassType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
@@ -197,6 +197,28 @@ class Checker:
             case While:
                 self.check_expr(result.condition, known)
                 self.check_block(result.body, known)
+                match result.if_broken_body as broken_body:
+                    case list[Stmt]:
+                        self.check_block(broken_body, known)
+                    case none:
+                        pass
+            case For:
+                elem_type = self.check_for_iterable_element_type(result.iterable, known)
+                match result.target as target:
+                    case IdentPattern:
+                        match elem_type as et:
+                            case LType:
+                                known[target.name] = et
+                            case none:
+                                pass
+                    case _:
+                        self.error("only a plain name is supported as a for-loop target in this subset", result.span)
+                self.check_block(result.body, known)
+                match result.if_broken_body as broken_body:
+                    case list[Stmt]:
+                        self.check_block(broken_body, known)
+                    case none:
+                        pass
             case Return:
                 match result.value as value_expr:
                     case Expr:
@@ -279,6 +301,49 @@ class Checker:
                 return self.check_call(result, known)
             case _:
                 self.error("unsupported expression kind", expr.span)
+                return none
+
+    # `for` loops don't get full list[T] typing in this subset (see the
+    # header comment) -- just the two iterable shapes that show up in
+    # practice: a list literal (every element checked, all required to
+    # agree) and a call to the `range` builtin (always int).
+    def check_for_iterable_element_type(self, iterable: Expr, known: dict[str, LType]) -> LType | none:
+        match iterable as result:
+            case ListExpr:
+                if len(result.elements) == 0:
+                    self.error("cannot infer the element type of an empty list literal in this subset", iterable.span)
+                    return none
+                elem_type = self.check_expr(result.elements[0], known)
+                i = 1
+                while i < len(result.elements):
+                    t = self.check_expr(result.elements[i], known)
+                    match elem_type as et:
+                        case LType:
+                            match t as tt:
+                                case LType:
+                                    if not types_equal(et, tt):
+                                        self.error("list literal elements must all have the same type in this subset", iterable.span)
+                                case none:
+                                    pass
+                        case none:
+                            pass
+                    i = i + 1
+                return elem_type
+            case Call:
+                match result.func as callee:
+                    case Ident:
+                        if callee.name == "range":
+                            if len(result.args) != 1 and len(result.args) != 2:
+                                self.error("range(...) supports only one or two arguments in this subset", iterable.span)
+                            for a in result.args:
+                                self.check_expr(a.value, known)
+                            return IntType()
+                    case _:
+                        pass
+                self.error("unsupported iterable expression in this subset (only a list literal or range(...) is supported)", iterable.span)
+                return none
+            case _:
+                self.error("unsupported iterable expression in this subset (only a list literal or range(...) is supported)", iterable.span)
                 return none
 
     def check_binary(self, op: str, left: LType, right: LType, span: Span) -> LType | none:

@@ -84,9 +84,12 @@ divmod_source = "def main() -> int:\n    print(7 // 2)\n    print(7 // -2)\n    
 
 broken_source = "def broken() -> int:\n    return missing_variable\n\ndef main() -> int:\n    return broken()\n"
 
+loops_source = "def sum_list() -> int:\n    total = 0\n    for x in [10, 20, 30]:\n        total = total + x\n    return total\n\ndef sum_range() -> int:\n    total = 0\n    for x in range(1, 6):\n        total = total + x\n    return total\n\ndef find_in_grid() -> int:\n    found = -1\n    for row in [1, 2, 3]:\n        for col in [10, 20, 30]:\n            if row == 2 and col == 20:\n                found = row * 100 + col\n                break\n        if_broken:\n            break\n    return found\n\ndef count_until_break() -> int:\n    x = 0\n    while x < 100:\n        if x == 7:\n            break\n        x = x + 1\n    if_broken:\n        print(\"stopped early at\", x)\n    return x\n\ndef main() -> int:\n    print(sum_list())\n    print(sum_range())\n    print(find_in_grid())\n    print(count_until_break())\n    return 0\n"
+
 compile_to_file("fibonacci (recursion)", fib_source, "self-host/compile_demo_fib.c")
 compile_to_file("factorial (iteration)", factorial_source, "self-host/compile_demo_factorial.c")
 compile_to_file("gcd + classify (mod, and/or, comparisons)", gcd_source, "self-host/compile_demo_gcd.c")
 compile_to_file("divmod (Euclidean // and %, negative operands)", divmod_source, "self-host/compile_demo_divmod.c")
+compile_to_file("loops (for over a list literal and range(), nested if_broken, while if_broken)", loops_source, "self-host/compile_demo_loops.c")
 compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")
 compile_path_to_file("examples/vectors.lucid (classes, dispatch, strings -- a real Lucid program)", "examples/vectors.lucid", "self-host/compile_demo_vectors.c")

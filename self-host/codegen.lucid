@@ -37,7 +37,7 @@
 # variable declared inside one branch invisible after it, unlike Lucid's
 # own more permissive same-function visibility.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, NamedType, dummy_span
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, NamedType, dummy_span
 from .types import LType, IntType, BoolType, StrType, ClassType, type_name, resolve_type_expr, FieldSig, ClassSig, field_type, FuncSig, FuncTable, new_func_table, register_signature, find_signature
 
 runtime_prelude = "#include <stdio.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}"
@@ -243,6 +243,27 @@ class Codegen:
             case _:
                 return none
 
+    # Mirrors checker.lucid's check_for_iterable_element_type -- the same
+    # two iterable shapes this subset's `for` supports (a list literal, a
+    # call to `range`), inferred rather than checked since a program that
+    # reaches codegen has already passed the checker.
+    def infer_for_iterable_element_type(self, iterable: Expr, known: dict[str, LType]) -> LType | none:
+        match iterable as result:
+            case ListExpr:
+                if len(result.elements) == 0:
+                    return none
+                return self.infer_expr_type(result.elements[0], known)
+            case Call:
+                match result.func as callee:
+                    case Ident:
+                        if callee.name == "range":
+                            return IntType()
+                    case _:
+                        pass
+                return none
+            case _:
+                return none
+
     def dispatch_return_type(self, op: str, left: LType | none, right: LType | none) -> LType | none:
         match dispatch_op_name(op) as dunder:
             case str:
@@ -399,13 +420,21 @@ class Codegen:
             case _:
                 return "_unsupported_target"
 
-    def codegen_block(self, stmts: list[Stmt], indent: str, known: dict[str, LType]) -> str:
+    # `broken_flag` names the C variable that an enclosing loop's
+    # `if_broken` clause (if any) checks after the loop exits --
+    # `codegen_stmt`'s Break case sets it before emitting `break;`. It
+    # names the *innermost* enclosing loop's flag (or none, if that loop
+    # has no `if_broken` clause): entering a nested loop's own body
+    # always rebinds it to that loop's own flag (or none), per
+    # docs/for-and-while.md's "an if_broken clause belongs to the loop
+    # immediately before it".
+    def codegen_block(self, stmts: list[Stmt], indent: str, known: dict[str, LType], broken_flag: str | none) -> str:
         lines: list[str] = []
         for s in stmts:
-            lines.append(self.codegen_stmt(s, indent, known))
+            lines.append(self.codegen_stmt(s, indent, known, broken_flag))
         return join_with(lines, "\n")
 
-    def codegen_stmt(self, s: Stmt, indent: str, known: dict[str, LType]) -> str:
+    def codegen_stmt(self, s: Stmt, indent: str, known: dict[str, LType], broken_flag: str | none) -> str:
         match s as result:
             case VarDef:
                 value_code = "0"
@@ -435,23 +464,32 @@ class Codegen:
                 return indent + name + " = " + value_code + ";"
             case If:
                 cond = self.codegen_expr(result.condition, known)
-                then_code = self.codegen_block(result.then_branch, indent + "    ", known)
+                then_code = self.codegen_block(result.then_branch, indent + "    ", known, broken_flag)
                 text = indent + "if (" + cond + ") {\n" + then_code + "\n" + indent + "}"
                 for branch in result.elif_branches:
                     elif_cond = self.codegen_expr(branch.condition, known)
-                    elif_code = self.codegen_block(branch.body, indent + "    ", known)
+                    elif_code = self.codegen_block(branch.body, indent + "    ", known, broken_flag)
                     text = text + " else if (" + elif_cond + ") {\n" + elif_code + "\n" + indent + "}"
                 match result.else_branch as else_body:
                     case list[Stmt]:
-                        else_code = self.codegen_block(else_body, indent + "    ", known)
+                        else_code = self.codegen_block(else_body, indent + "    ", known, broken_flag)
                         text = text + " else {\n" + else_code + "\n" + indent + "}"
                     case none:
                         pass
                 return text
             case While:
                 cond = self.codegen_expr(result.condition, known)
-                body = self.codegen_block(result.body, indent + "    ", known)
-                return indent + "while (" + cond + ") {\n" + body + "\n" + indent + "}"
+                match result.if_broken_body as broken_body:
+                    case list[Stmt]:
+                        loop_flag = "__lucid_broke_" + str(result.span.line) + "_" + str(result.span.column)
+                        body = self.codegen_block(result.body, indent + "        ", known, loop_flag)
+                        broken_code = self.codegen_block(broken_body, indent + "        ", known, broken_flag)
+                        return indent + "{\n" + indent + "    int " + loop_flag + " = 0;\n" + indent + "    while (" + cond + ") {\n" + body + "\n" + indent + "    }\n" + indent + "    if (" + loop_flag + ") {\n" + broken_code + "\n" + indent + "    }\n" + indent + "}"
+                    case none:
+                        body = self.codegen_block(result.body, indent + "    ", known, none)
+                        return indent + "while (" + cond + ") {\n" + body + "\n" + indent + "}"
+            case For:
+                return self.codegen_for(result, indent, known, broken_flag)
             case Return:
                 match result.value as v:
                     case Expr:
@@ -459,7 +497,11 @@ class Codegen:
                     case none:
                         return indent + "return;"
             case Break:
-                return indent + "break;"
+                match broken_flag as flag:
+                    case str:
+                        return indent + flag + " = 1;\n" + indent + "break;"
+                    case none:
+                        return indent + "break;"
             case Continue:
                 return indent + "continue;"
             case Pass:
@@ -470,6 +512,80 @@ class Codegen:
                 return ""
             case _:
                 return indent + "/* unsupported statement */"
+
+    # This subset's `for` only supports two iterable shapes -- a list
+    # literal, compiled to a small fixed-size C array plus an index loop,
+    # and a call to `range`, compiled straight to a C counting loop reusing
+    # the loop target itself as the counter (already declared `long` at
+    # the top of the enclosing function, since IntType is what
+    # infer_for_iterable_element_type always gives `range`'s element type)
+    # -- see infer_for_iterable_element_type / check_for_iterable_element_type.
+    # `if_broken` reuses the same flag-variable trick as While's.
+    def codegen_for(self, node: For, indent: str, known: dict[str, LType], broken_flag: str | none) -> str:
+        target_name = self.ident_pattern_name(node.target)
+        has_if_broken = false
+        loop_flag = ""
+        match node.if_broken_body as broken_body:
+            case list[Stmt]:
+                has_if_broken = true
+                loop_flag = "__lucid_broke_" + str(node.span.line) + "_" + str(node.span.column)
+            case none:
+                pass
+        inner_flag: str | none = none
+        if has_if_broken:
+            inner_flag = loop_flag
+        body_indent = indent + "    "
+        header_indent = indent
+        if has_if_broken:
+            body_indent = indent + "        "
+            header_indent = indent + "    "
+        body = self.codegen_block(node.body, body_indent, known, inner_flag)
+
+        loop_text = header_indent + "/* unsupported for-loop iterable */"
+        match node.iterable as it:
+            case ListExpr:
+                elem_type = self.infer_for_iterable_element_type(node.iterable, known)
+                ctype = "long"
+                match elem_type as et:
+                    case LType:
+                        ctype = c_type_of(et)
+                    case none:
+                        pass
+                elements: list[str] = []
+                for e in it.elements:
+                    elements.append(self.codegen_expr(e, known))
+                arr_name = "__lucid_for_arr_" + str(node.span.line) + "_" + str(node.span.column)
+                idx_name = "__lucid_for_i_" + str(node.span.line) + "_" + str(node.span.column)
+                arr_decl = header_indent + ctype + " " + arr_name + "[] = {" + join_with(elements, ", ") + "};"
+                loop_open = header_indent + "for (long " + idx_name + " = 0; " + idx_name + " < " + str(len(elements)) + "; " + idx_name + "++) {"
+                assign = body_indent + target_name + " = " + arr_name + "[" + idx_name + "];"
+                loop_text = arr_decl + "\n" + loop_open + "\n" + assign + "\n" + body + "\n" + header_indent + "}"
+            case Call:
+                match it.func as callee:
+                    case Ident:
+                        if callee.name == "range":
+                            start_code = "0"
+                            stop_code = "0"
+                            if len(it.args) == 1:
+                                stop_code = self.codegen_expr(it.args[0].value, known)
+                            if len(it.args) == 2:
+                                start_code = self.codegen_expr(it.args[0].value, known)
+                                stop_code = self.codegen_expr(it.args[1].value, known)
+                            loop_open = header_indent + "for (" + target_name + " = " + start_code + "; " + target_name + " < " + stop_code + "; " + target_name + "++) {"
+                            loop_text = loop_open + "\n" + body + "\n" + header_indent + "}"
+                    case _:
+                        pass
+            case _:
+                pass
+
+        if has_if_broken:
+            match node.if_broken_body as broken_body:
+                case list[Stmt]:
+                    broken_code = self.codegen_block(broken_body, indent + "    ", known, broken_flag)
+                    return indent + "{\n" + indent + "    int " + loop_flag + " = 0;\n" + loop_text + "\n" + indent + "    if (" + loop_flag + ") {\n" + broken_code + "\n" + indent + "    }\n" + indent + "}"
+                case none:
+                    pass
+        return loop_text
 
     def c_param_list(self, params: list[Param]) -> str:
         names: list[str] = []
@@ -508,6 +624,19 @@ class Codegen:
                             pass
                 case While:
                     self.collect_local_names(result.body, names)
+                    match result.if_broken_body as broken_body:
+                        case list[Stmt]:
+                            self.collect_local_names(broken_body, names)
+                        case none:
+                            pass
+                case For:
+                    names.add(self.ident_pattern_name(result.target))
+                    self.collect_local_names(result.body, names)
+                    match result.if_broken_body as broken_body:
+                        case list[Stmt]:
+                            self.collect_local_names(broken_body, names)
+                        case none:
+                            pass
                 case _:
                     pass
 
@@ -550,6 +679,23 @@ class Codegen:
                             pass
                 case While:
                     self.infer_local_types(result.body, known)
+                    match result.if_broken_body as broken_body:
+                        case list[Stmt]:
+                            self.infer_local_types(broken_body, known)
+                        case none:
+                            pass
+                case For:
+                    match self.infer_for_iterable_element_type(result.iterable, known) as et:
+                        case LType:
+                            known[self.ident_pattern_name(result.target)] = et
+                        case none:
+                            pass
+                    self.infer_local_types(result.body, known)
+                    match result.if_broken_body as broken_body:
+                        case list[Stmt]:
+                            self.infer_local_types(broken_body, known)
+                        case none:
+                            pass
                 case _:
                     pass
 
@@ -580,7 +726,7 @@ class Codegen:
                         declarations.append("    " + c_type_of(t) + " " + name + ";")
                     case none:
                         declarations.append("    long " + name + ";")
-        body = self.codegen_block(fn.body, "    ", known)
+        body = self.codegen_block(fn.body, "    ", known, none)
         full_body = join_with(declarations, "\n") + "\n" + body
         c_name = mangled_name(self.functions, sig)
         if fn.name == "main":

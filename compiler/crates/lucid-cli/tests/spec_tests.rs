@@ -1193,6 +1193,11 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: 'Point' has no field 'z'",
         "ERROR: no '__add__' overload for (Point, int)",
         "ERROR: construct arguments must be positional (no name=value form)",
+        "--- for over a list literal, and range ---\n(no errors)",
+        "--- for/while with if_broken ---\n(no errors)",
+        "ERROR: list literal elements must all have the same type in this subset",
+        "ERROR: unsupported iterable expression in this subset (only a list literal or range(...) is supported)",
+        "ERROR: range(...) supports only one or two arguments in this subset",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1270,7 +1275,15 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    for name in ["fib", "factorial", "gcd", "divmod", "broken", "vectors"] {
+    for name in [
+        "fib",
+        "factorial",
+        "gcd",
+        "divmod",
+        "loops",
+        "broken",
+        "vectors",
+    ] {
         let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
     }
 
@@ -1307,13 +1320,17 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
-    let cases: [(&str, &str); 4] = [
+    let cases: [(&str, &str); 5] = [
         ("fib", "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n"),
         ("factorial", "1\n2\n6\n24\n120\n720\n5040\n"),
         ("gcd", "6\n1\n1\n2\n3\n"),
         // Euclidean // and %: the remainder is always in [0, |b|),
         // unlike both C's truncating and Python's floored division.
         ("divmod", "3\n-3\n-4\n4\n1\n1\n1\n1\n"),
+        // sum_list, sum_range, find_in_grid (nested for, if_broken on
+        // the inner loop re-breaking the outer), count_until_break
+        // (while with if_broken).
+        ("loops", "60\n15\n220\nstopped early at 7\n7\n"),
     ];
     for (name, expected_stdout) in cases {
         let c_path = format!("{repo_root}/self-host/compile_demo_{name}.c");
@@ -1371,7 +1388,15 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         "the compiled native binary's output should match the reference interpreter's exactly"
     );
 
-    for name in ["fib", "factorial", "gcd", "divmod", "broken", "vectors"] {
+    for name in [
+        "fib",
+        "factorial",
+        "gcd",
+        "divmod",
+        "loops",
+        "broken",
+        "vectors",
+    ] {
         let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
     }
     let _ = fs::remove_dir_all(&temp_dir);

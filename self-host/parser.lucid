@@ -280,14 +280,20 @@ class Parser:
         self.expect("IN")?
         iterable = self.parse_expr()?
         body = self.parse_block()?
-        return For(start, target, iterable, body, none)
+        if_broken_body: list[Stmt] | none = none
+        if self.match_tok("IF_BROKEN"):
+            if_broken_body = self.parse_block()?
+        return For(start, target, iterable, body, if_broken_body)
 
     def parse_while_stmt(self) -> Stmt | ParserError:
         start = self.span()
         self.expect("WHILE")?
         condition = self.parse_expr()?
         body = self.parse_block()?
-        return While(start, condition, body, none)
+        if_broken_body: list[Stmt] | none = none
+        if self.match_tok("IF_BROKEN"):
+            if_broken_body = self.parse_block()?
+        return While(start, condition, body, if_broken_body)
 
     def parse_match_stmt(self) -> Stmt | ParserError:
         start = self.span()
