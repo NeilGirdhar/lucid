@@ -571,8 +571,23 @@ class Codegen:
                             if len(it.args) == 2:
                                 start_code = self.codegen_expr(it.args[0].value, known)
                                 stop_code = self.codegen_expr(it.args[1].value, known)
-                            loop_open = header_indent + "for (" + target_name + " = " + start_code + "; " + target_name + " < " + stop_code + "; " + target_name + "++) {"
-                            loop_text = loop_open + "\n" + body + "\n" + header_indent + "}"
+                            # Hoist both bounds into their own C locals,
+                            # evaluated once, and drive the loop with a
+                            # hidden counter rather than `target_name`
+                            # itself -- Lucid evaluates range(...)'s
+                            # arguments once and re-binds the loop target
+                            # fresh each iteration, so a body that
+                            # reassigns the target (or a bound expression
+                            # with side effects) must not change how many
+                            # iterations run.
+                            suffix = str(node.span.line) + "_" + str(node.span.column)
+                            start_var = "__lucid_for_start_" + suffix
+                            stop_var = "__lucid_for_stop_" + suffix
+                            idx_name = "__lucid_for_i_" + suffix
+                            decls = header_indent + "long " + start_var + " = " + start_code + ";\n" + header_indent + "long " + stop_var + " = " + stop_code + ";"
+                            loop_open = header_indent + "for (long " + idx_name + " = " + start_var + "; " + idx_name + " < " + stop_var + "; " + idx_name + "++) {"
+                            assign = body_indent + target_name + " = " + idx_name + ";"
+                            loop_text = decls + "\n" + loop_open + "\n" + assign + "\n" + body + "\n" + header_indent + "}"
                     case _:
                         pass
             case _:

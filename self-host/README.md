@@ -158,10 +158,19 @@ pieces is close to feature parity with its Rust counterpart.
   (the way every real `examples/*.lucid` program is actually written)
   has its top-level statements wrapped into a synthesized one; `print`
   takes any number of int/bool/str arguments, each formatted by its own
-  inferred type. `for` over a list literal compiles to a small fixed-size
-  C array plus an index loop; `for` over `range(...)` reuses the loop
-  target itself as a plain C counter (already declared at the top of the
-  enclosing function, the same as every other local — see below); an
+  inferred type. `for` over a list literal, or over `range(...)`, both
+  compile to a hidden C counter driving the loop, with the visible loop
+  target assigned from it at the top of each iteration — never the C
+  counter itself, and `range(...)`'s bounds are evaluated once into
+  their own C locals before the loop starts, not re-evaluated in the C
+  loop condition. Both match Lucid's own per-iteration re-binding
+  semantics: a body that reassigns the loop target, or mutates a
+  variable `range(...)` read its bound from, must not change how many
+  iterations run (an earlier draft used the target itself as the C `for`
+  counter, and evaluated the `range(...)` stop bound directly in the C
+  condition — a real miscompile on both counts, caught by writing
+  exactly those two programs and comparing against the reference
+  interpreter before assuming the naive translation was fine). An
   `if_broken` clause on either `for` or `while` compiles to a C `int`
   flag, set right before every `break;` that's actually inside that
   loop (nested loops each get their own flag, or none, matching

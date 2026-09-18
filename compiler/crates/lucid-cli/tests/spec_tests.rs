@@ -1329,8 +1329,12 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         ("divmod", "3\n-3\n-4\n4\n1\n1\n1\n1\n"),
         // sum_list, sum_range, find_in_grid (nested for, if_broken on
         // the inner loop re-breaking the outer), count_until_break
-        // (while with if_broken).
-        ("loops", "60\n15\n220\nstopped early at 7\n7\n"),
+        // (while with if_broken), range_bound_evaluated_once (range(n)'s
+        // bound must be read once, not re-evaluated every iteration
+        // against a body that mutates n), range_target_rebinding_does_
+        // not_affect_iteration (reassigning the loop target inside the
+        // body must not change how many iterations run).
+        ("loops", "60\n15\n220\nstopped early at 7\n7\n3\n406\n"),
     ];
     for (name, expected_stdout) in cases {
         let c_path = format!("{repo_root}/self-host/compile_demo_{name}.c");
