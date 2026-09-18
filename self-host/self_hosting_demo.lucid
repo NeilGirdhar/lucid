@@ -1,0 +1,50 @@
+# The deepest proof point in this directory: load self-host/lexer.lucid's
+# own source, run its top-level class/function definitions through the
+# self-hosted parser and interpreter (registering its Lexer/Token/
+# LexError classes and its tokenize()/new_lexer() functions the way the
+# reference interpreter would), then call its own tokenize() function on
+# a sample program and print the tokens it produces.
+#
+# lexer_demo.lucid already proved the self-hosted lexer can tokenize real
+# Lucid source, run directly by the reference interpreter. This proves
+# something stacked one level deeper: the self-hosted parser and
+# self-hosted interpreter, working together, can load and correctly run
+# the self-hosted lexer's own class-based logic -- construction, method
+# calls with `self` mutation persisting across calls, dict/list builtin
+# methods, string/list indexing, and `match` -- not just the small
+# hand-written toy programs interpreter_demo.lucid exercises directly.
+# Lucid, running Lucid, running Lucid.
+
+from .parser import parse, ParserError
+from .lexer import LexError
+from .ast import ParsedModule
+from .interpreter import new_interpreter, run_statements, EvalError
+
+def load_and_run(interp, path: str, extra_source: str) -> none | ParseError | ParserError | LexError | EvalError:
+    own_source = read_file(path)?
+    parsed = parse(own_source)?
+    run_statements(interp, parsed.statements)?
+    extra_parsed = parse(extra_source)?
+    run_statements(interp, extra_parsed.statements)?
+    return none
+
+def repr_str(s: str) -> str:
+    escaped = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+    return "\"" + escaped + "\""
+
+sample = "def greet(name: str) -> str:\n    return \"Hello, \" + name\n"
+driver = "def run_it():\n    tokens = tokenize(" + repr_str(sample) + ")?\n    for t in tokens:\n        print(t.kind, t.text)\n    return 0\n\nrun_it()\n"
+
+print("--- loading lexer.lucid into the self-hosted interpreter, then calling its own tokenize() ---")
+interp = new_interpreter()
+match load_and_run(interp, "self-host/lexer.lucid", driver) as outcome:
+    case none:
+        print("(lexer.lucid's tokenize() ran correctly under the self-hosted parser + interpreter)")
+    case ParseError:
+        print("READ ERROR:", outcome.message)
+    case ParserError:
+        print("PARSE ERROR:", outcome.message)
+    case LexError:
+        print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
+    case EvalError:
+        print("EVAL ERROR:", outcome.message, "at", outcome.span.line, outcome.span.column)

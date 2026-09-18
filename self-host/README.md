@@ -58,21 +58,38 @@ it, not a claim that it's close to done.
 - `interpreter.lucid` — a tree-walking evaluator over `ast.lucid`'s
   `Expr`/`Stmt` nodes: no checker or codegen pass in between, just direct
   execution, the way `compiler/crates/lucid-runtime` runs a checked
-  program. A genuine subset, not feature parity — classes, traits,
-  dispatch, exceptions, `match`, dict/set values, attribute access,
-  indexing, imports, comprehensions, and closures over anything but a
-  call's own parameters are all left for later, listed at the top of the
-  file itself — but what's covered (recursion, `while`/`for`, `if`/`elif`/
-  `else`, lists, the arithmetic/comparison/logical operators, `print`/
-  `len`/`str`/`int`/`float`) is enough to run real, non-trivial programs.
-- `interpreter_demo.lucid` — **the milestone this directory has been
-  building toward.** Takes two small programs as plain-text Lucid
-  source — a recursive `fib`, an iterative `factorial` over a list — and
-  runs each one, as text, through `lexer.lucid` then `parser.lucid` then
-  `interpreter.lucid`, printing their real output. Lucid source a human
-  wrote, run by the reference interpreter, correctly lexing, parsing, and
-  running other Lucid source: Lucid running Lucid, for programs with
-  recursion, loops, and conditionals, not just a hand-built AST.
+  program. A genuine subset, not feature parity — traits, dispatch,
+  exceptions, sealed-class inheritance (a subclass doesn't inherit a
+  parent's fields/methods), set values, slicing, imports,
+  comprehensions, generators, async, context managers, closures over
+  anything but a call's own parameters, and keyword/variadic/default
+  parameters are all left for later, listed at the top of the file
+  itself — but what's covered (recursion, `while`/`for`, `if`/`elif`/
+  `else`, classes with fields and methods (including `self` mutation
+  that persists across calls), `Construct` calls, attribute get/set,
+  list/dict/str indexing, list/dict values and literals, `match` over a
+  class name or `none`, `?` as a statement's own value expression, the
+  arithmetic/comparison/logical operators, `print`/`len`/`str`/`int`/
+  `float`, and `list.append`/`.pop`/`dict.get`) is enough to run real,
+  substantial programs — including `lexer.lucid` itself.
+- `interpreter_demo.lucid` — takes three small hand-written programs as
+  plain-text Lucid source (a recursive `fib`; an iterative `factorial`
+  over a list; a fourth program covering globals, `elif`/`else`,
+  `break`/`continue`, `not`/`and`/`or`, unary `-`, and floats) and runs
+  each one, as text, through `lexer.lucid` then `parser.lucid` then
+  `interpreter.lucid`, printing their real output — plus a program that's
+  *supposed* to fail (an undefined name inside a list literal), proving
+  errors surface correctly too, not just the happy path.
+- `self_hosting_demo.lucid` — **the milestone this directory has been
+  building toward.** Loads `lexer.lucid`'s own source — its `Lexer`,
+  `Token`, and `LexError` classes, its `tokenize()`/`new_lexer()`
+  functions — into the self-hosted parser and interpreter, then calls
+  its own `tokenize()` on a sample program and prints the tokens it
+  produces. Not a hand-written toy program: real class-based logic,
+  method calls with `self` mutation persisting across calls,
+  `dict.get()`/`list.append()`, string indexing, and `match`, running
+  correctly one level deeper than `interpreter_demo.lucid`. Lucid,
+  running Lucid, running Lucid.
 
 Run them:
 
@@ -81,6 +98,7 @@ lucid run self-host/lexer_demo.lucid
 lucid run self-host/ast_demo.lucid
 lucid run self-host/parser_demo.lucid
 lucid run self-host/interpreter_demo.lucid
+lucid run self-host/self_hosting_demo.lucid
 ```
 
 Self-tokenizing takes on the order of 20-30 seconds under the debug
@@ -90,7 +108,10 @@ inlining. Worth revisiting once there's more here to justify it (either a
 StringBuilder-style pattern in the language, or building lists of
 characters and joining once), but it works, which is what "start on"
 called for. Self-parsing (tokenize + parse) `lexer.lucid`'s ~500 lines
-takes on the order of 30 seconds for the same reason, one layer up.
+takes on the order of 30 seconds for the same reason, one layer up;
+`self_hosting_demo.lucid` (parse `lexer.lucid`, then interpret it, then
+have that interpreted code tokenize a small sample) takes on the order
+of 35 seconds, one layer up again.
 
 None compile under `lucid run --native` yet — see "Native codegen
 gaps" below. All run correctly under the reference interpreter, which is
