@@ -138,6 +138,7 @@ def emit_list_type(element_type: LType) -> str:
     parts.append("static void " + name + "_append(" + name + " *lst, " + ctype + " value) {\n    if (lst->len >= lst->cap) {\n        lst->cap = (lst->cap == 0) ? 4 : lst->cap * 2;\n        lst->items = realloc(lst->items, sizeof(" + ctype + ") * lst->cap);\n    }\n    lst->items[lst->len] = value;\n    lst->len = lst->len + 1;\n}")
     parts.append("static " + ctype + " " + name + "_get(" + name + " *lst, long i) {\n    long idx = i;\n    if (idx < 0) {\n        idx += lst->len;\n    }\n    if (idx < 0 || idx >= lst->len) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    return lst->items[idx];\n}")
     parts.append("static " + name + " *" + name + "_of(long n, " + ctype + " *src) {\n    " + name + " *lst = " + name + "_new();\n    long i = 0;\n    while (i < n) {\n        " + name + "_append(lst, src[i]);\n        i = i + 1;\n    }\n    return lst;\n}")
+    parts.append("static " + ctype + " " + name + "_pop(" + name + " *lst) {\n    if (lst->len == 0) {\n        fprintf(stderr, \"Runtime Error: pop from an empty list\\n\");\n        exit(1);\n    }\n    lst->len = lst->len - 1;\n    return lst->items[lst->len];\n}")
     return join_with(parts, "\n\n")
 
 def dispatch_op_name(op: str) -> str | none:
@@ -401,7 +402,9 @@ class Codegen:
                                                 return none
                                     case none:
                                         return none
-                            case _:
+                            case ListType:
+                                if callee.attr == "pop":
+                                    return rt.element_type
                                 # list[T].append(...) is a statement in
                                 # practice (its result is always
                                 # discarded), but codegen_expr still
@@ -409,6 +412,8 @@ class Codegen:
                                 # fine, since nothing hoists a
                                 # declaration from a call whose result
                                 # isn't assigned.
+                                return none
+                            case _:
                                 return none
                     case _:
                         return none
@@ -614,10 +619,12 @@ class Codegen:
                         receiver_code = self.codegen_expr(callee.value, known)
                         match self.infer_expr_type(callee.value, known) as rt:
                             case ListType:
+                                name = "lucid_list_" + mangle_component(rt.element_type)
                                 if callee.attr == "append" and len(result.args) == 1:
                                     value_code = self.codegen_expr(result.args[0].value, known)
-                                    name = "lucid_list_" + mangle_component(rt.element_type)
                                     return name + "_append(" + receiver_code + ", " + value_code + ")"
+                                if callee.attr == "pop" and len(result.args) == 0:
+                                    return name + "_pop(" + receiver_code + ")"
                                 return "0 /* unsupported list method */"
                             case ClassType:
                                 method_arg_codes: list[str] = [receiver_code]

@@ -871,6 +871,11 @@ class Checker:
                                 return none
                             self.error("list.append() requires a single argument of type " + type_name(rt.element_type), call.span)
                             return none
+                        if callee.attr == "pop":
+                            if len(checked_arg_types) == 0:
+                                return rt.element_type
+                            self.error("list.pop() takes no arguments in this subset", call.span)
+                            return none
                         self.error("'" + callee.attr + "' is not supported on list[T] in this subset", call.span)
                         return none
                     case ClassType:

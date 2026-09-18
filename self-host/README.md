@@ -172,8 +172,12 @@ pieces is close to feature parity with its Rust counterpart.
   infer the element type of an empty list literal in this subset";
   `len(...)` accepts a `str` or a `list[T]` (not just `str`, as
   before); `xs.append(v)` requires `v`'s type to exactly match `xs`'s
-  declared element type, and no other method call on any value is
-  supported. A function or `dispatch def` named
+  declared element type; `xs.pop()` (no arguments) removes and returns
+  the last element, typed `T`, matching `list.pop()`'s reference
+  semantics (verified first: `[1, 2, 3].pop()` returns `3`, leaving
+  `[1, 2]`) — `append`/`pop` are the only `list[T]` methods, class
+  methods (see below) the only other method call this subset supports.
+  A function or `dispatch def` named
   `print`/`range`/`len`/`freeze` is rejected outright, since
   `check_call`/`codegen_expr` recognize those names ahead of consulting
   the registered function table — a user redefinition would register a
@@ -303,7 +307,10 @@ pieces is close to feature parity with its Rust counterpart.
   `_new`/`_append` (realloc-doubling, leaked)/`_get` (bounds-checked
   exactly like `lucid_rt_str_index`, including negative indices)/`_of`
   (a non-empty list literal's elements, via a C99 compound-literal
-  array). *Pointer*, not by-value, unlike every other type this codegen
+  array)/`_pop` (decrements `len` and returns the element that's now
+  past it — no `realloc` to shrink, so a popped slot's memory stays
+  allocated, consistent with this subset never freeing anything).
+  *Pointer*, not by-value, unlike every other type this codegen
   emits: `Value::List` in lucid-runtime is `Rc<RefCell<Vec<Value>>>`,
   reference semantics — verified directly (`b = a; b.append(3)` changes
   `len(a)` too) before choosing this representation, since every

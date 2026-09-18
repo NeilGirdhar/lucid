@@ -1250,6 +1250,8 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: 'P' has no method 'unknown_method'",
         "ERROR: method 'add' on 'Adder' does not match the given argument types",
         "ERROR: duplicate method 'foo' in class 'Bad'",
+        "--- list.pop() is supported ---\n(no errors)",
+        "ERROR: list.pop() takes no arguments in this subset",
     ] {
         assert!(
             stdout.contains(expected),

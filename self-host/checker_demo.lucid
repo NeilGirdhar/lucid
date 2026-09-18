@@ -167,3 +167,7 @@ report("calling an unknown method is rejected", "class P:\n    x: int\n\ndef bad
 report("calling a method with the wrong argument type is rejected", "class Adder:\n    base: int\n\n    def add(self, n: int) -> int:\n        return self.base + n\n\ndef bad() -> int:\n    a = Adder(1)\n    a.add(\"s\")\n    return 0\n")
 
 report("a duplicate method name is rejected", "class Bad:\n    x: int\n\n    def foo(self) -> int:\n        return 1\n\n    def foo(self) -> int:\n        return 2\n\ndef ok() -> int:\n    return 0\n")
+
+report("list.pop() is supported", "def ok() -> int:\n    xs: list[int] = []\n    xs.append(1)\n    x = xs.pop()\n    print(x)\n    return 0\n")
+
+report("list.pop() with an argument is rejected", "def bad() -> int:\n    xs: list[int] = []\n    xs.pop(1)\n    return 0\n")

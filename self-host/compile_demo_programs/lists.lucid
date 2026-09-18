@@ -55,3 +55,13 @@ ss.append("hi")
 ss.append("there")
 print(ss[0])
 print(ss[1])
+
+ps: list[int] = []
+ps.append(1)
+ps.append(2)
+ps.append(3)
+popped = ps.pop()
+print(popped)
+print(len(ps))
+ps.pop()
+print(len(ps))
