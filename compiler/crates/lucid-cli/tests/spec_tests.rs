@@ -1199,6 +1199,13 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: unsupported iterable expression in this subset (only a list literal or range(...) is supported)",
         "ERROR: range(...) supports only one or two arguments in this subset",
         "ERROR: print() of a class value is not supported in this subset",
+        "ERROR: operator ADD requires two int operands, got str and str",
+        "ERROR: operator EQ is not supported on (str, str) in this subset",
+        "ERROR: operator EQ is not supported on (int, bool) in this subset",
+        "ERROR: operator ADD requires two int operands, got bool and int",
+        "ERROR: operator AND requires two bool operands, got int and int",
+        "ERROR: operator NOT requires a bool operand, got int",
+        "ERROR: operator NEG requires an int operand, got bool",
     ] {
         assert!(
             stdout.contains(expected),

@@ -123,7 +123,18 @@ pieces is close to feature parity with its Rust counterpart.
   checking: duplicate functions/overloads, undefined names, wrong-arity
   or no-matching-overload calls, unknown classes, wrong field
   count/type, unknown fields, and unsupported types are all rejected
-  with a specific message. `for` is checked over exactly two iterable
+  with a specific message. A binary/unary operator on non-class operands
+  has its own required operand types, checked explicitly rather than
+  accepted for any two operands of the same non-class kind — arithmetic
+  and ordered comparison need two `int`, `and`/`or` need two `bool`,
+  `==`/`!=` need two `int` or two `bool` (never `str`), `not` needs
+  `bool`, unary `-` needs `int` — since `codegen.lucid` maps these
+  straight to C's own operators, which silently do pointer arithmetic or
+  pointer comparison on two `const char *` operands rather than
+  rejecting them (an earlier draft accepted any two non-class operands
+  here, which `"a" + "b"` and `1 and 2` both slipped through, reaching
+  codegen as real miscompiles rather than "unsupported"). `for` is
+  checked over exactly two iterable
   shapes — a list literal (every element checked, all required to
   agree on one type) and `range(...)` (one or two arguments, always
   `int`) — there's no general `list[T]` typing yet, so anything else is
