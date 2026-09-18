@@ -10,10 +10,19 @@
 # compiler/crates/lucid-codegen itself has, shelling out to `gcc` from
 # Rust rather than from the Lucid code it's compiling.
 #
-# Three programs that exercise recursion, iteration, and every operator
-# codegen.lucid supports, each compiled to its own .c file; a fourth
-# that's supposed to fail checking, proving a real error stops codegen
-# rather than emitting broken C.
+# Four hand-written programs exercising recursion, iteration, and every
+# operator codegen.lucid supports (each compiled to its own .c file), one
+# that's supposed to fail checking (proving a real error stops codegen
+# rather than emitting broken C), and -- the actual milestone --
+# examples/vectors.lucid, a real Lucid program from this repository, not
+# written for this pipeline: classes, `dispatch def` operator overloading
+# (resolved statically, by the exact argument types, since this subset
+# has no runtime dispatch mechanism -- see checker.lucid/codegen.lucid's
+# own header comments), and multi-argument, mixed str/int print(). Its
+# compiled binary's output matches `lucid run examples/vectors.lucid`'s
+# own output exactly (checked by
+# self_hosted_compile_demo_compiles_a_real_example_program in
+# compiler/crates/lucid-cli/tests/spec_tests.rs).
 
 from .parser import parse, ParserError
 from .lexer import LexError
@@ -26,6 +35,27 @@ def compile_source(source: str) -> str | list[CheckError] | ParserError | LexErr
     if len(errors) > 0:
         return errors
     return codegen_module(parsed.statements)
+
+def compile_path_to_file(label: str, source_path: str, output_path: str):
+    print("---", label, "---")
+    match read_file(source_path) as source:
+        case str:
+            match compile_source(source) as result:
+                case str:
+                    match write_file(output_path, result) as write_outcome:
+                        case none:
+                            print("wrote " + output_path + " (" + str(len(result)) + " bytes)")
+                        case ParseError:
+                            print("WRITE ERROR:", write_outcome.message)
+                case list[CheckError]:
+                    for e in result:
+                        print("CHECK ERROR:", e.message)
+                case ParserError:
+                    print("PARSE ERROR:", result.message)
+                case LexError:
+                    print("LEX ERROR:", result.message)
+        case ParseError:
+            print("READ ERROR:", source.message)
 
 def compile_to_file(label: str, source: str, path: str):
     print("---", label, "---")
@@ -59,3 +89,4 @@ compile_to_file("factorial (iteration)", factorial_source, "self-host/compile_de
 compile_to_file("gcd + classify (mod, and/or, comparisons)", gcd_source, "self-host/compile_demo_gcd.c")
 compile_to_file("divmod (Euclidean // and %, negative operands)", divmod_source, "self-host/compile_demo_divmod.c")
 compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")
+compile_path_to_file("examples/vectors.lucid (classes, dispatch, strings -- a real Lucid program)", "examples/vectors.lucid", "self-host/compile_demo_vectors.c")

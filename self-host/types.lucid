@@ -1,0 +1,153 @@
+# A shared type representation for self-host/checker.lucid and
+# self-host/codegen.lucid, written in Lucid: both phases need to know
+# each expression's type (checker to reject a wrong program, codegen to
+# pick the right C representation and resolve which `dispatch def`
+# overload a call means), so the representation and the class/function
+# tables built from it live here once, not duplicated in each.
+#
+# Deliberately small: `int`, `bool`, `str`, and a named class -- no
+# generics, no unions, no inference beyond "what does this literal/
+# parameter/field/return type say". A class's fields and a function's
+# parameters/return type are always exactly one of these.
+
+from .ast import TypeExpr, NamedType
+
+sealed class LType:
+    pass
+
+class IntType(LType):
+    pass
+
+class BoolType(LType):
+    pass
+
+class StrType(LType):
+    pass
+
+class ClassType(LType):
+    name: str
+
+def type_name(t: LType) -> str:
+    match t as result:
+        case IntType:
+            return "int"
+        case BoolType:
+            return "bool"
+        case StrType:
+            return "str"
+        case ClassType:
+            return result.name
+        case _:
+            return "?"
+
+def types_equal(a: LType, b: LType) -> bool:
+    match a as left:
+        case IntType:
+            match b as right:
+                case IntType:
+                    return true
+                case _:
+                    return false
+        case BoolType:
+            match b as right:
+                case BoolType:
+                    return true
+                case _:
+                    return false
+        case StrType:
+            match b as right:
+                case StrType:
+                    return true
+                case _:
+                    return false
+        case ClassType:
+            match b as right:
+                case ClassType:
+                    return left.name == right.name
+                case _:
+                    return false
+        case _:
+            return false
+
+def type_list_equal(a: list[LType], b: list[LType]) -> bool:
+    if len(a) != len(b):
+        return false
+    i = 0
+    while i < len(a):
+        if not types_equal(a[i], b[i]):
+            return false
+        i = i + 1
+    return true
+
+def resolve_type_expr(t: TypeExpr | none) -> LType | none:
+    match t as result:
+        case none:
+            return none
+        case NamedType:
+            if result.name == "int":
+                return IntType()
+            if result.name == "bool":
+                return BoolType()
+            if result.name == "str":
+                return StrType()
+            if len(result.name) > 0 and result.name[0] >= "A" and result.name[0] <= "Z":
+                return ClassType(result.name)
+            return none
+        case _:
+            return none
+
+class FieldSig:
+    name: str
+    field_type: LType
+
+class ClassSig:
+    name: str
+    fields: list[FieldSig]
+
+def field_type(cls: ClassSig, name: str) -> LType | none:
+    for f in cls.fields:
+        if f.name == name:
+            return f.field_type
+    return none
+
+class FuncSig:
+    name: str
+    param_types: list[LType]
+    return_type: LType
+
+# A function/dispatch name can have more than one FuncSig -- Lucid's
+# multiple dispatch (docs/dispatch.md) lets several `dispatch def`s share
+# a name, resolved by the STATIC argument types at the call site (this
+# subset resolves purely statically, at check/codegen time, not with any
+# runtime dispatch mechanism -- correct as long as every call's argument
+# types are exactly known, which they always are in an int/bool/str/
+# class-only subset with no subtyping).
+class FuncTable:
+    signatures: dict[str, list[FuncSig]]
+
+def new_func_table() -> FuncTable:
+    return FuncTable({:})
+
+def register_signature(table: FuncTable, sig: FuncSig):
+    match table.signatures.get(sig.name, none) as existing:
+        case list[FuncSig]:
+            existing.append(sig)
+        case none:
+            table.signatures[sig.name] = [sig]
+
+def find_signature(table: FuncTable, name: str, arg_types: list[LType]) -> FuncSig | none:
+    match table.signatures.get(name, none) as sigs:
+        case list[FuncSig]:
+            for sig in sigs:
+                if type_list_equal(sig.param_types, arg_types):
+                    return sig
+            return none
+        case none:
+            return none
+
+def has_any_signature(table: FuncTable, name: str) -> bool:
+    match table.signatures.get(name, none) as sigs:
+        case list[FuncSig]:
+            return len(sigs) > 0
+        case none:
+            return false

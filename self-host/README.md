@@ -14,9 +14,12 @@ lexer, parser, checker, both codegen backends, then bootstrapping. That
 is a large, multi-stage undertaking; this records real progress toward
 it, not a claim that it's close to done. All five pieces now exist in
 some form — lexer, parser, a tree-walking interpreter, a checker, and a
-C codegen — and `compile_demo.lucid` proves the checker+codegen half
-actually produces correct native executables, not just well-formed C;
-none of the five is close to feature parity with its Rust counterpart.
+C codegen — and `compile_demo.lucid` compiles a real, unmodified program
+from `examples/` (`vectors.lucid`, using classes and multiple dispatch)
+to a native executable whose output matches the reference interpreter's
+own output exactly: Lucid, compiling Lucid, to a native binary — for the
+subset covered so far, not yet for the whole language. None of the five
+pieces is close to feature parity with its Rust counterpart.
 
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
@@ -99,58 +102,82 @@ none of the five is close to feature parity with its Rust counterpart.
   interpreter running the self-hosted parser, which itself calls the
   self-hosted lexer, all as interpreted code. Lucid, running Lucid,
   running Lucid.
+- `types.lucid` — the type representation `checker.lucid` and
+  `codegen.lucid` both build from the same AST, shared so the two don't
+  duplicate it: `int`, `bool`, `str`, and a named class, plus the
+  class/function tables built from a module's declarations. A function
+  or `dispatch def` name can have more than one registered signature —
+  Lucid's multiple dispatch (see
+  [Dispatch](../docs/dispatch.md)) — resolved purely by the *static*
+  argument types at a call site, with no runtime dispatch mechanism:
+  correct as long as every argument's type is exactly known, which it
+  always is in this subset (no subtyping, no unions).
 - `checker.lucid` — a static checker over `ast.lucid`'s `Expr`/`Stmt`
-  nodes: no execution, just name resolution (every variable read and
-  function call resolves to something in scope) and call-arity checking,
-  over the `int`/`bool`-only subset `codegen.lucid` compiles. Not feature
-  parity with `compiler/crates/lucid-checker` (~20,000 lines covering
-  generics, traits, variance, exhaustiveness, and far more) — no real
-  type inference beyond "is this `int`/`bool`", no flow-sensitive
-  definite-assignment analysis — but real, useful checking: duplicate
-  function names, undefined names, wrong-arity calls, and unsupported
-  types are all rejected with a specific message.
-- `checker_demo.lucid` — runs `checker.lucid` against one clean program
+  nodes: no execution, just name resolution, call-arity/signature
+  resolution, and structural field checking, over the subset
+  `codegen.lucid` compiles. Not feature parity with
+  `compiler/crates/lucid-checker` (~20,000 lines covering generics,
+  traits, inferred variance, exhaustiveness, and far more) — no real
+  type inference beyond "is this int/bool/str/a known class", no
+  flow-sensitive definite-assignment analysis — but real, useful
+  checking: duplicate functions/overloads, undefined names, wrong-arity
+  or no-matching-overload calls, unknown classes, wrong field
+  count/type, unknown fields, and unsupported types are all rejected
+  with a specific message.
+- `checker_demo.lucid` — runs `checker.lucid` against clean programs
+  (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
   found.
 - `codegen.lucid` — a C code generator for the same subset
-  `checker.lucid` accepts: every function becomes a C function (a Lucid
-  function named `main` becomes C's own `int main(void)`), every local
-  variable is a C `long`, arithmetic/comparison/logical operators map
-  straight to their C equivalents, and `print(x)` becomes
-  `printf("%ld\n", x)`. Lucid has no subprocess/exec builtin, so codegen
-  stops at emitting C text — invoking a system C compiler on it is
-  necessarily a driver step outside Lucid, the same role
+  `checker.lucid` accepts: `int`/`bool` are a C `long`, `str` a
+  `const char *`, a class a plain (not heap-allocated) C struct passed
+  and returned by value; arithmetic/comparison/logical operators map
+  straight to their C equivalents (`//`/`%` through two `static` helper
+  functions in the generated C's own prelude — Lucid's are *Euclidean*:
+  the remainder is always in `[0, |b|)`, unlike both C's truncating and
+  Python's floored division, a real, easy-to-miss mismatch this
+  codegen's first draft got wrong); a binary operator on two class-typed
+  operands, or a call to a name with more than one `dispatch def`,
+  resolves to one specific C function chosen by the static argument
+  types and name-mangled by them (`__add___Vector2D_Vector2D`), since C
+  has no overloading of its own; a Lucid function literally named `main`
+  becomes C's own `int main(void)`, and a script with no `main` at all
+  (the way every real `examples/*.lucid` program is actually written)
+  has its top-level statements wrapped into a synthesized one; `print`
+  takes any number of int/bool/str arguments, each formatted by its own
+  inferred type. Lucid has no subprocess/exec builtin, so codegen stops
+  at emitting C text — invoking a system C compiler on it is necessarily
+  a driver step outside Lucid, the same role
   `compiler/crates/lucid-codegen` itself plays (it also just shells out
   to `gcc`, from Rust rather than from the Lucid it compiles).
-- `compile_demo.lucid` — an actual compiler, written in Lucid, producing
-  a real native executable — for the `int`/`bool` subset `checker.lucid`
-  and `codegen.lucid` cover, **not yet for Lucid itself**: none of the
-  four programs `compile_demo.lucid` compiles is a program from
-  `examples/`, `benchmarks/`, or `self-host/` — every real Lucid program
-  in this repo uses strings, classes, collections, or `dispatch def`, all
-  still unsupported. Lexes, parses, checks, and generates C for a
-  recursive `fib`, an iterative `factorial`, a `gcd`/`classify` pair
-  exercising `%`, `and`/`or`, and comparisons, and a `divmod` program
-  checking `//`/`%`'s exact Euclidean semantics (the remainder is always
-  in `[0, |b|)`, unlike both C's truncating and Python's floored
-  division — a real, otherwise-easy-to-miss mismatch this codegen's
-  first draft got wrong) — entirely through `lexer.lucid`,
-  `parser.lucid`, `checker.lucid`, and `codegen.lucid` — plus a fifth
-  program that's supposed to fail checking, proving a real error stops
+- `compile_demo.lucid` — **an actual compiler, written in Lucid,
+  compiling a real Lucid program to a native executable.**
+  `examples/vectors.lucid` — classes, `dispatch def` operator
+  overloading, multi-argument mixed-type `print` — was never written for
+  this pipeline; lexed, parsed, checked, and compiled to C entirely
+  through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
+  `codegen.lucid`, its native binary's output matches `lucid run
+  examples/vectors.lucid`'s own output exactly
+  (`self_hosted_compile_demo_compiles_a_real_example_program` in
+  `compiler/crates/lucid-cli/tests/spec_tests.rs` is the differential
+  check, the same discipline `self_hosting_demo.lucid` already applies
+  to the self-hosted lexer and parser). Also compiles four hand-written
+  programs (recursion, iteration, `%`/`and`/`or`/comparisons, and
+  `//`/`%`'s exact Euclidean semantics on all four sign combinations)
+  and one that's supposed to fail checking, proving a real error stops
   codegen instead of emitting broken C. Each valid program's C output is
   written to `self-host/compile_demo_<name>.c` (gitignored — regenerated
   by running the demo); `gcc -std=c11 -o <binary>
   self-host/compile_demo_<name>.c` compiles it, and running the
   resulting binary produces the exact correct output
-  (`compiler/crates/lucid-cli/tests/spec_tests.rs`'s
-  `self_hosted_compile_demo_produces_correct_native_binaries` test is
-  that external driver, checked in). The real milestone this directory
-  is building toward is `compile_demo.lucid` compiling one of the actual
-  `examples/*.lucid` programs to a binary whose output matches `lucid
-  run examples/<name>.lucid` byte for byte — that needs classes (C
-  structs), strings, and (for `examples/shapes.lucid`/`vectors.lucid`)
-  `dispatch def` resolved statically at check time, none of which exist
-  yet.
+  (`self_hosted_compile_demo_produces_correct_native_binaries` is that
+  external driver, checked in). Still a real subset, not feature parity
+  with Lucid — `examples/shapes.lucid` needs `freeze()` and `for`/
+  `if_broken`; `examples/collections.lucid` needs comprehensions,
+  ranges, dicts, and sets; `examples/errors.lucid` needs `?` compiled to
+  some checked-error ABI; `examples/hello.lucid` needs string methods
+  and comprehensions — none of which `checker.lucid`/`codegen.lucid`
+  (or, for some of these, `parser.lucid`) support yet.
 
 Run them:
 
@@ -456,3 +483,37 @@ work rather than a rushed fix bundled in here:
   scoping) and hoist one `long` declaration per name to the top of the
   generated C function; every `VarDef`/`Assignment` node then just emits
   a plain `x = ...;`.
+- **A real Lucid script has no `main` — its top-level statements just
+  run.** `checker.lucid`/`codegen.lucid` first required an explicit
+  `def main() -> int:` as the entry point, matching C's own convention —
+  fine for hand-written test programs, but every actual
+  `examples/*.lucid` program (this repo's own real Lucid source) is
+  written the other way, with top-level statements that just execute in
+  order, no wrapper function at all. Fixed by having both check and
+  compile top-level statements the same way as any function's body (with
+  their own fresh module-level scope), and having `codegen.lucid`
+  synthesize a `FunctionDef` named `main` wrapping them when the module
+  doesn't already declare one itself.
+- **`parser.lucid` didn't parse `dispatch def` at all.** Needed to parse
+  `examples/vectors.lucid` in the first place: `parse_raw_function`
+  already threaded an `is_dispatch` flag through to `FunctionDef` (set
+  unconditionally to `false`), but `parse_statement` never recognized the
+  `DISPATCH` keyword to call it with `true`. A three-line addition
+  (`if kind == "DISPATCH": self.advance(); self.expect("DEF")?; ...`) —
+  a case of the AST/data plumbing already being ready for a feature the
+  grammar-level entry point simply never wired up.
+- **A method call inside a large class sometimes reports the wrong
+  arity, for reasons not fully root-caused.** `codegen.lucid`'s
+  `Codegen` class (about 15 methods) had one method,
+  `self.codegen_struct(cls)` (one argument beyond `self`), rejected with
+  "method accepts fewer arguments than supplied" — renaming the method
+  changed nothing, and trimming its body to a one-line stub didn't
+  change the error either, so it wasn't about the name or what the body
+  did. `codegen_struct` doesn't actually touch any of `Codegen`'s own
+  fields, so moving the identical logic out to a plain module-level
+  function (`emit_struct(cls: ClassSig)`, called as `emit_struct(cls)`
+  rather than `self.emit_struct(cls)`) made the error disappear — the
+  fix this file keeps, and arguably the better design regardless, but
+  the underlying checker bug (something about this specific method, in
+  this specific class, in this specific position) is still unexplained
+  and worth a closer, dedicated investigation later.

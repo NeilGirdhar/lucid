@@ -1,30 +1,52 @@
-# A minimal C code generator for self-host/ast.lucid, written in Lucid:
-# the code generation phase self-host/checker.lucid's own subset is
-# scoped for, mirroring compiler/crates/lucid-codegen (which also emits C
-# and shells out to a system C compiler -- Lucid has no subprocess/exec
-# builtin by design, so *invoking* that compiler is necessarily a driver
-# step outside Lucid, the same way it is a driver step outside the
+# A C code generator for self-host/ast.lucid, written in Lucid: the code
+# generation phase self-host/checker.lucid's own subset is scoped for,
+# mirroring compiler/crates/lucid-codegen (which also emits C and shells
+# out to a system C compiler -- Lucid has no subprocess/exec builtin by
+# design, so *invoking* that compiler is necessarily a driver step
+# outside Lucid, the same way it is a driver step outside the
 # Rust-implemented codegen's own Lucid-facing surface; see
 # compile_demo.lucid for the driver that writes this module's C output to
-# a file and actually compiles and runs it).
+# a file and actually compiles and runs it). self-host/types.lucid holds
+# the shared type representation and class/function tables both this
+# file and self-host/checker.lucid build from the same AST -- codegen
+# assumes its input already passed checker.lucid (it doesn't re-report
+# errors; an unsupported construct becomes a C comment, not a rejection).
 #
 # Deliberately a small subset, not feature parity with lucid-codegen (a
 # ~16,000-line crate with dynamic LucidVal boxing, generic numeric
-# promotion, exception unwinding, and far more): every value here is a
-# plain C `long` (both `int` and `bool` -- codegen doesn't distinguish
-# them, matching checker.lucid's own scope), arithmetic and comparison
-# operators map straight to their C equivalents, a function becomes a C
-# function (a Lucid function literally named `main` becomes C's own
-# `int main(void)` entry point, taking no parameters), and `print(x)`
-# becomes `printf("%ld\n", x)`. Left for later: classes, strings, floats,
-# collections, closures, anything checker.lucid itself doesn't accept.
+# promotion, exception unwinding, and far more): `int`/`bool` are a C
+# `long`, `str` a `const char*`, a class a plain (not heap-allocated) C
+# struct passed and returned by value; arithmetic/comparison/logical
+# operators on int/bool map straight to their C equivalents (`//`/`%`
+# through two `static` helpers -- Lucid's are Euclidean, unlike C's
+# truncating or Python's floored division: the remainder is always in
+# [0, |b|) regardless of either operand's sign); a binary operator on two
+# class-typed operands, or a call to a name with more than one
+# `dispatch def`, resolves to one specific C function chosen by the
+# static argument types, name-mangled by them (`__add___Vector2D_
+# Vector2D`) since C has no overloading of its own; a Lucid function
+# literally named `main` becomes C's own `int main(void)`; `print(...)`
+# takes any number of int/bool/str arguments, each formatted by its own
+# inferred type. Left for later: inheritance, generics, methods with
+# `self`, collections, closures, exceptions, `?`, comprehensions --
+# everything else checker.lucid's header comment's Rust counterpart
+# covers, since codegen never accepts more than checker.lucid does.
 # Also assumes (not yet enforced by checker.lucid) that every local
 # variable is declared once, at the top level of its function body, not
 # inside a nested if/while -- C's block scoping would otherwise make a
 # variable declared inside one branch invisible after it, unlike Lucid's
 # own more permissive same-function visibility.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, IntLit, BoolLit, Stmt, FunctionStmt, VarDef, Assignment, If, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, NamedType, dummy_span
+from .types import LType, IntType, BoolType, StrType, ClassType, type_name, resolve_type_expr, FieldSig, ClassSig, field_type, FuncSig, FuncTable, new_func_table, register_signature, find_signature
+
+runtime_prelude = "#include <stdio.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}"
+
+def emit_struct(cls: ClassSig) -> str:
+    fields: list[str] = []
+    for f in cls.fields:
+        fields.append("    " + c_type_of(f.field_type) + " " + f.name + ";")
+    return "typedef struct {\n" + join_with(fields, "\n") + "\n} " + cls.name + ";"
 
 def join_with(parts: list[str], sep: str) -> str:
     text = ""
@@ -35,6 +57,19 @@ def join_with(parts: list[str], sep: str) -> str:
         text = text + parts[i]
         i = i + 1
     return text
+
+def dispatch_op_name(op: str) -> str | none:
+    if op == "ADD":
+        return "__add__"
+    if op == "SUB":
+        return "__sub__"
+    if op == "MUL":
+        return "__mul__"
+    if op == "FLOOR_DIV":
+        return "__floordiv__"
+    if op == "MOD":
+        return "__mod__"
+    return none
 
 def c_binary_op(op: str) -> str:
     if op == "ADD":
@@ -61,194 +96,578 @@ def c_binary_op(op: str) -> str:
         return "||"
     return "/* unsupported operator " + op + " */"
 
-def codegen_expr(e: Expr) -> str:
-    match e as result:
-        case LiteralExpr:
-            match result.value as lit:
-                case IntLit:
-                    return str(lit.value)
-                case BoolLit:
-                    if lit.value:
-                        return "1"
-                    return "0"
+def c_type_of(t: LType) -> str:
+    match t as result:
+        case IntType:
+            return "long"
+        case BoolType:
+            return "long"
+        case StrType:
+            return "const char *"
+        case ClassType:
+            return result.name
+        case _:
+            return "long"
+
+def c_string_literal(s: str) -> str:
+    escaped = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+    return "\"" + escaped + "\""
+
+# The C name for a specific resolved overload of a Lucid function/
+# dispatch name -- C has no overloading, so every signature beyond the
+# first `dispatch def` for a name needs its own C identifier, mangled by
+# its parameter types. A name with only ever one signature keeps its
+# plain Lucid name (cheaper to read in the generated C, and avoids
+# renaming ordinary, non-dispatched functions for no reason).
+def mangled_name(table: FuncTable, sig: FuncSig) -> str:
+    match table.signatures.get(sig.name, none) as sigs:
+        case list[FuncSig]:
+            if len(sigs) <= 1:
+                return sig.name
+        case none:
+            pass
+    parts: list[str] = [sig.name]
+    for pt in sig.param_types:
+        parts.append(type_name(pt))
+    return join_with(parts, "__")
+
+class Codegen:
+    functions: FuncTable
+    classes: dict[str, ClassSig]
+
+    def collect_declarations(self, stmts: list[Stmt]):
+        for stmt in stmts:
+            match stmt as result:
+                case ClassDef:
+                    fields: list[FieldSig] = []
+                    for member in result.body:
+                        match member as m:
+                            case FieldMember:
+                                match resolve_type_expr(m.field.type_annotation) as ft:
+                                    case LType:
+                                        fields.append(FieldSig(m.field.name, ft))
+                                    case none:
+                                        pass
+                            case _:
+                                pass
+                    self.classes[result.name] = ClassSig(result.name, fields)
+                case FunctionStmt:
+                    fn = result.function
+                    param_types: list[LType] = []
+                    for p in fn.params:
+                        match resolve_type_expr(p.type_annotation) as pt:
+                            case LType:
+                                param_types.append(pt)
+                            case none:
+                                pass
+                    return_type: LType = IntType()
+                    match resolve_type_expr(fn.return_type) as rt:
+                        case LType:
+                            return_type = rt
+                        case none:
+                            pass
+                    register_signature(self.functions, FuncSig(fn.name, param_types, return_type))
                 case _:
-                    return "0 /* unsupported literal */"
-        case Ident:
-            return result.name
-        case Binary:
-            left = codegen_expr(result.left)
-            right = codegen_expr(result.right)
-            if result.op == "FLOOR_DIV":
-                return "lucid_floordiv(" + left + ", " + right + ")"
-            if result.op == "MOD":
-                return "lucid_mod(" + left + ", " + right + ")"
-            return "(" + left + " " + c_binary_op(result.op) + " " + right + ")"
-        case Unary:
-            inner = codegen_expr(result.expr)
-            if result.op == "NEG":
-                return "(-" + inner + ")"
-            if result.op == "NOT":
-                return "(!" + inner + ")"
-            return inner
-        case Call:
-            match result.func as callee:
-                case Ident:
-                    args: list[str] = []
-                    for a in result.args:
-                        args.append(codegen_expr(a.value))
-                    joined = join_with(args, ", ")
-                    if callee.name == "print":
-                        return "printf(\"%ld\\n\", " + joined + ")"
-                    return callee.name + "(" + joined + ")"
+                    pass
+
+    def infer_expr_type(self, expr: Expr, known: dict[str, LType]) -> LType | none:
+        match expr as result:
+            case LiteralExpr:
+                match result.value as lit:
+                    case IntLit:
+                        return IntType()
+                    case BoolLit:
+                        return BoolType()
+                    case StrLit:
+                        return StrType()
+                    case _:
+                        return none
+            case Ident:
+                return known.get(result.name, none)
+            case Binary:
+                left_type = self.infer_expr_type(result.left, known)
+                right_type = self.infer_expr_type(result.right, known)
+                match left_type as lt:
+                    case ClassType:
+                        return self.dispatch_return_type(result.op, lt, right_type)
+                    case _:
+                        pass
+                match right_type as rt:
+                    case ClassType:
+                        return self.dispatch_return_type(result.op, left_type, rt)
+                    case _:
+                        pass
+                if result.op == "AND" or result.op == "OR" or result.op == "EQ" or result.op == "NOT_EQ" or result.op == "LT" or result.op == "LT_EQ" or result.op == "GT" or result.op == "GT_EQ":
+                    return BoolType()
+                return IntType()
+            case Unary:
+                return self.infer_expr_type(result.expr, known)
+            case Construct:
+                return ClassType(result.class_name)
+            case Attribute:
+                receiver_type = self.infer_expr_type(result.value, known)
+                match receiver_type as rt:
+                    case ClassType:
+                        match self.classes.get(rt.name, none) as cls:
+                            case ClassSig:
+                                return field_type(cls, result.attr)
+                            case none:
+                                return none
+                    case _:
+                        return none
+            case Call:
+                match result.func as callee:
+                    case Ident:
+                        arg_types: list[LType] = []
+                        for a in result.args:
+                            match self.infer_expr_type(a.value, known) as at:
+                                case LType:
+                                    arg_types.append(at)
+                                case none:
+                                    pass
+                        match find_signature(self.functions, callee.name, arg_types) as sig:
+                            case FuncSig:
+                                return sig.return_type
+                            case none:
+                                return none
+                    case _:
+                        return none
+            case _:
+                return none
+
+    def dispatch_return_type(self, op: str, left: LType | none, right: LType | none) -> LType | none:
+        match dispatch_op_name(op) as dunder:
+            case str:
+                match left as lt:
+                    case LType:
+                        match right as rt:
+                            case LType:
+                                match find_signature(self.functions, dunder, [lt, rt]) as sig:
+                                    case FuncSig:
+                                        return sig.return_type
+                                    case none:
+                                        return none
+                            case none:
+                                return none
+                    case none:
+                        return none
+            case none:
+                return none
+
+    def codegen_expr(self, e: Expr, known: dict[str, LType]) -> str:
+        match e as result:
+            case LiteralExpr:
+                match result.value as lit:
+                    case IntLit:
+                        return str(lit.value)
+                    case BoolLit:
+                        if lit.value:
+                            return "1"
+                        return "0"
+                    case StrLit:
+                        return c_string_literal(lit.value)
+                    case _:
+                        return "0 /* unsupported literal */"
+            case Ident:
+                return result.name
+            case Binary:
+                left_type = self.infer_expr_type(result.left, known)
+                right_type = self.infer_expr_type(result.right, known)
+                left_code = self.codegen_expr(result.left, known)
+                right_code = self.codegen_expr(result.right, known)
+                is_dispatch = false
+                match left_type as lt:
+                    case ClassType:
+                        is_dispatch = true
+                    case _:
+                        pass
+                match right_type as rt:
+                    case ClassType:
+                        is_dispatch = true
+                    case _:
+                        pass
+                if is_dispatch:
+                    match dispatch_op_name(result.op) as dunder:
+                        case str:
+                            match left_type as lt:
+                                case LType:
+                                    match right_type as rt:
+                                        case LType:
+                                            match find_signature(self.functions, dunder, [lt, rt]) as sig:
+                                                case FuncSig:
+                                                    name = mangled_name(self.functions, sig)
+                                                    return name + "(" + left_code + ", " + right_code + ")"
+                                                case none:
+                                                    pass
+                                        case none:
+                                            pass
+                                case none:
+                                    pass
+                        case none:
+                            pass
+                    return "0 /* unresolved dispatch operator */"
+                if result.op == "FLOOR_DIV":
+                    return "lucid_floordiv(" + left_code + ", " + right_code + ")"
+                if result.op == "MOD":
+                    return "lucid_mod(" + left_code + ", " + right_code + ")"
+                return "(" + left_code + " " + c_binary_op(result.op) + " " + right_code + ")"
+            case Unary:
+                inner = self.codegen_expr(result.expr, known)
+                if result.op == "NEG":
+                    return "(-" + inner + ")"
+                if result.op == "NOT":
+                    return "(!" + inner + ")"
+                return inner
+            case Construct:
+                match self.classes.get(result.class_name, none) as cls:
+                    case ClassSig:
+                        args: list[str] = []
+                        for a in result.args:
+                            args.append(self.codegen_expr(a.value, known))
+                        return "((" + result.class_name + "){" + join_with(args, ", ") + "})"
+                    case none:
+                        return "0 /* unknown class */"
+            case Attribute:
+                receiver = self.codegen_expr(result.value, known)
+                return receiver + "." + result.attr
+            case Call:
+                match result.func as callee:
+                    case Ident:
+                        arg_codes: list[str] = []
+                        arg_types: list[LType] = []
+                        for a in result.args:
+                            arg_codes.append(self.codegen_expr(a.value, known))
+                            match self.infer_expr_type(a.value, known) as at:
+                                case LType:
+                                    arg_types.append(at)
+                                case none:
+                                    pass
+                        if callee.name == "print":
+                            return self.codegen_print(result.args, known)
+                        joined = join_with(arg_codes, ", ")
+                        match find_signature(self.functions, callee.name, arg_types) as sig:
+                            case FuncSig:
+                                name = mangled_name(self.functions, sig)
+                                return name + "(" + joined + ")"
+                            case none:
+                                return callee.name + "(" + joined + ")"
+                    case _:
+                        return "0 /* unsupported call target */"
+            case _:
+                return "0 /* unsupported expression */"
+
+    def codegen_print(self, args: list[Arg], known: dict[str, LType]) -> str:
+        format_parts: list[str] = []
+        value_codes: list[str] = []
+        i = 0
+        while i < len(args):
+            if i > 0:
+                format_parts.append(" ")
+            arg_type = self.infer_expr_type(args[i].value, known)
+            match arg_type as at:
+                case StrType:
+                    format_parts.append("%s")
                 case _:
-                    return "0 /* unsupported call target */"
-        case _:
-            return "0 /* unsupported expression */"
+                    format_parts.append("%ld")
+            value_codes.append(self.codegen_expr(args[i].value, known))
+            i = i + 1
+        format_str = c_string_literal(join_with(format_parts, "") + "\n")
+        pieces: list[str] = [format_str]
+        for v in value_codes:
+            pieces.append(v)
+        return "printf(" + join_with(pieces, ", ") + ")"
 
-def ident_pattern_name(p: Pattern) -> str:
-    match p as result:
-        case IdentPattern:
-            return result.name
-        case _:
-            return "_unsupported_pattern"
+    def ident_pattern_name(self, p: Pattern) -> str:
+        match p as result:
+            case IdentPattern:
+                return result.name
+            case _:
+                return "_unsupported_pattern"
 
-def ident_target_name(e: Expr) -> str:
-    match e as result:
-        case Ident:
-            return result.name
-        case _:
-            return "_unsupported_target"
+    def ident_target_name(self, e: Expr) -> str:
+        match e as result:
+            case Ident:
+                return result.name
+            case _:
+                return "_unsupported_target"
 
-def codegen_block(stmts: list[Stmt], indent: str) -> str:
-    lines: list[str] = []
-    for s in stmts:
-        lines.append(codegen_stmt(s, indent))
-    return join_with(lines, "\n")
+    def codegen_block(self, stmts: list[Stmt], indent: str, known: dict[str, LType]) -> str:
+        lines: list[str] = []
+        for s in stmts:
+            lines.append(self.codegen_stmt(s, indent, known))
+        return join_with(lines, "\n")
 
-def codegen_stmt(s: Stmt, indent: str) -> str:
-    match s as result:
-        case VarDef:
-            value_code = "0"
-            match result.value as v:
-                case Expr:
-                    value_code = codegen_expr(v)
-                case none:
-                    pass
-            name = ident_pattern_name(result.pattern)
-            return indent + name + " = " + value_code + ";"
-        case Assignment:
-            name = ident_target_name(result.target)
-            return indent + name + " = " + codegen_expr(result.value) + ";"
-        case If:
-            cond = codegen_expr(result.condition)
-            then_code = codegen_block(result.then_branch, indent + "    ")
-            text = indent + "if (" + cond + ") {\n" + then_code + "\n" + indent + "}"
-            for branch in result.elif_branches:
-                elif_cond = codegen_expr(branch.condition)
-                elif_code = codegen_block(branch.body, indent + "    ")
-                text = text + " else if (" + elif_cond + ") {\n" + elif_code + "\n" + indent + "}"
-            match result.else_branch as else_body:
-                case list[Stmt]:
-                    else_code = codegen_block(else_body, indent + "    ")
-                    text = text + " else {\n" + else_code + "\n" + indent + "}"
-                case none:
-                    pass
-            return text
-        case While:
-            cond = codegen_expr(result.condition)
-            body = codegen_block(result.body, indent + "    ")
-            return indent + "while (" + cond + ") {\n" + body + "\n" + indent + "}"
-        case Return:
-            match result.value as v:
-                case Expr:
-                    return indent + "return " + codegen_expr(v) + ";"
-                case none:
-                    return indent + "return;"
-        case Break:
-            return indent + "break;"
-        case Continue:
-            return indent + "continue;"
-        case Pass:
-            return indent + ";"
-        case ExprStmt:
-            return indent + codegen_expr(result.expr) + ";"
-        case MetadataStmt:
-            return ""
-        case _:
-            return indent + "/* unsupported statement */"
-
-def c_param_list(params: list[Param]) -> str:
-    names: list[str] = []
-    for p in params:
-        names.append("long " + p.name)
-    joined = join_with(names, ", ")
-    if joined == "":
-        return "void"
-    return joined
-
-def collect_local_names(stmts: list[Stmt], names: set[str]):
-    # Every local Lucid names for the rest of its enclosing function, not
-    # just the block it's first assigned in (see the header comment) --
-    # so every VarDef/Assignment target anywhere in the body, including
-    # nested if/while blocks, becomes one C declaration hoisted to the
-    # top of the function, and codegen_stmt itself never declares one.
-    for s in stmts:
+    def codegen_stmt(self, s: Stmt, indent: str, known: dict[str, LType]) -> str:
         match s as result:
             case VarDef:
-                names.add(ident_pattern_name(result.pattern))
-            case Assignment:
-                names.add(ident_target_name(result.target))
-            case If:
-                collect_local_names(result.then_branch, names)
-                for branch in result.elif_branches:
-                    collect_local_names(branch.body, names)
-                match result.else_branch as else_body:
-                    case list[Stmt]:
-                        collect_local_names(else_body, names)
+                value_code = "0"
+                inferred: LType | none = resolve_type_expr(result.type_annotation)
+                match result.value as v:
+                    case Expr:
+                        value_code = self.codegen_expr(v, known)
+                        if inferred == none:
+                            inferred = self.infer_expr_type(v, known)
                     case none:
                         pass
+                name = self.ident_pattern_name(result.pattern)
+                match inferred as it:
+                    case LType:
+                        known[name] = it
+                    case none:
+                        pass
+                return indent + name + " = " + value_code + ";"
+            case Assignment:
+                value_code = self.codegen_expr(result.value, known)
+                name = self.ident_target_name(result.target)
+                match self.infer_expr_type(result.value, known) as it:
+                    case LType:
+                        known[name] = it
+                    case none:
+                        pass
+                return indent + name + " = " + value_code + ";"
+            case If:
+                cond = self.codegen_expr(result.condition, known)
+                then_code = self.codegen_block(result.then_branch, indent + "    ", known)
+                text = indent + "if (" + cond + ") {\n" + then_code + "\n" + indent + "}"
+                for branch in result.elif_branches:
+                    elif_cond = self.codegen_expr(branch.condition, known)
+                    elif_code = self.codegen_block(branch.body, indent + "    ", known)
+                    text = text + " else if (" + elif_cond + ") {\n" + elif_code + "\n" + indent + "}"
+                match result.else_branch as else_body:
+                    case list[Stmt]:
+                        else_code = self.codegen_block(else_body, indent + "    ", known)
+                        text = text + " else {\n" + else_code + "\n" + indent + "}"
+                    case none:
+                        pass
+                return text
             case While:
-                collect_local_names(result.body, names)
+                cond = self.codegen_expr(result.condition, known)
+                body = self.codegen_block(result.body, indent + "    ", known)
+                return indent + "while (" + cond + ") {\n" + body + "\n" + indent + "}"
+            case Return:
+                match result.value as v:
+                    case Expr:
+                        return indent + "return " + self.codegen_expr(v, known) + ";"
+                    case none:
+                        return indent + "return;"
+            case Break:
+                return indent + "break;"
+            case Continue:
+                return indent + "continue;"
+            case Pass:
+                return indent + ";"
+            case ExprStmt:
+                return indent + self.codegen_expr(result.expr, known) + ";"
+            case MetadataStmt:
+                return ""
             case _:
+                return indent + "/* unsupported statement */"
+
+    def c_param_list(self, params: list[Param]) -> str:
+        names: list[str] = []
+        for p in params:
+            match resolve_type_expr(p.type_annotation) as pt:
+                case LType:
+                    names.append(c_type_of(pt) + " " + p.name)
+                case none:
+                    names.append("long " + p.name)
+        joined = join_with(names, ", ")
+        if joined == "":
+            return "void"
+        return joined
+
+    def collect_local_names(self, stmts: list[Stmt], names: set[str]):
+        # Every local Lucid name stays visible for the rest of its
+        # enclosing function, not just the block it's first assigned in
+        # (see the header comment) -- so every VarDef/Assignment target
+        # anywhere in the body, including nested if/while blocks, becomes
+        # one C declaration hoisted to the top of the generated C
+        # function, and codegen_stmt itself never declares one.
+        for s in stmts:
+            match s as result:
+                case VarDef:
+                    names.add(self.ident_pattern_name(result.pattern))
+                case Assignment:
+                    names.add(self.ident_target_name(result.target))
+                case If:
+                    self.collect_local_names(result.then_branch, names)
+                    for branch in result.elif_branches:
+                        self.collect_local_names(branch.body, names)
+                    match result.else_branch as else_body:
+                        case list[Stmt]:
+                            self.collect_local_names(else_body, names)
+                        case none:
+                            pass
+                case While:
+                    self.collect_local_names(result.body, names)
+                case _:
+                    pass
+
+    def infer_local_types(self, stmts: list[Stmt], known: dict[str, LType]):
+        # A first pass purely to learn each local's type before emitting
+        # any code, since a name used before its own VarDef/Assignment
+        # appears later in the same function (legal in Lucid -- see the
+        # header comment) would otherwise codegen with an unknown type.
+        # Mirrors codegen_stmt/codegen_expr's own type propagation without
+        # emitting anything.
+        for s in stmts:
+            match s as result:
+                case VarDef:
+                    inferred: LType | none = resolve_type_expr(result.type_annotation)
+                    if inferred == none:
+                        match result.value as v:
+                            case Expr:
+                                inferred = self.infer_expr_type(v, known)
+                            case none:
+                                pass
+                    match inferred as it:
+                        case LType:
+                            known[self.ident_pattern_name(result.pattern)] = it
+                        case none:
+                            pass
+                case Assignment:
+                    match self.infer_expr_type(result.value, known) as it:
+                        case LType:
+                            known[self.ident_target_name(result.target)] = it
+                        case none:
+                            pass
+                case If:
+                    self.infer_local_types(result.then_branch, known)
+                    for branch in result.elif_branches:
+                        self.infer_local_types(branch.body, known)
+                    match result.else_branch as else_body:
+                        case list[Stmt]:
+                            self.infer_local_types(else_body, known)
+                        case none:
+                            pass
+                case While:
+                    self.infer_local_types(result.body, known)
+                case _:
+                    pass
+
+    def codegen_function(self, fn: FunctionDef, sig: FuncSig) -> str:
+        param_list = self.c_param_list(fn.params)
+        known: dict[str, LType] = {:}
+        i = 0
+        while i < len(fn.params) and i < len(sig.param_types):
+            known[fn.params[i].name] = sig.param_types[i]
+            i = i + 1
+        # Two passes: first learn every local's type (needed since a
+        # local can be used, in a later statement, before codegen has
+        # otherwise seen its own declaration's type -- e.g. a call whose
+        # argument type determines dispatch resolution, referencing a
+        # variable assigned earlier in the same straight-line body but
+        # after codegen_block would have inferred it lazily); then emit.
+        self.infer_local_types(fn.body, known)
+        local_names: set[str] = {}
+        self.collect_local_names(fn.body, local_names)
+        param_names: set[str] = {}
+        for p in fn.params:
+            param_names.add(p.name)
+        declarations: list[str] = []
+        for name in local_names:
+            if name not in param_names:
+                match known.get(name, none) as t:
+                    case LType:
+                        declarations.append("    " + c_type_of(t) + " " + name + ";")
+                    case none:
+                        declarations.append("    long " + name + ";")
+        body = self.codegen_block(fn.body, "    ", known)
+        full_body = join_with(declarations, "\n") + "\n" + body
+        c_name = mangled_name(self.functions, sig)
+        if fn.name == "main":
+            return "int main(" + param_list + ") {\n" + full_body + "\n}"
+        return c_type_of(sig.return_type) + " " + c_name + "(" + param_list + ") {\n" + full_body + "\n}"
+
+    def codegen_forward_decl(self, fn: FunctionDef, sig: FuncSig) -> str:
+        return c_type_of(sig.return_type) + " " + mangled_name(self.functions, sig) + "(" + self.c_param_list(fn.params) + ");"
+
+    def signature_for(self, fn: FunctionDef) -> FuncSig | none:
+        param_types: list[LType] = []
+        for p in fn.params:
+            match resolve_type_expr(p.type_annotation) as pt:
+                case LType:
+                    param_types.append(pt)
+                case none:
+                    return none
+        return_type: LType = IntType()
+        match resolve_type_expr(fn.return_type) as rt:
+            case LType:
+                return_type = rt
+            case none:
                 pass
+        return find_signature(self.functions, fn.name, param_types)
 
-def codegen_function(fn: FunctionDef) -> str:
-    param_list = c_param_list(fn.params)
-    param_names: set[str] = {}
-    for p in fn.params:
-        param_names.add(p.name)
-    local_names: set[str] = {}
-    collect_local_names(fn.body, local_names)
-    declarations: list[str] = []
-    for name in local_names:
-        if name not in param_names:
-            declarations.append("    long " + name + ";")
-    body = codegen_block(fn.body, "    ")
-    full_body = join_with(declarations, "\n") + "\n" + body
-    if fn.name == "main":
-        return "int main(" + param_list + ") {\n" + full_body + "\n}"
-    return "long " + fn.name + "(" + param_list + ") {\n" + full_body + "\n}"
+    def codegen_module(self, stmts: list[Stmt]) -> str:
+        self.collect_declarations(stmts)
+        top_level: list[Stmt] = []
+        has_main = false
+        for stmt in stmts:
+            match stmt as result:
+                case FunctionStmt:
+                    if result.function.name == "main":
+                        has_main = true
+                case _:
+                    pass
+        for stmt in stmts:
+            match stmt as result:
+                case ClassDef:
+                    pass
+                case FunctionStmt:
+                    pass
+                case _:
+                    top_level.append(stmt)
+        parts: list[str] = [runtime_prelude, ""]
+        for stmt in stmts:
+            match stmt as result:
+                case ClassDef:
+                    match self.classes.get(result.name, none) as cls:
+                        case ClassSig:
+                            parts.append(emit_struct(cls))
+                            parts.append("")
+                        case none:
+                            pass
+                case _:
+                    pass
+        for stmt in stmts:
+            match stmt as result:
+                case FunctionStmt:
+                    if result.function.name != "main":
+                        match self.signature_for(result.function) as sig:
+                            case FuncSig:
+                                parts.append(self.codegen_forward_decl(result.function, sig))
+                            case none:
+                                pass
+                case _:
+                    pass
+        parts.append("")
+        for stmt in stmts:
+            match stmt as result:
+                case FunctionStmt:
+                    match self.signature_for(result.function) as sig:
+                        case FuncSig:
+                            parts.append(self.codegen_function(result.function, sig))
+                            parts.append("")
+                        case none:
+                            pass
+                case _:
+                    pass
+        # A real Lucid script has no `main` -- its top-level statements
+        # just run in order. Wrap them into a synthesized entry point the
+        # same way any other function's body is generated, so the same
+        # codegen_function code path handles both an explicit `def main()`
+        # and a plain script with no function wrapper at all.
+        if not has_main and len(top_level) > 0:
+            synthetic_main = FunctionDef("main", [], [], NamedType(dummy_span(), "int", []), top_level, false, false, false, false, [], dummy_span())
+            synthetic_sig = FuncSig("main", [], IntType())
+            parts.append(self.codegen_function(synthetic_main, synthetic_sig))
+            parts.append("")
+        return join_with(parts, "\n")
 
-def codegen_forward_decl(fn: FunctionDef) -> str:
-    return "long " + fn.name + "(" + c_param_list(fn.params) + ");"
 
-runtime_prelude = "#include <stdio.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}"
+def new_codegen() -> Codegen:
+    return Codegen(new_func_table(), {:})
 
 def codegen_module(stmts: list[Stmt]) -> str:
-    parts: list[str] = [runtime_prelude, ""]
-    for stmt in stmts:
-        match stmt as result:
-            case FunctionStmt:
-                if result.function.name != "main":
-                    parts.append(codegen_forward_decl(result.function))
-            case _:
-                pass
-    parts.append("")
-    for stmt in stmts:
-        match stmt as result:
-            case FunctionStmt:
-                parts.append(codegen_function(result.function))
-                parts.append("")
-            case _:
-                pass
-    return join_with(parts, "\n")
+    cg = new_codegen()
+    return cg.codegen_module(stmts)

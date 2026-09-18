@@ -1,5 +1,6 @@
 # Exercises self-host/checker.lucid against a handful of small programs:
-# one clean, and one for each kind of error it's supposed to catch.
+# clean ones (plain functions, classes, dispatch) and one for each kind
+# of error it's supposed to catch.
 
 from .parser import parse, ParserError
 from .lexer import LexError
@@ -25,12 +26,24 @@ def report(label: str, source: str):
 
 report("clean program", "def add(a: int, b: int) -> int:\n    return a + b\n\ndef main() -> int:\n    x = add(1, 2)\n    y = 0\n    while y < x:\n        y = y + 1\n    print(y)\n    return y\n")
 
+report("clean program with classes and dispatch", "class Vector2D:\n    x: int\n    y: int\n\ndispatch def __add__(a: Vector2D, b: Vector2D) -> Vector2D:\n    return Vector2D(a.x + b.x, a.y + b.y)\n\ndef main() -> int:\n    v1 = Vector2D(1, 2)\n    v2 = Vector2D(3, 4)\n    v3 = v1 + v2\n    print(v3.x, v3.y)\n    return 0\n")
+
 report("undefined variable", "def bad() -> int:\n    return missing\n")
 
 report("undefined function", "def bad() -> int:\n    return not_a_real_function(1)\n")
 
 report("wrong arity", "def add(a: int, b: int) -> int:\n    return a + b\n\ndef bad() -> int:\n    return add(1)\n")
 
-report("duplicate function", "def dup() -> int:\n    return 1\n\ndef dup() -> int:\n    return 2\n")
+report("duplicate function (same signature twice)", "def dup() -> int:\n    return 1\n\ndef dup() -> int:\n    return 2\n")
 
-report("unsupported type", "def bad() -> str:\n    return \"hi\"\n")
+report("unsupported type", "def bad() -> list[int]:\n    pass\n")
+
+report("unknown class", "def bad() -> int:\n    v = NotAClass(1)\n    return 0\n")
+
+report("wrong field count", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1)\n    return 0\n")
+
+report("wrong field type", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, \"two\")\n    return 0\n")
+
+report("unknown field", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, 2)\n    return p.z\n")
+
+report("no matching dispatch overload", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, 2)\n    q = p + 1\n    return 0\n")

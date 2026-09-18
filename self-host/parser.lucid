@@ -118,6 +118,11 @@ class Parser:
             return self.parse_class_def()
         if kind == "DEF":
             return self.parse_function_def()
+        if kind == "DISPATCH":
+            self.advance()
+            self.expect("DEF")?
+            func = self.parse_raw_function(true)?
+            return FunctionStmt(func.span, func)
         if kind == "IF":
             return self.parse_if_stmt()
         if kind == "FOR":

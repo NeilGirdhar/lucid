@@ -1181,11 +1181,17 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
     );
     for expected in [
         "--- clean program ---\n(no errors)",
+        "--- clean program with classes and dispatch ---\n(no errors)",
         "ERROR: undefined name 'missing'",
         "ERROR: undefined function 'not_a_real_function'",
-        "ERROR: function 'add' expects 2 arguments, got 1",
+        "ERROR: no overload of 'add' matches the given argument types",
         "ERROR: duplicate function 'dup'",
         "ERROR: function 'bad' has an unsupported return type",
+        "ERROR: unknown class 'NotAClass'",
+        "ERROR: construct for 'Point' expects 2 field value(s), got 1",
+        "ERROR: field 'y' expects int, got str",
+        "ERROR: 'Point' has no field 'z'",
+        "ERROR: no '__add__' overload for (Point, int)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1250,7 +1256,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    for name in ["fib", "factorial", "gcd", "divmod", "broken"] {
+    for name in ["fib", "factorial", "gcd", "divmod", "broken", "vectors"] {
         let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
     }
 
@@ -1314,8 +1320,83 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         );
     }
 
-    for name in ["fib", "factorial", "gcd", "divmod", "broken"] {
+    for name in ["fib", "factorial", "gcd", "divmod", "broken", "vectors"] {
         let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
     }
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+/// The actual milestone this whole pipeline was built toward: compile a
+/// real Lucid program that was never written for this pipeline --
+/// examples/vectors.lucid, using classes and `dispatch def` operator
+/// overloading -- to a native binary, and check that its output matches
+/// `lucid run examples/vectors.lucid`'s own output exactly. Not a hint
+/// that the compiled program is probably right: a byte-for-byte
+/// comparison against the reference interpreter running the identical
+/// source, the same differential discipline self_hosting_demo.lucid
+/// already applies to the self-hosted lexer and parser.
+#[test]
+fn self_hosted_compile_demo_compiles_a_real_example_program() {
+    use std::fs;
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let c_path = format!("{repo_root}/self-host/compile_demo_vectors.c");
+    let _ = fs::remove_file(&c_path);
+
+    let compile_output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/compile_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    assert!(
+        compile_output.status.success(),
+        "compile_demo.lucid should run cleanly: {}\n{}",
+        String::from_utf8_lossy(&compile_output.stdout),
+        String::from_utf8_lossy(&compile_output.stderr)
+    );
+    assert!(
+        fs::metadata(&c_path).is_ok(),
+        "compile_demo.lucid should have written {c_path}"
+    );
+
+    let interpreted_output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "examples/vectors.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    assert!(
+        interpreted_output.status.success(),
+        "the reference interpreter should run examples/vectors.lucid cleanly"
+    );
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "lucid_self_hosted_compile_vectors_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let binary_path = temp_dir.join("vectors");
+    let gcc_status = Command::new("gcc")
+        .args(["-std=c11", "-o"])
+        .arg(&binary_path)
+        .arg(&c_path)
+        .status()
+        .unwrap();
+    assert!(
+        gcc_status.success(),
+        "gcc should compile the generated C for examples/vectors.lucid without error"
+    );
+    let native_output = Command::new(&binary_path).output().unwrap();
+    assert!(
+        native_output.status.success(),
+        "the compiled examples/vectors.lucid binary should exit successfully"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&native_output.stdout),
+        String::from_utf8_lossy(&interpreted_output.stdout),
+        "the compiled native binary's output should match the reference interpreter's exactly"
+    );
+
+    let _ = fs::remove_file(&c_path);
     let _ = fs::remove_dir_all(&temp_dir);
 }

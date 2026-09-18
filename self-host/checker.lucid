@@ -1,109 +1,186 @@
-# A minimal static checker for self-host/ast.lucid, written in Lucid:
-# together with lexer.lucid and parser.lucid, this is the first genuinely
-# separate "check" phase in the self-hosted toolchain -- not the
-# tree-walking interpreter.lucid runs a program directly, this walks a
-# parsed program and reports errors WITHOUT running it, the way
-# compiler/crates/lucid-checker does before compiler/crates/lucid-runtime
-# or compiler/crates/lucid-codegen ever sees a program.
+# A static checker for self-host/ast.lucid, written in Lucid: together
+# with lexer.lucid and parser.lucid, this is the first genuinely separate
+# "check" phase in the self-hosted toolchain -- not the tree-walking
+# interpreter.lucid runs a program directly, this walks a parsed program
+# and reports errors WITHOUT running it, the way compiler/crates/
+# lucid-checker does before compiler/crates/lucid-runtime or compiler/
+# crates/lucid-codegen ever sees a program. self-host/types.lucid holds
+# the shared type representation and class/function tables both this
+# file and self-host/codegen.lucid build from the same AST.
 #
 # Deliberately a small subset, not feature parity with lucid-checker (a
-# ~20,000-line crate covering generics, traits, variance, exhaustiveness,
-# and far more) -- what's covered is real, useful checking over the
-# subset self-host/codegen.lucid compiles: every function is registered
-# once (no duplicate names), every call resolves to a known function at
-# the right arity, every variable read resolves to something already in
-# scope (a parameter or an assignment earlier in the same function), and
-# every literal/parameter/return type is `int` or `bool` (the only types
-# codegen.lucid emits C for). Left for later, matching interpreter.lucid's
-# own documented scope: classes, traits, dispatch, exceptions, closures,
-# real numeric/string type inference, flow-sensitive definite-assignment
-# analysis (a variable read after being assigned in only one branch of an
-# `if` is accepted here, not rejected the way lucid-checker's own
-# definite-assignment analysis would).
+# ~20,000-line crate covering generics, traits, inferred variance,
+# exhaustiveness, and far more) -- what's covered is real, useful
+# checking over the subset self-host/codegen.lucid compiles:
+#   - int, bool, str, and plain classes with int/bool/str fields (no
+#     inheritance, no generics, no methods -- a class is only ever
+#     constructed and its fields read, never given behavior of its own)
+#   - every function/`dispatch def` registered once per distinct
+#     parameter-type signature (two `dispatch def`s sharing a name need
+#     different parameter types, not just different bodies); a call
+#     resolves to exactly one signature by the static types of its
+#     arguments, matching docs/dispatch.md's own resolution rule, purely
+#     at check time -- there is no runtime dispatch mechanism in this
+#     subset, correct as long as every argument's type is exactly known,
+#     which it always is here (no subtyping, no unions)
+#   - a binary operator on two class-typed operands resolves to a
+#     `__add__`/`__sub__`/`__mul__`/`__floordiv__`/`__mod__` dispatch
+#     function the same way a call does; on two int/bool operands it's
+#     the built-in arithmetic; every other operator/operand-type
+#     combination is unsupported
+#   - every variable read resolves to something already in scope (a
+#     parameter or an assignment earlier in the same function) --  no
+#     flow-sensitive definite-assignment analysis, a variable read after
+#     being assigned in only one branch of an `if` is accepted here, not
+#     rejected the way lucid-checker's own analysis would
+# Left for later: traits, inheritance, generics, methods with `self`,
+# collections, closures, exceptions, `?`, comprehensions -- everything
+# else checker.lucid's header comment's Rust counterpart covers.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, IntLit, BoolLit, Stmt, FunctionStmt, VarDef, Assignment, If, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, TypeExpr, NamedType, Span
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
+from .types import LType, IntType, BoolType, StrType, ClassType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
     message: str
     span: Span
 
-class FuncSig:
-    name: str
-    param_count: int
-
-def type_name_is_supported(t: TypeExpr | none) -> bool:
-    match t as te:
-        case none:
-            return true
-        case NamedType:
-            return te.name == "int" or te.name == "bool"
-        case _:
-            return false
+def dispatch_op_name(op: str) -> str | none:
+    if op == "ADD":
+        return "__add__"
+    if op == "SUB":
+        return "__sub__"
+    if op == "MUL":
+        return "__mul__"
+    if op == "FLOOR_DIV":
+        return "__floordiv__"
+    if op == "MOD":
+        return "__mod__"
+    return none
 
 class Checker:
-    functions: dict[str, FuncSig]
+    functions: FuncTable
+    classes: dict[str, ClassSig]
     errors: list[CheckError]
 
     def error(self, message: str, span: Span):
         self.errors.append(CheckError(message, span))
 
-    def collect_functions(self, stmts: list[Stmt]):
+    def collect_declarations(self, stmts: list[Stmt]):
         for stmt in stmts:
             match stmt as result:
+                case ClassDef:
+                    self.collect_class(result)
                 case FunctionStmt:
-                    fn = result.function
-                    match self.functions.get(fn.name, none) as existing:
-                        case FuncSig:
-                            self.error("duplicate function '" + fn.name + "'", fn.span)
-                        case none:
-                            pass
-                    self.functions[fn.name] = FuncSig(fn.name, len(fn.params))
+                    self.collect_function_signature(result.function)
                 case _:
                     pass
 
+    def collect_class(self, cd: ClassDef):
+        if self.classes.get(cd.name, none) != none:
+            self.error("duplicate class '" + cd.name + "'", cd.span)
+        fields: list[FieldSig] = []
+        for member in cd.body:
+            match member as m:
+                case FieldMember:
+                    match resolve_type_expr(m.field.type_annotation) as ft:
+                        case LType:
+                            fields.append(FieldSig(m.field.name, ft))
+                        case none:
+                            self.error("field '" + m.field.name + "' has an unsupported type", cd.span)
+                case _:
+                    self.error("only plain fields are supported in a class body (no methods)", cd.span)
+        self.classes[cd.name] = ClassSig(cd.name, fields)
+
+    def collect_function_signature(self, fn: FunctionDef):
+        param_types: list[LType] = []
+        ok = true
+        for p in fn.params:
+            match resolve_type_expr(p.type_annotation) as pt:
+                case LType:
+                    param_types.append(pt)
+                case none:
+                    self.error("parameter '" + p.name + "' has an unsupported type", fn.span)
+                    ok = false
+        return_type: LType = IntType()
+        match resolve_type_expr(fn.return_type) as rt:
+            case LType:
+                return_type = rt
+            case none:
+                if fn.return_type != none:
+                    self.error("function '" + fn.name + "' has an unsupported return type", fn.span)
+                    ok = false
+        if ok:
+            match find_signature(self.functions, fn.name, param_types) as existing:
+                case FuncSig:
+                    self.error("duplicate function '" + fn.name + "' (another definition already has this exact parameter-type signature)", fn.span)
+                case none:
+                    register_signature(self.functions, FuncSig(fn.name, param_types, return_type))
+
     def check_module(self, stmts: list[Stmt]):
-        self.collect_functions(stmts)
+        self.collect_declarations(stmts)
+        top_level: list[Stmt] = []
         for stmt in stmts:
             match stmt as result:
+                case ClassDef:
+                    pass
                 case FunctionStmt:
                     self.check_function(result.function)
                 case _:
-                    self.error("only function definitions are supported at module level", result.span)
+                    top_level.append(stmt)
+        # A real Lucid script has no `main` -- its top-level statements
+        # just run, in order, the way examples/*.lucid is actually
+        # written. Check them the same way as any function body, with
+        # their own fresh (empty) starting scope, matching the module
+        # scope a top-level statement actually runs in.
+        if len(top_level) > 0:
+            module_scope: dict[str, LType] = {:}
+            self.check_block(top_level, module_scope)
 
     def check_function(self, fn: FunctionDef):
-        if not type_name_is_supported(fn.return_type):
-            self.error("function '" + fn.name + "' has an unsupported return type (only int/bool are compiled)", fn.span)
-        known: set[str] = {}
+        known: dict[str, LType] = {:}
         for p in fn.params:
-            if not type_name_is_supported(p.type_annotation):
-                self.error("parameter '" + p.name + "' has an unsupported type (only int/bool are compiled)", fn.span)
-            known.add(p.name)
+            match resolve_type_expr(p.type_annotation) as pt:
+                case LType:
+                    known[p.name] = pt
+                case none:
+                    pass
         self.check_block(fn.body, known)
 
-    def check_block(self, stmts: list[Stmt], known: set[str]):
+    def check_block(self, stmts: list[Stmt], known: dict[str, LType]):
         for stmt in stmts:
             self.check_stmt(stmt, known)
 
-    def check_stmt(self, stmt: Stmt, known: set[str]):
+    def check_stmt(self, stmt: Stmt, known: dict[str, LType]):
         match stmt as result:
             case VarDef:
-                if not type_name_is_supported(result.type_annotation):
-                    self.error("variable has an unsupported type (only int/bool are compiled)", result.span)
+                declared: LType | none = resolve_type_expr(result.type_annotation)
+                inferred: LType | none = none
                 match result.value as value_expr:
                     case Expr:
-                        self.check_expr(value_expr, known)
+                        inferred = self.check_expr(value_expr, known)
                     case none:
                         pass
+                var_type = declared
+                if var_type == none:
+                    var_type = inferred
                 match result.pattern as p:
                     case IdentPattern:
-                        known.add(p.name)
+                        match var_type as vt:
+                            case LType:
+                                known[p.name] = vt
+                            case none:
+                                self.error("cannot determine the type of '" + p.name + "'", result.span)
                     case _:
                         self.error("only a plain name is supported as a variable-definition target", result.span)
             case Assignment:
-                self.check_expr(result.value, known)
+                value_type = self.check_expr(result.value, known)
                 match result.target as target:
                     case Ident:
-                        known.add(target.name)
+                        match value_type as vt:
+                            case LType:
+                                known[target.name] = vt
+                            case none:
+                                pass
                     case _:
                         self.error("only a plain name is supported as an assignment target", result.span)
             case If:
@@ -139,50 +216,156 @@ class Checker:
             case _:
                 self.error("unsupported statement kind", stmt.span)
 
-    def check_expr(self, expr: Expr, known: set[str]):
+    def check_expr(self, expr: Expr, known: dict[str, LType]) -> LType | none:
         match expr as result:
             case LiteralExpr:
                 match result.value as lit:
                     case IntLit:
-                        pass
+                        return IntType()
                     case BoolLit:
-                        pass
+                        return BoolType()
+                    case StrLit:
+                        return StrType()
                     case _:
-                        self.error("unsupported literal kind (only int/bool are compiled)", result.span)
+                        self.error("unsupported literal kind", result.span)
+                        return none
             case Ident:
-                is_known = result.name in known
-                is_func = false
-                match self.functions.get(result.name, none) as sig:
-                    case FuncSig:
-                        is_func = true
+                match known.get(result.name, none) as vt:
+                    case LType:
+                        return vt
                     case none:
-                        pass
-                if not is_known and not is_func:
-                    self.error("undefined name '" + result.name + "'", result.span)
+                        if has_any_signature(self.functions, result.name):
+                            self.error("'" + result.name + "' is a function, not a value", result.span)
+                        else:
+                            self.error("undefined name '" + result.name + "'", result.span)
+                        return none
             case Binary:
-                self.check_expr(result.left, known)
-                self.check_expr(result.right, known)
-            case Unary:
-                self.check_expr(result.expr, known)
-            case Call:
-                match result.func as callee:
-                    case Ident:
-                        match self.functions.get(callee.name, none) as sig:
-                            case FuncSig:
-                                if len(result.args) != sig.param_count:
-                                    self.error("function '" + callee.name + "' expects " + str(sig.param_count) + " arguments, got " + str(len(result.args)), result.span)
+                left_type = self.check_expr(result.left, known)
+                right_type = self.check_expr(result.right, known)
+                match left_type as lt:
+                    case LType:
+                        match right_type as rt:
+                            case LType:
+                                return self.check_binary(result.op, lt, rt, result.span)
                             case none:
-                                if callee.name != "print":
-                                    self.error("undefined function '" + callee.name + "'", result.span)
-                    case _:
-                        self.error("only calling a plain name is supported", result.span)
-                for a in result.args:
-                    self.check_expr(a.value, known)
+                                return none
+                    case none:
+                        return none
+            case Unary:
+                return self.check_expr(result.expr, known)
+            case Construct:
+                return self.check_construct(result.class_name, result.args, result.span, known)
+            case Attribute:
+                receiver_type = self.check_expr(result.value, known)
+                match receiver_type as rt:
+                    case ClassType:
+                        match self.classes.get(rt.name, none) as cls:
+                            case ClassSig:
+                                match field_type(cls, result.attr) as ft:
+                                    case LType:
+                                        return ft
+                                    case none:
+                                        self.error("'" + rt.name + "' has no field '" + result.attr + "'", result.span)
+                                        return none
+                            case none:
+                                self.error("unknown class '" + rt.name + "'", result.span)
+                                return none
+                    case LType:
+                        self.error("attribute access on a non-class value", result.span)
+                        return none
+                    case none:
+                        return none
+            case Call:
+                return self.check_call(result, known)
             case _:
                 self.error("unsupported expression kind", expr.span)
+                return none
+
+    def check_binary(self, op: str, left: LType, right: LType, span: Span) -> LType | none:
+        match left as lt:
+            case ClassType:
+                return self.check_dispatch_binary(op, left, right, span)
+            case _:
+                pass
+        match right as rt:
+            case ClassType:
+                return self.check_dispatch_binary(op, left, right, span)
+            case _:
+                pass
+        # Built-in int/bool arithmetic, comparison, and logical operators.
+        if op == "AND" or op == "OR":
+            return BoolType()
+        if op == "EQ" or op == "NOT_EQ" or op == "LT" or op == "LT_EQ" or op == "GT" or op == "GT_EQ":
+            return BoolType()
+        if op == "ADD" or op == "SUB" or op == "MUL" or op == "FLOOR_DIV" or op == "MOD":
+            return IntType()
+        self.error("unsupported operator " + op, span)
+        return none
+
+    def check_dispatch_binary(self, op: str, left: LType, right: LType, span: Span) -> LType | none:
+        match dispatch_op_name(op) as dunder:
+            case str:
+                arg_types: list[LType] = [left, right]
+                match find_signature(self.functions, dunder, arg_types) as sig:
+                    case FuncSig:
+                        return sig.return_type
+                    case none:
+                        self.error("no '" + dunder + "' overload for (" + type_name(left) + ", " + type_name(right) + ")", span)
+                        return none
+            case none:
+                self.error("operator " + op + " is not supported on class values", span)
+                return none
+
+    def check_construct(self, class_name: str, args: list[Arg], span: Span, known: dict[str, LType]) -> LType | none:
+        match self.classes.get(class_name, none) as cls:
+            case ClassSig:
+                if len(args) != len(cls.fields):
+                    self.error("construct for '" + class_name + "' expects " + str(len(cls.fields)) + " field value(s), got " + str(len(args)), span)
+                i = 0
+                while i < len(args) and i < len(cls.fields):
+                    arg_type = self.check_expr(args[i].value, known)
+                    match arg_type as at:
+                        case LType:
+                            if not types_equal(at, cls.fields[i].field_type):
+                                self.error("field '" + cls.fields[i].name + "' expects " + type_name(cls.fields[i].field_type) + ", got " + type_name(at), span)
+                        case none:
+                            pass
+                    i = i + 1
+                return ClassType(class_name)
+            case none:
+                self.error("unknown class '" + class_name + "'", span)
+                return none
+
+    def check_call(self, call: Call, known: dict[str, LType]) -> LType | none:
+        match call.func as callee:
+            case Ident:
+                arg_types: list[LType] = []
+                any_unknown = false
+                for a in call.args:
+                    match self.check_expr(a.value, known) as at:
+                        case LType:
+                            arg_types.append(at)
+                        case none:
+                            any_unknown = true
+                if callee.name == "print":
+                    return none
+                if any_unknown:
+                    return none
+                match find_signature(self.functions, callee.name, arg_types) as sig:
+                    case FuncSig:
+                        return sig.return_type
+                    case none:
+                        if has_any_signature(self.functions, callee.name):
+                            self.error("no overload of '" + callee.name + "' matches the given argument types", call.span)
+                        else:
+                            self.error("undefined function '" + callee.name + "'", call.span)
+                        return none
+            case _:
+                self.error("only calling a plain name is supported", call.span)
+                return none
 
 def new_checker() -> Checker:
-    return Checker({:}, [])
+    return Checker(new_func_table(), {:}, [])
 
 def check_program(stmts: list[Stmt]) -> list[CheckError]:
     checker = new_checker()
