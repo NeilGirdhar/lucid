@@ -224,7 +224,13 @@ report("'?' whose error type the enclosing function's return type doesn't includ
 
 report("'?' used outside a function is rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\nx = get(true)?\n")
 
-report("'?' nested inside a larger expression is rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> int | ItemError:\n    x = get(true)? + 1\n    return x\n")
+report("'?' as a Binary operand is supported (hoisted ahead of the statement)", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef use_it(flag: bool) -> int | ItemError:\n    x = get(flag)? + 1\n    return x\n\ndef ok() -> int:\n    use_it(true)\n    return 0\n")
+
+report("'?' as a Call argument is supported (hoisted ahead of the statement)", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef use_it(flag: bool) -> int | ItemError:\n    xs: list[int] = []\n    xs.append(get(flag)?)\n    return xs[0]\n\ndef ok() -> int:\n    use_it(true)\n    return 0\n")
+
+report("'?' inside 'and'/'or' is still rejected (the right operand isn't always evaluated)", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> bool:\n    x = true and get(true)? == 1\n    return x\n")
+
+report("'?' nested two levels deep in an expression is still rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> int | ItemError:\n    x = (get(true)? + 1) + 2\n    return x\n")
 
 report("match on a non-union subject is rejected", "def ok() -> int:\n    x = 5\n    match x as result:\n        case _:\n            print(result)\n    return 0\n")
 

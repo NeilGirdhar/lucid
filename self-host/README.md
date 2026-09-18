@@ -21,56 +21,37 @@ own output exactly: Lucid, compiling Lucid, to a native binary — for the
 subset covered so far, not yet for the whole language. None of the five
 pieces is close to feature parity with its Rust counterpart.
 
-**`self-host/lexer.lucid` itself now compiles through this pipeline**:
-`checker.lucid` reports zero errors on it, and `codegen.lucid`'s
-generated C compiles cleanly with `gcc` — the actual bootstrap target,
-reached after closing the gaps union return types, `match` narrowing,
-and `?` exposed (see the `checker.lucid`/`codegen.lucid` entries below,
-and the `union_types.lucid` compile-demo program, whose shapes were
-chosen specifically to mirror `lexer.lucid`'s own). Not yet linked and
-run end-to-end as a working compiled lexer (that needs a caller — a
-compiled `parser.lucid`, or a small hand-written driver — to actually
-invoke `tokenize` and check its output against the reference
-interpreter's own `tokenize`, the same differential discipline every
-other compiled program in this pipeline already gets); `self-host/
+**`self-host/lexer.lucid` and `self-host/parser.lucid` both now compile
+through this pipeline**: `checker.lucid` reports zero errors on each,
+and `codegen.lucid`'s generated C for each compiles cleanly with `gcc`
+— the actual bootstrap target, reached for `lexer.lucid` after closing
+the gaps union return types, `match` narrowing, and `?` exposed (see
+the `checker.lucid`/`codegen.lucid` entries below, and the
+`union_types.lucid` compile-demo program, whose shapes were chosen
+specifically to mirror `lexer.lucid`'s own), and for `parser.lucid`
+after closing every gap listed in the previous revision of this
+section (cross-file imports, class inheritance, union-typed fields, `?`
+in three positions, sealed-hierarchy matching, subtype-aware calls,
+union return-type subsets) plus five more this branch found by
+compiling `parser.lucid` itself all the way through and reading every
+resulting `gcc` error, not just the checker's own: `?` hoisted out of a
+`Call`/`Construct` argument or a `Binary` operand (see the
+`checker.lucid`/`codegen.lucid` entries below), `int(...)`/`float(...)`
+conversion builtins and a `FloatType` primitive (`ast.lucid`'s own
+`FloatLit`/`ComplexLit` fields, never before supported), a Lucid local
+whose name collides with a C reserved word (`default`), a `VarDef`
+initialized with a subtype `Construct` into a declared sealed-base
+type, and a union type used only as a local variable's own declared
+type (neither a return type nor a field). Neither is yet linked and run
+end-to-end as a working compiled lexer/parser (that needs a caller — a
+compiled `checker.lucid`, or a small hand-written driver — to actually
+invoke `tokenize`/`parse` and check the output against the reference
+interpreter's own, the same differential discipline every other
+compiled program in this pipeline already gets); `self-host/
 _probe_selfcompile.lucid` (untracked, a standing local gauge, not
-committed) re-runs this check on demand.
+committed) re-runs the `lexer.lucid` half of this check on demand.
 
-**Next target: `self-host/parser.lucid`**, probed the same way,
-repeatedly, as each gap closed — does *not* compile yet, but is down
-from dozens of error categories and hundreds of occurrences to five
-categories and eighteen occurrences total, eleven of them one single
-remaining gap. Closed as of this branch: cross-file imports, narrowing
-a declared union via a later plain assignment, `pass`-bodied classes,
-class inheritance (field order and subtype compatibility), union-typed
-class fields, `?` in two more positions (a `return` statement's own
-value, and — by far the single most common `?` shape in
-`parser.lucid`, ~60 of its ~70 uses — a bare expression statement on
-its own), matching a sealed class hierarchy by its own concrete
-subclasses (a real runtime tag, `ClassSig.sealed_root`/`class_tag`), a
-subtype value satisfying a plain function or method call's own
-parameter type or a `list[T].append(...)`'s own element type (not just
-a `Construct`/`Return`/Attribute-assignment site, the gap the very
-first sealed-hierarchy test surfaced), and a union return type that's a
-strict subset of a wider one. What's left, from the latest probe:
-- **`?` nested inside a larger expression or as a `Call` argument** —
-  the one remaining category, and now the dominant one by a wide margin
-  (eleven of the eighteen total occurrences): `body.append(self.
-  parse_class_member()?)`, `bases.append(self.parse_type_expr()?)`, and
-  similar. This subset's plain-C11 discipline (no GNU statement
-  expressions) means there's no single C expression `?` could become
-  there; closing this honestly would mean either accepting the
-  restriction (rewriting the small number of call sites, if this were
-  real source being ported) or finding a statement-sequence desugaring
-  for a call argument specifically (evaluate into a temp before the
-  call, propagate from there, pass the temp as the actual argument),
-  not attempted yet.
-- A few smaller, narrower items, one occurrence each: `int(...)`-style
-  calls (this subset has no builtin type-conversion call at all), two
-  fields (both, it turns out, `FloatLit`'s and a sibling's own `value:
-  float` — this subset was never at feature parity with `float`/
-  `FloatType` to begin with, out of scope here) whose declared type
-  `resolve_type_expr` can't resolve.
+**Next target: `self-host/checker.lucid`**, probed the same way.
 
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
@@ -549,6 +530,39 @@ strict subset of a wider one. What's left, from the latest probe:
   ParserError` (no `LexError` on that path). `codegen.lucid` needed real
   work for this one, not just a type-check relaxation — see its own
   entry below.
+  `?` nested one level inside a `Call`/`Construct` argument or a
+  non-short-circuit `Binary` operand is now supported too (`self-host/
+  parser.lucid`'s own dominant remaining `?` shape, eleven of eighteen
+  occurrences on the last probe before this branch: `body.append(self.
+  parse_class_member()?)`, `module_name = module_name + self.
+  parse_dotted_name()?`) — by hoisting, not by teaching `check_expr`
+  itself about nested `?`. A new `hoist_propagate` (`ast.lucid`, shared
+  with `codegen.lucid`) looks one level into an expression's own direct
+  children for a single `Propagate` node and, if it finds one, returns
+  an equivalent tree with that node replaced by a fresh `Ident`
+  referencing a temp that already holds its unwrapped ok value —
+  `check_rhs_expr` then type-checks the *substituted* tree exactly like
+  any other expression (an `Ident` with a known type needs no special
+  case anywhere), after checking the extracted `Propagate` itself via
+  `check_propagate` and registering the temp's ok type. Deliberately
+  narrow: only a `Call`/`Construct` argument or a `Binary` operand, one
+  level deep, and `and`/`or` are skipped on purpose (their right operand
+  isn't always evaluated, so hoisting it out ahead of the operator would
+  change what actually runs) — nested any other way (an `if`-expression
+  branch, a comprehension, two levels deep) still isn't supported, and
+  still reports the ordinary "'?' is only supported as..." error.
+  `int(...)`/`float(...)` are now recognized as two narrow builtin
+  conversions (`check_call`, a single `str` argument each, returning
+  `int`/the new `FloatType`) — `self-host/parser.lucid`'s own
+  `IntLit(int(tok.text))`/`FloatLit(float(tok.text))`. `FloatType` itself
+  (`types.lucid`) exists purely so `ast.lucid`'s `FloatLit.value`/
+  `ComplexLit.value: float` fields can be registered at all (`collect_
+  class` previously rejected them outright, which — since `check_
+  construct` only iterates as many fields as `cls.fields` actually has —
+  silently dropped `FloatLit`'s field list to zero and never even
+  reached checking `float(tok.text)` as a Construct argument); there's no
+  float arithmetic, comparison, or dispatch overload anywhere in this
+  subset, since nothing self-hosted needs one yet.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -922,14 +936,110 @@ strict subset of a wider one. What's left, from the latest probe:
   a driver step outside Lucid, the same role
   `compiler/crates/lucid-codegen` itself plays (it also just shells out
   to `gcc`, from Rust rather than from the Lucid it compiles).
+  `?` hoisted out of a `Call`/`Construct` argument or a `Binary` operand
+  (see checker.lucid's own entry above) gets a matching
+  `codegen_hoisted_prelude`, the same temp/tag-check/early-return shape
+  `codegen_propagate_exprstmt` already builds for a bare `expr?`
+  statement, plus one more plain C declaration unwrapping the ok value
+  into the hoisted temp (a real local, declared mid-block — C99/C11
+  allows this, and every other propagate temp in this file already
+  relies on it). `codegen_stmt`'s Assignment/Return/ExprStmt arms all
+  call `hoist_propagate` themselves (via `ast.lucid`, not duplicating
+  the pattern-matching in three places) before falling back to plain
+  `codegen_expr`, and codegen the *substituted* expression tree
+  afterward — again needing no changes to `codegen_expr` itself, since
+  the hoisted temp reads back as an ordinary `Ident`.
+  `int(...)`/`float(...)` compile straight to `atol(...)`/`strtod(...,
+  NULL)` (both already available — `<stdlib.h>` is already included for
+  `malloc`/`realloc`); `FloatType` is a C `double`, printed with `%g`.
+
+  Compiling `self-host/parser.lucid` itself all the way through this
+  pipeline — not just past `checker.lucid`, but through `codegen.lucid`
+  and a real `gcc` invocation on the result — surfaced five more real,
+  previously-undiscovered bugs, none related to any feature added this
+  branch, each a shape no earlier compiled program happened to exercise:
+  - **`infer_local_types`'s match-arm pre-pass doesn't narrow the
+    subject alias.** `codegen_sealed_match_arm`/`codegen_match_arm` both
+    correctly narrow a match's own subject alias (`match e as result:
+    case Call: ...` binds `result: Call` *inside* that arm, for actual
+    codegen) — but the separate `infer_local_types`/`collect_local_names`
+    pre-pass that hoists every local's own C declaration recurses into
+    each arm's body using the *unnarrowed* `known`, so a fresh local
+    assigned from the narrowed alias's own field (`a = result.args[i]`,
+    once inside `ast.lucid`'s own new `hoist_propagate`) silently fell
+    back to `long` instead of the real pointer type, miscompiling every
+    `->` access after it. Not fixed in the shared pre-pass (used by
+    every self-hosted file, too wide a blast radius to change without a
+    much larger regression sweep than this branch's actual need
+    justifies) — worked around locally, in `hoist_propagate` itself, by
+    never naming the narrowed field read as its own local at all
+    (indexing `result.args[i]` again each time instead).
+  - **`codegen_propagate_assignment` never wrapped into an established
+    wider type.** `value: Expr | none = none` then, later, `value =
+    self.parse_expr()?` (`self-host/parser.lucid`'s own
+    `parse_statement`) needs the unwrapped ok value wrapped into the
+    *already-established* `Expr | none`, the same way the ordinary
+    (non-`?`) Assignment arm already handles a narrower value assigned
+    into an established union or sealed-base class — but the `?`
+    desugaring's own unwrap always assigned the bare ok value straight
+    into the target name, regardless of the name's own established type,
+    a real C type error (`Expr *` into a `lucid_union_Expr_none`
+    struct). Fixed by giving `codegen_propagate_assignment` the same
+    `known.get(name, none)`-driven wrap/cast logic the plain Assignment
+    arm already has.
+  - **`collect_union_types` never scanned a local variable's own
+    declared type.** It scans every registered function/method return
+    type and every class field (see its own header comment, itself
+    fixed for the field case earlier in this project) — but never a
+    `VarDef`'s own declared type, a third union-usage site
+    (`default: Item | none = none`, `self-host/parser.lucid`'s own
+    `parse_class_member`/`parse_raw_function`) that's neither. Left
+    `lucid_union_Item_none` undeclared the moment a union was used only
+    this way. Fixed with a new `collect_var_union_types`, walking every
+    `FunctionDef`/method body and the module's own top-level statements
+    for a `VarDef`'s own union-typed annotation, merged into the same
+    list `collect_union_types` already builds.
+  - **A `VarDef`'s own initializer never got the sealed-base subtype
+    cast.** `exception_type: TypeExpr = NamedType(...)` and
+    `pattern: Pattern = IdentPattern(...)` (both real shapes in
+    `self-host/parser.lucid`) declare a plain sealed-base class type
+    with an initializer whose own static type is a narrower concrete
+    subclass — the same cast an ordinary *reassignment*, a `Construct`
+    argument, a `Return`, and an Attribute-assignment all already get,
+    but `VarDef`'s own codegen never gave its initializer the same
+    treatment (only a declared *union* type's initializer was covered).
+    Fixed by adding the matching `case ClassType:` branch alongside the
+    existing `case UnionLType:` one.
+  - **A Lucid identifier that collides with a C reserved word compiles
+    to invalid C.** `default: Expr | none = none` (`self-host/
+    parser.lucid`'s own `parse_field_member`/`parse_param_list` — a
+    field/parameter's own *default value* expression, named the same as
+    the concept it holds) emitted a bare C local literally named
+    `default`, a C keyword — `int`, `float`, and every other C reserved
+    word Lucid doesn't reserve itself are the same risk, just not yet
+    hit by name. Fixed with a new `c_safe_ident` (appends `_` to any of
+    the ~35 C keywords Lucid doesn't already reserve as its own), applied
+    at every point a Lucid-sourced local/parameter/match-alias name
+    becomes a raw C identifier — `ident_target_name`, `ident_pattern_name`,
+    `codegen_expr`'s own `Ident` case, `infer_expr_type`'s own `Ident`
+    case, `c_param_list`, `codegen_method_param_list`, and both match-arm
+    alias bindings — so a declaration and every later read of the same
+    name always agree on the same escaped spelling.
+
+  Each of the five was root-caused with a from-scratch, minimal
+  reproduction, then verified the usual way (compiled through the full
+  pipeline, `gcc -Wall`-compiled, diffed byte-for-byte against `lucid
+  run` on the same source) before being folded into
+  `compile_demo_programs/parser_gaps.lucid`, the one program in this
+  branch that exercises the whole set together.
 - `compile_demo.lucid` — **an actual compiler, written in Lucid,
   compiling real Lucid programs to native executables.**
   `examples/vectors.lucid` — classes, `dispatch def` operator
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles sixteen hand-written programs — fifteen
-  real files under `self-host/compile_demo_programs/`, plus
+  `codegen.lucid`. Also compiles seventeen hand-written programs —
+  sixteen real files under `self-host/compile_demo_programs/`, plus
   `imports_demo.lucid`, which lives directly under `self-host/` instead
   (see compile_demo.lucid's own header comment for why: its
   `from .lexer import ...` has to resolve to `self-host/lexer.lucid`
@@ -1011,6 +1121,15 @@ strict subset of a wider one. What's left, from the latest probe:
   subclass (`case NumberNode: ...`), a subtype value passed to a plain
   function and to `list[T].append(...)`, and a `return` whose own union
   return type is a strict subset of the enclosing function's wider one
+  — and `parser_gaps` — `?` hoisted out of a `list[int].append(...)`
+  argument and out of a `Binary` `+` operand, both on the success and
+  failure path, `int(...)`/`float(...)` conversions and a `float`-typed
+  class field, a local named `default` (a C reserved word), a `VarDef`
+  declaring a sealed-base type initialized with a subtype `Construct`
+  then reassigned to a different subtype, and a local declared with a
+  union type that's neither a return type nor a field — the five real
+  bugs `self-host/parser.lucid`'s own first full compile found (see the
+  `codegen.lucid` entry above), exercised together in the one program
   — plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen

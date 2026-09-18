@@ -593,3 +593,93 @@ class MetadataStmt(Stmt):
 class ParsedModule:
     statements: list[Stmt]
     span: Span
+
+class Hoisted:
+    prop: Propagate
+    replaced: Expr
+
+# `?` nested inside a Call/Construct argument, or as the operand of a
+# (non-short-circuit) Binary op, is supported by hoisting it out:
+# checker.lucid and codegen.lucid both call this to find the one
+# Propagate node and get back an equivalent expression tree with that
+# node replaced by `replacement` (a fresh `Ident` naming a temp
+# already holding its unwrapped ok value) -- so check_expr/codegen_expr
+# need no changes at all to handle the result, an `Ident` with a known
+# type already being fully supported everywhere they recurse.
+#
+# Deliberately narrow: looks only at an expression's own direct
+# children, one level deep, and only at the two shapes self-host/
+# parser.lucid actually needs (`container.append(f()?)`,
+# `a + f()?`) -- not a general expression-tree walker. Skips `and`/
+# `or`: their right operand isn't always evaluated, so hoisting it out
+# ahead of the operator would change what actually runs. If more than
+# one nested Propagate is present, or it's nested somewhere this
+# doesn't look (inside an `if`-expression branch, a comprehension body,
+# a lambda), this returns `none` and the caller falls back to the
+# ordinary "'?' is only supported as..." rejection.
+def hoist_propagate(e: Expr, replacement: Expr) -> Hoisted | none:
+    match e as result:
+        case Binary:
+            if result.op == "AND" or result.op == "OR":
+                return none
+            match result.right as r:
+                case Propagate:
+                    return Hoisted(r, Binary(result.span, result.op, result.left, replacement))
+                case _:
+                    pass
+            match result.left as l:
+                case Propagate:
+                    return Hoisted(l, Binary(result.span, result.op, replacement, result.right))
+                case _:
+                    return none
+        case Call:
+            # `a = result.args[i]` (a plain local holding one `Arg`,
+            # read several times below) would be the natural way to
+            # write this loop, but codegen.lucid's infer_local_types
+            # pre-pass doesn't narrow a sealed-match subject_alias
+            # (`result` here) the way codegen_sealed_match_arm's own
+            # per-arm `arm_known` does at actual codegen time -- a real,
+            # previously-undiscovered gap, caught by this function's own
+            # first self-hosted compile (`result.args[i]`'s inferred
+            # type silently fell back to `long`, miscompiling every
+            # `->` after it). Indexing `result.args[i]` again each time
+            # instead of naming it once avoids the gap entirely, rather
+            # than patching the shared pre-pass every other self-hosted
+            # file also relies on.
+            i = 0
+            while i < len(result.args):
+                match result.args[i].value as v:
+                    case Propagate:
+                        new_args: list[Arg] = []
+                        j = 0
+                        while j < len(result.args):
+                            if j == i:
+                                new_args.append(Arg(result.args[i].name, replacement, result.args[i].is_spread, result.args[i].is_dict_spread, result.args[i].is_gather_spread, result.args[i].span))
+                            else:
+                                new_args.append(result.args[j])
+                            j = j + 1
+                        return Hoisted(v, Call(result.span, result.func, new_args))
+                    case _:
+                        pass
+                i = i + 1
+            return none
+        case Construct:
+            i = 0
+            while i < len(result.args):
+                match result.args[i].value as v:
+                    case Propagate:
+                        new_args: list[Arg] = []
+                        j = 0
+                        while j < len(result.args):
+                            if j == i:
+                                new_args.append(Arg(result.args[i].name, replacement, result.args[i].is_spread, result.args[i].is_dict_spread, result.args[i].is_gather_spread, result.args[i].span))
+                            else:
+                                new_args.append(result.args[j])
+                            j = j + 1
+                        return Hoisted(v, Construct(result.span, result.class_name, new_args))
+                    case _:
+                        pass
+                i = i + 1
+            return none
+        case _:
+            return none

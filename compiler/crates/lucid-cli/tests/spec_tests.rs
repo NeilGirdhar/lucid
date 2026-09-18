@@ -1277,6 +1277,8 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: '?' requires exactly one non-error member in this subset",
         "ERROR: '?' propagates ItemError, but the enclosing function's return type (int) doesn't include it",
         "ERROR: '?' used outside a function",
+        "--- '?' as a Binary operand is supported (hoisted ahead of the statement) ---\n(no errors)",
+        "--- '?' as a Call argument is supported (hoisted ahead of the statement) ---\n(no errors)",
         "ERROR: '?' is only supported as the direct right-hand side of a plain assignment, the direct value of a return statement, or a bare expression statement on its own, in this subset",
         "ERROR: match on int is not supported in this subset (only a union-typed subject, or one belonging to a sealed class hierarchy, can be matched)",
         "ERROR: match on Item | none is not exhaustive: no case for none",
@@ -1371,7 +1373,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 17] = [
+    let cases: [(&str, &str); 18] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1399,6 +1401,10 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         (
             "inheritance",
             "self-host/compile_demo_programs/inheritance.lucid",
+        ),
+        (
+            "parser_gaps",
+            "self-host/compile_demo_programs/parser_gaps.lucid",
         ),
         ("vectors", "examples/vectors.lucid"),
     ];

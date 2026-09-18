@@ -30,6 +30,18 @@ class BoolType(LType):
 class StrType(LType):
     pass
 
+# `self-host/ast.lucid`'s own `FloatLit.value`/`ComplexLit.value`
+# fields, and nothing else -- no float arithmetic, comparison, or
+# dispatch overloads anywhere in this subset (parser.lucid only ever
+# constructs a FloatLit and never reads its value back out). Exists
+# purely so `collect_class` can register those two fields at all
+# (without it, `field 'value' has an unsupported type` short-circuits
+# the whole Construct, dropping its field list to zero -- see
+# check_construct) and so `float(tok.text)` (check_call's own `int`/
+# `float` conversion builtins) has something to return.
+class FloatType(LType):
+    pass
+
 class ClassType(LType):
     name: str
 
@@ -106,6 +118,8 @@ def type_name(t: LType) -> str:
             return "bool"
         case StrType:
             return "str"
+        case FloatType:
+            return "float"
         case ClassType:
             return result.name
         case ListType:
@@ -185,6 +199,12 @@ def types_equal(a: LType, b: LType) -> bool:
         case StrType:
             match b as right:
                 case StrType:
+                    return true
+                case _:
+                    return false
+        case FloatType:
+            match b as right:
+                case FloatType:
                     return true
                 case _:
                     return false
@@ -273,6 +293,8 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
                 return BoolType()
             if result.name == "str":
                 return StrType()
+            if result.name == "float":
+                return FloatType()
             if result.name == "none":
                 return NoneType()
             if result.name == "list" and len(result.args) == 1:

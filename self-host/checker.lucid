@@ -74,8 +74,8 @@
 # subclasses -- everything else checker.lucid's header comment's Rust
 # counterpart covers.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, PassMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, Propagate, FunctionDef, Param, Span, FromImport, Import
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, type_list_assignable, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, has_any_signature, resolve_all_declarations, inherited_fields, is_subclass_of, class_assignable_to
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, FloatLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, PassMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, Propagate, FunctionDef, Param, Span, FromImport, Import, Hoisted, hoist_propagate
+from .types import LType, IntType, BoolType, StrType, FloatType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, type_list_assignable, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, has_any_signature, resolve_all_declarations, inherited_fields, is_subclass_of, class_assignable_to
 
 class CheckError:
     message: str
@@ -682,9 +682,11 @@ class Checker:
                         # shape, and self-host/parser.lucid's dominant
                         # one) -- codegen_stmt's Return arm has its own
                         # matching desugaring (codegen_propagate_return).
-                        # '?' nested inside a larger expression is still
-                        # rejected (check_expr's own Propagate case, via
-                        # check_rhs_expr's fallback).
+                        # '?' nested inside a Call/Construct argument or
+                        # a (non-short-circuit) Binary operand is also
+                        # supported here, via check_rhs_expr's own
+                        # hoist_propagate fallback; nested any other way
+                        # still isn't (check_expr's own Propagate case).
                         value_type = self.check_rhs_expr(value_expr, known, expected_return)
                         match expected_return as rt:
                             case LType:
@@ -936,6 +938,8 @@ class Checker:
                         return BoolType()
                     case StrLit:
                         return StrType()
+                    case FloatLit:
+                        return FloatType()
                     case NoneLit:
                         # `none` itself is still not a value this subset
                         # can hold in a variable (bind() rejects it) --
@@ -1115,30 +1119,51 @@ class Checker:
                 self.error("unsupported expression kind", expr.span)
                 return none
 
-    # '?' is supported in exactly three positions in this subset: the
-    # direct right-hand side of a plain assignment (`tok =
+    # '?' is supported in exactly three direct positions in this subset:
+    # the direct right-hand side of a plain assignment (`tok =
     # lexer.next_token()?`, self-host/lexer.lucid's own `tokenize`), the
     # direct value of a return statement (`return self.parse_expr()?`,
     # docs/question-mark-operator.md's own example shape), and a bare
     # expression statement on its own (`self.consume_stmt_end()?`,
     # self-host/parser.lucid's own single most common '?' shape by far
     # -- a validation call whose ok value is discarded either way,
-    # typically `none`) -- never nested inside a larger expression, and
-    # never as a `Call` argument, since codegen.lucid has no GNU-
-    # statement-expression-free way to turn '?' into a single C
-    # expression there (all three supported shapes instead desugar to a
-    # short statement sequence: see codegen_propagate_assignment,
-    # codegen_propagate_return, and codegen_propagate_exprstmt).
-    # check_stmt's Return and ExprStmt arms both call this (not plain
-    # check_expr) for exactly this reason; check_expr's own Propagate
-    # case (reached from here too, for any other kind of expr) reports
-    # this same error.
+    # typically `none`) -- since codegen.lucid has no GNU-statement-
+    # expression-free way to turn '?' into a single C expression
+    # (all three desugar to a short statement sequence instead: see
+    # codegen_propagate_assignment, codegen_propagate_return, and
+    # codegen_propagate_exprstmt).
+    #
+    # Nested one level deeper -- as a Call/Construct argument, or as a
+    # (non-short-circuit) Binary operand -- is *also* supported at each
+    # of those three positions, by hoisting the '?' out ahead of the
+    # statement instead: see ast.lucid's own hoist_propagate and
+    # codegen.lucid's codegen_hoisted_prelude. `self-host/parser.lucid`'s
+    # own `body.append(self.parse_class_member()?)` (a Call argument)
+    # and `module_name = module_name + self.parse_dotted_name()?` (a
+    # Binary operand) are exactly these two shapes. Nested any other way
+    # (inside `and`/`or`, an `if`-expression branch, a comprehension, a
+    # lambda, or more than one level deep) still isn't supported.
+    #
+    # check_stmt's Assignment, Return, and ExprStmt arms all call this
+    # (not plain check_expr) for exactly this reason; check_expr's own
+    # Propagate case (reached from here too, for any '?' this doesn't
+    # recognize) reports the underlying error.
     def check_rhs_expr(self, expr: Expr, known: dict[str, LType], expected_return: LType | none) -> LType | none:
         match expr as result:
             case Propagate:
                 return self.check_propagate(result, known, expected_return)
             case _:
-                return self.check_expr(expr, known)
+                temp_name = "__lucid_hoist_" + str(expr.span.line) + "_" + str(expr.span.column)
+                match hoist_propagate(expr, Ident(expr.span, temp_name)) as h:
+                    case Hoisted:
+                        match self.check_propagate(h.prop, known, expected_return) as ok_type:
+                            case LType:
+                                known[temp_name] = ok_type
+                                return self.check_expr(h.replaced, known)
+                            case none:
+                                return none
+                    case none:
+                        return self.check_expr(expr, known)
 
     # Mirrors docs/question-mark-operator.md's own desugaring: `expr?`
     # requires expr's type to be a union with exactly one "error" member
@@ -1412,6 +1437,35 @@ class Checker:
                     if any_unknown:
                         return none
                     self.error("len() supports only a single str or list[T] argument in this subset", call.span)
+                    return none
+                # `int(tok.text)`/`float(tok.text)` -- self-host/
+                # parser.lucid's own two numeric-literal conversions
+                # (`IntLit(int(tok.text))`, `FloatLit(float(tok.text))`)
+                # -- a str-to-number conversion, never the other way
+                # around (`str(n)` is a distinct, already-supported
+                # builtin) and never on anything but a str argument in
+                # this subset.
+                if callee.name == "int":
+                    if len(arg_types) == 1:
+                        match arg_types[0] as at2:
+                            case StrType:
+                                return IntType()
+                            case _:
+                                pass
+                    if any_unknown:
+                        return none
+                    self.error("int() supports only a single str argument in this subset", call.span)
+                    return none
+                if callee.name == "float":
+                    if len(arg_types) == 1:
+                        match arg_types[0] as at3:
+                            case StrType:
+                                return FloatType()
+                            case _:
+                                pass
+                    if any_unknown:
+                        return none
+                    self.error("float() supports only a single str argument in this subset", call.span)
                     return none
                 if any_unknown:
                     return none
