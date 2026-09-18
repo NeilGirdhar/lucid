@@ -672,7 +672,23 @@ impl fmt::Debug for Value {
                 is_frozen,
             } => {
                 let prefix = if *is_frozen.borrow() { "!" } else { "" };
-                write!(f, "{prefix}{class_name}({:?})", *fields.borrow())
+                // `fields` is a HashMap, whose iteration order is
+                // randomized per process (Rust's default hasher uses a
+                // random seed for DoS resistance) -- printing the same
+                // object twice in the same run, let alone across runs,
+                // previously produced a different string each time.
+                // Sorted by field name for a stable, reproducible repr.
+                let borrowed = fields.borrow();
+                let mut sorted: Vec<(&String, &Value)> = borrowed.iter().collect();
+                sorted.sort_by_key(|(key, _)| key.as_str());
+                write!(f, "{prefix}{class_name}({{")?;
+                for (i, (key, value)) in sorted.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{key:?}: {value:?}")?;
+                }
+                write!(f, "}})")
             }
             Value::Function { name, .. } => write!(f, "<def {name}>"),
             Value::Future(_) => write!(f, "<future>"),
@@ -11142,6 +11158,27 @@ mod tests {
         assert!(!Interpreter::pattern_identifier_binds("DottedPath"));
         assert!(!Interpreter::pattern_identifier_binds("_"));
         assert!(Interpreter::pattern_identifier_binds("value"));
+    }
+
+    #[test]
+    fn object_repr_field_order_is_deterministic_not_hashmap_order() {
+        // Value::Object's fields are a HashMap, whose iteration order is
+        // randomized per process (Rust's default hasher). print()ing the
+        // same object used to produce a different string on almost every
+        // run -- caught by running the same source repeatedly and seeing
+        // the field order change. Fixed by sorting fields by name before
+        // formatting; this pins that order down.
+        let module = parse(
+            "class P:\n    name: str\n    age: int\n    active: bool\n\nvalue = P(\"Alice\", 30, true)\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        let value = interp.env.borrow().get("value").unwrap();
+        assert_eq!(
+            format!("{value:?}"),
+            "P({\"active\": true, \"age\": 30, \"name\": \"Alice\"})"
+        );
     }
 
     #[test]
