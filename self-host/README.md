@@ -158,7 +158,14 @@ pieces is close to feature parity with its Rust counterpart.
   would compile as if it returned `int`, handing codegen a garbage
   value); every `return` is checked against that type, bare `return` is
   rejected (there's no `none`/void type in this subset for it to mean),
-  and a `return` outside any function is rejected too.
+  and a `return` outside any function is rejected too. A function whose
+  body can fall off its end without returning is rejected as well — a
+  conservative "definitely returns" predicate (an `if` only counts if
+  its then-branch, every `elif`, and a *present* `else` all definitely
+  return; no `else` at all means falling through is possible), since
+  reaching the closing brace of a non-`void` C function without a
+  `return` is undefined behavior (C11 6.9.1p12), not just "returns some
+  default" — `gcc` without `-Wall` doesn't even warn about it.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -182,10 +189,21 @@ pieces is close to feature parity with its Rust counterpart.
   convention for dispatch operators collides with directly enough that
   the *un*-mangled single-overload case, plain `lucid___add__`, needs
   exactly the same prefix, since C has no overloading of
-  its own; a Lucid function literally named `main`
-  becomes C's own `int main(void)`, and a script with no `main` at all
-  (the way every real `examples/*.lucid` program is actually written)
-  has its top-level statements wrapped into a synthesized one; `print`
+  its own; every Lucid function is one of these mangled functions,
+  including one literally named `main` — C's own `int main(void)` is a
+  *separate*, unconditionally synthesized entry point built from the
+  module's top-level statements, matching both `lucid run` (which never
+  auto-invokes a user-defined `main`, only runs top-level statements —
+  the way every real `examples/*.lucid` program is actually written)
+  and the reference native backend (`compiler/crates/lucid-codegen`
+  always mangles a Lucid `main` too, `lucid_fn_main`, and always
+  synthesizes its own C `main` from top-level code). An earlier draft
+  special-cased a Lucid function literally named `main` into becoming
+  that entry point directly — plausible-looking, and wrong: it
+  diverged from what `def main(): ...` followed by top-level code
+  actually does in both the interpreter and the reference compiler,
+  caught by checking exactly that program compiled versus
+  interpreted, not by inspection; `print`
   takes any number of int/bool/str arguments, each formatted by its own
   inferred type — `bool` prints as `true`/`false` (via a C `?:` into
   `%s`), not `1`/`0`, matching the reference interpreter; a class-typed
@@ -217,35 +235,39 @@ pieces is close to feature parity with its Rust counterpart.
   `compiler/crates/lucid-codegen` itself plays (it also just shells out
   to `gcc`, from Rust rather than from the Lucid it compiles).
 - `compile_demo.lucid` — **an actual compiler, written in Lucid,
-  compiling a real Lucid program to a native executable.**
+  compiling real Lucid programs to native executables.**
   `examples/vectors.lucid` — classes, `dispatch def` operator
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`, its native binary's output matches `lucid run
-  examples/vectors.lucid`'s own output exactly (checked by a
-  differential comparison, the same discipline `self_hosting_demo.lucid`
-  already applies to the self-hosted lexer and parser). Also compiles
-  six hand-written programs (recursion, iteration,
+  `codegen.lucid`. Also compiles six hand-written programs, each a real
+  file under `self-host/compile_demo_programs/` (recursion, iteration,
   `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean semantics on all
   four sign combinations, `bools` — bool literals, comparisons, and
   `and`/`or` results printed as `true`/`false` — and `loops` — `for`
   over both a list literal and `range(...)`, a nested `for` whose inner
   loop's `if_broken` clause re-breaks the outer loop, a `while` with its
   own `if_broken`, and the two range-codegen miscompile cases described
-  above) and one that's supposed to fail checking, proving a real error
-  stops codegen instead of emitting broken C. Each valid program's C
-  output is written to
+  above), plus one Lucid string literal that's supposed to fail
+  checking, proving a real error stops codegen instead of emitting
+  broken C. Every valid program's compiled binary is checked the same
+  way `vectors`' is: its output must match `lucid run` on that exact
+  source file exactly — not a hardcoded expected string — the same
+  differential discipline `self_hosting_demo.lucid` already applies to
+  the self-hosted lexer and parser (an earlier draft hardcoded each
+  hand-written program's expected output instead, the only place in
+  this pipeline that wasn't actually differential-tested against the
+  reference interpreter). Each valid program's C output is written to
   `self-host/compile_demo_<name>.c` (gitignored — regenerated by running
   the demo); `gcc -std=c11 -o <binary> self-host/compile_demo_<name>.c`
   compiles it, and running the resulting binary produces the exact
   correct output.
   `self_hosted_compile_demo_produces_correct_native_binaries` in
   `compiler/crates/lucid-cli/tests/spec_tests.rs` is that external
-  driver and the `examples/vectors.lucid` differential check together,
-  checked in as one test — deliberately one, not two, since an earlier
-  split into separate tests raced on these same shared output files
-  under `cargo test`'s default parallelism. Still a real subset,
+  driver and every differential check together, checked in as one test
+  — deliberately one, not several, since an earlier split into separate
+  tests raced on these same shared output files under `cargo test`'s
+  default parallelism. Still a real subset,
   not feature parity with Lucid — `examples/shapes.lucid` needs
   `freeze()` and printing a class value (a default `repr`);
   `examples/collections.lucid` needs comprehensions, `list[T]`

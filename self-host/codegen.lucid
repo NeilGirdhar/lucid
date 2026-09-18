@@ -37,7 +37,7 @@
 # variable declared inside one branch invisible after it, unlike Lucid's
 # own more permissive same-function visibility.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, NamedType, dummy_span
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
 from .types import LType, IntType, BoolType, StrType, ClassType, type_name, resolve_type_expr, FieldSig, ClassSig, field_type, FuncSig, FuncTable, new_func_table, register_signature, find_signature
 
 runtime_prelude = "#include <stdio.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}"
@@ -718,24 +718,20 @@ class Codegen:
                 case _:
                     pass
 
-    def codegen_function(self, fn: FunctionDef, sig: FuncSig) -> str:
-        param_list = self.c_param_list(fn.params)
-        known: dict[str, LType] = {:}
-        i = 0
-        while i < len(fn.params) and i < len(sig.param_types):
-            known[fn.params[i].name] = sig.param_types[i]
-            i = i + 1
-        # Two passes: first learn every local's type (needed since a
-        # local can be used, in a later statement, before codegen has
-        # otherwise seen its own declaration's type -- e.g. a call whose
-        # argument type determines dispatch resolution, referencing a
-        # variable assigned earlier in the same straight-line body but
-        # after codegen_block would have inferred it lazily); then emit.
-        self.infer_local_types(fn.body, known)
+    # Shared by codegen_function and codegen_entry_point: two passes --
+    # first learn every local's type (needed since a local can be used,
+    # in a later statement, before codegen has otherwise seen its own
+    # declaration's type -- e.g. a call whose argument type determines
+    # dispatch resolution, referencing a variable assigned earlier in
+    # the same straight-line body but after codegen_block would have
+    # inferred it lazily), then emit, with every local (besides a
+    # parameter) declared once, hoisted to the top.
+    def codegen_body(self, params: list[Param], body: list[Stmt], known: dict[str, LType]) -> str:
+        self.infer_local_types(body, known)
         local_names: set[str] = {}
-        self.collect_local_names(fn.body, local_names)
+        self.collect_local_names(body, local_names)
         param_names: set[str] = {}
-        for p in fn.params:
+        for p in params:
             param_names.add(p.name)
         declarations: list[str] = []
         for name in local_names:
@@ -745,12 +741,27 @@ class Codegen:
                         declarations.append("    " + c_type_of(t) + " " + name + ";")
                     case none:
                         declarations.append("    long " + name + ";")
-        body = self.codegen_block(fn.body, "    ", known, none)
-        full_body = join_with(declarations, "\n") + "\n" + body
+        body_code = self.codegen_block(body, "    ", known, none)
+        return join_with(declarations, "\n") + "\n" + body_code
+
+    def codegen_function(self, fn: FunctionDef, sig: FuncSig) -> str:
+        param_list = self.c_param_list(fn.params)
+        known: dict[str, LType] = {:}
+        i = 0
+        while i < len(fn.params) and i < len(sig.param_types):
+            known[fn.params[i].name] = sig.param_types[i]
+            i = i + 1
+        full_body = self.codegen_body(fn.params, fn.body, known)
         c_name = mangled_name(self.functions, sig)
-        if fn.name == "main":
-            return "int main(" + param_list + ") {\n" + full_body + "\n}"
         return c_type_of(sig.return_type) + " " + c_name + "(" + param_list + ") {\n" + full_body + "\n}"
+
+    # The module's top-level statements -- the only thing `lucid run`
+    # actually executes directly, and the only thing that becomes C's
+    # own `int main(void)` (see codegen_module's header comment).
+    def codegen_entry_point(self, top_level: list[Stmt]) -> str:
+        known: dict[str, LType] = {:}
+        full_body = self.codegen_body([], top_level, known)
+        return "int main(void) {\n" + full_body + "\n}"
 
     def codegen_forward_decl(self, fn: FunctionDef, sig: FuncSig) -> str:
         return c_type_of(sig.return_type) + " " + mangled_name(self.functions, sig) + "(" + self.c_param_list(fn.params) + ");"
@@ -774,14 +785,6 @@ class Codegen:
     def codegen_module(self, stmts: list[Stmt]) -> str:
         self.collect_declarations(stmts)
         top_level: list[Stmt] = []
-        has_main = false
-        for stmt in stmts:
-            match stmt as result:
-                case FunctionStmt:
-                    if result.function.name == "main":
-                        has_main = true
-                case _:
-                    pass
         for stmt in stmts:
             match stmt as result:
                 case ClassDef:
@@ -802,15 +805,27 @@ class Codegen:
                             pass
                 case _:
                     pass
+        # Every Lucid function is an ordinary, mangled C function here --
+        # including one literally named `main`, which `lucid run` never
+        # auto-invokes and which the reference native backend
+        # (compiler/crates/lucid-codegen) always mangles too (`lucid_fn_
+        # main`, never bare `main`). C's own `main` is a separate,
+        # unconditionally synthesized entry point below, built from the
+        # module's top-level statements -- the only thing `lucid run`
+        # actually executes on its own, and the only thing that becomes
+        # C's `int main(void)`. An earlier draft special-cased a Lucid
+        # function named `main` into being that entry point directly,
+        # which matched neither the interpreter's nor the reference
+        # compiler's actual behavior -- a real semantic divergence, not
+        # just an unsupported feature.
         for stmt in stmts:
             match stmt as result:
                 case FunctionStmt:
-                    if result.function.name != "main":
-                        match self.signature_for(result.function) as sig:
-                            case FuncSig:
-                                parts.append(self.codegen_forward_decl(result.function, sig))
-                            case none:
-                                pass
+                    match self.signature_for(result.function) as sig:
+                        case FuncSig:
+                            parts.append(self.codegen_forward_decl(result.function, sig))
+                        case none:
+                            pass
                 case _:
                     pass
         parts.append("")
@@ -825,15 +840,8 @@ class Codegen:
                             pass
                 case _:
                     pass
-        # A real Lucid script has no `main` -- its top-level statements
-        # just run in order. Wrap them into a synthesized entry point the
-        # same way any other function's body is generated, so the same
-        # codegen_function code path handles both an explicit `def main()`
-        # and a plain script with no function wrapper at all.
-        if not has_main and len(top_level) > 0:
-            synthetic_main = FunctionDef("main", [], [], NamedType(dummy_span(), "int", []), top_level, false, false, false, false, [], dummy_span())
-            synthetic_sig = FuncSig("main", [], IntType())
-            parts.append(self.codegen_function(synthetic_main, synthetic_sig))
+        if len(top_level) > 0:
+            parts.append(self.codegen_entry_point(top_level))
             parts.append("")
         return join_with(parts, "\n")
 

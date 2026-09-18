@@ -93,3 +93,9 @@ report("if condition must be bool", "def bad() -> int:\n    if 5:\n        pass\
 report("while condition must be bool", "def bad() -> int:\n    while \"s\":\n        pass\n    return 0\n")
 
 report("unannotated function return type rejected", "def bad():\n    return 1\n")
+
+report("function falling off its end without returning rejected", "def bad() -> int:\n    x = 1\n")
+
+report("if without else falling through rejected", "def bad(n: int) -> int:\n    if n > 0:\n        return 1\n")
+
+report("if/elif/else that all return still passes", "def ok(n: int) -> int:\n    if n > 0:\n        return 1\n    elif n < 0:\n        return 2\n    else:\n        return 3\n")

@@ -1215,6 +1215,8 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: if condition must be bool, got int",
         "ERROR: while condition must be bool, got str",
         "ERROR: function 'bad' must have an explicit return type annotation in this subset",
+        "ERROR: function 'bad' can fall off its end without returning a int",
+        "--- if/elif/else that all return still passes ---\n(no errors)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1271,19 +1273,16 @@ fn self_hosted_self_hosting_demo_runs_lexer_and_parser_through_the_interpreter()
 /// the same role `compiler/crates/lucid-codegen` itself plays for its
 /// own generated C. Compiles each file with the same `gcc` invocation a
 /// human would use, runs the resulting native binary, and checks its
-/// output against the actual correct sequence -- proving the generated C
-/// isn't merely well-formed, it's correct.
-///
-/// `vectors` is the actual milestone this whole pipeline was built
-/// toward, checked differently from the rest: examples/vectors.lucid is
-/// a real Lucid program that was never written for this pipeline, using
-/// classes and `dispatch def` operator overloading, so there's no fixed
-/// "correct sequence" to hardcode -- instead its compiled binary's
-/// output is compared, byte for byte, against `lucid run
-/// examples/vectors.lucid`'s own output from the reference interpreter,
-/// the same differential discipline self_hosting_demo.lucid already
-/// applies to the self-hosted lexer and parser. (All of this lives in
-/// one #[test]: a separate test compiling the same shared
+/// output against `lucid run`'s own output for that exact source file --
+/// not a hardcoded expected string -- the same differential discipline
+/// self_hosting_demo.lucid already applies to the self-hosted lexer and
+/// parser. `vectors` is the actual milestone this whole pipeline was
+/// built toward: examples/vectors.lucid is a real Lucid program that
+/// was never written for this pipeline, using classes and `dispatch
+/// def` operator overloading; the rest are hand-written under
+/// self-host/compile_demo_programs/, covering every operator and
+/// control-flow form codegen.lucid supports. (All of this lives in one
+/// #[test]: a separate test compiling the same shared
 /// self-host/compile_demo_*.c files would race with this one whenever
 /// cargo test runs them in parallel.)
 #[test]
@@ -1292,18 +1291,23 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    for name in [
-        "fib",
-        "factorial",
-        "gcd",
-        "divmod",
-        "bools",
-        "loops",
-        "broken",
-        "vectors",
-    ] {
+    let cases: [(&str, &str); 7] = [
+        ("fib", "self-host/compile_demo_programs/fib.lucid"),
+        (
+            "factorial",
+            "self-host/compile_demo_programs/factorial.lucid",
+        ),
+        ("gcd", "self-host/compile_demo_programs/gcd.lucid"),
+        ("divmod", "self-host/compile_demo_programs/divmod.lucid"),
+        ("bools", "self-host/compile_demo_programs/bools.lucid"),
+        ("loops", "self-host/compile_demo_programs/loops.lucid"),
+        ("vectors", "examples/vectors.lucid"),
+    ];
+
+    for (name, _) in cases {
         let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
     }
+    let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_broken.c"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
         .args(["run", "self-host/compile_demo.lucid"])
@@ -1321,16 +1325,6 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         "the broken program should fail checking with the expected error, not produce C: {stdout}"
     );
 
-    let interpreted_vectors_output = Command::new(env!("CARGO_BIN_EXE_lucid"))
-        .args(["run", "examples/vectors.lucid"])
-        .current_dir(&repo_root)
-        .output()
-        .unwrap();
-    assert!(
-        interpreted_vectors_output.status.success(),
-        "the reference interpreter should run examples/vectors.lucid cleanly"
-    );
-
     let temp_dir = std::env::temp_dir().join(format!(
         "lucid_self_hosted_compile_demo_{}",
         std::process::id()
@@ -1338,29 +1332,17 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
-    let cases: [(&str, &str); 6] = [
-        ("fib", "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n"),
-        ("factorial", "1\n2\n6\n24\n120\n720\n5040\n"),
-        ("gcd", "6\n1\n1\n2\n3\n"),
-        // Euclidean // and %: the remainder is always in [0, |b|),
-        // unlike both C's truncating and Python's floored division.
-        ("divmod", "3\n-3\n-4\n4\n1\n1\n1\n1\n"),
-        // bool literals, comparisons, and `and`/`or` results printed as
-        // `true`/`false`, not `1`/`0`.
-        (
-            "bools",
-            "true\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\n",
-        ),
-        // sum_list, sum_range, find_in_grid (nested for, if_broken on
-        // the inner loop re-breaking the outer), count_until_break
-        // (while with if_broken), range_bound_evaluated_once (range(n)'s
-        // bound must be read once, not re-evaluated every iteration
-        // against a body that mutates n), range_target_rebinding_does_
-        // not_affect_iteration (reassigning the loop target inside the
-        // body must not change how many iterations run).
-        ("loops", "60\n15\n220\nstopped early at 7\n7\n3\n406\n"),
-    ];
-    for (name, expected_stdout) in cases {
+    for (name, source_path) in cases {
+        let interpreted_output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args(["run", source_path])
+            .current_dir(&repo_root)
+            .output()
+            .unwrap();
+        assert!(
+            interpreted_output.status.success(),
+            "the reference interpreter should run {source_path} cleanly"
+        );
+
         let c_path = format!("{repo_root}/self-host/compile_demo_{name}.c");
         assert!(
             fs::metadata(&c_path).is_ok(),
@@ -1384,49 +1366,14 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         );
         assert_eq!(
             String::from_utf8_lossy(&run_output.stdout),
-            expected_stdout,
-            "the compiled '{name}' binary's output should match the correct sequence"
+            String::from_utf8_lossy(&interpreted_output.stdout),
+            "the compiled '{name}' binary's output should match the reference interpreter's exactly for {source_path}"
         );
     }
 
-    let vectors_c_path = format!("{repo_root}/self-host/compile_demo_vectors.c");
-    assert!(
-        fs::metadata(&vectors_c_path).is_ok(),
-        "compile_demo.lucid should have written {vectors_c_path}"
-    );
-    let vectors_binary_path = temp_dir.join("vectors");
-    let gcc_status = Command::new("gcc")
-        .args(["-std=c11", "-o"])
-        .arg(&vectors_binary_path)
-        .arg(&vectors_c_path)
-        .status()
-        .unwrap();
-    assert!(
-        gcc_status.success(),
-        "gcc should compile the generated C for examples/vectors.lucid without error"
-    );
-    let native_vectors_output = Command::new(&vectors_binary_path).output().unwrap();
-    assert!(
-        native_vectors_output.status.success(),
-        "the compiled examples/vectors.lucid binary should exit successfully"
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&native_vectors_output.stdout),
-        String::from_utf8_lossy(&interpreted_vectors_output.stdout),
-        "the compiled native binary's output should match the reference interpreter's exactly"
-    );
-
-    for name in [
-        "fib",
-        "factorial",
-        "gcd",
-        "divmod",
-        "bools",
-        "loops",
-        "broken",
-        "vectors",
-    ] {
+    for (name, _) in cases {
         let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
     }
+    let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_broken.c"));
     let _ = fs::remove_dir_all(&temp_dir);
 }

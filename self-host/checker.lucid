@@ -65,6 +65,43 @@ def dispatch_op_name(op: str) -> str | none:
         return "__mod__"
     return none
 
+# A conservative "definitely returns" predicate: `Return` obviously
+# does, a block does if any statement in it does, an `If` does only if
+# its then-branch, every elif branch, and a *present* else branch all
+# do (no else at all means falling through is possible, so no). Used
+# to reject a function whose body can fall off its end without
+# returning -- codegen.lucid emits a plain C function for one of these,
+# and reaching the closing brace of a non-void C function without a
+# `return` is undefined behavior (C11 6.9.1p12), not just "returns some
+# default". Conservative on purpose: a `while true:` loop that always
+# returns, or a `match` that covers every case, would be flagged here
+# as "not definitely returning" even though it always does -- this
+# subset doesn't attempt that analysis, so it's the same kind of
+# accept-a-narrower-set-of-programs tradeoff docs/principles.md accepts
+# elsewhere, not a bug.
+def definitely_returns(stmts: list[Stmt]) -> bool:
+    for stmt in stmts:
+        match stmt as result:
+            case Return:
+                return true
+            case If:
+                if definitely_returns(result.then_branch):
+                    all_others_return = true
+                    for branch in result.elif_branches:
+                        if not definitely_returns(branch.body):
+                            all_others_return = false
+                    match result.else_branch as else_body:
+                        case list[Stmt]:
+                            if not definitely_returns(else_body):
+                                all_others_return = false
+                        case none:
+                            all_others_return = false
+                    if all_others_return:
+                        return true
+            case _:
+                pass
+    return false
+
 class Checker:
     functions: FuncTable
     classes: dict[str, ClassSig]
@@ -185,6 +222,12 @@ class Checker:
         # inside the latter wrongly report "outside a function" too.
         expected_return: LType | none = resolve_type_expr(fn.return_type)
         self.check_block(fn.body, known, expected_return, true)
+        match expected_return as rt:
+            case LType:
+                if not definitely_returns(fn.body):
+                    self.error("function '" + fn.name + "' can fall off its end without returning a " + type_name(rt), fn.span)
+            case none:
+                pass
 
     def check_block(self, stmts: list[Stmt], known: dict[str, LType], expected_return: LType | none, in_function: bool):
         for stmt in stmts:

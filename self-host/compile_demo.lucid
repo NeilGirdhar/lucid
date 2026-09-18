@@ -10,19 +10,22 @@
 # compiler/crates/lucid-codegen itself has, shelling out to `gcc` from
 # Rust rather than from the Lucid code it's compiling.
 #
-# Four hand-written programs exercising recursion, iteration, and every
-# operator codegen.lucid supports (each compiled to its own .c file), one
-# that's supposed to fail checking (proving a real error stops codegen
-# rather than emitting broken C), and -- the actual milestone --
+# Six hand-written programs, each a real file under
+# self-host/compile_demo_programs/, exercising recursion, iteration, and
+# every operator codegen.lucid supports (each compiled to its own .c
+# file, and independently run through `lucid run` for a reference
+# output to differential-test the compiled binary's output against --
+# not a hardcoded expected string), one Lucid string literal that's
+# supposed to fail checking (proving a real error stops codegen rather
+# than emitting broken C), and -- the actual milestone --
 # examples/vectors.lucid, a real Lucid program from this repository, not
 # written for this pipeline: classes, `dispatch def` operator overloading
 # (resolved statically, by the exact argument types, since this subset
 # has no runtime dispatch mechanism -- see checker.lucid/codegen.lucid's
-# own header comments), and multi-argument, mixed str/int print(). Its
-# compiled binary's output matches `lucid run examples/vectors.lucid`'s
-# own output exactly (checked by
-# self_hosted_compile_demo_compiles_a_real_example_program in
-# compiler/crates/lucid-cli/tests/spec_tests.rs).
+# own header comments), and multi-argument, mixed str/int print(). All
+# the differential checks live in
+# self_hosted_compile_demo_produces_correct_native_binaries in
+# compiler/crates/lucid-cli/tests/spec_tests.rs.
 
 from .parser import parse, ParserError
 from .lexer import LexError
@@ -74,25 +77,20 @@ def compile_to_file(label: str, source: str, path: str):
         case LexError:
             print("LEX ERROR:", result.message)
 
-fib_source = "def fib(n: int) -> int:\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\n\ndef main() -> int:\n    i = 0\n    while i < 10:\n        print(fib(i))\n        i = i + 1\n    return 0\n"
+broken_source = "def broken() -> int:\n    return missing_variable\n\nx = broken()\n"
 
-factorial_source = "def factorial(n: int) -> int:\n    result = 1\n    k = 1\n    while k <= n:\n        result = result * k\n        k = k + 1\n    return result\n\ndef main() -> int:\n    n = 1\n    while n <= 7:\n        print(factorial(n))\n        n = n + 1\n    return 0\n"
-
-gcd_source = "def gcd(a: int, b: int) -> int:\n    if b == 0:\n        return a\n    return gcd(b, a % b)\n\ndef classify(n: int) -> int:\n    if n > 0 and n % 2 == 0:\n        return 1\n    if n > 0 or n == 0:\n        return 2\n    return 3\n\ndef main() -> int:\n    print(gcd(48, 18))\n    print(gcd(17, 5))\n    print(classify(4))\n    print(classify(3))\n    print(classify(-1))\n    return 0\n"
-
-divmod_source = "def main() -> int:\n    print(7 // 2)\n    print(7 // -2)\n    print(-7 // 2)\n    print(-7 // -2)\n    print(7 % 2)\n    print(7 % -2)\n    print(-7 % 2)\n    print(-7 % -2)\n    return 0\n"
-
-bools_source = "def is_even(n: int) -> bool:\n    return n % 2 == 0\n\ndef main() -> int:\n    print(true)\n    print(false)\n    print(1 < 2)\n    print(2 < 1)\n    print(is_even(4))\n    print(is_even(4) and is_even(4))\n    print(is_even(4) and is_even(3))\n    print(is_even(3) or is_even(4))\n    return 0\n"
-
-broken_source = "def broken() -> int:\n    return missing_variable\n\ndef main() -> int:\n    return broken()\n"
-
-loops_source = "def sum_list() -> int:\n    total = 0\n    for x in [10, 20, 30]:\n        total = total + x\n    return total\n\ndef sum_range() -> int:\n    total = 0\n    for x in range(1, 6):\n        total = total + x\n    return total\n\ndef find_in_grid() -> int:\n    found = -1\n    for row in [1, 2, 3]:\n        for col in [10, 20, 30]:\n            if row == 2 and col == 20:\n                found = row * 100 + col\n                break\n        if_broken:\n            break\n    return found\n\ndef count_until_break() -> int:\n    x = 0\n    while x < 100:\n        if x == 7:\n            break\n        x = x + 1\n    if_broken:\n        print(\"stopped early at\", x)\n    return x\n\ndef range_bound_evaluated_once() -> int:\n    n = 3\n    count = 0\n    for x in range(n):\n        n = n + 10\n        count = count + 1\n    return count\n\ndef range_target_rebinding_does_not_affect_iteration() -> int:\n    total = 0\n    for x in range(4):\n        x = x + 100\n        total = total + x\n    return total\n\ndef main() -> int:\n    print(sum_list())\n    print(sum_range())\n    print(find_in_grid())\n    print(count_until_break())\n    print(range_bound_evaluated_once())\n    print(range_target_rebinding_does_not_affect_iteration())\n    return 0\n"
-
-compile_to_file("fibonacci (recursion)", fib_source, "self-host/compile_demo_fib.c")
-compile_to_file("factorial (iteration)", factorial_source, "self-host/compile_demo_factorial.c")
-compile_to_file("gcd + classify (mod, and/or, comparisons)", gcd_source, "self-host/compile_demo_gcd.c")
-compile_to_file("divmod (Euclidean // and %, negative operands)", divmod_source, "self-host/compile_demo_divmod.c")
-compile_to_file("bools (bool literals, comparisons, and/or, printed as true/false)", bools_source, "self-host/compile_demo_bools.c")
-compile_to_file("loops (for over a list literal and range(), nested if_broken, while if_broken)", loops_source, "self-host/compile_demo_loops.c")
+# Every program below except `broken` (which is supposed to fail
+# checking, so there's no compiled output to compare) is a real
+# self-host/compile_demo_programs/*.lucid file, run directly through
+# `lucid run` for its own reference output -- not a hardcoded string --
+# by self_hosted_compile_demo_produces_correct_native_binaries in
+# compiler/crates/lucid-cli/tests/spec_tests.rs, the same differential
+# discipline `vectors` below already uses.
+compile_path_to_file("fibonacci (recursion)", "self-host/compile_demo_programs/fib.lucid", "self-host/compile_demo_fib.c")
+compile_path_to_file("factorial (iteration)", "self-host/compile_demo_programs/factorial.lucid", "self-host/compile_demo_factorial.c")
+compile_path_to_file("gcd + classify (mod, and/or, comparisons)", "self-host/compile_demo_programs/gcd.lucid", "self-host/compile_demo_gcd.c")
+compile_path_to_file("divmod (Euclidean // and %, negative operands)", "self-host/compile_demo_programs/divmod.lucid", "self-host/compile_demo_divmod.c")
+compile_path_to_file("bools (bool literals, comparisons, and/or, printed as true/false)", "self-host/compile_demo_programs/bools.lucid", "self-host/compile_demo_bools.c")
+compile_path_to_file("loops (for over a list literal and range(), nested if_broken, while if_broken)", "self-host/compile_demo_programs/loops.lucid", "self-host/compile_demo_loops.c")
 compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")
 compile_path_to_file("examples/vectors.lucid (classes, dispatch, strings -- a real Lucid program)", "examples/vectors.lucid", "self-host/compile_demo_vectors.c")
