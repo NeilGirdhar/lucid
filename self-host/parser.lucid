@@ -22,7 +22,7 @@
 #     this parser stops at the first ParserError, matching parser.rs's
 #     strict parse_module rather than its recovering counterpart
 
-from .ast import Span, dummy_span, merge_span, ParsedModule, Stmt, ClassDef, FunctionStmt, VarDef, Assignment, AugAssign, If, ElifBranch, For, While, Return, Raise, Assert, Break, Continue, Pass, Import, FromImport, ImportedName, ExprStmt, Try, ExceptHandler, MatchStmt, MatchArm, ClassMember, FieldMember, MethodMember, FunctionDef, FieldDef, Param, Pattern, IdentPattern, LiteralPattern, WildcardPattern, TypePattern, ClassDestructure, DestructureField, Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Propagate, Attribute, Index, Slice, ListExpr, SetExpr, DictExpr, DictEntry, AnonymousDef, Skip, Arg, LiteralValue, IntLit, FloatLit, StrLit, BoolLit, NoneLit, TypeExpr, NamedType, UnionType, FunctionType, ViewType, MutabilityView
+from .ast import Span, dummy_span, merge_span, ParsedModule, Stmt, ClassDef, FunctionStmt, VarDef, Assignment, AugAssign, If, ElifBranch, For, While, Return, Raise, Assert, Break, Continue, Pass, Import, FromImport, ImportedName, ExprStmt, Try, ExceptHandler, MatchStmt, MatchArm, ClassMember, FieldMember, MethodMember, PassMember, FunctionDef, FieldDef, Param, Pattern, IdentPattern, LiteralPattern, WildcardPattern, TypePattern, ClassDestructure, DestructureField, Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Propagate, Attribute, Index, Slice, ListExpr, SetExpr, DictExpr, DictEntry, AnonymousDef, Skip, Arg, LiteralValue, IntLit, FloatLit, StrLit, BoolLit, NoneLit, TypeExpr, NamedType, UnionType, FunctionType, ViewType, MutabilityView
 from .lexer import Token, LexError, tokenize
 
 class ParserError:
@@ -200,7 +200,7 @@ class Parser:
         start = self.span()
         if self.match_tok("PASS"):
             self.consume_stmt_end()?
-            return FieldMember(FieldDef("pass", NamedType(start, "object", []), none, false, none, start))
+            return PassMember(start)
         if self.match_tok("DEF"):
             func = self.parse_raw_function(false)?
             return MethodMember(func)

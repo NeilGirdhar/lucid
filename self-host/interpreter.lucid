@@ -9,11 +9,13 @@
 # Deliberately a small subset of the full language, not at feature
 # parity with compiler/crates/lucid-runtime -- what's covered is enough
 # to run real, non-trivial programs, including self-host/lexer.lucid
-# itself (see interpreter_demo.lucid); everything below is left for
+# itself (see self_hosting_demo.lucid); everything below is left for
 # later:
-#   - traits, dispatch, exceptions/try/except, sealed-class inheritance
-#     (a class's own fields/methods work; a subclass does not inherit a
-#     parent's fields or methods)
+#   - traits, dispatch, exceptions/try/except (single-parent field/method
+#     inheritance works: a subclass's ClassInfo prepends its one
+#     registered class parent's field_names, and an unresolved method
+#     call falls back through nothing -- no method-resolution-order walk
+#     up a parent chain yet, just the subclass's own methods dict)
 #   - set values and literals (dict/list values and literals work);
 #     slicing (plain single-index get/set on list/str/dict works)
 #   - match: only a `case ClassName:` / `case none:` / `case _:` /
@@ -30,7 +32,7 @@
 #   - numeric cross-type comparison (3 == 3.0 is false here, since it
 #     compares an IntValue to a FloatValue structurally, not numerically)
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, DictEntry, Arg, LiteralValue, IntLit, FloatLit, StrLit, BoolLit, NoneLit, Stmt, FunctionStmt, VarDef, Assignment, If, While, For, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, ClassDef, ClassMember, FieldMember, MethodMember, Pattern, IdentPattern, WildcardPattern, TypePattern, LiteralPattern, TypeExpr, NamedType, FunctionDef, Param, Span
+from .ast import dummy_span, Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, DictEntry, Arg, LiteralValue, IntLit, FloatLit, StrLit, BoolLit, NoneLit, Stmt, FunctionStmt, VarDef, Assignment, If, While, For, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, ClassDef, ClassMember, FieldMember, MethodMember, Import, FromImport, Pattern, IdentPattern, WildcardPattern, TypePattern, LiteralPattern, TypeExpr, NamedType, FunctionDef, Param, Span
 
 sealed class Value:
     pass
@@ -70,13 +72,14 @@ class PropagatedValue(Value):
     # operand of a larger expression, no) must check for this sentinel
     # and re-propagate it -- exactly the class of bug documented in
     # ../self-host/README.md's "`?` silently no-op'd inside a nested
-    # expression" section, now on this interpreter's own end. Unlike that
-    # fix, this evaluator does not yet check every such site: `?` is only
-    # supported directly as a statement's own value expression (a
-    # VarDef's, Assignment's, Return's, or ExprStmt's), matching every
-    # actual use in lexer.lucid (`tok = lexer.next_token()?`); anywhere
-    # else it surfaces a clear, specific EvalError rather than silently
-    # discarding the propagated value the way the runtime bug did.
+    # expression" section, now on this interpreter's own end. Call/
+    # construct arguments and list/dict literal elements bubble a
+    # PropagatedValue back up as their own expression's result (matching
+    # parser.lucid's own `body.append(self.parse_class_member()?)`
+    # idiom, used throughout it); binary/unary operands and attribute/
+    # index receivers don't yet -- `?` there surfaces a clear, specific
+    # EvalError naming the position, rather than silently discarding the
+    # propagated value the way the runtime bug did.
     inner: Value
 
 class EvalError:
@@ -497,7 +500,12 @@ class Interpreter:
                         func_name = callee.name
                         values: list[Value] = []
                         for a in result.args:
-                            values.append(reject_propagated(self.eval_expr(env, a.value)?, result.span, "a call argument")?)
+                            arg_val = self.eval_expr(env, a.value)?
+                            match arg_val as pv:
+                                case PropagatedValue:
+                                    return pv
+                                case _:
+                                    values.append(arg_val)
                         match self.call_builtin(func_name, values, result.span)? as builtin_result:
                             case Value:
                                 return builtin_result
@@ -509,10 +517,20 @@ class Interpreter:
                             case none:
                                 return EvalError("undefined function '" + func_name + "'", result.span)
                     case Attribute:
-                        receiver = reject_propagated(self.eval_expr(env, callee.value)?, result.span, "a method receiver")?
+                        receiver = self.eval_expr(env, callee.value)?
+                        match receiver as recv_pv:
+                            case PropagatedValue:
+                                return recv_pv
+                            case _:
+                                pass
                         method_values: list[Value] = []
                         for a in result.args:
-                            method_values.append(reject_propagated(self.eval_expr(env, a.value)?, result.span, "a call argument")?)
+                            arg_val = self.eval_expr(env, a.value)?
+                            match arg_val as pv:
+                                case PropagatedValue:
+                                    return pv
+                                case _:
+                                    method_values.append(arg_val)
                         return self.call_method(receiver, callee.attr, method_values, result.span)?
                     case _:
                         return EvalError("only calling a plain name or a method is supported", result.span)
@@ -524,7 +542,12 @@ class Interpreter:
                         fields: dict[str, Value] = {:}
                         i = 0
                         while i < len(result.args):
-                            field_val = reject_propagated(self.eval_expr(env, result.args[i].value)?, result.span, "a construct argument")?
+                            field_val = self.eval_expr(env, result.args[i].value)?
+                            match field_val as pv:
+                                case PropagatedValue:
+                                    return pv
+                                case _:
+                                    pass
                             fields[info.field_names[i]] = field_val
                             i = i + 1
                         return ObjectValue(result.class_name, fields)
@@ -576,8 +599,18 @@ class Interpreter:
             case DictExpr:
                 entries: dict[str, Value] = {:}
                 for entry in result.entries:
-                    key_val = reject_propagated(self.eval_expr(env, entry.key)?, result.span, "a dict literal key")?
-                    dict_entry_val = reject_propagated(self.eval_expr(env, entry.value)?, result.span, "a dict literal value")?
+                    key_val = self.eval_expr(env, entry.key)?
+                    match key_val as key_pv:
+                        case PropagatedValue:
+                            return key_pv
+                        case _:
+                            pass
+                    dict_entry_val = self.eval_expr(env, entry.value)?
+                    match dict_entry_val as value_pv:
+                        case PropagatedValue:
+                            return value_pv
+                        case _:
+                            pass
                     match key_val as kv:
                         case StrValue:
                             entries[kv.value] = dict_entry_val
@@ -587,7 +620,12 @@ class Interpreter:
             case ListExpr:
                 items: list[Value] = []
                 for el in result.elements:
-                    items.append(reject_propagated(self.eval_expr(env, el)?, result.span, "a list literal element")?)
+                    el_val = self.eval_expr(env, el)?
+                    match el_val as pv:
+                        case PropagatedValue:
+                            return pv
+                        case _:
+                            items.append(el_val)
                 return ListValue(items)
             case _:
                 return EvalError("unsupported expression kind", result.span)
@@ -660,16 +698,36 @@ class Interpreter:
                 self.functions[result.function.name] = result.function
                 return NormalSignal()
             case ClassDef:
-                field_names: list[str] = []
+                own_field_names: list[str] = []
                 methods: dict[str, FunctionDef] = {:}
                 for member in result.body:
                     match member as m:
                         case FieldMember:
-                            field_names.append(m.field.name)
+                            own_field_names.append(m.field.name)
                         case MethodMember:
                             methods[m.method.name] = m.method
                         case _:
                             pass
+                # A parent's fields come first, matching Construct's
+                # positional argument order (`Binary(span, op, left,
+                # right)`: `span` is Expr's own field, declared before
+                # Binary's). Only the single class parent counts -- a
+                # base that isn't itself a registered class is a trait
+                # (structural, no fields of its own) and is skipped.
+                field_names: list[str] = []
+                for base in result.bases:
+                    match base as b:
+                        case NamedType:
+                            match self.classes.get(b.name, none) as parent_info:
+                                case ClassInfo:
+                                    for inherited in parent_info.field_names:
+                                        field_names.append(inherited)
+                                case none:
+                                    pass
+                        case _:
+                            pass
+                for own in own_field_names:
+                    field_names.append(own)
                 self.classes[result.name] = ClassInfo(field_names, methods)
                 return NormalSignal()
             case VarDef:
@@ -799,6 +857,17 @@ class Interpreter:
                 return NormalSignal()
             case MetadataStmt:
                 return NormalSignal()
+            case Import:
+                # A no-op here: this evaluator has no module system of
+                # its own (see the deferred-features list at the top of
+                # this file). Whatever `import`/`from ... import` names
+                # are actually used has to already be registered in this
+                # same Interpreter -- by a caller running that other
+                # module's statements through it first, the way
+                # self_hosting_demo.lucid and this file's own probes do.
+                return NormalSignal()
+            case FromImport:
+                return NormalSignal()
             case MatchStmt:
                 subject_val = reject_propagated(self.eval_expr(env, result.subject)?, result.span, "a match subject")?
                 for arm in result.arms:
@@ -829,3 +898,10 @@ def new_interpreter() -> Interpreter:
 def run_statements(interp: Interpreter, stmts: list[Stmt]) -> none | EvalError:
     signal = interp.exec_block(interp.globals, stmts)?
     return none
+
+def call_registered(interp: Interpreter, name: str, args: list[Value]) -> Value | EvalError:
+    match interp.functions.get(name, none) as fn:
+        case FunctionDef:
+            return interp.call_function(fn, args, dummy_span())?
+        case none:
+            return EvalError("undefined function '" + name + "'", dummy_span())

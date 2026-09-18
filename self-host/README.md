@@ -81,15 +81,20 @@ it, not a claim that it's close to done.
   *supposed* to fail (an undefined name inside a list literal), proving
   errors surface correctly too, not just the happy path.
 - `self_hosting_demo.lucid` — **the milestone this directory has been
-  building toward.** Loads `lexer.lucid`'s own source — its `Lexer`,
-  `Token`, and `LexError` classes, its `tokenize()`/`new_lexer()`
-  functions — into the self-hosted parser and interpreter, then calls
-  its own `tokenize()` on a sample program and prints the tokens it
-  produces. Not a hand-written toy program: real class-based logic,
-  method calls with `self` mutation persisting across calls,
-  `dict.get()`/`list.append()`, string indexing, and `match`, running
-  correctly one level deeper than `interpreter_demo.lucid`. Lucid,
-  running Lucid, running Lucid.
+  building toward, in two parts.** Part 1 loads `lexer.lucid`'s own
+  source — its `Lexer`, `Token`, and `LexError` classes, its
+  `tokenize()`/`new_lexer()` functions — into the self-hosted parser and
+  interpreter, calls its own `tokenize()` on a sample program, and
+  checks the result token-by-token against calling the *host-run*
+  `tokenize()` (imported directly, executed by the reference
+  interpreter) on the same sample — a real differential test, not
+  eyeballing a token list, that would catch an off-by-one in string
+  indexing or a wrong `self.line`/`column` mutation. Part 2 goes one
+  level deeper: loads `ast.lucid`, `lexer.lucid`, and `parser.lucid`
+  together and calls parser.lucid's own `parse()` — the self-hosted
+  interpreter running the self-hosted parser, which itself calls the
+  self-hosted lexer, all as interpreted code. Lucid, running Lucid,
+  running Lucid.
 
 Run them:
 
@@ -109,9 +114,13 @@ StringBuilder-style pattern in the language, or building lists of
 characters and joining once), but it works, which is what "start on"
 called for. Self-parsing (tokenize + parse) `lexer.lucid`'s ~500 lines
 takes on the order of 30 seconds for the same reason, one layer up;
-`self_hosting_demo.lucid` (parse `lexer.lucid`, then interpret it, then
-have that interpreted code tokenize a small sample) takes on the order
-of 35 seconds, one layer up again.
+`self_hosting_demo.lucid`'s Part 1 (parse `lexer.lucid`, then interpret
+it, then have that interpreted code tokenize a small sample and compare
+it against the host-run lexer) takes on the order of 35 seconds, one
+layer up again; Part 2 (parse and interpret `ast.lucid`, `lexer.lucid`,
+and `parser.lucid` together, then have that interpreted code parse a
+small sample) takes on the order of 3 minutes, stacking every layer
+above on top of each other.
 
 None compile under `lucid run --native` yet — see "Native codegen
 gaps" below. All run correctly under the reference interpreter, which is
@@ -363,3 +372,13 @@ work rather than a rushed fix bundled in here:
   later call that needs the element type — `case list[Stmt]:` narrows
   correctly. Only came up because `If.else_branch: list[Stmt] | none`
   needed the narrowed arm passed to a `list[Stmt]`-typed parameter.
+- **A no-op class member isn't a field named `"pass"` — it's its own
+  node.** `parser.lucid` first turned `class Foo: pass` into a
+  `FieldMember` with a made-up field literally named `"pass"`, since
+  that satisfied the checker (any field name type-checks) and the bug
+  stayed invisible until something actually *constructed* a `Foo`:
+  `ast.lucid` is full of `class Break(Stmt): pass`-shaped classes, and
+  `Break(span)` under `interpreter.lucid` would have silently bound
+  `fields["pass"] = span` and looked like it worked. `ast.lucid` already
+  has the right node for this, `PassMember(ClassMember)` — parsing
+  `pass` inside a class body should return that, not fabricate a field.
