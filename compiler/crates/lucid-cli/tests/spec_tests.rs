@@ -1206,6 +1206,15 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: operator AND requires two bool operands, got int and int",
         "ERROR: operator NOT requires a bool operand, got int",
         "ERROR: operator NEG requires an int operand, got bool",
+        "ERROR: variable 'x' declared as int but initialized with str",
+        "ERROR: 'x' cannot change type from int to str in this subset",
+        "ERROR: 'x' cannot change type from int to bool in this subset",
+        "ERROR: return type mismatch: expected int, got str",
+        "ERROR: bare return is not supported in this subset",
+        "ERROR: return statement outside a function",
+        "ERROR: if condition must be bool, got int",
+        "ERROR: while condition must be bool, got str",
+        "ERROR: function 'bad' must have an explicit return type annotation in this subset",
     ] {
         assert!(
             stdout.contains(expected),

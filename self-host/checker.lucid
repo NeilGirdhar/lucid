@@ -73,6 +73,25 @@ class Checker:
     def error(self, message: str, span: Span):
         self.errors.append(CheckError(message, span))
 
+    # codegen.lucid hoists exactly one C declaration per local name to
+    # the top of its enclosing function, so this checker has to enforce
+    # the invariant that makes that sound: one type per name per
+    # function, for its whole body -- not just "whatever type the most
+    # recent assignment happened to produce", which `known[name] = t`
+    # alone would silently allow (`x = 1` then later `x = "s"` would
+    # bind the second, but codegen would still declare and initialize
+    # `x` as `long` from the first). Every VarDef/Assignment/for-loop
+    # target binds through here instead of writing `known` directly.
+    def bind(self, known: dict[str, LType], name: str, t: LType, span: Span):
+        match known.get(name, none) as existing:
+            case LType:
+                if not types_equal(existing, t):
+                    self.error("'" + name + "' cannot change type from " + type_name(existing) + " to " + type_name(t) + " in this subset", span)
+                    return
+            case none:
+                pass
+        known[name] = t
+
     def collect_declarations(self, stmts: list[Stmt]):
         for stmt in stmts:
             match stmt as result:
@@ -110,11 +129,14 @@ class Checker:
                     self.error("parameter '" + p.name + "' has an unsupported type", fn.span)
                     ok = false
         return_type: LType = IntType()
-        match resolve_type_expr(fn.return_type) as rt:
-            case LType:
-                return_type = rt
-            case none:
-                if fn.return_type != none:
+        if fn.return_type == none:
+            self.error("function '" + fn.name + "' must have an explicit return type annotation in this subset", fn.span)
+            ok = false
+        else:
+            match resolve_type_expr(fn.return_type) as rt:
+                case LType:
+                    return_type = rt
+                case none:
                     self.error("function '" + fn.name + "' has an unsupported return type", fn.span)
                     ok = false
         if ok:
@@ -142,7 +164,7 @@ class Checker:
         # scope a top-level statement actually runs in.
         if len(top_level) > 0:
             module_scope: dict[str, LType] = {:}
-            self.check_block(top_level, module_scope)
+            self.check_block(top_level, module_scope, none, false)
 
     def check_function(self, fn: FunctionDef):
         known: dict[str, LType] = {:}
@@ -152,13 +174,23 @@ class Checker:
                     known[p.name] = pt
                 case none:
                     pass
-        self.check_block(fn.body, known)
+        # `resolve_type_expr(fn.return_type)` can come back `none` here
+        # even for a function whose header genuinely IS a function --
+        # an unsupported return-type annotation, already reported once
+        # by collect_function_signature. `in_function` (passed
+        # separately, always `true` from here) is what actually
+        # distinguishes "return outside any function" from "inside a
+        # function whose return type this subset couldn't resolve" --
+        # collapsing them into one `LType | none` would make a return
+        # inside the latter wrongly report "outside a function" too.
+        expected_return: LType | none = resolve_type_expr(fn.return_type)
+        self.check_block(fn.body, known, expected_return, true)
 
-    def check_block(self, stmts: list[Stmt], known: dict[str, LType]):
+    def check_block(self, stmts: list[Stmt], known: dict[str, LType], expected_return: LType | none, in_function: bool):
         for stmt in stmts:
-            self.check_stmt(stmt, known)
+            self.check_stmt(stmt, known, expected_return, in_function)
 
-    def check_stmt(self, stmt: Stmt, known: dict[str, LType]):
+    def check_stmt(self, stmt: Stmt, known: dict[str, LType], expected_return: LType | none, in_function: bool):
         match stmt as result:
             case VarDef:
                 declared: LType | none = resolve_type_expr(result.type_annotation)
@@ -168,14 +200,24 @@ class Checker:
                         inferred = self.check_expr(value_expr, known)
                     case none:
                         pass
-                var_type = declared
-                if var_type == none:
-                    var_type = inferred
                 match result.pattern as p:
                     case IdentPattern:
+                        match declared as dt:
+                            case LType:
+                                match inferred as it:
+                                    case LType:
+                                        if not types_equal(dt, it):
+                                            self.error("variable '" + p.name + "' declared as " + type_name(dt) + " but initialized with " + type_name(it), result.span)
+                                    case none:
+                                        pass
+                            case none:
+                                pass
+                        var_type = declared
+                        if var_type == none:
+                            var_type = inferred
                         match var_type as vt:
                             case LType:
-                                known[p.name] = vt
+                                self.bind(known, p.name, vt, result.span)
                             case none:
                                 self.error("cannot determine the type of '" + p.name + "'", result.span)
                     case _:
@@ -186,28 +228,28 @@ class Checker:
                     case Ident:
                         match value_type as vt:
                             case LType:
-                                known[target.name] = vt
+                                self.bind(known, target.name, vt, result.span)
                             case none:
                                 pass
                     case _:
                         self.error("only a plain name is supported as an assignment target", result.span)
             case If:
-                self.check_expr(result.condition, known)
-                self.check_block(result.then_branch, known)
+                self.check_condition(result.condition, known, "if")
+                self.check_block(result.then_branch, known, expected_return, in_function)
                 for branch in result.elif_branches:
-                    self.check_expr(branch.condition, known)
-                    self.check_block(branch.body, known)
+                    self.check_condition(branch.condition, known, "elif")
+                    self.check_block(branch.body, known, expected_return, in_function)
                 match result.else_branch as else_body:
                     case list[Stmt]:
-                        self.check_block(else_body, known)
+                        self.check_block(else_body, known, expected_return, in_function)
                     case none:
                         pass
             case While:
-                self.check_expr(result.condition, known)
-                self.check_block(result.body, known)
+                self.check_condition(result.condition, known, "while")
+                self.check_block(result.body, known, expected_return, in_function)
                 match result.if_broken_body as broken_body:
                     case list[Stmt]:
-                        self.check_block(broken_body, known)
+                        self.check_block(broken_body, known, expected_return, in_function)
                     case none:
                         pass
             case For:
@@ -216,23 +258,36 @@ class Checker:
                     case IdentPattern:
                         match elem_type as et:
                             case LType:
-                                known[target.name] = et
+                                self.bind(known, target.name, et, result.span)
                             case none:
                                 pass
                     case _:
                         self.error("only a plain name is supported as a for-loop target in this subset", result.span)
-                self.check_block(result.body, known)
+                self.check_block(result.body, known, expected_return, in_function)
                 match result.if_broken_body as broken_body:
                     case list[Stmt]:
-                        self.check_block(broken_body, known)
+                        self.check_block(broken_body, known, expected_return, in_function)
                     case none:
                         pass
             case Return:
+                if not in_function:
+                    self.error("return statement outside a function", result.span)
                 match result.value as value_expr:
                     case Expr:
-                        self.check_expr(value_expr, known)
+                        value_type = self.check_expr(value_expr, known)
+                        match expected_return as rt:
+                            case LType:
+                                match value_type as vt:
+                                    case LType:
+                                        if not types_equal(vt, rt):
+                                            self.error("return type mismatch: expected " + type_name(rt) + ", got " + type_name(vt), result.span)
+                                    case none:
+                                        pass
+                            case none:
+                                pass
                     case none:
-                        pass
+                        if in_function:
+                            self.error("bare return is not supported in this subset (every checked function returns a value)", result.span)
             case Break:
                 pass
             case Continue:
@@ -245,6 +300,20 @@ class Checker:
                 pass
             case _:
                 self.error("unsupported statement kind", stmt.span)
+
+    # codegen.lucid compiles a condition straight to a C `if`/`while`
+    # condition, and C accepts any scalar there -- so an unchecked
+    # non-bool condition here (an int, say) would silently reach codegen
+    # and run under C's own truthiness rather than get rejected, the
+    # same shape of gap every other fix in this subset has closed.
+    def check_condition(self, cond: Expr, known: dict[str, LType], keyword: str):
+        match self.check_expr(cond, known) as ct:
+            case BoolType:
+                pass
+            case LType:
+                self.error(keyword + " condition must be bool, got " + type_name(ct), cond.span)
+            case none:
+                pass
 
     def check_expr(self, expr: Expr, known: dict[str, LType]) -> LType | none:
         match expr as result:

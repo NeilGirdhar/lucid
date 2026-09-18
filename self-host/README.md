@@ -142,7 +142,23 @@ pieces is close to feature parity with its Rust counterpart.
   and `while` both accept an `if_broken` clause, checked as an ordinary
   extra block; a class-typed argument to `print(...)` is rejected, since
   `codegen.lucid` has no per-class `repr` to emit yet and would
-  otherwise pass a struct straight to `printf`.
+  otherwise pass a struct straight to `printf`. Every name (a `VarDef`,
+  a plain `x = ...` assignment, a `for`-loop target) has exactly one
+  type for its whole enclosing function — re-binding a name to a
+  *different* type is rejected, and a `VarDef` with both a declared
+  type and an initializer must agree — because `codegen.lucid` hoists
+  exactly one C declaration per local name to the top of its enclosing
+  function; nothing enforced that invariant before, so a function that
+  reused a name at two different types would compile to a single
+  wrongly-typed declaration. `if`/`elif`/`while` conditions must be
+  `bool` (C accepts any scalar there and would silently apply its own
+  truthiness instead of rejecting, say, `if 5:`). Every function needs
+  an explicit return-type annotation (an unannotated one used to
+  default silently to `int`, so a function actually returning `str`
+  would compile as if it returned `int`, handing codegen a garbage
+  value); every `return` is checked against that type, bare `return` is
+  rejected (there's no `none`/void type in this subset for it to mean),
+  and a `return` outside any function is rejected too.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it

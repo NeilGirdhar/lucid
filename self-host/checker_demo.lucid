@@ -75,3 +75,21 @@ report("int used with and/or rejected", "def bad() -> int:\n    b = 1 and 2\n   
 report("not on a non-bool rejected", "def bad() -> int:\n    b = not 5\n    return 0\n")
 
 report("unary minus on a non-int rejected", "def bad() -> int:\n    x = -true\n    return 0\n")
+
+report("declared/inferred VarDef mismatch rejected", "def bad() -> int:\n    x: int = \"s\"\n    return 0\n")
+
+report("retyping a name rejected", "def bad() -> int:\n    x = 1\n    x = \"s\"\n    return 0\n")
+
+report("retyping a for-loop target rejected", "def bad() -> int:\n    for x in [1, 2, 3]:\n        pass\n    for x in [true, false]:\n        pass\n    return 0\n")
+
+report("wrong return type rejected", "def bad() -> int:\n    return \"s\"\n")
+
+report("bare return in a non-void function rejected", "def bad() -> int:\n    return\n")
+
+report("return outside a function rejected", "x = 1\nreturn x\n")
+
+report("if condition must be bool", "def bad() -> int:\n    if 5:\n        pass\n    return 0\n")
+
+report("while condition must be bool", "def bad() -> int:\n    while \"s\":\n        pass\n    return 0\n")
+
+report("unannotated function return type rejected", "def bad():\n    return 1\n")
