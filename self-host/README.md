@@ -173,6 +173,18 @@ a success value instead. Every error type in this codebase already
 follows the `*Error` convention, so it hasn't blocked anything here, but
 it's a real, separate inconsistency between the checker's (partial, with
 a same-file fallback) and the runtime's (none) handling of the same rule.
+The fix belongs in the checker, not here: `Expr::Propagate`'s runtime
+handler only ever sees one concrete `Value` with one concrete class
+name — it has no access to the enclosing function's declared return type
+or the full static union the checker reasons about, so it has no way to
+tell "this is the one non-`Error`-suffixed type that happens to be the
+error" from "this is the one non-`Error`-suffixed type that happens to be
+the success value" the way the checker's fallback does. The checker is
+the right place to close this gap — for instance, by rejecting a `?`
+whose error variant doesn't end in `Error` outright, so the convention
+this whole codebase already follows becomes a real, enforced rule instead
+of an implicit one a future `MyErr`-named type could still silently fall
+through.
 
 ## Native codegen gaps
 

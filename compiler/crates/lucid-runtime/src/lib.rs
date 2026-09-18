@@ -8065,7 +8065,7 @@ class ZeroDivisionError(Exception):
                         }),
                     });
                 }
-                let obj = self.eval_expr(value)?;
+                let obj = eval_operand!(self, value);
                 match obj {
                     Value::Function { name, .. } => match attr.as_str() {
                         "__name__" => Ok(Value::Str(name)),
@@ -9138,7 +9138,7 @@ class ZeroDivisionError(Exception):
                 }
             }
             Expr::Index { value, index, span } => {
-                let obj = self.eval_expr(value)?;
+                let obj = eval_operand!(self, value);
                 if let Expr::Slice {
                     ref start,
                     ref stop,
@@ -9415,7 +9415,7 @@ class ZeroDivisionError(Exception):
                     }
                 }
 
-                let idx = self.eval_expr(index)?;
+                let idx = eval_operand!(self, index);
                 if let Value::Object {
                     class_name, fields, ..
                 } = &obj
@@ -11177,6 +11177,12 @@ mod tests {
             "def run() -> int | MyError:\n    total = 1 + fail()?\n    return 999\nresult = run()\n",
             // Unary operand.
             "def run() -> int | MyError:\n    total = -fail()?\n    return 999\nresult = run()\n",
+            // Attribute receiver.
+            "def run() -> int | MyError:\n    total = fail()?.message\n    return 999\nresult = run()\n",
+            // Index receiver.
+            "def run() -> int | MyError:\n    total = fail()?[0]\n    return 999\nresult = run()\n",
+            // Index operand.
+            "def run() -> int | MyError:\n    xs = [1, 2, 3]\n    total = xs[fail()?]\n    return 999\nresult = run()\n",
         ];
         for source in cases {
             let full_source = format!("{preamble}{source}");

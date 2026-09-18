@@ -26,7 +26,7 @@ match run(fib_source) as outcome:
     case LexError:
         print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
     case EvalError:
-        print("EVAL ERROR:", outcome.message)
+        print("EVAL ERROR:", outcome.message, "at", outcome.span.line, outcome.span.column)
 
 factorial_source = "def factorial(n):\n    result = 1\n    k = 1\n    while k <= n:\n        result = result * k\n        k = k + 1\n    return result\n\nfor n in [1, 2, 3, 4, 5, 6, 7]:\n    print(str(n) + \"! =\", factorial(n))\n"
 
@@ -40,7 +40,7 @@ match run(factorial_source) as outcome:
     case LexError:
         print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
     case EvalError:
-        print("EVAL ERROR:", outcome.message)
+        print("EVAL ERROR:", outcome.message, "at", outcome.span.line, outcome.span.column)
 
 # A third program exercising everything the first two don't: a function
 # reading a module-level global (not just its own params), elif/else
@@ -57,4 +57,26 @@ match run(coverage_source) as outcome:
     case LexError:
         print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
     case EvalError:
-        print("EVAL ERROR:", outcome.message)
+        print("EVAL ERROR:", outcome.message, "at", outcome.span.line, outcome.span.column)
+
+# A fourth program that's supposed to fail: an undefined name used as a
+# list-literal element -- exactly the operand position that used to
+# silently swallow a `?` failure in lucid-runtime (fixed alongside this
+# interpreter; see ../self-host/README.md's "`?` silently no-op'd inside
+# a nested expression" section). Proves the interpreter's own
+# `eval_expr(...)?` calls in the same positions (list elements, call
+# arguments) correctly stop and report the error now, rather than
+# pressing on with a wrong result.
+error_source = "def broken():\n    xs = [1, 2, undefined_name]\n    return xs\n\nbroken()\n"
+
+print("")
+print("--- running a program that's supposed to fail (undefined name in a list literal) ---")
+match run(error_source) as outcome:
+    case none:
+        print("(program ran to completion -- this should not happen)")
+    case ParserError:
+        print("PARSE ERROR:", outcome.message)
+    case LexError:
+        print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
+    case EvalError:
+        print("EVAL ERROR (expected):", outcome.message, "at", outcome.span.line, outcome.span.column)
