@@ -111,3 +111,5 @@ report("continue outside a loop rejected", "def bad() -> int:\n    continue\n   
 report("break in a loop's if_broken with no outer loop rejected", "def bad() -> int:\n    for x in [1, 2, 3]:\n        break\n    if_broken:\n        break\n    return 0\n")
 
 report("break in a nested loop's if_broken re-breaking the outer loop still passes", "def ok() -> int:\n    for row in [1, 2, 3]:\n        for col in [1, 2, 3]:\n            break\n        if_broken:\n            break\n    return 0\n")
+
+report("redefining a builtin rejected", "def len(s: str) -> int:\n    return 42\ndef main() -> int:\n    print(len(\"abc\"))\n    return 0\n")

@@ -1222,6 +1222,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: break statement outside a loop",
         "ERROR: continue statement outside a loop",
         "--- break in a nested loop's if_broken re-breaking the outer loop still passes ---\n(no errors)",
+        "ERROR: cannot redefine builtin 'len' in this subset",
     ] {
         assert!(
             stdout.contains(expected),

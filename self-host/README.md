@@ -647,16 +647,16 @@ work rather than a rushed fix bundled in here:
   written the other way, with top-level statements that just execute in
   order, no wrapper function at all. Fixed by having both check and
   compile top-level statements the same way as any function's body (with
-  their own fresh module-level scope). A later pass fixed this further:
-  a Lucid function literally named `main` was still special-cased into
-  becoming C's own entry point directly (see the "real semantics
-  divergence" entry in `compiler/crates/lucid-cli/tests/spec_tests.rs`'s
-  git history for the full story) — `codegen.lucid` now always
-  synthesizes C's `int main(void)` from the module's top-level
-  statements alone, unconditionally, and a Lucid `main` (if a program
-  happens to declare one) is just an ordinary mangled function like any
-  other, never auto-invoked, matching both `lucid run` and the
-  reference native backend.
+  their own fresh module-level scope). A later pass (commit `a97ab9d`,
+  "Reject fall-off-end functions; fix a real main() semantics
+  divergence") fixed this further: a Lucid function literally named
+  `main` was still special-cased into becoming C's own entry point
+  directly — `codegen.lucid` now always synthesizes C's `int
+  main(void)` from the module's top-level statements alone,
+  unconditionally, and a Lucid `main` (if a program happens to declare
+  one) is just an ordinary mangled function like any other, never
+  auto-invoked, matching both `lucid run` and the reference native
+  backend.
 - **`parser.lucid` didn't parse `dispatch def` at all.** Needed to parse
   `examples/vectors.lucid` in the first place: `parse_raw_function`
   already threaded an `is_dispatch` flag through to `FunctionDef` (set

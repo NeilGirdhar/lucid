@@ -156,6 +156,17 @@ class Checker:
         self.classes[cd.name] = ClassSig(cd.name, fields)
 
     def collect_function_signature(self, fn: FunctionDef):
+        # print/range/len/freeze are recognized by NAME, ahead of
+        # FuncTable, at both check_call and codegen_expr's Call arms --
+        # a user function reusing one of these names would pass the
+        # checker under its real (registered) signature but still get
+        # compiled as the builtin, a real divergence from the
+        # interpreter (which does let a later definition shadow a
+        # builtin name). Rejected outright rather than silently
+        # miscompiled.
+        if fn.name == "print" or fn.name == "range" or fn.name == "len" or fn.name == "freeze":
+            self.error("cannot redefine builtin '" + fn.name + "' in this subset", fn.span)
+            return
         param_types: list[LType] = []
         ok = true
         for p in fn.params:
