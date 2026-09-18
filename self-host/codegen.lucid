@@ -38,7 +38,7 @@
 # own more permissive same-function visibility.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
-from .types import LType, IntType, BoolType, StrType, ClassType, type_name, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, type_name, mangle_component, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
 
 runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
 
@@ -92,6 +92,30 @@ def join_with(parts: list[str], sep: str) -> str:
         i = i + 1
     return text
 
+# A monomorphized C list type for one element LType -- `lucid_list_int`,
+# `lucid_list_str`, `lucid_list_Circle`, and so on, named by
+# mangle_component(element_type). Heap-allocated and accessed only
+# through a pointer (never by value): Value::List in lucid-runtime is
+# Rc<RefCell<Vec<Value>>>, reference semantics (an alias of a list
+# mutates every alias -- verified directly: `b = a; b.append(3)`
+# changes `len(a)` too), unlike every plain-struct class this codegen
+# otherwise emits. `int`/`bool`/`str` versions are emitted
+# unconditionally, in the prelude, regardless of whether a compiled
+# program actually uses `list[int]` -- cheap, and skips having to walk
+# a program collecting which element types are actually instantiated
+# (which could miss one); a `list[SomeClass]` version is emitted right
+# after `SomeClass`'s own struct, in codegen_module.
+def emit_list_type(element_type: LType) -> str:
+    ctype = c_type_of(element_type)
+    name = "lucid_list_" + mangle_component(element_type)
+    parts: list[str] = []
+    parts.append("typedef struct {\n    " + ctype + " *items;\n    long len;\n    long cap;\n} " + name + ";")
+    parts.append("static " + name + " *" + name + "_new(void) {\n    " + name + " *lst = malloc(sizeof(" + name + "));\n    lst->items = NULL;\n    lst->len = 0;\n    lst->cap = 0;\n    return lst;\n}")
+    parts.append("static void " + name + "_append(" + name + " *lst, " + ctype + " value) {\n    if (lst->len >= lst->cap) {\n        lst->cap = (lst->cap == 0) ? 4 : lst->cap * 2;\n        lst->items = realloc(lst->items, sizeof(" + ctype + ") * lst->cap);\n    }\n    lst->items[lst->len] = value;\n    lst->len = lst->len + 1;\n}")
+    parts.append("static " + ctype + " " + name + "_get(" + name + " *lst, long i) {\n    long idx = i;\n    if (idx < 0) {\n        idx += lst->len;\n    }\n    if (idx < 0 || idx >= lst->len) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    return lst->items[idx];\n}")
+    parts.append("static " + name + " *" + name + "_of(long n, " + ctype + " *src) {\n    " + name + " *lst = " + name + "_new();\n    long i = 0;\n    while (i < n) {\n        " + name + "_append(lst, src[i]);\n        i = i + 1;\n    }\n    return lst;\n}")
+    return join_with(parts, "\n\n")
+
 def dispatch_op_name(op: str) -> str | none:
     if op == "ADD":
         return "__add__"
@@ -140,6 +164,8 @@ def c_type_of(t: LType) -> str:
             return "const char *"
         case ClassType:
             return result.name
+        case ListType:
+            return "lucid_list_" + mangle_component(result.element_type) + " *"
         case _:
             return "long"
 
@@ -271,8 +297,14 @@ class Codegen:
                 match self.infer_expr_type(result.value, known) as rt:
                     case StrType:
                         return StrType()
+                    case ListType:
+                        return rt.element_type
                     case _:
                         return none
+            case ListExpr:
+                if len(result.elements) == 0:
+                    return none
+                return self.infer_expr_type(result.elements[0], known)
             case Call:
                 match result.func as callee:
                     case Ident:
@@ -290,6 +322,14 @@ class Codegen:
                                 return sig.return_type
                             case none:
                                 return none
+                    case Attribute:
+                        # list[T].append(...) is a statement in
+                        # practice (its result is always discarded),
+                        # but codegen_expr still needs SOME type for it
+                        # -- none is fine, since nothing hoists a
+                        # declaration from a call whose result isn't
+                        # assigned.
+                        return none
                     case _:
                         return none
             case _:
@@ -314,7 +354,11 @@ class Codegen:
                         pass
                 return none
             case _:
-                return none
+                match self.infer_expr_type(iterable, known) as it:
+                    case ListType:
+                        return it.element_type
+                    case _:
+                        return none
 
     def dispatch_return_type(self, op: str, left: LType | none, right: LType | none) -> LType | none:
         match dispatch_op_name(op) as dunder:
@@ -440,7 +484,25 @@ class Codegen:
             case Index:
                 receiver_code = self.codegen_expr(result.value, known)
                 index_code = self.codegen_expr(result.index, known)
-                return "lucid_rt_str_index(" + receiver_code + ", " + index_code + ")"
+                match self.infer_expr_type(result.value, known) as rt:
+                    case ListType:
+                        name = "lucid_list_" + mangle_component(rt.element_type)
+                        return name + "_get(" + receiver_code + ", " + index_code + ")"
+                    case _:
+                        return "lucid_rt_str_index(" + receiver_code + ", " + index_code + ")"
+            case ListExpr:
+                match self.infer_expr_type(e, known) as et:
+                    case LType:
+                        name = "lucid_list_" + mangle_component(et)
+                        if len(result.elements) == 0:
+                            return name + "_new()"
+                        elems: list[str] = []
+                        for e in result.elements:
+                            elems.append(self.codegen_expr(e, known))
+                        ctype = c_type_of(et)
+                        return name + "_of(" + str(len(elems)) + ", (" + ctype + "[]){" + join_with(elems, ", ") + "})"
+                    case none:
+                        return "0 /* unsupported list literal */"
             case Call:
                 match result.func as callee:
                     case Ident:
@@ -455,8 +517,12 @@ class Codegen:
                                     pass
                         if callee.name == "print":
                             return self.codegen_print(result.args, known)
-                        if callee.name == "len" and len(arg_codes) == 1:
-                            return "((long) strlen(" + arg_codes[0] + "))"
+                        if callee.name == "len" and len(result.args) == 1:
+                            match self.infer_expr_type(result.args[0].value, known) as at:
+                                case ListType:
+                                    return "(" + arg_codes[0] + "->len)"
+                                case _:
+                                    return "((long) strlen(" + arg_codes[0] + "))"
                         joined = join_with(arg_codes, ", ")
                         match find_signature(self.functions, callee.name, arg_types) as sig:
                             case FuncSig:
@@ -464,6 +530,17 @@ class Codegen:
                                 return name + "(" + joined + ")"
                             case none:
                                 return callee.name + "(" + joined + ")"
+                    case Attribute:
+                        receiver_code = self.codegen_expr(callee.value, known)
+                        match self.infer_expr_type(callee.value, known) as rt:
+                            case ListType:
+                                if callee.attr == "append" and len(result.args) == 1:
+                                    value_code = self.codegen_expr(result.args[0].value, known)
+                                    name = "lucid_list_" + mangle_component(rt.element_type)
+                                    return name + "_append(" + receiver_code + ", " + value_code + ")"
+                                return "0 /* unsupported list method */"
+                            case _:
+                                return "0 /* unsupported method call */"
                     case _:
                         return "0 /* unsupported call target */"
             case _:
@@ -565,6 +642,24 @@ class Codegen:
                 value_code = "0"
                 inferred: LType | none = resolve_type_expr(result.type_annotation)
                 match result.value as v:
+                    case ListExpr:
+                        # Mirrors check_stmt's VarDef handling: an empty
+                        # list literal can't infer its own element type
+                        # from codegen_expr's usual
+                        # infer_expr_type(expr)-driven path (nothing to
+                        # look at), so a declared list[T] type drives
+                        # codegen directly here instead.
+                        if len(v.elements) == 0:
+                            match inferred as it:
+                                case ListType:
+                                    lname = "lucid_list_" + mangle_component(it.element_type)
+                                    value_code = lname + "_new()"
+                                case _:
+                                    value_code = self.codegen_expr(v, known)
+                        else:
+                            value_code = self.codegen_expr(v, known)
+                            if inferred == none:
+                                inferred = self.infer_expr_type(v, known)
                     case Expr:
                         value_code = self.codegen_expr(v, known)
                         if inferred == none:
@@ -716,7 +811,26 @@ class Codegen:
                     case _:
                         pass
             case _:
-                pass
+                # A list[T]-typed value that isn't a literal in this
+                # `for` -- a variable, a field, a call -- iterated by
+                # index over its own `->len`/`->items`, evaluated once
+                # into a hoisted pointer (matching how `range(...)`'s
+                # bounds are hoisted above: the iterable expression, if
+                # it has any side effect, shouldn't run once per
+                # iteration).
+                match self.infer_for_iterable_element_type(node.iterable, known) as et:
+                    case LType:
+                        suffix = str(node.span.line) + "_" + str(node.span.column)
+                        list_var = "__lucid_for_list_" + suffix
+                        idx_name = "__lucid_for_i_" + suffix
+                        iterable_code = self.codegen_expr(node.iterable, known)
+                        list_ctype = "lucid_list_" + mangle_component(et) + " *"
+                        decl = header_indent + list_ctype + " " + list_var + " = " + iterable_code + ";"
+                        loop_open = header_indent + "for (long " + idx_name + " = 0; " + idx_name + " < " + list_var + "->len; " + idx_name + "++) {"
+                        assign = body_indent + target_name + " = " + list_var + "->items[" + idx_name + "];"
+                        loop_text = decl + "\n" + loop_open + "\n" + assign + "\n" + body + "\n" + header_indent + "}"
+                    case none:
+                        pass
 
         if has_if_broken:
             match node.if_broken_body as broken_body:
@@ -915,6 +1029,12 @@ class Codegen:
                 case _:
                     top_level.append(stmt)
         parts: list[str] = [runtime_prelude, ""]
+        parts.append(emit_list_type(IntType()))
+        parts.append("")
+        parts.append(emit_list_type(BoolType()))
+        parts.append("")
+        parts.append(emit_list_type(StrType()))
+        parts.append("")
         for stmt in stmts:
             match stmt as result:
                 case ClassDef:
@@ -925,6 +1045,8 @@ class Codegen:
                             if is_printable_class(cls):
                                 parts.append(emit_print_function(cls))
                                 parts.append("")
+                            parts.append(emit_list_type(ClassType(cls.name)))
+                            parts.append("")
                         case none:
                             pass
                 case _:

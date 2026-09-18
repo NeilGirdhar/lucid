@@ -1,0 +1,57 @@
+xs: list[int] = []
+xs.append(1)
+xs.append(2)
+xs.append(3)
+print(xs[0])
+print(xs[1])
+print(xs[2])
+print(xs[-1])
+print(len(xs))
+
+total = 0
+for x in [10, 20, 30]:
+    total = total + x
+print(total)
+
+ys: list[int] = []
+ys.append(1)
+ys.append(2)
+ys.append(3)
+sum_via_for = 0
+for y in ys:
+    sum_via_for = sum_via_for + y
+print(sum_via_for)
+
+def sum_list(zs: list[int]) -> int:
+    total = 0
+    for z in zs:
+        total = total + z
+    return total
+
+def make_list() -> list[int]:
+    result: list[int] = []
+    result.append(1)
+    result.append(2)
+    result.append(3)
+    return result
+
+print(sum_list(make_list()))
+
+a: list[int] = []
+a.append(1)
+a.append(2)
+b = a
+b.append(3)
+print(len(a))
+
+bs: list[bool] = []
+bs.append(true)
+bs.append(false)
+print(bs[0])
+print(bs[1])
+
+ss: list[str] = []
+ss.append("hi")
+ss.append("there")
+print(ss[0])
+print(ss[1])

@@ -46,7 +46,7 @@
 # else checker.lucid's header comment's Rust counterpart covers.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
-from .types import LType, IntType, BoolType, StrType, ClassType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
     message: str
@@ -147,6 +147,18 @@ class Checker:
             match member as m:
                 case FieldMember:
                     match resolve_type_expr(m.field.type_annotation) as ft:
+                        case ListType:
+                            # Not attempted here: a list-typed field
+                            # means emit_struct/emit_print_function and
+                            # every C struct-literal construct site
+                            # need to know the field's own list element
+                            # type too, and a class holding a
+                            # list[LaterClass] field raises a typedef
+                            # ordering question (self-referential and
+                            # forward-referenced structs) this codegen
+                            # doesn't handle for plain class fields
+                            # either.
+                            self.error("field '" + m.field.name + "' has an unsupported type (list[T] fields are not supported in this subset)", cd.span)
                         case LType:
                             fields.append(FieldSig(m.field.name, ft))
                         case none:
@@ -250,6 +262,24 @@ class Checker:
                 declared: LType | none = resolve_type_expr(result.type_annotation)
                 inferred: LType | none = none
                 match result.value as value_expr:
+                    case ListExpr:
+                        # The one bidirectional case in this subset: an
+                        # empty list literal can't infer its own
+                        # element type (nothing to look at), but
+                        # `xs: list[int] = []` doesn't need to --
+                        # `declared` already says what it is. A
+                        # non-empty literal still infers normally, and
+                        # a *mismatched* declared/empty-literal pair
+                        # (e.g. `xs: int = []`) still needs a real
+                        # error, not a silent pass-through.
+                        if len(value_expr.elements) == 0:
+                            match declared as dt:
+                                case ListType:
+                                    inferred = dt
+                                case _:
+                                    inferred = self.check_expr(value_expr, known)
+                        else:
+                            inferred = self.check_expr(value_expr, known)
                     case Expr:
                         inferred = self.check_expr(value_expr, known)
                     case none:
@@ -467,9 +497,42 @@ class Checker:
                                 return none
                             case none:
                                 return none
+                    case ListType:
+                        match index_type as it:
+                            case IntType:
+                                return rt.element_type
+                            case LType:
+                                self.error("list index must be int, got " + type_name(it), result.span)
+                                return none
+                            case none:
+                                return none
                     case LType:
-                        self.error("indexing is only supported on str in this subset", result.span)
+                        self.error("indexing is only supported on str/list[T] in this subset", result.span)
                         return none
+                    case none:
+                        return none
+            case ListExpr:
+                if len(result.elements) == 0:
+                    self.error("cannot infer the element type of an empty list literal in this subset (write it as part of a declared-type variable definition, e.g. xs: list[int] = [])", result.span)
+                    return none
+                elem_type = self.check_expr(result.elements[0], known)
+                i = 1
+                while i < len(result.elements):
+                    t = self.check_expr(result.elements[i], known)
+                    match elem_type as et:
+                        case LType:
+                            match t as tt:
+                                case LType:
+                                    if not types_equal(et, tt):
+                                        self.error("list literal elements must all have the same type in this subset", result.span)
+                                case none:
+                                    pass
+                        case none:
+                            pass
+                    i = i + 1
+                match elem_type as et:
+                    case LType:
+                        return ListType(et)
                     case none:
                         return none
             case _:
@@ -513,11 +576,17 @@ class Checker:
                             return IntType()
                     case _:
                         pass
-                self.error("unsupported iterable expression in this subset (only a list literal or range(...) is supported)", iterable.span)
+                self.error("unsupported iterable expression in this subset (only a list literal, a list[T] value, or range(...) is supported)", iterable.span)
                 return none
             case _:
-                self.error("unsupported iterable expression in this subset (only a list literal or range(...) is supported)", iterable.span)
-                return none
+                match self.check_expr(iterable, known) as it:
+                    case ListType:
+                        return it.element_type
+                    case LType:
+                        self.error("unsupported iterable expression in this subset (only a list literal, a list[T] value, or range(...) is supported)", iterable.span)
+                        return none
+                    case none:
+                        return none
 
     def check_binary(self, op: str, left: LType, right: LType, span: Span) -> LType | none:
         match left as lt:
@@ -625,6 +694,8 @@ class Checker:
                                             self.error("print() of a '" + t.name + "' value is not supported in this subset (it has a field whose type is itself a class)", call.span)
                                     case none:
                                         pass
+                            case ListType:
+                                self.error("print() of a list value is not supported in this subset", call.span)
                             case _:
                                 pass
                     return none
@@ -643,11 +714,17 @@ class Checker:
                     self.error("freeze() is not supported in this subset (frozen-ness is a runtime property of a shared object, which by-value structs can't represent)", call.span)
                     return none
                 if callee.name == "len":
-                    if len(arg_types) == 1 and types_equal(arg_types[0], StrType()):
-                        return IntType()
+                    if len(arg_types) == 1:
+                        match arg_types[0] as at:
+                            case StrType:
+                                return IntType()
+                            case ListType:
+                                return IntType()
+                            case _:
+                                pass
                     if any_unknown:
                         return none
-                    self.error("len() supports only a single str argument in this subset", call.span)
+                    self.error("len() supports only a single str or list[T] argument in this subset", call.span)
                     return none
                 if any_unknown:
                     return none
@@ -659,6 +736,34 @@ class Checker:
                             self.error("no overload of '" + callee.name + "' matches the given argument types", call.span)
                         else:
                             self.error("undefined function '" + callee.name + "'", call.span)
+                        return none
+            case Attribute:
+                receiver_type = self.check_expr(callee.value, known)
+                any_arg_unknown = false
+                checked_arg_types: list[LType] = []
+                for a in call.args:
+                    if a.name != none:
+                        self.error("call arguments must be positional (no name=value form) in this subset", call.span)
+                    match self.check_expr(a.value, known) as at:
+                        case LType:
+                            checked_arg_types.append(at)
+                        case none:
+                            any_arg_unknown = true
+                match receiver_type as rt:
+                    case ListType:
+                        if callee.attr == "append":
+                            if len(checked_arg_types) == 1 and types_equal(checked_arg_types[0], rt.element_type):
+                                return none
+                            if any_arg_unknown:
+                                return none
+                            self.error("list.append() requires a single argument of type " + type_name(rt.element_type), call.span)
+                            return none
+                        self.error("'" + callee.attr + "' is not supported on list[T] in this subset", call.span)
+                        return none
+                    case LType:
+                        self.error("only 'list[T].append' is supported as a method call in this subset", call.span)
+                        return none
+                    case none:
                         return none
             case _:
                 self.error("only calling a plain name is supported", call.span)

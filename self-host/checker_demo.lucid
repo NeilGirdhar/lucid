@@ -36,7 +36,7 @@ report("wrong arity", "def add(a: int, b: int) -> int:\n    return a + b\n\ndef 
 
 report("duplicate function (same signature twice)", "def dup() -> int:\n    return 1\n\ndef dup() -> int:\n    return 2\n")
 
-report("unsupported type", "def bad() -> list[int]:\n    pass\n")
+report("unsupported type", "def bad() -> dict[str, int]:\n    pass\n")
 
 report("unknown class", "def bad() -> int:\n    v = NotAClass(1)\n    return 0\n")
 
@@ -121,3 +121,15 @@ report("string indexing is supported", "def bad() -> int:\n    s = \"abc\"\n    
 report("indexing a non-str rejected", "def bad() -> int:\n    x = 5\n    c = x[0]\n    return 0\n")
 
 report("indexing with a non-int index rejected", "def bad() -> int:\n    s = \"abc\"\n    c = s[\"x\"]\n    return 0\n")
+
+report("typed empty list, append, index, and len are supported", "def ok() -> int:\n    xs: list[int] = []\n    xs.append(1)\n    print(xs[0])\n    print(len(xs))\n    return 0\n")
+
+report("appending the wrong type rejected", "def bad() -> int:\n    xs: list[int] = []\n    xs.append(\"s\")\n    return 0\n")
+
+report("empty list without a declared type rejected", "def bad() -> int:\n    xs = []\n    return 0\n")
+
+report("print() of a list rejected", "def bad() -> int:\n    xs: list[int] = []\n    print(xs)\n    return 0\n")
+
+report("nested list[list[int]] rejected", "def bad() -> int:\n    xs: list[list[int]] = []\n    return 0\n")
+
+report("a list-typed class field rejected", "class Bag:\n    items: list[int]\n\ndef bad() -> int:\n    return 0\n")

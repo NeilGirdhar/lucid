@@ -27,6 +27,16 @@ class StrType(LType):
 class ClassType(LType):
     name: str
 
+# `list[T]` for T in int/bool/str/a class -- no nested list[list[T]]
+# (resolve_type_expr rejects it), and no other collection type in this
+# subset. Reference semantics, not by-value: Value::List in
+# lucid-runtime is Rc<RefCell<Vec<Value>>>, an alias of a list mutates
+# every alias (verified: `b = a; b.append(3)` changes `len(a)` too) --
+# the first reference-semantics type this subset represents, unlike
+# every plain-struct class so far.
+class ListType(LType):
+    element_type: LType
+
 def type_name(t: LType) -> str:
     match t as result:
         case IntType:
@@ -37,8 +47,20 @@ def type_name(t: LType) -> str:
             return "str"
         case ClassType:
             return result.name
+        case ListType:
+            return "list[" + type_name(result.element_type) + "]"
         case _:
             return "?"
+
+# Like type_name, but for building a C identifier (mangled_name in
+# codegen.lucid) -- type_name's `list[int]` has brackets, which aren't
+# valid in a C identifier.
+def mangle_component(t: LType) -> str:
+    match t as result:
+        case ListType:
+            return "list_" + mangle_component(result.element_type)
+        case _:
+            return type_name(t)
 
 def types_equal(a: LType, b: LType) -> bool:
     match a as left:
@@ -66,6 +88,12 @@ def types_equal(a: LType, b: LType) -> bool:
                     return left.name == right.name
                 case _:
                     return false
+        case ListType:
+            match b as right:
+                case ListType:
+                    return types_equal(left.element_type, right.element_type)
+                case _:
+                    return false
         case _:
             return false
 
@@ -90,6 +118,14 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
                 return BoolType()
             if result.name == "str":
                 return StrType()
+            if result.name == "list" and len(result.args) == 1:
+                match resolve_type_expr(result.args[0]) as et:
+                    case ListType:
+                        return none
+                    case LType:
+                        return ListType(et)
+                    case none:
+                        return none
             if len(result.name) > 0 and result.name[0] >= "A" and result.name[0] <= "Z":
                 return ClassType(result.name)
             return none

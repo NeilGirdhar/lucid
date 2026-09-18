@@ -1196,7 +1196,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- for over a list literal, and range ---\n(no errors)",
         "--- for/while with if_broken ---\n(no errors)",
         "ERROR: list literal elements must all have the same type in this subset",
-        "ERROR: unsupported iterable expression in this subset (only a list literal or range(...) is supported)",
+        "ERROR: unsupported iterable expression in this subset (only a list literal, a list[T] value, or range(...) is supported)",
         "ERROR: range(...) supports only one or two arguments in this subset",
         "--- print() of a class with int/bool/str fields is supported ---\n(no errors)",
         "ERROR: print() of a 'Outer' value is not supported in this subset",
@@ -1225,8 +1225,14 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- break in a nested loop's if_broken re-breaking the outer loop still passes ---\n(no errors)",
         "ERROR: cannot redefine builtin 'len' in this subset",
         "--- string indexing is supported ---\n(no errors)",
-        "ERROR: indexing is only supported on str in this subset",
+        "ERROR: indexing is only supported on str/list[T] in this subset",
         "ERROR: string index must be int, got str",
+        "--- typed empty list, append, index, and len are supported ---\n(no errors)",
+        "ERROR: list.append() requires a single argument of type int",
+        "cannot infer the element type of an empty list literal in this subset",
+        "ERROR: print() of a list value is not supported in this subset",
+        "ERROR: cannot determine the type of 'xs'",
+        "ERROR: field 'items' has an unsupported type (list[T] fields are not supported in this subset)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1301,7 +1307,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 9] = [
+    let cases: [(&str, &str); 10] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1313,6 +1319,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         ("loops", "self-host/compile_demo_programs/loops.lucid"),
         ("records", "self-host/compile_demo_programs/records.lucid"),
         ("strings", "self-host/compile_demo_programs/strings.lucid"),
+        ("lists", "self-host/compile_demo_programs/lists.lucid"),
         ("vectors", "examples/vectors.lucid"),
     ];
 

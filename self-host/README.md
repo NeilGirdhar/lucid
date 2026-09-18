@@ -118,7 +118,8 @@ pieces is close to feature parity with its Rust counterpart.
   `codegen.lucid` compiles. Not feature parity with
   `compiler/crates/lucid-checker` (~20,000 lines covering generics,
   traits, inferred variance, exhaustiveness, and far more) — no real
-  type inference beyond "is this int/bool/str/a known class", no
+  type inference beyond "is this int/bool/str/a known class/a list of
+  one of those", no
   flow-sensitive definite-assignment analysis — but real, useful
   checking: duplicate functions/overloads, undefined names, wrong-arity
   or no-matching-overload calls, unknown classes, wrong field
@@ -138,25 +139,43 @@ pieces is close to feature parity with its Rust counterpart.
   rather than "unsupported" — `"a" == "a"`/`"a" < "b"`/`"a" + "b"` and
   `len(s)` came later, once codegen actually had a correct C
   translation for each, `strcmp`/`strlen`/`lucid_rt_str_concat`). `for` is
-  checked over exactly two iterable
+  checked over three iterable
   shapes — a list literal (every element checked, all required to
-  agree on one type) and `range(...)` (one or two arguments, always
-  `int`) — there's no general `list[T]` typing yet, so anything else is
+  agree on one type), a `list[T]` value (a variable, a field, a call —
+  anything whose own type resolves to `list[T]`), and `range(...)` (one
+  or two arguments, always `int`) — so anything else is
   rejected as "unsupported iterable expression in this subset"; `for`
   and `while` both accept an `if_broken` clause, checked as an ordinary
   extra block; `print(...)` accepts a class value whose fields are all
   int/bool/str — `codegen.lucid` has a per-class printer for those, see
   below — but rejects one with a class-typed field (no nested printer
-  call yet); `freeze(...)` is rejected outright, not emulated (see
-  `compile_demo.lucid`'s entry below for why); `s[i]` is checked only
-  for `s: str` and `i: int`, yielding `str` — `list[T]` indexing isn't
-  supported yet, so anything else is "indexing is only supported on
-  str in this subset". A function or `dispatch def` named
+  call yet) or a list value (no printer for those at all); `freeze(...)`
+  is rejected outright, not emulated (see
+  `compile_demo.lucid`'s entry below for why); `s[i]`/`xs[i]` are
+  checked for `s: str` or `xs: list[T]` with `i: int`, yielding `str`
+  or `T` respectively — anything else is "indexing is only supported on
+  str/list[T] in this subset". `list[T]` itself: `T` is int/bool/str/a
+  class (`list[list[T]]` is rejected — `resolve_type_expr` refuses to
+  resolve it — and so is a class field typed `list[T]`, since a class
+  holding a `list[LaterClass]` field raises a typedef-ordering question
+  this codegen doesn't handle for plain class fields either); an empty
+  list literal `[]` can only appear where a declared type gives its
+  element type away (`xs: list[int] = []`) — anywhere else, "cannot
+  infer the element type of an empty list literal in this subset";
+  `len(...)` accepts a `str` or a `list[T]` (not just `str`, as
+  before); `xs.append(v)` requires `v`'s type to exactly match `xs`'s
+  declared element type, and no other method call on any value is
+  supported. A function or `dispatch def` named
   `print`/`range`/`len`/`freeze` is rejected outright, since
   `check_call`/`codegen_expr` recognize those names ahead of consulting
   the registered function table — a user redefinition would register a
   real signature but still compile as the builtin, silently diverging
-  from the interpreter (which does let a later definition shadow one).
+  from the interpreter (which does let a later definition shadow one;
+  also verified a `dispatch def __add__(a: str, b: str)` overload is
+  simply never consulted for `"x" + "y"` there either — builtin-typed
+  operators aren't dispatchable in the interpreter, so this subset's
+  codegen ignoring any such registered overload for `str`/`int`/`bool`
+  operands already matches, nothing to fix).
   Every name (a `VarDef`,
   a plain `x = ...` assignment, a `for`-loop target) has exactly one
   type for its whole enclosing function — re-binding a name to a
@@ -198,7 +217,7 @@ pieces is close to feature parity with its Rust counterpart.
   `checker.lucid` accepts: `int`/`bool` are a C `long`, `str` a
   `const char *`, a class a plain (not heap-allocated) C struct passed
   and returned by value; arithmetic/comparison/logical operators map
-  straight to their C equivalents (`//`/`%` through two `static` helper
+  straight to their C equivalents. `//`/`%` go through two `static` helper
   functions in the generated C's own prelude — Lucid's are *Euclidean*:
   the remainder is always in `[0, |b|)`, unlike both C's truncating and
   Python's floored division, a real, easy-to-miss mismatch this
@@ -213,7 +232,29 @@ pieces is close to feature parity with its Rust counterpart.
   reference interpreter), and unlike `+`/`len()` it doesn't allocate: a
   static `char[256][2]` table of every possible one-character string,
   each already NUL-terminated by C's own zero-initialization of static
-  storage, returns a stable pointer per byte value instead); a binary operator on two class-typed
+  storage, returns a stable pointer per byte value instead. `list[T]`
+  is a monomorphized, heap-allocated, *pointer*-typed C struct per
+  element type — `lucid_list_int`, `lucid_list_str`,
+  `lucid_list_Circle` (named by `mangle_component`, `types.lucid`'s
+  `type_name` sibling for building a valid C identifier —
+  `type_name(list[int])` is `"list[int]"` for diagnostics, brackets and
+  all, which isn't a legal C identifier fragment), each with its own
+  `_new`/`_append` (realloc-doubling, leaked)/`_get` (bounds-checked
+  exactly like `lucid_rt_str_index`, including negative indices)/`_of`
+  (a non-empty list literal's elements, via a C99 compound-literal
+  array). *Pointer*, not by-value, unlike every other type this codegen
+  emits: `Value::List` in lucid-runtime is `Rc<RefCell<Vec<Value>>>`,
+  reference semantics — verified directly (`b = a; b.append(3)` changes
+  `len(a)` too) before choosing this representation, since every
+  class so far had been a plain value type specifically because its
+  fields can't be mutated after construction, and a list is the first
+  type in this subset where that assumption doesn't hold.
+  `lucid_list_int`/`_bool`/`_str` are emitted unconditionally, in the
+  prelude, regardless of whether a compiled program actually uses
+  `list[int]` — cheap, and skips walking a whole program collecting
+  which element types are actually instantiated (which could miss one);
+  `lucid_list_<Class>` is emitted right after `Class`'s own struct.
+  A binary operator on two class-typed
   operands, or a call to a name with more than one `dispatch def`,
   resolves to one specific C function chosen by the static argument
   types and name-mangled by them (two `__add__` overloads, on `Vector2D`
@@ -283,7 +324,7 @@ pieces is close to feature parity with its Rust counterpart.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles eight hand-written programs, each a
+  `codegen.lucid`. Also compiles nine hand-written programs, each a
   real file under `self-host/compile_demo_programs/` (recursion,
   iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
   semantics on all four sign combinations, `bools` — bool literals,
@@ -293,10 +334,16 @@ pieces is close to feature parity with its Rust counterpart.
   a `while` with its own `if_broken`, and the two range-codegen
   miscompile cases described above — `records` — printing a class
   value, alone, mixed with other `print` arguments, and with more than
-  one field of mixed str/int/bool type — and `strings` — `==`/`!=`/
+  one field of mixed str/int/bool type — `strings` — `==`/`!=`/
   `<`/`<=`/`>`/`>=`, `len()`, and `+` concatenation on `str`, standalone,
   assigned to a variable, and through user functions, plus `s[i]`
-  indexing, negative indices, and indexing inside a loop), plus one
+  indexing, negative indices, and indexing inside a loop — and `lists`
+  — a `list[int]` built with a typed empty literal and `append`,
+  indexed (including negatively), `len()`'d, iterated with `for`, a
+  non-empty list literal iterated directly, a function taking and
+  returning `list[int]`, the aliasing case (`b = a; b.append(3)`
+  changes `len(a)` too, verified against the interpreter first), and
+  `list[bool]`/`list[str]`), plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
