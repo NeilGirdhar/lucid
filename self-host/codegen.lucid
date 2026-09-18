@@ -47,7 +47,7 @@
 # own more permissive same-function visibility.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param, FromImport
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, resolve_all_declarations
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, resolve_all_declarations, inherited_fields, class_assignable_to, is_subclass_of
 
 runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
 
@@ -206,6 +206,31 @@ def emit_union_type(members: list[LType]) -> str:
                 fields.append("    " + c_type_of(m) + " v" + str(i) + ";")
         i = i + 1
     return "typedef struct {\n" + join_with(fields, "\n") + "\n} " + name + ";"
+
+# Which of `members` a value of type `vt` actually belongs in --
+# `vt` itself if it's an exact member (the common case), or, for a
+# class-typed `vt` that's a *subtype* of one, that member instead
+# (`return LiteralExpr(...)` from a `-> Expr | ParserError` method:
+# `vt` is `LiteralExpr`, but the member to wrap into, and to tag-check
+# against later, is `Expr`). `none` only if checker.lucid's own
+# class_assignable_to somehow accepted something this scan can't find a
+# home for, which shouldn't happen for a program that passed checking.
+def find_union_member(classes: dict[str, ClassSig], members: list[LType], vt: LType) -> LType | none:
+    for m in members:
+        if types_equal(m, vt):
+            return m
+    match vt as vtt:
+        case ClassType:
+            for m in members:
+                match m as mt:
+                    case ClassType:
+                        if is_subclass_of(classes, vtt.name, mt.name):
+                            return m
+                    case _:
+                        pass
+        case _:
+            pass
+    return none
 
 # The tag value (an index into sorted_union_members(members)) a value of
 # type `m` gets when wrapped into a union of `members`. Only ever called
@@ -384,14 +409,25 @@ class Codegen:
         for stmt in stmts:
             match stmt as result:
                 case ClassDef:
-                    fields: list[FieldSig] = []
+                    own_fields: list[FieldSig] = []
                     methods: dict[str, FuncSig] = {:}
+                    # Mirrors checker.lucid's own collect_class /
+                    # resolve_parent -- codegen assumes checker already
+                    # rejected more than one base, so it's enough to
+                    # look at the first.
+                    parent: str | none = none
+                    if len(result.bases) > 0:
+                        match resolve_type_expr(result.bases[0]) as bt:
+                            case ClassType:
+                                parent = bt.name
+                            case _:
+                                pass
                     for member in result.body:
                         match member as m:
                             case FieldMember:
                                 match resolve_type_expr(m.field.type_annotation) as ft:
                                     case LType:
-                                        fields.append(FieldSig(m.field.name, ft))
+                                        own_fields.append(FieldSig(m.field.name, ft))
                                     case none:
                                         pass
                             case MethodMember:
@@ -414,7 +450,7 @@ class Codegen:
                                 methods[m.method.name] = FuncSig(m.method.name, mparam_types, mreturn_type)
                             case _:
                                 pass
-                    self.classes[result.name] = ClassSig(result.name, fields, methods)
+                    self.classes[result.name] = ClassSig(result.name, inherited_fields(self.classes, parent, own_fields), methods, parent)
                 case FunctionStmt:
                     fn = result.function
                     param_types: list[LType] = []
@@ -787,6 +823,71 @@ class Codegen:
                                         arg_code = self.codegen_expr(av, known)
                                 case _:
                                     arg_code = self.codegen_expr(av, known)
+                            # A field declared as a sealed base
+                            # (`left: Expr`) constructed from a concrete
+                            # subtype value (`Binary(span, some_literal_
+                            # expr, "+", other)`) needs an explicit C
+                            # cast: `LiteralExpr *` and `Expr *` are two
+                            # separate, unrelated struct types in this
+                            # codegen (see c_type_of's own ClassType
+                            # case), not related by any C-level
+                            # inheritance -- checker.lucid's
+                            # class_assignable_to already confirmed this
+                            # is a real subtype relationship (`Expr`'s
+                            # own fields, here just `span`, are always
+                            # the *first* fields of every subclass's own
+                            # struct too, via inherited_fields, so this
+                            # cast is safe under C11 6.5.2.3p6's "common
+                            # initial sequence" rule for any access to a
+                            # field `Expr` itself declares -- it is NOT
+                            # safe to cast back down to a *different*
+                            # concrete subtype without a real runtime
+                            # tag, which this subset doesn't have; see
+                            # self-host/README.md's Status section).
+                            match field_type_i as ft2:
+                                case ClassType:
+                                    match self.infer_expr_type(av, known) as at2:
+                                        case ClassType:
+                                            if at2.name != ft2.name:
+                                                arg_code = "(" + c_type_of(ft2) + ") " + arg_code
+                                        case _:
+                                            pass
+                                case UnionLType:
+                                    # A union-typed field (self-host/
+                                    # ast.lucid's own `alias: str | none`
+                                    # and its many siblings) constructed
+                                    # from a member value (`ImportedName
+                                    # (name, none)`, `alias` here a bare
+                                    # `none` literal, not the whole
+                                    # `str | none` union) needs the same
+                                    # wrap codegen_stmt's Return/
+                                    # Assignment arms already give a
+                                    # narrower value assigned into an
+                                    # established union.
+                                    match self.infer_expr_type(av, known) as at3:
+                                        case UnionLType:
+                                            pass
+                                        case LType:
+                                            match find_union_member(self.classes, ft2.members, at3) as target4:
+                                                case LType:
+                                                    wrap_code4 = arg_code
+                                                    match at3 as at3t:
+                                                        case ClassType:
+                                                            match target4 as tt4:
+                                                                case ClassType:
+                                                                    if at3t.name != tt4.name:
+                                                                        wrap_code4 = "(" + c_type_of(tt4) + ") " + arg_code
+                                                                case _:
+                                                                    pass
+                                                        case _:
+                                                            pass
+                                                    arg_code = wrap_union_value(ft2.members, target4, wrap_code4)
+                                                case none:
+                                                    pass
+                                        case none:
+                                            pass
+                                case _:
+                                    pass
                             args.append(arg_code)
                             i = i + 1
                         return "lucid_new_" + result.class_name + "(" + join_with(args, ", ") + ")"
@@ -1054,7 +1155,22 @@ class Codegen:
                                     match initializer_type as it2:
                                         case LType:
                                             if not types_equal(decl_t, it2):
-                                                value_code = wrap_union_value(decl_t.members, it2, value_code)
+                                                match find_union_member(self.classes, decl_t.members, it2) as target2:
+                                                    case LType:
+                                                        wrap_code2 = value_code
+                                                        match it2 as it2t:
+                                                            case ClassType:
+                                                                match target2 as tt2:
+                                                                    case ClassType:
+                                                                        if it2t.name != tt2.name:
+                                                                            wrap_code2 = "(" + c_type_of(tt2) + ") " + value_code
+                                                                    case _:
+                                                                        pass
+                                                            case _:
+                                                                pass
+                                                        value_code = wrap_union_value(decl_t.members, target2, wrap_code2)
+                                                    case none:
+                                                        pass
                                         case none:
                                             pass
                                 case _:
@@ -1081,6 +1197,47 @@ class Codegen:
                         # is untouched (there's no local name here to
                         # register a type for).
                         receiver_code = self.codegen_expr(target.value, known)
+                        # A union-typed field (self-host/ast.lucid's own
+                        # `alias: str | none` and its many siblings)
+                        # assigned a member value needs the same wrap
+                        # every other union-typed slot in this codegen
+                        # gets -- see codegen_expr's own Construct case
+                        # for the identical shape at construction time
+                        # instead of assignment.
+                        match self.infer_expr_type(target.value, known) as receiver_t:
+                            case ClassType:
+                                match self.classes.get(receiver_t.name, none) as receiver_cls:
+                                    case ClassSig:
+                                        match field_type(receiver_cls, target.attr) as ft5:
+                                            case UnionLType:
+                                                match self.infer_expr_type(result.value, known) as vt5:
+                                                    case UnionLType:
+                                                        pass
+                                                    case LType:
+                                                        match find_union_member(self.classes, ft5.members, vt5) as target5:
+                                                            case LType:
+                                                                wrap_code5 = value_code
+                                                                match vt5 as vt5t:
+                                                                    case ClassType:
+                                                                        match target5 as tt5:
+                                                                            case ClassType:
+                                                                                if vt5t.name != tt5.name:
+                                                                                    wrap_code5 = "(" + c_type_of(tt5) + ") " + value_code
+                                                                            case _:
+                                                                                pass
+                                                                    case _:
+                                                                        pass
+                                                                value_code = wrap_union_value(ft5.members, target5, wrap_code5)
+                                                            case none:
+                                                                pass
+                                                    case none:
+                                                        pass
+                                            case _:
+                                                pass
+                                    case none:
+                                        pass
+                            case _:
+                                pass
                         return indent + receiver_code + "->" + target.attr + " = " + value_code + ";"
                     case _:
                         name = self.ident_target_name(result.target)
@@ -1104,7 +1261,38 @@ class Codegen:
                                 match known.get(name, none) as existing:
                                     case UnionLType:
                                         if not types_equal(existing, it):
-                                            value_code = wrap_union_value(existing.members, it, value_code)
+                                            match find_union_member(self.classes, existing.members, it) as target3:
+                                                case LType:
+                                                    wrap_code3 = value_code
+                                                    match it as itt3:
+                                                        case ClassType:
+                                                            match target3 as tt3:
+                                                                case ClassType:
+                                                                    if itt3.name != tt3.name:
+                                                                        wrap_code3 = "(" + c_type_of(tt3) + ") " + value_code
+                                                                case _:
+                                                                    pass
+                                                        case _:
+                                                            pass
+                                                    value_code = wrap_union_value(existing.members, target3, wrap_code3)
+                                                case none:
+                                                    pass
+                                    case ClassType:
+                                        # Mirrors checker.lucid's own
+                                        # bind() -- reassigning a name
+                                        # already established as a plain
+                                        # sealed-base class with a
+                                        # concrete subtype value needs
+                                        # the same explicit cast a union
+                                        # member or a Construct argument
+                                        # does (see codegen_expr's own
+                                        # Construct case).
+                                        match it as itt4:
+                                            case ClassType:
+                                                if itt4.name != existing.name:
+                                                    value_code = "(" + c_type_of(existing) + ") " + value_code
+                                            case _:
+                                                pass
                                     case none:
                                         known[name] = it
                                     case _:
@@ -1142,6 +1330,8 @@ class Codegen:
                 return self.codegen_for(result, indent, known, broken_flag, expected_return)
             case Return:
                 match result.value as v:
+                    case Propagate:
+                        return self.codegen_propagate_return(v, indent, known, expected_return)
                     case Expr:
                         value_code = self.codegen_expr(v, known)
                         match expected_return as rt:
@@ -1171,8 +1361,51 @@ class Codegen:
                                     case UnionLType:
                                         pass
                                     case LType:
-                                        value_code = wrap_union_value(rt.members, vt, value_code)
+                                        match find_union_member(self.classes, rt.members, vt) as target:
+                                            case LType:
+                                                wrap_code = value_code
+                                                # A class-typed value
+                                                # narrower than the
+                                                # union member it
+                                                # belongs in (a
+                                                # `LiteralExpr` for an
+                                                # `Expr` member) needs
+                                                # the same explicit cast
+                                                # codegen_expr's own
+                                                # Construct case gives a
+                                                # sealed-base field --
+                                                # see its comment for why
+                                                # this is safe.
+                                                match vt as vtt:
+                                                    case ClassType:
+                                                        match target as tt:
+                                                            case ClassType:
+                                                                if vtt.name != tt.name:
+                                                                    wrap_code = "(" + c_type_of(tt) + ") " + value_code
+                                                            case _:
+                                                                pass
+                                                    case _:
+                                                        pass
+                                                value_code = wrap_union_value(rt.members, target, wrap_code)
+                                            case none:
+                                                pass
                                     case none:
+                                        pass
+                            case ClassType:
+                                # The declared return type is a plain
+                                # (non-union) class, but the returned
+                                # value's own static type can still be a
+                                # narrower subtype (`-> Expr` returning a
+                                # `LiteralExpr`) -- same cast, no
+                                # union-wrap needed since there's no
+                                # tagged struct here at all, just a
+                                # pointer type mismatch C itself would
+                                # otherwise reject.
+                                match self.infer_expr_type(v, known) as vt:
+                                    case ClassType:
+                                        if vt.name != rt.name:
+                                            value_code = "(" + c_type_of(rt) + ") " + value_code
+                                    case _:
                                         pass
                             case _:
                                 pass
@@ -1190,7 +1423,11 @@ class Codegen:
             case Pass:
                 return indent + ";"
             case ExprStmt:
-                return indent + self.codegen_expr(result.expr, known) + ";"
+                match result.expr as e:
+                    case Propagate:
+                        return self.codegen_propagate_exprstmt(e, indent, known, expected_return)
+                    case _:
+                        return indent + self.codegen_expr(result.expr, known) + ";"
             case MetadataStmt:
                 return ""
             case FromImport:
@@ -1256,6 +1493,121 @@ class Codegen:
                 check = indent + "if (" + temp + ".tag == " + str(err_index) + ") {\n" + indent + "    return " + wrapped_err + ";\n" + indent + "}"
                 unwrap = indent + name + " = " + temp + ".v" + str(ok_index) + ";"
                 return decl + "\n" + check + "\n" + unwrap
+            case _:
+                return indent + "/* unsupported '?' */"
+
+    # `return expr?` -- the same desugaring as codegen_propagate_
+    # assignment (see its own comment for the ok/err-type split and the
+    # temp/tag-check shape), except there's no name to unwrap into: the
+    # ok value is returned directly, wrapped into `expected_return` the
+    # same way codegen_stmt's own Return arm wraps an ordinary
+    # expression value (a union member gets tagged, or a subtype gets an
+    # explicit cast -- see its own comments for why each is safe).
+    # `self-host/parser.lucid`'s own dominant `?` shape (`return
+    # self.parse_expr()?`, docs/question-mark-operator.md's own example
+    # shape) is exactly this.
+    def codegen_propagate_return(self, prop: Propagate, indent: str, known: dict[str, LType], expected_return: LType | none) -> str:
+        match self.infer_expr_type(prop.expr, known) as it:
+            case UnionLType:
+                ok_types: list[LType] = []
+                err_types: list[LType] = []
+                for m in it.members:
+                    match m as mt:
+                        case ClassType:
+                            if mt.name.endswith("Error"):
+                                err_types.append(mt)
+                            else:
+                                ok_types.append(mt)
+                        case _:
+                            ok_types.append(mt)
+                if len(ok_types) != 1 or len(err_types) != 1:
+                    return indent + "/* unsupported '?' */"
+                ok_type = ok_types[0]
+                err_type = err_types[0]
+                temp = "__lucid_prop_" + str(prop.span.line) + "_" + str(prop.span.column)
+                inner_code = self.codegen_expr(prop.expr, known)
+                err_index = union_member_index(it.members, err_type)
+                ok_index = union_member_index(it.members, ok_type)
+                err_field = temp + ".v" + str(err_index)
+                ok_field = temp + ".v" + str(ok_index)
+                wrapped_err = err_field
+                wrapped_ok = ok_field
+                match expected_return as rt:
+                    case UnionLType:
+                        wrapped_err = wrap_union_value(rt.members, err_type, err_field)
+                        match find_union_member(self.classes, rt.members, ok_type) as target:
+                            case LType:
+                                ok_wrap_code = ok_field
+                                match ok_type as okt:
+                                    case ClassType:
+                                        match target as tt:
+                                            case ClassType:
+                                                if okt.name != tt.name:
+                                                    ok_wrap_code = "(" + c_type_of(tt) + ") " + ok_field
+                                            case _:
+                                                pass
+                                    case _:
+                                        pass
+                                wrapped_ok = wrap_union_value(rt.members, target, ok_wrap_code)
+                            case none:
+                                pass
+                    case ClassType:
+                        match ok_type as okt2:
+                            case ClassType:
+                                if okt2.name != rt.name:
+                                    wrapped_ok = "(" + c_type_of(rt) + ") " + ok_field
+                            case _:
+                                pass
+                    case _:
+                        pass
+                union_ctype = union_c_name(it.members)
+                decl = indent + union_ctype + " " + temp + " = " + inner_code + ";"
+                check = indent + "if (" + temp + ".tag == " + str(err_index) + ") {\n" + indent + "    return " + wrapped_err + ";\n" + indent + "}"
+                final_return = indent + "return " + wrapped_ok + ";"
+                return decl + "\n" + check + "\n" + final_return
+            case _:
+                return indent + "/* unsupported '?' */"
+
+    # `expr?` as a bare expression statement -- self-host/parser.lucid's
+    # own single most common '?' shape by far (`self.consume_stmt_end()?`,
+    # a validation call whose own ok value, typically `none`, is
+    # discarded either way, same as any other expression statement's
+    # value). Same temp/tag-check/early-return shape as
+    # codegen_propagate_assignment/codegen_propagate_return, minus
+    # whatever those two do with the ok value afterward -- there's
+    # nowhere for it to go here, so it's simply never read out of the
+    # temp at all.
+    def codegen_propagate_exprstmt(self, prop: Propagate, indent: str, known: dict[str, LType], expected_return: LType | none) -> str:
+        match self.infer_expr_type(prop.expr, known) as it:
+            case UnionLType:
+                ok_types: list[LType] = []
+                err_types: list[LType] = []
+                for m in it.members:
+                    match m as mt:
+                        case ClassType:
+                            if mt.name.endswith("Error"):
+                                err_types.append(mt)
+                            else:
+                                ok_types.append(mt)
+                        case _:
+                            ok_types.append(mt)
+                if len(ok_types) != 1 or len(err_types) != 1:
+                    return indent + "/* unsupported '?' */"
+                err_type = err_types[0]
+                temp = "__lucid_prop_" + str(prop.span.line) + "_" + str(prop.span.column)
+                inner_code = self.codegen_expr(prop.expr, known)
+                err_index = union_member_index(it.members, err_type)
+                err_field = temp + ".v" + str(err_index)
+                wrapped_err = err_field
+                match expected_return as rt:
+                    case UnionLType:
+                        wrapped_err = wrap_union_value(rt.members, err_type, err_field)
+                    case _:
+                        pass
+                union_ctype = union_c_name(it.members)
+                decl = indent + union_ctype + " " + temp + " = " + inner_code + ";"
+                check = indent + "if (" + temp + ".tag == " + str(err_index) + ") {\n" + indent + "    return " + wrapped_err + ";\n" + indent + "}"
+                return decl + "\n" + check
             case _:
                 return indent + "/* unsupported '?' */"
 
@@ -1568,6 +1920,16 @@ class Codegen:
                                     match known.get(name, none) as existing:
                                         case UnionLType:
                                             pass
+                                        case ClassType:
+                                            # Same reasoning, one level
+                                            # narrower: an established
+                                            # plain sealed-base class
+                                            # (`Expr`) reassigned a
+                                            # concrete subtype
+                                            # (`LiteralExpr`) later
+                                            # keeps the wider type too.
+                                            if not class_assignable_to(self.classes, it, existing):
+                                                known[name] = it
                                         case _:
                                             known[name] = it
                                 case none:
@@ -1682,13 +2044,20 @@ class Codegen:
                     return none
         return find_signature(self.functions, fn.name, param_types)
 
-    # Every distinct union return type this module's registered
-    # functions and methods actually use -- collect_declarations already
-    # built self.functions/self.classes from every FunctionStmt/ClassDef
-    # in the module, so scanning those two tables directly is a complete
-    # enumeration, not a second AST walk that could miss a signature.
-    # Deduplicated by types_equal (order-insensitive -- see UnionLType's
-    # own header comment) and sorted by mangled name, both for the same
+    # Every distinct union type this module's registered functions,
+    # methods, and class fields actually use -- collect_declarations
+    # already built self.functions/self.classes from every
+    # FunctionStmt/ClassDef in the module, so scanning those two tables
+    # directly is a complete enumeration, not a second AST walk that
+    # could miss one. A union-typed *field* (self-host/ast.lucid's own
+    # `alias: str | none`) needs its own struct emitted here exactly
+    # like a union *return* type does -- easy to miss, since nothing
+    # about a field union shows up in either table's own return-type
+    # slot; a first draft only scanned return types and left
+    # `lucid_union_Item_none` undeclared the moment any class actually
+    # used one only as a field, never as a return type. Deduplicated by
+    # types_equal (order-insensitive -- see UnionLType's own header
+    # comment) and sorted by mangled name, both for the same
     # reproducible-output reason self.module_scope's own emission sorts.
     def collect_union_types(self) -> list[UnionLType]:
         found: list[UnionLType] = []
@@ -1717,6 +2086,13 @@ class Codegen:
                                     case _:
                                         pass
                             case none:
+                                pass
+                    for f in cls.fields:
+                        match f.field_type as ft:
+                            case UnionLType:
+                                if not union_already_found(found, ft):
+                                    found.append(ft)
+                            case _:
                                 pass
                 case none:
                     pass
@@ -1808,6 +2184,48 @@ class Codegen:
         parts.append("")
         parts.append(emit_dict_type(StrType()))
         parts.append("")
+        # `lucid_list_<ClassName>` for every class, before any union type
+        # or full class struct body -- a union member can itself be
+        # `list[SomeClass]` (self-host/lexer.lucid's own `tokenize`,
+        # `list[Token] | LexError`), so the list type has to exist
+        # before the union struct that references it, the same way it
+        # needs to exist before any *other* class's own struct field of
+        # that list type. Like the union structs below, this only needs
+        # every class's own forward declaration (a list holds a pointer
+        # array, not the pointee's full layout), never a full struct
+        # body -- so it's safe here, ahead of any of those.
+        for stmt in all_decls:
+            match stmt as result:
+                case ClassDef:
+                    match self.classes.get(result.name, none) as cls:
+                        case ClassSig:
+                            parts.append(emit_list_type(ClassType(cls.name)))
+                            parts.append("")
+                        case none:
+                            pass
+                case _:
+                    pass
+        # Every union type any registered function/method signature or
+        # class field actually uses (`Token | LexError`, `Token | none`,
+        # `list[Token] | LexError`, self-host/ast.lucid's own `alias:
+        # str | none` and its many siblings, ...), each its own tagged
+        # struct -- after every list[T]/dict[str, V] type (including a
+        # per-class list[T], just emitted above) and class forward
+        # declaration a member could possibly need, but before any full
+        # class struct body: a union-typed *field* (unlike a union
+        # *return* type) needs its own union struct to already exist
+        # for the class's own struct to declare a member of it, so this
+        # can't wait until after every class's full struct the way it
+        # used to when only return types needed one. collect_union_types
+        # scans self.functions/self.classes directly -- the exact
+        # signature/field tables collect_declarations already built --
+        # rather than walking the AST a second time, so it can't miss
+        # one a walk over statements might (a signature or field
+        # registered from an import, say). Sorted by name, same
+        # reproducibility reason as the module-level globals below.
+        for u in self.collect_union_types():
+            parts.append(emit_union_type(u.members))
+            parts.append("")
         for stmt in all_decls:
             match stmt as result:
                 case ClassDef:
@@ -1820,28 +2238,10 @@ class Codegen:
                             if is_printable_class(cls):
                                 parts.append(emit_print_function(cls))
                                 parts.append("")
-                            parts.append(emit_list_type(ClassType(cls.name)))
-                            parts.append("")
                         case none:
                             pass
                 case _:
                     pass
-        # Every union return type any registered function/method
-        # signature actually uses (`Token | LexError`, `Token | none`,
-        # `list[Token] | LexError`, ...), each its own tagged struct --
-        # after every class/list[T]/dict[str, V] type a member could
-        # possibly need (a union member can itself be a class, as here),
-        # but before any function/method forward declaration, since a
-        # union-returning signature's own C return type names one of
-        # these. collect_union_types scans self.functions/self.classes
-        # directly -- the exact signature tables collect_declarations
-        # already built -- rather than walking the AST a second time, so
-        # it can't miss one a walk over statements might (a signature
-        # registered from an import, say). Sorted by name, same
-        # reproducibility reason as the module-level globals just below.
-        for u in self.collect_union_types():
-            parts.append(emit_union_type(u.members))
-            parts.append("")
         # Every module-level name as a real, uninitialized (per C's own
         # zero-initialization of `static` storage) C global -- declared
         # here, after every struct/list[T]/dict[str, V] type it could

@@ -1264,17 +1264,20 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- a method returning T | none, narrowed by match, is supported ---\n(no errors)",
         "--- a method returning T | ErrorClass, narrowed by match, is supported ---\n(no errors)",
         "--- '?' propagation is supported ---\n(no errors)",
+        "--- '?' propagation as a return statement's own value is supported ---\n(no errors)",
+        "--- '?' propagation as a bare expression statement is supported ---\n(no errors)",
         "--- a local variable can be bound directly to a union-typed value ---\n(no errors)",
         "--- an empty list literal as a constructor argument infers from the field's declared type ---\n(no errors)",
-        "ERROR: field 'x' has an unsupported type (a union type is only supported as a function/method return type in this subset)",
-        "ERROR: parameter 'x' has an unsupported type (a union type is only supported as a function/method return type in this subset)",
+        "--- a union-typed field is supported ---\n(no errors)",
+        "ERROR: print() of a 'Holder' value is not supported in this subset",
+        "ERROR: parameter 'x' has an unsupported type (a union type is only supported as a function/method return type or a class field in this subset)",
         "ERROR: print() of a union-typed value is not supported in this subset",
         "ERROR: '?' is only supported on a union return type in this subset",
         "ERROR: '?' requires a union type with exactly one error variant (a class whose name ends in 'Error') in this subset",
         "ERROR: '?' requires exactly one non-error member in this subset",
         "ERROR: '?' propagates ItemError, but the enclosing function's return type (int) doesn't include it",
         "ERROR: '?' used outside a function",
-        "ERROR: '?' is only supported as the direct right-hand side of a plain assignment in this subset",
+        "ERROR: '?' is only supported as the direct right-hand side of a plain assignment, the direct value of a return statement, or a bare expression statement on its own, in this subset",
         "ERROR: match on int is not supported in this subset (only a union-typed subject can be matched)",
         "ERROR: match on Item | none is not exhaustive: no case for none",
         "ERROR: a match arm guard ('if ...') is not supported in this subset",
@@ -1282,6 +1285,12 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- a name declared as a union type can be reassigned a narrower member, and back ---\n(no errors)",
         "ERROR: 'x' cannot change type from Item to Item | none in this subset",
         "--- a class imported from another self-host/ file is a known type ---\n(no errors)",
+        "--- a subclass's Construct call takes the parent's own fields first, then its own ---\n(no errors)",
+        "--- a subclass value satisfies a base-class-typed return ---\n(no errors)",
+        "--- a subclass value satisfies a base-class-containing union return ---\n(no errors)",
+        "ERROR: construct for 'NumberNode' expects 2 field value(s), got 1",
+        "ERROR: class 'Bad' has more than one base -- only a single class parent is supported in this subset (no traits)",
+        "ERROR: return type mismatch: expected Node, got Other",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1356,7 +1365,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 16] = [
+    let cases: [(&str, &str); 17] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1381,6 +1390,10 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
             "self-host/compile_demo_programs/union_types.lucid",
         ),
         ("imports_demo", "self-host/imports_demo.lucid"),
+        (
+            "inheritance",
+            "self-host/compile_demo_programs/inheritance.lucid",
+        ),
         ("vectors", "examples/vectors.lucid"),
     ];
 

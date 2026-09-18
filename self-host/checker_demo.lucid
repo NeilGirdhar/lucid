@@ -196,11 +196,17 @@ report("a method returning T | ErrorClass, narrowed by match, is supported", "cl
 
 report("'?' propagation is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\ndef get_item(ok: bool) -> Item | ItemError:\n    if ok:\n        return Item(1)\n    return ItemError(\"missing\")\n\ndef use_item(ok: bool) -> int | ItemError:\n    item = get_item(ok)?\n    return item.value\n\ndef ok() -> int:\n    use_item(true)\n    return 0\n")
 
+report("'?' propagation as a return statement's own value is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\ndef get_item(ok: bool) -> Item | ItemError:\n    if ok:\n        return Item(1)\n    return ItemError(\"missing\")\n\ndef use_item(ok: bool) -> Item | ItemError:\n    return get_item(ok)?\n\ndef ok() -> int:\n    use_item(true)\n    return 0\n")
+
+report("'?' propagation as a bare expression statement is supported", "class ItemError:\n    message: str\n\ndef validate(ok: bool) -> none | ItemError:\n    if ok:\n        return none\n    return ItemError(\"bad\")\n\ndef use_it(ok: bool) -> int | ItemError:\n    validate(ok)?\n    return 42\n\ndef ok() -> int:\n    use_it(true)\n    return 0\n")
+
 report("a local variable can be bound directly to a union-typed value", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef ok() -> int:\n    x = maybe_item(true)\n    match x as result:\n        case Item:\n            print(result.value)\n        case none:\n            print(0)\n    return 0\n")
 
 report("an empty list literal as a constructor argument infers from the field's declared type", "class Box:\n    items: list[int]\n    count: int\n\ndef ok() -> int:\n    b = Box([], 0)\n    print(len(b.items))\n    return 0\n")
 
-report("a union-typed field is rejected", "class Item:\n    value: int\n\nclass Bad:\n    x: Item | none\n\ndef ok() -> int:\n    return 0\n")
+report("a union-typed field is supported", "class Item:\n    value: int\n\nclass Holder:\n    payload: Item | none\n\ndef ok() -> int:\n    h = Holder(Item(1))\n    match h.payload as p:\n        case Item:\n            print(p.value)\n        case none:\n            print(0)\n    h.payload = none\n    return 0\n")
+
+report("print() of a class with a union-typed field is rejected", "class Item:\n    value: int\n\nclass Holder:\n    payload: Item | none\n\ndef bad() -> int:\n    h = Holder(Item(1))\n    print(h)\n    return 0\n")
 
 report("a union-typed parameter is rejected", "class Item:\n    value: int\n\ndef bad(x: Item | none) -> int:\n    return 0\n")
 
@@ -233,3 +239,15 @@ report("a name declared as a union type can be reassigned a narrower member, and
 report("reassigning a plain-typed name to a union value is still rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    x = Item(1)\n    x = maybe_item(true)\n    return 0\n")
 
 report("a class imported from another self-host/ file is a known type", "from .lexer import Token\n\ndef ok() -> int:\n    t = Token(\"INT\", \"5\", 1, 1)\n    print(t.kind, t.text)\n    return 0\n")
+
+report("a subclass's Construct call takes the parent's own fields first, then its own", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef ok() -> int:\n    n = NumberNode(1, 42)\n    print(n.id, n.value)\n    return 0\n")
+
+report("a subclass value satisfies a base-class-typed return", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef make(id: int, value: int) -> Node:\n    return NumberNode(id, value)\n\ndef ok() -> int:\n    n = make(1, 2)\n    print(n.id)\n    return 0\n")
+
+report("a subclass value satisfies a base-class-containing union return", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass NodeError:\n    message: str\n\ndef make(id: int, ok: bool) -> Node | NodeError:\n    if ok:\n        return NumberNode(id, 1)\n    return NodeError(\"bad\")\n\ndef ok() -> int:\n    match make(1, true) as result:\n        case Node:\n            print(result.id)\n        case NodeError:\n            print(result.message)\n    return 0\n")
+
+report("a subclass Construct call missing the parent's own field is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef bad() -> int:\n    n = NumberNode(42)\n    return 0\n")
+
+report("a class with more than one base is rejected", "class A:\n    x: int\n\nclass B:\n    y: int\n\nclass Bad(A, B):\n    z: int\n\ndef ok() -> int:\n    return 0\n")
+
+report("an unrelated class does not satisfy a base-class-typed return", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass Other:\n    n: int\n\ndef bad() -> Node:\n    return Other(1)\n")

@@ -36,46 +36,48 @@ other compiled program in this pipeline already gets); `self-host/
 _probe_selfcompile.lucid` (untracked, a standing local gauge, not
 committed) re-runs this check on demand.
 
-**Next target: `self-host/parser.lucid`**, probed the same way, does
-*not* compile yet. Three of the four gaps the first probe found are
-closed as of this branch — cross-file imports (every "unknown class"
-error is gone), narrowing a declared union via a later plain
-assignment, and `pass`-bodied classes — leaving one confirmed gap and a
-newly-visible one underneath it, both real, both structural, neither
-attempted yet.
-(1) **`?` appears far more often than `self-host/lexer.lucid` needed,
-and mostly in positions this subset deliberately doesn't support**:
-`next_token()?`, `self.advance()?`, and similar appear as a `Call`
-argument, inside a larger expression, and (most often) as a `return`'s
-own value (`return self.parse_expr()?`) — `docs/question-mark-
-operator.md`'s own example shape, checked out by `check_propagate` but
-not desugared by `codegen.lucid`, which only ever implements the single
-plain-assignment shape `self-host/lexer.lucid` needed (see
-`check_rhs_expr`'s own comment). Closing this means at least a
-return-position desugaring (a temp, a tag check, two returns) — the
-nested-expression case may need declaring `?` unsupported there
-honestly instead, the same way this subset already is for several other
-constructs.
-(2) **Class inheritance** — invisible until cross-file imports started
-actually registering `self-host/ast.lucid`'s classes, since nothing
-compiled before this needed it: `ast.lucid`'s node classes all extend a
-`sealed class Expr:`/`sealed class Stmt:`/`sealed class Pattern:` (etc.)
-base with its own field (`span: Span`), and parser.lucid constructs
-them as `Binary(span, left, op, right)` — the base class's own field
-*first*, then the subclass's own, a real Lucid construction-order rule
-this subset's `ClassSig`/`collect_class` don't know about at all (they
-only ever look at a class's own body, never a parent's): `construct for
-'Binary' expects 3 field value(s), got 4` and `field 'op' expects str,
-got Span` are the same gap, not two. The same absence shows up as a
-type-compatibility gap too — `return type mismatch: expected Expr |
-ParserError, got LiteralExpr` fires because `LiteralExpr` is a *subtype*
-of `Expr` (extends it directly) but `types_equal`/`assignable_to` only
-ever compare class names for exact equality, with no notion of "is a
-subclass of" at all. Both need real inheritance support: field lists
-that include a parent's own fields (in order), and a subtyping check
-(`is_subtype_of` in the reference checker's own terms) used everywhere
-this subset currently uses `types_equal` for a class value against an
-expected type.
+**Next target: `self-host/parser.lucid`**, probed the same way,
+repeatedly, as each gap closed — does *not* compile yet, but is down
+from dozens of error categories and hundreds of occurrences to a
+handful of small, narrow ones. Closed as of this branch: cross-file
+imports, narrowing a declared union via a later plain assignment,
+`pass`-bodied classes, class inheritance (field order and subtype
+compatibility — `class_assignable_to`/`is_subclass_of`, `types.lucid`),
+union-typed class fields, and `?` in two more positions (a `return`
+statement's own value, and — by far the single most common `?` shape in
+`parser.lucid`, ~60 of its ~70 uses — a bare expression statement on its
+own, `self.consume_stmt_end()?`). What's left, from the latest probe:
+- **`?` nested inside a larger expression or as a `Call` argument** is
+  still rejected outright (`body.append(self.parse_class_member()?)`,
+  a handful of these) — this subset's plain-C11 discipline (no GNU
+  statement expressions) means there's no single C expression `?` could
+  become there; closing this honestly would mean either accepting the
+  restriction (rewriting the small number of call sites, if this were
+  real source being ported) or finding a statement-sequence desugaring
+  for a call argument specifically, not attempted yet.
+- **Matching a sealed class hierarchy by its own concrete subclasses**
+  (`match expr_value as e: case Binary: ... case LiteralExpr: ...`,
+  where `expr_value`'s own static type is the sealed base `Expr`, not a
+  union) is different from union narrowing, this subset's whole `match`
+  story so far: `Expr | LexError` is a real, compiler-chosen tagged
+  struct, but `Expr` alone, with `Binary`/`LiteralExpr`/... as its
+  concrete cases, is a sealed hierarchy the *language* dispatches on
+  through its own mechanism, not something this subset's checker/codegen
+  represent with a runtime tag at all yet (`match on Expr is not
+  supported in this subset` — a handful of these, not many, but each one
+  blocks whatever function contains it).
+- **A union return type that's a strict subset of another union**
+  (`return type mismatch: expected ParsedModule | ParserError |
+  LexError, got ParsedModule | ParserError` — `parse`'s own three-member
+  return type, satisfied by a call to a narrower two-member one) needs
+  `assignable_to`/`class_assignable_to` to accept "every member of the
+  narrower union is also a member of the wider one," not just "one
+  member" or "the exact same union" as today.
+- A couple of smaller, narrower items: `int(...)`-style calls (this
+  subset has no builtin type-conversion call at all), a field whose
+  declared type this subset's `resolve_type_expr` still can't resolve,
+  and one `list[Stmt].append(...)` call this subset's own arg-count/type
+  check rejects for a reason not yet diagnosed.
 
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
@@ -464,6 +466,55 @@ expected type.
   constructs a class it never imported, but that its actual import
   *did* transitively pull in, wouldn't be caught) — not a soundness
   problem for what codegen can compile, just a missed diagnostic.
+  A class can now extend one other class (`class Binary(Expr):`) —
+  `self-host/ast.lucid`'s own node classes all extend a `sealed class
+  Expr:`/`sealed class Stmt:`/etc. with its own field (`span: Span`),
+  the shape cross-file imports started actually registering. `ClassSig`
+  gained a `parent: str | none` field (`resolve_parent`, resolving
+  `cd.bases[0]` the same way any other type annotation is, and
+  rejecting more than one base outright — no traits in this subset) and
+  `fields` now includes the parent's own fields first, via `types.lucid`'s
+  new `inherited_fields` — `Binary(span, left, op, right)`, not
+  `Binary(left, op, right)`, the same construction order `Construct`
+  checking already validates positionally. A new `class_assignable_to`
+  (also `types.lucid`, alongside a plain `is_subclass_of` walking
+  `ClassSig.parent` up the chain) extends `assignable_to` with subtype
+  awareness, used everywhere a concrete class value meets an expected
+  type: `check_construct` (a `LiteralExpr` argument satisfies a field
+  declared `Expr`), `check_stmt`'s Return arm and Attribute-assignment
+  arm, and `bind()`'s own union-narrowing check, one level narrower now
+  too (a name established as a plain `Expr` can be reassigned a
+  `LiteralExpr` later, keeping `Expr`, the same "keep the wider type"
+  rule the union case already had). `assignable_to` itself stays
+  ignorant of classes on purpose — almost none of its own many call
+  sites ever compare two class types, so only the handful that do call
+  `class_assignable_to` instead. No runtime tag anywhere in this subset,
+  so a value only ever flows *up* the hierarchy this way (a subtype
+  value stored where a supertype is expected) — matching one of
+  something back *down* to its own concrete subtype (`match node_value
+  as n: case NumberNode: ...` where `node_value`'s own static type is
+  the sealed base `Node`, not a union) still isn't supported; see the
+  Status section above.
+  A class field can be a union type now too (`alias: str | none`,
+  `self-host/ast.lucid`'s own dominant field shape — `collect_class` no
+  longer rejects it) — by-value, the same tagged struct a union return
+  type already gets. `?` is now supported in two more positions: a
+  `return` statement's own value (`return self.parse_expr()?`,
+  `docs/question-mark-operator.md`'s own example shape) and a bare
+  expression statement on its own (`self.consume_stmt_end()?`,
+  `self-host/parser.lucid`'s single most common `?` shape by a wide
+  margin — validating something and discarding the ok value, typically
+  `none`, either way) — still never nested in a larger expression, for
+  the same "no GNU statement expressions" reason as before (see
+  `codegen.lucid`'s own entry below). A real, previously-undiscovered
+  bug in `compiler/crates/lucid-runtime` surfaced verifying the
+  return-statement shape: `return expr?` breaks the *reference
+  interpreter itself* whenever `?` actually propagates (not when it
+  unwraps successfully) — documented at length in the Design notes
+  below, since it meant that one shape's own failure path couldn't be
+  differentially verified against `lucid run` the usual way; the bare
+  expression statement shape doesn't share the bug (verified directly,
+  both paths) and is differentially tested normally.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -739,6 +790,50 @@ expected type.
   for the same reason (codegen needs the whole transitively-imported
   file regardless of which names were actually imported, since anything
   imported might call anything else in its own file).
+  A subclass's own struct now includes its parent's fields first
+  (`ClassSig.fields`, via `types.lucid`'s shared `inherited_fields` —
+  see checker.lucid's own entry above), so `emit_struct`/
+  `emit_constructor` need no changes of their own to lay one out or
+  build its constructor correctly — they already just iterate
+  `cls.fields` in order. What *does* need a change: a field declared as
+  a sealed base (`left: Expr`) constructed, returned, matched, or
+  field-assigned from a concrete subtype value (`LiteralExpr`) needs an
+  explicit C cast, since `LiteralExpr *` and `Expr *` are two separate,
+  unrelated struct types here (no C-level inheritance at all) — safe
+  under C11 6.5.2.3p6's "common initial sequence" rule for any access
+  to a field the *base* class itself declares (`Expr`'s own fields are
+  always the first fields of every subclass's own struct too, via
+  `inherited_fields`), but never safe to cast back down to a
+  *different* concrete subtype without a real runtime tag, which this
+  subset doesn't have. `codegen_expr`'s Construct case, `codegen_stmt`'s
+  Return and Assignment (Attribute-target) arms, and a new
+  `find_union_member` helper (used wherever a value gets wrapped into a
+  union, so a `LiteralExpr` satisfies a `Token | none`-shaped union
+  whose actual member is `Expr`, not `LiteralExpr` itself) all emit this
+  cast where needed. A union-typed field gets the exact same treatment
+  as a union-typed local or return value everywhere it's written
+  (`emit_struct` already handles the *type* for free — `c_type_of`
+  already returns the tagged struct's own name for a `UnionLType`
+  field, same as any other type) — but `collect_union_types` had to
+  grow a field-scanning pass too, not just its original scan of
+  function/method return types, and `codegen_module`'s own emission
+  order had to change: a union struct now has to exist *before* any
+  class's own full struct body (a union-typed field needs it declared
+  already), not just before any function/method forward declaration the
+  way a union return type alone required — so `lucid_list_<ClassName>`
+  for every class (itself only needing a forward declaration, not a
+  full struct, the same reasoning list types have always used) moved
+  ahead of union emission too, and full class struct bodies now come
+  last of the three. `?` as a `return` statement's own value
+  (`codegen_propagate_return`) mirrors `codegen_propagate_assignment`
+  exactly for the temp/tag-check/early-return shape, but the final "ok"
+  branch returns the unwrapped value directly instead of assigning it,
+  wrapped into the enclosing function's own return type the same way an
+  ordinary `return` expression already is. `?` as a bare expression
+  statement (`codegen_propagate_exprstmt`) is the same shape again, minus
+  even that final return — the ok value simply isn't read out of the
+  temp anywhere, since there's nowhere for it to go (an ordinary
+  expression statement already discards its own value the same way).
   Lucid has no subprocess/exec builtin, so codegen stops
   at emitting C text — invoking a system C compiler on it is necessarily
   a driver step outside Lucid, the same role
@@ -750,7 +845,7 @@ expected type.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles fifteen hand-written programs — fourteen
+  `codegen.lucid`. Also compiles sixteen hand-written programs — fifteen
   real files under `self-host/compile_demo_programs/`, plus
   `imports_demo.lucid`, which lives directly under `self-host/` instead
   (see compile_demo.lucid's own header comment for why: its
@@ -817,7 +912,19 @@ expected type.
   above) and its full-file inlining (codegen.lucid's own entry) —
   verified the generated C (about 40KB, inlining all of
   `self-host/lexer.lucid`, not just the two imported functions) compiles
-  and matches the reference interpreter exactly — plus one
+  and matches the reference interpreter exactly — and
+  `inheritance` — a class extending a sealed base (`NumberNode(Node)`),
+  its own Construct call taking the parent's field first, a function
+  returning a subtype where the declared return type is the base class
+  and another where it's a union containing the base, a `match` on that
+  union narrowing to the base class (not the concrete subtype — this
+  subset's own limit, see Status above), a union-typed field
+  constructed/read/reassigned, `?` as a `return` statement's own value
+  (on the success path only — see the Design notes entry below for why
+  the failure path couldn't be included), and `?` as a bare expression
+  statement, on *both* the success and failure path (the reference
+  interpreter's own bug is specific to the `return`-statement shape,
+  verified directly before relying on it) — plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
@@ -1371,3 +1478,73 @@ work rather than a rushed fix bundled in here:
   correct whether or not the underlying C expression was already
   `long`, and cheap enough to apply unconditionally rather than trying
   to detect which expressions specifically need it.
+- **A real bug in `compiler/crates/lucid-checker` itself: a class used
+  only as a `dict[K, V]` value type, forward-referenced from *inside*
+  another class's own field, breaks type-checking for an unrelated call
+  between two *different* functions.** Found writing `is_subclass_of`/
+  `class_assignable_to` in `types.lucid`: both take `classes: dict[str,
+  ClassSig]`, and `class_assignable_to` calling `is_subclass_of(classes,
+  ...)` failed with `argument 1 to 'is_subclass_of' has incompatible
+  type` — pointing at `classes` itself, even though both functions
+  declare the exact same parameter type. Root-caused with a from-scratch
+  ~25-line reproduction, independent of this codebase: a class
+  `ClassSig` with a field `methods: dict[str, FuncSig]`, where `FuncSig`
+  is a plain class defined *later* in the same file (`ClassSig` forward-
+  references it, ordinary and normally harmless in this language) — the
+  moment `dict[str, ClassSig]` is passed from one function to a
+  *different* function also declaring `dict[str, ClassSig]` as its own
+  parameter, the second function's own call into the first stops
+  type-checking, with the exact same "incompatible type" error, on the
+  exact same parameter. Confirmed by elimination: removing `class
+  FuncSig` from the file entirely, or moving its definition *before*
+  `ClassSig` instead of after (eliminating the forward reference),
+  both independently make the error disappear. `types.lucid` genuinely
+  needs `ClassSig.methods: dict[str, FuncSig]` (unrelated to
+  `class_assignable_to`, pre-existing since methods were first added)
+  and needed `is_subclass_of(classes: dict[str, ClassSig], ...)` called
+  from a second function with the identical parameter type (new, for
+  class inheritance) — the two together are what triggers it. Not fixed
+  in the Rust source, out of scope for this branch; worked around by
+  moving `class FuncSig`'s own definition ahead of `class ClassSig`'s in
+  `types.lucid`, breaking the forward reference that triggers the bug,
+  with no change to either class's own fields.
+- **A real bug in `compiler/crates/lucid-runtime` itself: `return
+  expr?` crashes the reference interpreter whenever `?` actually
+  propagates an error — the success path works fine.** Found trying to
+  differentially verify this branch's own new return-position `?`
+  support: `def use_item(ok: bool) -> Item | ItemError: return
+  get_item(ok)?` ran correctly under `lucid run` when `get_item`
+  succeeded, but raised `Runtime Error: return is only valid inside a
+  function` (a synthetic, zero-span error — not tied to any real source
+  position) the moment `get_item` actually failed. Root-caused by
+  reading `Expr::Propagate`'s own evaluation in `lucid-runtime`: on the
+  error path, it returns a special `Value::Return(Box::new(val))`
+  sentinel meant to unwind up through the enclosing statement machinery
+  as if a `return` had just executed — correct when `?` is a plain
+  assignment's right-hand side (a different code path handles unwrapping
+  that sentinel correctly, verified independently and used throughout
+  this branch's own `union_types.lucid`), but when `?` is instead the
+  *direct value of an actual `return` statement*, that statement's own
+  evaluator receives the sentinel as its "value" and wraps it in
+  *another* `Value::Return(...)`, doubly nested — something downstream
+  doesn't expect. This subset's own `codegen.lucid` doesn't share the
+  bug: its desugaring (`codegen_propagate_return`) is a plain C
+  statement sequence (a temp, an `if` with an early `return`, then a
+  final `return`), with no sentinel value or double-wrapping possible in
+  C's own control flow — confirmed correct by direct inspection of the
+  generated C and by structural identity with the assignment-position
+  desugaring's own error-path handling, already differentially verified.
+  But it meant this one feature's *error* path couldn't be verified the
+  usual way (a `lucid run` reference to diff a compiled binary against),
+  since the reference interpreter itself can't run the program that
+  would exercise it — `compile_demo_programs/inheritance.lucid`'s own
+  `?`-as-return-value case is deliberately called only on the success
+  path for exactly this reason. The bug is genuinely specific to the
+  `return`-statement shape, not to `?`/propagation in general — verified
+  directly that `?` as a bare expression statement (`self.
+  consume_stmt_end()?`, added the same session once this was
+  root-caused) propagates an error correctly under `lucid run` on both
+  paths, with no special handling needed, so `compile_demo_programs/
+  inheritance.lucid`'s own bare-statement `?` case *is* differentially
+  tested on both paths. Not fixed in `lucid-runtime`, out of scope for
+  this branch.

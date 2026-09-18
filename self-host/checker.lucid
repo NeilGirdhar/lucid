@@ -46,23 +46,36 @@
 #     flow-sensitive definite-assignment analysis, a variable read after
 #     being assigned in only one branch of an `if` is accepted here, not
 #     rejected the way lucid-checker's own analysis would
-#   - a function/method return type can be a union of the above
-#     (`Token | none`, `Token | LexError`) -- never a parameter, field,
-#     or list/dict element type; narrowed by a `match` on a union
-#     subject (exhaustive, class-name or `none` patterns only, no
+#   - a function/method return type, or a class field, can be a union
+#     of the above (`Token | none`, `Token | LexError`,
+#     self-host/ast.lucid's own `alias: str | none`) -- never a
+#     parameter or a list/dict element type; narrowed by a `match` on a
+#     union subject (exhaustive, class-name or `none` patterns only, no
 #     guards) or by `?` (exactly one error member, a class ending in
 #     "Error", and exactly one non-error member -- narrower than
 #     compiler/crates/lucid-checker's own more permissive multi-error
-#     rule; only supported as a plain assignment's right-hand side, not
-#     nested in an expression or a return statement's own value -- see
-#     check_match/check_propagate's own comments)
-# Left for later: traits, inheritance, generics, method overloading,
-# a dict key/value type beyond str/int/bool/str, closures, exceptions,
-# comprehensions -- everything else checker.lucid's header comment's
-# Rust counterpart covers.
+#     rule; only supported as a plain assignment's right-hand side, a
+#     return statement's own value, or a bare expression statement on
+#     its own, never nested in a larger expression
+#     -- see check_match/check_propagate's own comments)
+#   - a class can extend one other class (`class Binary(Expr):`,
+#     never a trait); Construct is positional, parent's fields first
+#     (`inherited_fields`), and a subtype value satisfies a supertype-
+#     or supertype-union-typed expectation almost everywhere a plain
+#     type would (`class_assignable_to`) -- no runtime tag anywhere,
+#     though, so a value only ever flows *up* the hierarchy (a subtype
+#     value stored where a supertype is expected) here, never back down
+#     via a `match` on the hierarchy itself (that needs a real
+#     discriminant this subset doesn't have; see self-host/README.md's
+#     Status section)
+# Left for later: traits, generics, method overloading, a dict
+# key/value type beyond str/int/bool/str, closures, exceptions,
+# comprehensions, matching a sealed class hierarchy by its own concrete
+# subclasses -- everything else checker.lucid's header comment's Rust
+# counterpart covers.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, PassMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, Propagate, FunctionDef, Param, Span, FromImport, Import
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature, resolve_all_declarations
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature, resolve_all_declarations, inherited_fields, is_subclass_of, class_assignable_to
 
 class CheckError:
     message: str
@@ -185,7 +198,18 @@ class Checker:
         # union return type.
         match known.get(name, none) as wider:
             case UnionLType:
-                if assignable_to(t, wider):
+                if class_assignable_to(self.classes, t, wider):
+                    return
+            case ClassType:
+                # Same idea, one level narrower: a name already
+                # established as a plain (non-union) sealed-base class
+                # (`x = self.parse_expr()`, `x`'s own established type
+                # `Expr`) reassigned a concrete subtype value later
+                # (`x = LiteralExpr(...)`) keeps the wider `Expr`, not
+                # `LiteralExpr` -- a later reassignment to some *other*
+                # `Expr` subtype still needs to type-check against the
+                # same established name.
+                if class_assignable_to(self.classes, t, wider):
                     return
             case _:
                 pass
@@ -220,10 +244,34 @@ class Checker:
                 case _:
                     pass
 
+    # `bases` is `resolve_type_expr`'d the same way any other type
+    # annotation is -- a base name has to be a known-uppercase class
+    # name, matching this subset's other resolution rules exactly (no
+    # separate "is this actually a class, not a trait" check, since
+    # nothing self-host/ast.lucid needs to compile ever extends a
+    # trait). At most one base is supported (docs/principles.md's own
+    # "at most one class parent" rule, so this subset doesn't need to
+    # reject a *second* class base specifically -- Lucid's own grammar
+    # already wouldn't produce one -- only more than one base at all,
+    # which would mean traits this subset doesn't support).
+    def resolve_parent(self, cd: ClassDef) -> str | none:
+        if len(cd.bases) == 0:
+            return none
+        if len(cd.bases) > 1:
+            self.error("class '" + cd.name + "' has more than one base -- only a single class parent is supported in this subset (no traits)", cd.span)
+            return none
+        match resolve_type_expr(cd.bases[0]) as bt:
+            case ClassType:
+                return bt.name
+            case _:
+                self.error("class '" + cd.name + "' has an unsupported base type", cd.span)
+                return none
+
     def collect_class(self, cd: ClassDef):
         if self.classes.get(cd.name, none) != none:
             self.error("duplicate class '" + cd.name + "'", cd.span)
-        fields: list[FieldSig] = []
+        parent = self.resolve_parent(cd)
+        own_fields: list[FieldSig] = []
         methods: dict[str, FuncSig] = {:}
         for member in cd.body:
             match member as m:
@@ -231,10 +279,18 @@ class Checker:
                     match resolve_type_expr(m.field.type_annotation) as ft:
                         case NoneType:
                             self.error("field '" + m.field.name + "' has an unsupported type (none isn't a valid field type)", cd.span)
-                        case UnionLType:
-                            self.error("field '" + m.field.name + "' has an unsupported type (a union type is only supported as a function/method return type in this subset)", cd.span)
                         case LType:
-                            fields.append(FieldSig(m.field.name, ft))
+                            # A union-typed field is supported now
+                            # (`alias: str | none`, self-host/ast.lucid's
+                            # own dominant field shape -- ImportedName,
+                            # Slice, Return, and many more all have at
+                            # least one) -- by-value, the same tagged
+                            # struct representation a union return type
+                            # already gets (see codegen.lucid's
+                            # emit_union_type), just stored as an
+                            # ordinary struct field instead of a return
+                            # value.
+                            own_fields.append(FieldSig(m.field.name, ft))
                         case none:
                             self.error("field '" + m.field.name + "' has an unsupported type", cd.span)
                 case MethodMember:
@@ -247,16 +303,19 @@ class Checker:
                         case none:
                             pass
                 case PassMember:
-                    # `class Foo: pass` -- a zero-field, zero-method
-                    # class (a bare marker type, the same shape a
-                    # sealed hierarchy's own leaf cases often take --
+                    # `class Foo: pass` -- no fields/methods of its
+                    # own (a bare marker type, the same shape a sealed
+                    # hierarchy's own leaf cases often take --
                     # self-host/ast.lucid alone has over a dozen, e.g.
                     # `class Skip(Expr): pass`). Its own Construct call
-                    # takes no arguments, matching an empty `fields`.
+                    # still takes whatever its parent's own fields are
+                    # (`span`, for `Skip`) -- an empty *own* `fields`
+                    # list, not necessarily an empty ClassSig.fields
+                    # once inherited_fields prepends the parent's.
                     pass
                 case _:
                     self.error("only plain fields, methods with a bare 'self' first parameter, and 'pass' are supported in a class body", cd.span)
-        self.classes[cd.name] = ClassSig(cd.name, fields, methods)
+        self.classes[cd.name] = ClassSig(cd.name, inherited_fields(self.classes, parent, own_fields), methods, parent)
 
     # `self` isn't a type-annotated parameter in this subset (matching
     # every method in self-host/lexer.lucid: `def at_end(self) -> bool:`,
@@ -283,7 +342,7 @@ class Checker:
                     self.error("parameter '" + p.name + "' has an unsupported type (none isn't a valid parameter type)", fn.span)
                     ok = false
                 case UnionLType:
-                    self.error("parameter '" + p.name + "' has an unsupported type (a union type is only supported as a function/method return type in this subset)", fn.span)
+                    self.error("parameter '" + p.name + "' has an unsupported type (a union type is only supported as a function/method return type or a class field in this subset)", fn.span)
                     ok = false
                 case LType:
                     param_types.append(pt)
@@ -323,7 +382,7 @@ class Checker:
                     self.error("parameter '" + p.name + "' has an unsupported type (none isn't a valid parameter type)", fn.span)
                     ok = false
                 case UnionLType:
-                    self.error("parameter '" + p.name + "' has an unsupported type (a union type is only supported as a function/method return type in this subset)", fn.span)
+                    self.error("parameter '" + p.name + "' has an unsupported type (a union type is only supported as a function/method return type or a class field in this subset)", fn.span)
                     ok = false
                 case LType:
                     param_types.append(pt)
@@ -507,7 +566,7 @@ class Checker:
                             case LType:
                                 match inferred as it:
                                     case LType:
-                                        if not assignable_to(it, dt):
+                                        if not class_assignable_to(self.classes, it, dt):
                                             self.error("variable '" + p.name + "' declared as " + type_name(dt) + " but initialized with " + type_name(it), result.span)
                                     case none:
                                         pass
@@ -542,7 +601,7 @@ class Checker:
                                             case LType:
                                                 match value_type as vt:
                                                     case LType:
-                                                        if not types_equal(ft, vt):
+                                                        if not class_assignable_to(self.classes, vt, ft):
                                                             self.error("field '" + target.attr + "' expects " + type_name(ft) + ", got " + type_name(vt), result.span)
                                                     case none:
                                                         pass
@@ -603,21 +662,22 @@ class Checker:
                     self.error("return statement outside a function", result.span)
                 match result.value as value_expr:
                     case Expr:
-                        # Not check_rhs_expr: '?' is only supported as
-                        # the direct right-hand side of a plain
-                        # assignment in this subset (see
-                        # check_rhs_expr's own header comment) --
-                        # `return expr?` falls through to check_expr's
-                        # own Propagate case, which reports a clear,
-                        # specific error rather than silently accepting
-                        # something codegen.lucid has no statement-level
-                        # desugaring for at a return site.
-                        value_type = self.check_expr(value_expr, known)
+                        # check_rhs_expr, not plain check_expr: '?' is
+                        # now supported as a return statement's own
+                        # value too (`return parse(text)?`,
+                        # docs/question-mark-operator.md's own example
+                        # shape, and self-host/parser.lucid's dominant
+                        # one) -- codegen_stmt's Return arm has its own
+                        # matching desugaring (codegen_propagate_return).
+                        # '?' nested inside a larger expression is still
+                        # rejected (check_expr's own Propagate case, via
+                        # check_rhs_expr's fallback).
+                        value_type = self.check_rhs_expr(value_expr, known, expected_return)
                         match expected_return as rt:
                             case LType:
                                 match value_type as vt:
                                     case LType:
-                                        if not assignable_to(vt, rt):
+                                        if not class_assignable_to(self.classes, vt, rt):
                                             self.error("return type mismatch: expected " + type_name(rt) + ", got " + type_name(vt), result.span)
                                     case none:
                                         pass
@@ -639,7 +699,14 @@ class Checker:
             case Pass:
                 pass
             case ExprStmt:
-                self.check_expr(result.expr, known)
+                # check_rhs_expr, not plain check_expr: '?' is
+                # supported as a bare statement too now (`self.
+                # consume_stmt_end()?`, self-host/parser.lucid's own
+                # single most common '?' shape by far -- a validation
+                # call whose ok value, typically `none`, is discarded
+                # either way) -- codegen_stmt's own ExprStmt arm has a
+                # matching desugaring (codegen_propagate_exprstmt).
+                self.check_rhs_expr(result.expr, known, expected_return)
             case MetadataStmt:
                 pass
             case FromImport:
@@ -953,25 +1020,30 @@ class Checker:
                     case none:
                         return none
             case Propagate:
-                self.error("'?' is only supported as the direct right-hand side of a plain assignment in this subset", result.span)
+                self.error("'?' is only supported as the direct right-hand side of a plain assignment, the direct value of a return statement, or a bare expression statement on its own, in this subset", result.span)
                 return none
             case _:
                 self.error("unsupported expression kind", expr.span)
                 return none
 
-    # '?' is only supported as the direct right-hand side of a plain
-    # assignment in this subset (`tok = lexer.next_token()?`, the shape
-    # self-host/lexer.lucid's own `tokenize` needs) -- not nested inside
-    # a larger expression, and not as a return statement's own value
-    # either (`return parse(text)?`, docs/question-mark-operator.md's
-    # own example), even though that shape checks out fine here: its
-    # desugaring is an early return followed by another return, and
-    # codegen.lucid only implements the statement sequence this one
-    # shape needs (a temp declaration, a tag check with an early return,
-    # then an ordinary assignment) -- see check_stmt's Return arm, which
-    # deliberately calls check_expr here instead, so `return expr?`
-    # reports this same error rather than passing a checker.lucid
-    # doesn't fully back up with codegen.
+    # '?' is supported in exactly three positions in this subset: the
+    # direct right-hand side of a plain assignment (`tok =
+    # lexer.next_token()?`, self-host/lexer.lucid's own `tokenize`), the
+    # direct value of a return statement (`return self.parse_expr()?`,
+    # docs/question-mark-operator.md's own example shape), and a bare
+    # expression statement on its own (`self.consume_stmt_end()?`,
+    # self-host/parser.lucid's own single most common '?' shape by far
+    # -- a validation call whose ok value is discarded either way,
+    # typically `none`) -- never nested inside a larger expression, and
+    # never as a `Call` argument, since codegen.lucid has no GNU-
+    # statement-expression-free way to turn '?' into a single C
+    # expression there (all three supported shapes instead desugar to a
+    # short statement sequence: see codegen_propagate_assignment,
+    # codegen_propagate_return, and codegen_propagate_exprstmt).
+    # check_stmt's Return and ExprStmt arms both call this (not plain
+    # check_expr) for exactly this reason; check_expr's own Propagate
+    # case (reached from here too, for any other kind of expr) reports
+    # this same error.
     def check_rhs_expr(self, expr: Expr, known: dict[str, LType], expected_return: LType | none) -> LType | none:
         match expr as result:
             case Propagate:
@@ -1020,7 +1092,7 @@ class Checker:
                 match expected_return as rt:
                     case LType:
                         for e in err_types:
-                            if not assignable_to(e, rt):
+                            if not class_assignable_to(self.classes, e, rt):
                                 self.error("'?' propagates " + type_name(e) + ", but the enclosing function's return type (" + type_name(rt) + ") doesn't include it", prop.span)
                     case none:
                         self.error("'?' used outside a function", prop.span)
@@ -1181,7 +1253,7 @@ class Checker:
                             arg_type = self.check_expr(av, known)
                     match arg_type as at:
                         case LType:
-                            if not types_equal(at, field_type_i):
+                            if not class_assignable_to(self.classes, at, field_type_i):
                                 self.error("field '" + cls.fields[i].name + "' expects " + type_name(field_type_i) + ", got " + type_name(at), span)
                         case none:
                             pass

@@ -5,14 +5,15 @@
 # overload a call means), so the representation and the class/function
 # tables built from it live here once, not duplicated in each.
 #
-# Deliberately small: `int`, `bool`, `str`, a named class, `list[T]`,
-# `dict[str, V]`, and (as of UnionLType, below) a union of these -- no
-# generics beyond list/dict, no inference beyond "what does this
-# literal/parameter/field/return type say". A class's fields and a
-# function's parameters are always exactly one of the non-union types --
-# only a return type or a local variable may be a union (see
-# UnionLType's own comment for why the distinction is fields/parameters,
-# not "value vs. return type" the way NoneType's is).
+# Deliberately small: `int`, `bool`, `str`, a named class (which may
+# extend one other class), `list[T]`, `dict[str, V]`, and (as of
+# UnionLType, below) a union of these -- no generics beyond list/dict,
+# no inference beyond "what does this literal/parameter/field/return
+# type say". A function's parameters are always exactly one of the
+# non-union types -- a return type, a local variable, or a class field
+# may be a union too (see UnionLType's own comment for why the
+# distinction is specifically parameters, not "value vs. return type"
+# the way NoneType's is).
 
 from .ast import TypeExpr, NamedType, UnionType, Stmt, FromImport, Import, ParsedModule
 from .parser import parse, ParserError
@@ -70,20 +71,24 @@ class DictType(LType):
 # codegen.lucid's emit_union_type) -- a bare local variable can hold one
 # (self-host/lexer.lucid does exactly this: `layout =
 # self.handle_indentation()` binds a plain local to a `Token | none`
-# value, narrowed only later by the `match` that reads it), it's a
-# parameter or field that's rejected (checker.lucid's
-# collect_function_signature/method_signature_for/collect_class all
-# reject a UnionLType there explicitly), since nothing needs a
-# union-typed parameter or field yet and accepting one would need its
-# own call-site/construction-site wrapping logic this subset doesn't
-# have. `resolve_type_expr` only ever produces one from a `-> A | B`
-# annotation. `checker.lucid`'s `check_stmt` narrows a union value to
-# one member at a time, either through a `match` statement's own type
-# patterns (`case Token:`/`case none:`) or through `?` (see
-# check_propagate) -- every *other* use of a union-typed value (as a
-# binary/unary operand, a call argument, a dict/list element, ...) is
-# rejected the same way any other unsupported expression shape is,
-# simply by none of those checks having a UnionLType case to accept.
+# value, narrowed only later by the `match` that reads it), and so can a
+# class field (self-host/ast.lucid's own dominant field shape: `alias:
+# str | none`, checker.lucid's collect_class allows it now, with
+# checker/codegen both wrapping a member value into the field's own
+# union at construction and assignment sites -- see check_construct and
+# codegen_expr's own Construct case). It's still only a *parameter*
+# that's rejected (collect_function_signature/method_signature_for),
+# since nothing needs a union-typed parameter yet and accepting one
+# would need its own call-site wrapping logic this subset doesn't have.
+# `resolve_type_expr` only ever produces one from a `-> A | B`
+# annotation or a field's own declared type. `checker.lucid`'s
+# `check_stmt` narrows a union value to one member at a time, either
+# through a `match` statement's own type patterns (`case Token:`/`case
+# none:`) or through `?` (see check_propagate) -- every *other* use of a
+# union-typed value (as a binary/unary operand, a call argument other
+# than a Construct's own, a dict/list element, ...) is rejected the same
+# way any other unsupported expression shape is, simply by none of those
+# checks having a UnionLType case to accept.
 # `members` keeps the order written in the source (`A | B` is `[A, B]`,
 # not `[B, A]`) for type_name's own diagnostics; mangle_component and
 # types_equal both treat it as an unordered set instead, via
@@ -327,6 +332,25 @@ class FieldSig:
     name: str
     field_type: LType
 
+# Defined here, before ClassSig, not down with FuncTable below where it
+# would read more naturally next to register_signature/find_signature
+# -- ClassSig.methods (below) is `dict[str, FuncSig]`, and leaving
+# FuncSig's own definition to forward-reference *from* a dict value
+# position inside another class field, while `dict[str, ClassSig]`
+# itself gets passed between two different function signatures
+# (inherited_fields/is_subclass_of/class_assignable_to and their own
+# callers), triggers a real bug in compiler/crates/lucid-checker: a
+# spurious "argument N to '...' has incompatible type" on the *second*
+# function's own call to the first, gone the moment FuncSig is moved
+# ahead of ClassSig instead. Root-caused with a from-scratch, ~25-line
+# reproduction (self-host/README.md's Design notes has the details) --
+# not fixed in the Rust source, out of scope for this branch; this
+# reordering is the workaround.
+class FuncSig:
+    name: str
+    param_types: list[LType]
+    return_type: LType
+
 class ClassSig:
     name: str
     fields: list[FieldSig]
@@ -339,6 +363,22 @@ class ClassSig:
     # this subset -- one FuncSig per method name, unlike FuncTable's
     # list[FuncSig] for free functions.
     methods: dict[str, FuncSig]
+    # The one class this class extends (`class Binary(Expr): ...`), if
+    # any -- self-host/ast.lucid's own node classes all extend a sealed
+    # base (`sealed class Expr: span: Span`) with its own field, the
+    # shape this subset needed real inheritance support for at all
+    # (see is_subclass_of/class_assignable_to below, and
+    # inherited_fields, which is why `fields` above already includes
+    # the parent's own fields, prepended, not just this class's own
+    # body -- Construct is positional, so `Binary(span, left, op,
+    # right)` needs `span` first). No multiple inheritance in this
+    # subset (matching docs/principles.md's own "at most one class
+    # parent" rule) -- a class's `bases` naming more than one type is
+    # rejected (see collect_class's own check for why, and that this
+    # subset doesn't distinguish a trait base from a class one, since
+    # nothing self-host/ast.lucid needs to compile uses a trait base at
+    # all).
+    parent: str | none
 
 def field_type(cls: ClassSig, name: str) -> LType | none:
     for f in cls.fields:
@@ -349,10 +389,99 @@ def field_type(cls: ClassSig, name: str) -> LType | none:
 def method_signature(cls: ClassSig, name: str) -> FuncSig | none:
     return cls.methods.get(name, none)
 
+# Every field a fully-constructed value of this class carries, parent's
+# own fields first -- self-host/ast.lucid's `class Binary(Expr): left:
+# Expr, op: str, right: Expr` (with `Expr` itself `sealed class Expr:
+# span: Span`) needs `Binary`'s own ClassSig.fields to be `[span, left,
+# op, right]`, in that order, matching how `Binary(span, left, op,
+# right)` is actually constructed and how emit_struct/emit_constructor
+# (codegen.lucid) lay out and initialize the generated C struct.
+# `classes` must already have every ancestor registered -- true as long
+# as a base class is declared before its subclasses in the same file
+# (self-host/ast.lucid always does; collect_class calls this only after
+# resolving `parent`, which itself requires the parent to already be in
+# `classes`).
+def inherited_fields(classes: dict[str, ClassSig], parent: str | none, own_fields: list[FieldSig]) -> list[FieldSig]:
+    fields: list[FieldSig] = []
+    match parent as p:
+        case str:
+            match classes.get(p, none) as parent_cls:
+                case ClassSig:
+                    for f in parent_cls.fields:
+                        fields.append(f)
+                case none:
+                    pass
+        case none:
+            pass
+    for f in own_fields:
+        fields.append(f)
+    return fields
+
+# Is `sub` the same class as `super_name`, or does it extend it,
+# directly or transitively? Walks ClassSig.parent up the chain --
+# `classes` must have every class in the chain registered (see
+# inherited_fields's own note). `limit` guards against an accidental
+# cycle (this subset never checks for one elsewhere) turning into an
+# infinite loop; self-host/ast.lucid's own deepest chain is two levels,
+# so this is generous, not tuned.
+def is_subclass_of(classes: dict[str, ClassSig], sub: str, super_name: str) -> bool:
+    name = sub
+    limit = 1000
+    while limit > 0:
+        if name == super_name:
+            return true
+        match classes.get(name, none) as cls:
+            case ClassSig:
+                match cls.parent as p:
+                    case str:
+                        name = p
+                    case none:
+                        return false
+            case none:
+                return false
+        limit = limit - 1
+    return false
+
+# assignable_to, but aware of class inheritance too -- assignable_to
+# itself stays pure (no class table), since almost every call site
+# doesn't need this (no int/bool/str/list/dict/union comparison ever
+# involves a parent class), so only the few call sites that actually
+# handle a class-typed value against an expected type -- check_construct
+# and check_stmt's Return arm in checker.lucid, codegen_stmt's own
+# Return-wrapping in codegen.lucid -- call this instead. A `LiteralExpr`
+# value satisfies an `Expr`-typed (or `Expr | ParserError`-typed)
+# expectation this way, the same way self-host/parser.lucid's own
+# `return LiteralExpr(...)` (declared `-> Expr | ParserError`) needs.
+def class_assignable_to(classes: dict[str, ClassSig], value_type: LType, expected: LType) -> bool:
+    if assignable_to(value_type, expected):
+        return true
+    match value_type as vt:
+        case ClassType:
+            match expected as et:
+                case ClassType:
+                    return is_subclass_of(classes, vt.name, et.name)
+                case UnionLType:
+                    for m in et.members:
+                        match m as mt:
+                            case ClassType:
+                                if is_subclass_of(classes, vt.name, mt.name):
+                                    return true
+                            case _:
+                                pass
+                    return false
+                case _:
+                    return false
+        case _:
+            return false
+
 # A class is printable in this subset if every field is int/bool/str --
 # codegen.lucid's per-class printer only knows how to format those three
 # directly; a class-typed field would need its own nested printer call,
-# not supported yet.
+# not supported yet. A union-typed field (self-host/ast.lucid's own
+# `alias: str | none` and its many siblings) is the same kind of gap --
+# codegen.lucid's emit_print_function has no case for formatting a
+# tagged union struct either, and printing its raw bytes as %ld/%s would
+# be undefined behavior, not just wrong output.
 def is_printable_class(cls: ClassSig) -> bool:
     for f in cls.fields:
         match f.field_type as t:
@@ -362,14 +491,11 @@ def is_printable_class(cls: ClassSig) -> bool:
                 return false
             case DictType:
                 return false
+            case UnionLType:
+                return false
             case _:
                 pass
     return true
-
-class FuncSig:
-    name: str
-    param_types: list[LType]
-    return_type: LType
 
 # A function/dispatch name can have more than one FuncSig -- Lucid's
 # multiple dispatch (docs/dispatch.md) lets several `dispatch def`s share

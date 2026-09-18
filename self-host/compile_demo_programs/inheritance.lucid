@@ -1,0 +1,87 @@
+sealed class Node:
+    id: int
+
+class NumberNode(Node):
+    value: int
+
+class NameNode(Node):
+    name: str
+
+class NodeError:
+    message: str
+
+class Holder:
+    payload: Node | none
+    label: str
+
+def make_number(id: int, value: int) -> Node:
+    return NumberNode(id, value)
+
+def make_name_or_fail(id: int, name: str) -> Node | NodeError:
+    if len(name) == 0:
+        return NodeError("empty name")
+    return NameNode(id, name)
+
+def make_name_or_fail_direct(id: int, name: str) -> Node | NodeError:
+    return make_name_or_fail(id, name)?
+
+def validate_name(name: str) -> none | NodeError:
+    if len(name) == 0:
+        return NodeError("empty name")
+    return none
+
+def make_validated(id: int, name: str) -> Node | NodeError:
+    validate_name(name)?
+    return NameNode(id, name)
+
+def ok() -> int:
+    n = make_number(1, 42)
+    print(n.id)
+    node: Node | NodeError = make_name_or_fail(2, "x")
+    match node as result:
+        case Node:
+            print(result.id)
+        case NodeError:
+            print(result.message)
+    empty_node: Node | NodeError = make_name_or_fail(3, "")
+    match empty_node as result2:
+        case Node:
+            print(result2.id)
+        case NodeError:
+            print(result2.message)
+    match make_name_or_fail_direct(4, "y") as result3:
+        case Node:
+            print(result3.id)
+        case NodeError:
+            print(result3.message)
+    h = Holder(NumberNode(5, 99), "a")
+    match h.payload as p:
+        case Node:
+            print(p.id)
+        case none:
+            print(0)
+    h2 = Holder(none, "b")
+    match h2.payload as p2:
+        case Node:
+            print(p2.id)
+        case none:
+            print(-1)
+    h2.payload = NumberNode(6, 7)
+    match h2.payload as p3:
+        case Node:
+            print(p3.id)
+        case none:
+            print(-2)
+    match make_validated(7, "z") as result4:
+        case Node:
+            print(result4.id)
+        case NodeError:
+            print(result4.message)
+    match make_validated(8, "") as result5:
+        case Node:
+            print(result5.id)
+        case NodeError:
+            print(result5.message)
+    return 0
+
+print(ok())
