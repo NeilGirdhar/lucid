@@ -1279,6 +1279,8 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: match on Item | none is not exhaustive: no case for none",
         "ERROR: a match arm guard ('if ...') is not supported in this subset",
         "ERROR: pattern type Other is not part of Item | none",
+        "--- a name declared as a union type can be reassigned a narrower member, and back ---\n(no errors)",
+        "ERROR: 'x' cannot change type from Item to Item | none in this subset",
     ] {
         assert!(
             stdout.contains(expected),

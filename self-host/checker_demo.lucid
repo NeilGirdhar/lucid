@@ -227,3 +227,7 @@ report("a non-exhaustive match on a union is rejected", "class Item:\n    value:
 report("a match arm guard is rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    match maybe_item(true) as result:\n        case Item if true:\n            print(result.value)\n        case none:\n            print(0)\n    return 0\n")
 
 report("a match pattern type that isn't part of the subject union is rejected", "class Item:\n    value: int\n\nclass Other:\n    n: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    match maybe_item(true) as result:\n        case Other:\n            print(result.n)\n        case none:\n            print(0)\n    return 0\n")
+
+report("a name declared as a union type can be reassigned a narrower member, and back", "class Item:\n    value: int\n\ndef ok() -> int:\n    x: Item | none = none\n    x = Item(1)\n    x = none\n    match x as r:\n        case Item:\n            print(r.value)\n        case none:\n            print(0)\n    return 0\n")
+
+report("reassigning a plain-typed name to a union value is still rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    x = Item(1)\n    x = maybe_item(true)\n    return 0\n")

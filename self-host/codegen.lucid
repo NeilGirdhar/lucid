@@ -917,6 +917,16 @@ class Codegen:
                     arg_code = "(" + arg_code + " ? \"true\" : \"false\")"
                 case _:
                     format_parts.append("%ld")
+                    # A varargs call only promotes int to int, never on
+                    # to long -- an int-typed C expression here (a bare
+                    # negative literal like `(-1)`, which defaults to
+                    # int in C, unlike a runtime-computed `long` value)
+                    # read back through "%ld" is undefined behavior, a
+                    # real, previously-undiscovered miscompile caught by
+                    # `print(-1)` printing a garbage value instead of
+                    # -1. The explicit cast is correct whether or not
+                    # `arg_code` was already `long`.
+                    arg_code = "(long) " + arg_code
             value_codes.append(arg_code)
             i = i + 1
         format_str = c_string_literal(join_with(format_parts, "") + "\n")
@@ -948,7 +958,9 @@ class Codegen:
                 case BoolType:
                     terms.append("printf(\"%s\", (" + arg_code + " ? \"true\" : \"false\"))")
                 case _:
-                    terms.append("printf(\"%ld\", " + arg_code + ")")
+                    # Same int-under-"%ld" varargs fix as codegen_print's
+                    # own (no-class-argument) path -- see its comment.
+                    terms.append("printf(\"%ld\", (long) " + arg_code + ")")
             i = i + 1
         terms.append("printf(\"\\n\")")
         return "(" + join_with(terms, ", ") + ")"
@@ -1021,8 +1033,32 @@ class Codegen:
                                 inferred = self.infer_expr_type(v, known)
                     case Expr:
                         value_code = self.codegen_expr(v, known)
+                        initializer_type = self.infer_expr_type(v, known)
                         if inferred == none:
-                            inferred = self.infer_expr_type(v, known)
+                            inferred = initializer_type
+                        else:
+                            # A declared union type (`x: Item | none =
+                            # none`) whose initializer's own type is
+                            # narrower (a member, or NoneType for a bare
+                            # `none` literal) needs the same wrap
+                            # codegen_stmt's Assignment/Return arms
+                            # already give a narrower value assigned
+                            # into an established union -- otherwise the
+                            # raw, unwrapped initializer (here, `0 /*
+                            # unsupported literal */` for a `none`
+                            # literal) gets assigned straight into the
+                            # union-typed C local, which doesn't
+                            # type-check.
+                            match inferred as decl_t:
+                                case UnionLType:
+                                    match initializer_type as it2:
+                                        case LType:
+                                            if not types_equal(decl_t, it2):
+                                                value_code = wrap_union_value(decl_t.members, it2, value_code)
+                                        case none:
+                                            pass
+                                case _:
+                                    pass
                     case none:
                         pass
                 name = self.ident_pattern_name(result.pattern)
@@ -1050,7 +1086,29 @@ class Codegen:
                         name = self.ident_target_name(result.target)
                         match self.infer_expr_type(result.value, known) as it:
                             case LType:
-                                known[name] = it
+                                # Mirrors checker.lucid's own bind():
+                                # when this name's established type
+                                # (from its VarDef's declared type, or an
+                                # earlier assignment -- already in
+                                # `known`, via infer_local_types' own
+                                # pre-pass) is a wider union than this
+                                # particular value's own type, keep the
+                                # established union in `known` (a later
+                                # read, or a later reassignment back to a
+                                # different member, still needs to see
+                                # it) and wrap this value into it instead
+                                # of overwriting -- the same
+                                # Return-statement wrapping
+                                # codegen_stmt's own Return arm already
+                                # does, just at an Assignment instead.
+                                match known.get(name, none) as existing:
+                                    case UnionLType:
+                                        if not types_equal(existing, it):
+                                            value_code = wrap_union_value(existing.members, it, value_code)
+                                    case none:
+                                        known[name] = it
+                                    case _:
+                                        pass
                             case none:
                                 pass
                         return indent + name + " = " + value_code + ";"
@@ -1486,7 +1544,25 @@ class Codegen:
                         case _:
                             match self.infer_expr_type(result.value, known) as it:
                                 case LType:
-                                    known[self.ident_target_name(result.target)] = it
+                                    # Mirrors checker.lucid's own bind():
+                                    # a name already established (by an
+                                    # earlier VarDef/Assignment in this
+                                    # same pre-pass) as a wider union
+                                    # keeps that union -- this specific
+                                    # assignment's own narrower type
+                                    # (including NoneType, a
+                                    # reassignment back to `none`) must
+                                    # not downgrade it, or codegen_body's
+                                    # declaration loop would hoist the
+                                    # wrong C type from whichever
+                                    # assignment happened to run last in
+                                    # this pass.
+                                    name = self.ident_target_name(result.target)
+                                    match known.get(name, none) as existing:
+                                        case UnionLType:
+                                            pass
+                                        case _:
+                                            known[name] = it
                                 case none:
                                     pass
                 case If:

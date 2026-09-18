@@ -169,13 +169,35 @@ class Checker:
     # `x` as `long` from the first). Every VarDef/Assignment/for-loop
     # target binds through here instead of writing `known` directly.
     def bind(self, known: dict[str, LType], name: str, t: LType, span: Span):
+        # A narrower value (including a bare `none` literal, NoneType)
+        # assigned to a name whose established type (from its VarDef's
+        # own declared type, or an earlier assignment) is a wider union
+        # -- `value: Expr | none = none` then later `value =
+        # self.parse_expr()`, then maybe `value = none` again -- a real
+        # pattern self-host/parser.lucid uses throughout. Checked before
+        # the blanket "none can't be bound" rule below, since `t` being
+        # NoneType is exactly the shape a reassignment back to `none`
+        # takes. Keeps the established union type in `known` rather than
+        # narrowing it (a later read still needs to see the full union);
+        # codegen_stmt's own Assignment arm wraps the narrower value
+        # into the union at this exact assignment site, mirroring how a
+        # Return statement already wraps a member value into a declared
+        # union return type.
+        match known.get(name, none) as wider:
+            case UnionLType:
+                if assignable_to(t, wider):
+                    return
+            case _:
+                pass
         match t as nt:
             case NoneType:
-                # `none` is only ever a return type in this subset --
-                # never a value a variable can hold. A call to a
-                # `-> none` function is only meaningful as its own
-                # statement (`some_none_fn()`), not assigned anywhere.
-                self.error("'" + name + "' cannot be bound to a none-typed value in this subset (a call to a function returning none is only supported as a statement on its own)", span)
+                # `none` is only ever a return type, or a value assigned
+                # to a name whose established type is a union containing
+                # it (see above), in this subset -- never a value a
+                # variable can hold outright. A call to a `-> none`
+                # function is only meaningful as its own statement
+                # (`some_none_fn()`), not assigned anywhere.
+                self.error("'" + name + "' cannot be bound to a none-typed value in this subset (a call to a function returning none is only supported as a statement on its own, or assigned to a name whose established type is a union that includes none)", span)
                 return
             case _:
                 pass
@@ -455,7 +477,7 @@ class Checker:
                             case LType:
                                 match inferred as it:
                                     case LType:
-                                        if not types_equal(dt, it):
+                                        if not assignable_to(it, dt):
                                             self.error("variable '" + p.name + "' declared as " + type_name(dt) + " but initialized with " + type_name(it), result.span)
                                     case none:
                                         pass

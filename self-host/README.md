@@ -399,6 +399,23 @@ sensible pattern this subset doesn't recognize yet.
   declared type already could — a real gap only surfaced by
   `union_types.lucid`'s own `Stack` class, never hit by any earlier
   `compile_demo_programs/*.lucid` file.
+  `bind()` also now accepts *narrowing* a name whose established type
+  (from its own `VarDef`'s declared type, or an earlier assignment) is a
+  union, down to one of its members — `x: Item | none = none` then
+  later `x = Item(1)`, or back to `x = none` — instead of rejecting it
+  as a type change; the established union stays the name's own type in
+  `known` either way (a later read, or a later reassignment to a
+  *different* member, still needs to see the full union), and
+  `codegen.lucid`'s VarDef/Assignment codegen wraps the narrower value
+  into that union at the assignment site, the same way a `return`
+  already does. The reverse direction — a name already established as a
+  plain, non-union type later assigned a union-typed value — is still
+  rejected: `assignable_to` is asymmetric on purpose (a union can
+  satisfy a narrower expectation only by first being narrowed, never the
+  other way). This is `self-host/parser.lucid`'s own dominant pattern
+  (`value: Expr | none = none` then `value = self.parse_expr()` deeper
+  in the same function) and was the next thing probing it surfaced after
+  `self-host/lexer.lucid` itself started compiling (see Status above).
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -696,9 +713,15 @@ sensible pattern this subset doesn't recognize yet.
   another returning `Item | ItemError` narrowed by a `match` that also
   mutates `self` in one arm (mirroring `next_token`), two chained `?`
   propagations, one of them through a `list[Item] | ItemError` return
-  (mirroring `tokenize`'s own `list[Token] | LexError`), and an empty
+  (mirroring `tokenize`'s own `list[Token] | LexError`), an empty
   list literal as a constructor argument inferring its element type
-  from the target field's own declared type (`Stack([], 0)`) — this
+  from the target field's own declared type (`Stack([], 0)`), a local
+  declared as `Item | none` reassigned to a narrower `Item` and back to
+  `none` across a loop (mirroring `self-host/parser.lucid`'s own
+  `value: Expr | none = none` pattern, the next target this uncovered —
+  see Status above), and a bare negative literal passed directly to
+  `print()` (catching a real, previously-undiscovered miscompile — see
+  the Design notes entry below) — this
   file's own shapes are deliberately the exact ones
   `self-host/lexer.lucid` itself needs, verified by actually compiling
   `self-host/lexer.lucid` standalone afterward: zero check errors, and
@@ -1234,3 +1257,26 @@ work rather than a rushed fix bundled in here:
   it's already the exact declared union (an `UnionLType`, matched before
   falling through to the general member-wrapping case), return it
   as-is.
+- **`print(-1)` printed a garbage value instead of `-1` — a real,
+  previously-undiscovered miscompile, unrelated to union types, caught
+  while extending `union_types.lucid` to exercise a bare negative
+  literal as a `print()` argument for the first time.** A C integer
+  literal like `-1` defaults to type `int`, not `long`, unless it's too
+  large to fit — but `codegen_print`'s format string always uses `%ld`
+  for a non-str/bool argument, and `printf` is variadic: its argument
+  promotion only ever widens `int` to `int` (already done), never on to
+  `long`, so `printf("%ld\n", (-1))` reads a `long`-sized value out of
+  storage that only ever held an `int`-sized one — undefined behavior,
+  and on this machine, a real wrong answer (`4294967295`, `-1`
+  reinterpreted as an unsigned 32-bit value, not `-1`). Every earlier
+  `compile_demo_programs/*.lucid` file only ever printed a *computed*
+  int value (an arithmetic result, a variable, a function's return
+  value) — always genuinely `long`-typed by the time it reaches
+  `printf`, since it flows through a `long`-typed C local or parameter
+  along the way — never a bare negative literal passed straight through
+  as a `print()` argument, so nothing exercised this exact path before.
+  Fixed with an explicit `(long)` cast on every non-str/bool `print()`
+  argument (`codegen_print` and `codegen_print_with_class_args` both) —
+  correct whether or not the underlying C expression was already
+  `long`, and cheap enough to apply unconditionally rather than trying
+  to detect which expressions specifically need it.
