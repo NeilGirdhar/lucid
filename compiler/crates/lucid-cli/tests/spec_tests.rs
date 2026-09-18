@@ -1217,6 +1217,9 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: function 'bad' must have an explicit return type annotation in this subset",
         "ERROR: function 'bad' can fall off its end without returning a int",
         "--- if/elif/else that all return still passes ---\n(no errors)",
+        "ERROR: break statement outside a loop",
+        "ERROR: continue statement outside a loop",
+        "--- break in a nested loop's if_broken re-breaking the outer loop still passes ---\n(no errors)",
     ] {
         assert!(
             stdout.contains(expected),

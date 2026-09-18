@@ -165,7 +165,16 @@ pieces is close to feature parity with its Rust counterpart.
   return; no `else` at all means falling through is possible), since
   reaching the closing brace of a non-`void` C function without a
   `return` is undefined behavior (C11 6.9.1p12), not just "returns some
-  default" — `gcc` without `-Wall` doesn't even warn about it.
+  default" — `gcc` without `-Wall` doesn't even warn about it. `break`/
+  `continue` outside a loop are rejected too — codegen maps them
+  straight to C's own `break`/`continue`, which `gcc` itself does catch
+  ("not within loop", loud, not a silent miscompile), but Lucid rejects
+  them at check time, and a loop's `if_broken` clause needs its own
+  rule here: a `break` inside it refers to whatever loop was already
+  enclosing the one that just ran the clause, not the clause's own
+  loop (which has already exited by the time `if_broken` runs) — the
+  same "outer context" rule `codegen.lucid`'s `broken_flag` threading
+  uses for the identical case.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it

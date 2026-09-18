@@ -99,3 +99,11 @@ report("function falling off its end without returning rejected", "def bad() -> 
 report("if without else falling through rejected", "def bad(n: int) -> int:\n    if n > 0:\n        return 1\n")
 
 report("if/elif/else that all return still passes", "def ok(n: int) -> int:\n    if n > 0:\n        return 1\n    elif n < 0:\n        return 2\n    else:\n        return 3\n")
+
+report("break outside a loop rejected", "def bad() -> int:\n    break\n    return 0\n")
+
+report("continue outside a loop rejected", "def bad() -> int:\n    continue\n    return 0\n")
+
+report("break in a loop's if_broken with no outer loop rejected", "def bad() -> int:\n    for x in [1, 2, 3]:\n        break\n    if_broken:\n        break\n    return 0\n")
+
+report("break in a nested loop's if_broken re-breaking the outer loop still passes", "def ok() -> int:\n    for row in [1, 2, 3]:\n        for col in [1, 2, 3]:\n            break\n        if_broken:\n            break\n    return 0\n")

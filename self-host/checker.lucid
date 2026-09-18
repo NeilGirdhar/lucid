@@ -201,7 +201,7 @@ class Checker:
         # scope a top-level statement actually runs in.
         if len(top_level) > 0:
             module_scope: dict[str, LType] = {:}
-            self.check_block(top_level, module_scope, none, false)
+            self.check_block(top_level, module_scope, none, false, false)
 
     def check_function(self, fn: FunctionDef):
         known: dict[str, LType] = {:}
@@ -221,7 +221,7 @@ class Checker:
         # collapsing them into one `LType | none` would make a return
         # inside the latter wrongly report "outside a function" too.
         expected_return: LType | none = resolve_type_expr(fn.return_type)
-        self.check_block(fn.body, known, expected_return, true)
+        self.check_block(fn.body, known, expected_return, true, false)
         match expected_return as rt:
             case LType:
                 if not definitely_returns(fn.body):
@@ -229,11 +229,11 @@ class Checker:
             case none:
                 pass
 
-    def check_block(self, stmts: list[Stmt], known: dict[str, LType], expected_return: LType | none, in_function: bool):
+    def check_block(self, stmts: list[Stmt], known: dict[str, LType], expected_return: LType | none, in_function: bool, in_loop: bool):
         for stmt in stmts:
-            self.check_stmt(stmt, known, expected_return, in_function)
+            self.check_stmt(stmt, known, expected_return, in_function, in_loop)
 
-    def check_stmt(self, stmt: Stmt, known: dict[str, LType], expected_return: LType | none, in_function: bool):
+    def check_stmt(self, stmt: Stmt, known: dict[str, LType], expected_return: LType | none, in_function: bool, in_loop: bool):
         match stmt as result:
             case VarDef:
                 declared: LType | none = resolve_type_expr(result.type_annotation)
@@ -278,21 +278,27 @@ class Checker:
                         self.error("only a plain name is supported as an assignment target", result.span)
             case If:
                 self.check_condition(result.condition, known, "if")
-                self.check_block(result.then_branch, known, expected_return, in_function)
+                self.check_block(result.then_branch, known, expected_return, in_function, in_loop)
                 for branch in result.elif_branches:
                     self.check_condition(branch.condition, known, "elif")
-                    self.check_block(branch.body, known, expected_return, in_function)
+                    self.check_block(branch.body, known, expected_return, in_function, in_loop)
                 match result.else_branch as else_body:
                     case list[Stmt]:
-                        self.check_block(else_body, known, expected_return, in_function)
+                        self.check_block(else_body, known, expected_return, in_function, in_loop)
                     case none:
                         pass
             case While:
                 self.check_condition(result.condition, known, "while")
-                self.check_block(result.body, known, expected_return, in_function)
+                # The loop's own body is "in a loop"; its if_broken
+                # clause runs after the loop has already exited, so a
+                # break/continue there refers to whatever loop was
+                # already enclosing this one (in_loop, unchanged) -- the
+                # same "outer context" rule codegen.lucid's broken_flag
+                # threading uses for the same clause.
+                self.check_block(result.body, known, expected_return, in_function, true)
                 match result.if_broken_body as broken_body:
                     case list[Stmt]:
-                        self.check_block(broken_body, known, expected_return, in_function)
+                        self.check_block(broken_body, known, expected_return, in_function, in_loop)
                     case none:
                         pass
             case For:
@@ -306,10 +312,10 @@ class Checker:
                                 pass
                     case _:
                         self.error("only a plain name is supported as a for-loop target in this subset", result.span)
-                self.check_block(result.body, known, expected_return, in_function)
+                self.check_block(result.body, known, expected_return, in_function, true)
                 match result.if_broken_body as broken_body:
                     case list[Stmt]:
-                        self.check_block(broken_body, known, expected_return, in_function)
+                        self.check_block(broken_body, known, expected_return, in_function, in_loop)
                     case none:
                         pass
             case Return:
@@ -332,9 +338,11 @@ class Checker:
                         if in_function:
                             self.error("bare return is not supported in this subset (every checked function returns a value)", result.span)
             case Break:
-                pass
+                if not in_loop:
+                    self.error("break statement outside a loop", result.span)
             case Continue:
-                pass
+                if not in_loop:
+                    self.error("continue statement outside a loop", result.span)
             case Pass:
                 pass
             case ExprStmt:
