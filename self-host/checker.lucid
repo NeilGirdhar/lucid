@@ -45,7 +45,7 @@
 # collections, closures, exceptions, `?`, comprehensions -- everything
 # else checker.lucid's header comment's Rust counterpart covers.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
 from .types import LType, IntType, BoolType, StrType, ClassType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
@@ -454,6 +454,24 @@ class Checker:
                         return none
             case Call:
                 return self.check_call(result, known)
+            case Index:
+                receiver_type = self.check_expr(result.value, known)
+                index_type = self.check_expr(result.index, known)
+                match receiver_type as rt:
+                    case StrType:
+                        match index_type as it:
+                            case IntType:
+                                return StrType()
+                            case LType:
+                                self.error("string index must be int, got " + type_name(it), result.span)
+                                return none
+                            case none:
+                                return none
+                    case LType:
+                        self.error("indexing is only supported on str in this subset", result.span)
+                        return none
+                    case none:
+                        return none
             case _:
                 self.error("unsupported expression kind", expr.span)
                 return none

@@ -30,3 +30,19 @@ concatenated = "hello, " + "world"
 print(concatenated)
 print(greet("Alice"))
 print(len(greet("Bob")))
+
+def count_char(s: str, target: str) -> int:
+    count = 0
+    for i in range(len(s)):
+        if s[i] == target:
+            count = count + 1
+    return count
+
+s = "hello"
+print(s[0])
+print(s[1])
+print(s[-1])
+print("xyz"[2])
+print(s[1] + s[0])
+print(count_char("hello", "l"))
+print(count_char("hello", "z"))

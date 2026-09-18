@@ -1224,6 +1224,9 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: continue statement outside a loop",
         "--- break in a nested loop's if_broken re-breaking the outer loop still passes ---\n(no errors)",
         "ERROR: cannot redefine builtin 'len' in this subset",
+        "--- string indexing is supported ---\n(no errors)",
+        "ERROR: indexing is only supported on str in this subset",
+        "ERROR: string index must be int, got str",
     ] {
         assert!(
             stdout.contains(expected),

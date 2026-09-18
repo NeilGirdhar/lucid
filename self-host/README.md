@@ -148,7 +148,16 @@ pieces is close to feature parity with its Rust counterpart.
   int/bool/str — `codegen.lucid` has a per-class printer for those, see
   below — but rejects one with a class-typed field (no nested printer
   call yet); `freeze(...)` is rejected outright, not emulated (see
-  `compile_demo.lucid`'s entry below for why). Every name (a `VarDef`,
+  `compile_demo.lucid`'s entry below for why); `s[i]` is checked only
+  for `s: str` and `i: int`, yielding `str` — `list[T]` indexing isn't
+  supported yet, so anything else is "indexing is only supported on
+  str in this subset". A function or `dispatch def` named
+  `print`/`range`/`len`/`freeze` is rejected outright, since
+  `check_call`/`codegen_expr` recognize those names ahead of consulting
+  the registered function table — a user redefinition would register a
+  real signature but still compile as the builtin, silently diverging
+  from the interpreter (which does let a later definition shadow one).
+  Every name (a `VarDef`,
   a plain `x = ...` assignment, a `for`-loop target) has exactly one
   type for its whole enclosing function — re-binding a name to a
   *different* type is rejected, and a `VarDef` with both a declared
@@ -199,7 +208,12 @@ pieces is close to feature parity with its Rust counterpart.
   goes through `lucid_rt_str_concat`, another prelude helper
   (`malloc`+`strcpy`+`strcat`, this subset's first heap allocation,
   leaked like everything else here); `len()` of a `str` is `strlen`,
-  cast to `long`); a binary operator on two class-typed
+  cast to `long`; `s[i]` goes through `lucid_rt_str_index`, a third
+  prelude helper — a negative index counts from the end (matching the
+  reference interpreter), and unlike `+`/`len()` it doesn't allocate: a
+  static `char[256][2]` table of every possible one-character string,
+  each already NUL-terminated by C's own zero-initialization of static
+  storage, returns a stable pointer per byte value instead); a binary operator on two class-typed
   operands, or a call to a name with more than one `dispatch def`,
   resolves to one specific C function chosen by the static argument
   types and name-mangled by them (two `__add__` overloads, on `Vector2D`
@@ -281,8 +295,10 @@ pieces is close to feature parity with its Rust counterpart.
   value, alone, mixed with other `print` arguments, and with more than
   one field of mixed str/int/bool type — and `strings` — `==`/`!=`/
   `<`/`<=`/`>`/`>=`, `len()`, and `+` concatenation on `str`, standalone,
-  assigned to a variable, and through user functions), plus one Lucid string literal
-  that's supposed to fail checking, proving a real error stops codegen
+  assigned to a variable, and through user functions, plus `s[i]`
+  indexing, negative indices, and indexing inside a loop), plus one
+  Lucid string literal that's supposed to fail checking, proving a
+  real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
   compiled here (yet) — it needs `freeze()`, rejected outright in this
   subset rather than emulated: lucid-runtime's `freeze` mutates a
@@ -467,6 +483,9 @@ work rather than a rushed fix bundled in here:
   keyword wherever it's emitted as a raw C name (struct fields,
   constructor parameters, at minimum) — not attempted here since finding
   every such emission site in a 21,000-line file is its own project.
+  `self-host/codegen.lucid` shares this exact gap (class field names,
+  parameter names, and local variable names all become C names
+  unescaped) — not fixed there either, for the same reason.
 - **Attribute access on a match-narrowed variable doesn't inherit the
   narrowed type.** `match e as result: case Binary: return result.op`
   compiles `result.op` (statically a `str`, once narrowed to `Binary`)
