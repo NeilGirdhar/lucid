@@ -8988,6 +8988,84 @@ pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> Arc<[Diagnostic]> {
     Arc::from(diagnostics)
 }
 
+/// Type-check `file` with every module it (transitively) imports resolved
+/// first, so an imported class/function/variable carries its real type
+/// instead of the `Any` a bare `TypeChecker::check_module` falls back to
+/// for every `from <module> import ...` -- `lucid_checker::TypeChecker`
+/// does no file I/O of its own; this is the resolving caller its
+/// `imported_envs` field and `merge_import_from` method exist for.
+///
+/// Not itself `#[salsa::tracked]`: `lucid_checker::TypeEnvironment` has no
+/// `Eq`/`Hash` impl to satisfy salsa's revision comparison, and the
+/// project graph is a DAG in the common case, so the `cache` parameter
+/// (scoped to one top-level call from `project_diagnostics`) gets the bulk
+/// of the memoization that matters without that plumbing. A shared,
+/// cross-call cache is future work if this shows up in profiles.
+///
+/// A cycle (including a self-import) resolves to that file's *unmerged*
+/// environment -- the plain `check_module` result, imports stubbed to
+/// `Any` -- rather than failing outright: `module_order` already accepts
+/// a cycle when every module in it only contributes declarations, and
+/// those still type-check on their own; only cross-referencing a
+/// cycle-mate's actual inferred value would need the merge this skips.
+type ResolvedCheck = (
+    lucid_checker::TypeEnvironment,
+    Vec<lucid_checker::TypeWarning>,
+);
+
+fn resolved_type_environment(
+    db: &dyn Db,
+    project: Project,
+    file: SourceFile,
+    in_progress: &mut std::collections::HashSet<SourceFile>,
+    cache: &mut HashMap<SourceFile, Result<ResolvedCheck, lucid_checker::TypeError>>,
+) -> Result<ResolvedCheck, lucid_checker::TypeError> {
+    if let Some(cached) = cache.get(&file) {
+        return cached.clone();
+    }
+    let result = (|| {
+        let module = parse_ast(db, file)
+            .as_ref()
+            .map_err(|message| lucid_checker::TypeError {
+                message: message.to_string(),
+                span: source_fallback_span(db, file).unwrap_or_default(),
+            })?;
+        let mut checker = lucid_checker::TypeChecker::new();
+        if in_progress.insert(file) {
+            for statement in &module.statements {
+                let module_name = match statement {
+                    lucid_syntax::Stmt::Import { module, .. }
+                    | lucid_syntax::Stmt::FromImport { module, .. } => module,
+                    _ => continue,
+                };
+                if is_builtin_module(module_name) {
+                    continue;
+                }
+                let Some(imported_file) = resolve_import(db, project, file, module_name.clone())
+                else {
+                    continue;
+                };
+                // An error inside a dependency is that dependency's own
+                // diagnostic (file_diagnostics/project_diagnostics already
+                // report it there); this file still gets checked against
+                // whatever of the dependency's environment resolved.
+                if let Ok((imported_env, _)) =
+                    resolved_type_environment(db, project, *imported_file, in_progress, cache)
+                {
+                    checker
+                        .imported_envs
+                        .insert(module_name.clone(), imported_env);
+                }
+            }
+            in_progress.remove(&file);
+        }
+        checker.check_module(module)?;
+        Ok((checker.env, checker.warnings))
+    })();
+    cache.insert(file, result.clone());
+    result
+}
+
 /// Aggregate structured diagnostics for a complete project, including
 /// unresolved module edges.  This is the semantic diagnostic boundary used by
 /// editors and future build commands; string formatting is deferred to the
@@ -9028,8 +9106,21 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
             return Arc::from(diagnostics);
         }
     };
+    let mut resolved_cache = HashMap::new();
     for file in order.iter().copied() {
         let file_diagnostics = file_diagnostics(db, file);
+        // file_diagnostics() checks this file in isolation, so a
+        // `from <module> import <name>` binds `name` to `Any` regardless
+        // of what `<module>` actually declares -- correct for parse
+        // errors (E0001) and duplicate top-level declarations (E0100),
+        // which don't depend on imports at all, but an E0200 type error
+        // or W0200 warning from *that* pass can be a false positive (an
+        // imported class construction rejected as "unknown enclosing
+        // class") or a false negative (a real mismatch against an
+        // imported function's actual signature, invisible behind `Any`).
+        // Keep E0001/E0100 from it; supersede E0200/W0200 below with
+        // resolved_type_environment(), which merges each import's real,
+        // already-checked declarations in first.
         let private_import_error_spans = file_diagnostics
             .iter()
             .filter(|diagnostic| {
@@ -9038,7 +9129,47 @@ pub fn project_diagnostics(db: &dyn Db, project: Project) -> Arc<[Diagnostic]> {
             })
             .map(|diagnostic| diagnostic.span)
             .collect::<std::collections::HashSet<_>>();
-        diagnostics.extend(file_diagnostics.iter().cloned());
+        diagnostics.extend(
+            file_diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code != "E0200" && diagnostic.code != "W0200")
+                .cloned(),
+        );
+        // file_diagnostics() already reports a parse failure itself
+        // (E0001, possibly twice -- a lexical error and the parser errors
+        // it cascades into); resolved_type_environment() would just
+        // re-parse, fail the same way, and report a second, redundant
+        // diagnostic for it under E0200.
+        if parse_ast(db, file).as_ref().is_err() {
+            continue;
+        }
+        let mut in_progress = std::collections::HashSet::new();
+        match resolved_type_environment(db, project, file, &mut in_progress, &mut resolved_cache) {
+            Ok((_, warnings)) => {
+                for warning in warnings {
+                    diagnostics.push(Diagnostic {
+                        file,
+                        severity: Severity::Warning,
+                        code: "W0200".into(),
+                        message: warning.message,
+                        span: warning.span,
+                        related: Arc::from([]),
+                        fix: None,
+                    });
+                }
+            }
+            Err(error) => {
+                diagnostics.push(Diagnostic {
+                    file,
+                    severity: Severity::Error,
+                    code: "E0200".into(),
+                    message: error.message,
+                    span: error.span,
+                    related: Arc::from([]),
+                    fix: None,
+                });
+            }
+        }
         for import in imports(db, file).iter() {
             if is_builtin_module(import) {
                 continue;
@@ -14654,6 +14785,55 @@ mod tests {
             type_check_project(&db, project)
                 .iter()
                 .any(|error| error.starts_with("E0300:"))
+        );
+    }
+
+    #[test]
+    fn project_diagnostics_resolve_imported_class_and_function_types() {
+        let mut db = CompilerDatabase::default();
+        let shapes = db.add_file(
+            "pkg/shapes.lucid",
+            "sealed class Shape:\n    pass\n\nclass Circle(Shape):\n    radius: float\n\n    def area(self) -> float:\n        return 3.0 * self.radius * self.radius\n\ndef describe(s: Shape) -> str:\n    match s as result:\n        case Circle:\n            return \"circle\"\n\ndef add_one(n: int) -> int:\n    return n + 1\n",
+        );
+        let main = db.add_file(
+            "pkg/main.lucid",
+            "from .shapes import Shape, Circle, describe, add_one\n\nc = Circle(2.0)\narea = c.area()\nlabel = describe(c)\nnext_value = add_one(41)\n",
+        );
+        let project = Project::new(&db, vec![shapes, main]);
+        let diagnostics = project_diagnostics(&db, project);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "expected no errors, got {diagnostics:?}"
+        );
+
+        // A class imported by name still resolves as a real class, not
+        // Any -- constructing it with the wrong arity is rejected.
+        let bad_construct = db.add_file(
+            "pkg/bad_construct.lucid",
+            "from .shapes import Circle\n\nc = Circle(1.0, 2.0)\n",
+        );
+        let bad_construct_project = Project::new(&db, vec![shapes, bad_construct]);
+        assert!(
+            project_diagnostics(&db, bad_construct_project)
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error),
+            "expected an arity error constructing an imported class with too many arguments"
+        );
+
+        // A function imported by name keeps its real signature, not Any --
+        // calling it with the wrong argument type is rejected.
+        let bad_call = db.add_file(
+            "pkg/bad_call.lucid",
+            "from .shapes import add_one\n\nadd_one(\"not an int\")\n",
+        );
+        let bad_call_project = Project::new(&db, vec![shapes, bad_call]);
+        assert!(
+            project_diagnostics(&db, bad_call_project)
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error),
+            "expected a type error calling an imported function with a wrong-typed argument"
         );
     }
 
