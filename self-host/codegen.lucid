@@ -15,20 +15,29 @@
 # Deliberately a small subset, not feature parity with lucid-codegen (a
 # ~16,000-line crate with dynamic LucidVal boxing, generic numeric
 # promotion, exception unwinding, and far more): `int`/`bool` are a C
-# `long`, `str` a `const char*`, a class a plain (not heap-allocated) C
-# struct passed and returned by value; arithmetic/comparison/logical
-# operators on int/bool map straight to their C equivalents (`//`/`%`
-# through two `static` helpers -- Lucid's are Euclidean, unlike C's
-# truncating or Python's floored division: the remainder is always in
-# [0, |b|) regardless of either operand's sign); a binary operator on two
+# `long`, `str` a `const char*`, a class a heap-allocated, pointer-typed
+# C struct (`ClassName *`, matching lucid-runtime's own reference
+# semantics -- see c_type_of's own comment), `list[T]`/`dict[str, V]`
+# the same way, and a union return type a small by-value tagged struct
+# (see emit_union_type); arithmetic/comparison/logical operators on
+# int/bool map straight to their C equivalents (`//`/`%` through two
+# `static` helpers -- Lucid's are Euclidean, unlike C's truncating or
+# Python's floored division: the remainder is always in [0, |b|)
+# regardless of either operand's sign); a binary operator on two
 # class-typed operands, or a call to a name with more than one
 # `dispatch def`, resolves to one specific C function chosen by the
 # static argument types, name-mangled by them (`__add___Vector2D_
 # Vector2D`) since C has no overloading of its own; a Lucid function
-# literally named `main` becomes C's own `int main(void)`; `print(...)`
-# takes any number of int/bool/str arguments, each formatted by its own
-# inferred type. Left for later: inheritance, generics, methods with
-# `self`, collections, closures, exceptions, `?`, comprehensions --
+# literally named `main` becomes C's own `int main(void)`; a method
+# compiles to an ordinary C function taking `ClassName *self` explicitly
+# (see method_c_name); `match` on a union subject compiles to an
+# if/else-if chain on its own `.tag` field, never a C `switch` (see
+# codegen_match); `?` desugars to a temp, a tag check with an early
+# return, and an unwrap assignment, only as a plain assignment's own
+# right-hand side (see codegen_propagate_assignment); `print(...)` takes
+# any number of int/bool/str/class arguments, each formatted by its own
+# inferred type. Left for later: inheritance, generics, collections
+# beyond list[T]/dict[str, V], closures, exceptions, comprehensions --
 # everything else checker.lucid's header comment's Rust counterpart
 # covers, since codegen never accepts more than checker.lucid does.
 # Also assumes (not yet enforced by checker.lucid) that every local
@@ -37,8 +46,8 @@
 # variable declared inside one branch invisible after it, unlike Lucid's
 # own more permissive same-function visibility.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, type_name, mangle_component, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
 
 runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
 
@@ -162,6 +171,89 @@ def emit_dict_type(value_type: LType) -> str:
     parts.append("static " + ctype + " " + name + "_get(" + name + " *d, const char *key, " + ctype + " default_value) {\n    long i = 0;\n    while (i < d->len) {\n        if (strcmp(d->keys[i], key) == 0) {\n            return d->values[i];\n        }\n        i = i + 1;\n    }\n    return default_value;\n}")
     return join_with(parts, "\n\n")
 
+# The C name for a union return type -- `mangle_component(UnionLType(...))`
+# already returns "union_LexError_Token" (members canonically sorted, see
+# types.lucid's sorted_member_names); this just adds the same `lucid_`
+# prefix every other generated type name gets. Shared by c_type_of and
+# emit_union_type so the two can never name the same union differently.
+def union_c_name(members: list[LType]) -> str:
+    return "lucid_" + mangle_component(UnionLType(members))
+
+# A union type -- `Token | LexError`, `Token | none`, `list[Token] |
+# LexError` -- is a plain, by-value (not heap-allocated) tagged C
+# struct: an int `tag` plus one field per non-`none` member, named
+# positionally (`v0`, `v1`, ...) by that member's own index in
+# sorted_union_members(members), the same index `tag` holds when that
+# member is the active one. `none` gets a tag value but no field -- it
+# carries no data to store, the same reason NoneType itself has no C
+# representation as a value. By value, not by pointer: unlike a class or
+# list[T]/dict[str, V] (which need reference semantics because a Lucid
+# program can alias and mutate them), a union value only ever exists
+# transiently, between a call that produces it and the '?'/match
+# statement that narrows it immediately -- nothing in this subset ever
+# aliases one, so a small by-value struct (an int plus, at most, one
+# pointer or long) is both correct and cheap to copy.
+def emit_union_type(members: list[LType]) -> str:
+    ordered = sorted_union_members(members)
+    name = union_c_name(members)
+    fields: list[str] = ["    long tag;"]
+    i = 0
+    while i < len(ordered):
+        match ordered[i] as m:
+            case NoneType:
+                pass
+            case _:
+                fields.append("    " + c_type_of(m) + " v" + str(i) + ";")
+        i = i + 1
+    return "typedef struct {\n" + join_with(fields, "\n") + "\n} " + name + ";"
+
+# The tag value (an index into sorted_union_members(members)) a value of
+# type `m` gets when wrapped into a union of `members`. Only ever called
+# with an `m` checker.lucid has already confirmed is one of `members'`
+# own members (assignable_to), so the scan always finds one.
+def union_member_index(members: list[LType], m: LType) -> int:
+    ordered = sorted_union_members(members)
+    i = 0
+    while i < len(ordered):
+        if types_equal(ordered[i], m):
+            return i
+        i = i + 1
+    return 0
+
+# Wraps `value_code` (a value of type `m`, already codegen'd) into a
+# union-of-`members` compound literal -- `(lucid_union_LexError_Token)
+# {.tag = 1, .v1 = value_code}`. `m` being NoneType (the `return none`
+# case) omits the field entirely, matching emit_union_type's own field
+# skip for a `none` member.
+def wrap_union_value(members: list[LType], m: LType, value_code: str) -> str:
+    i = union_member_index(members, m)
+    name = union_c_name(members)
+    match m as mt:
+        case NoneType:
+            return "(" + name + "){.tag = " + str(i) + "}"
+        case _:
+            return "(" + name + "){.tag = " + str(i) + ", .v" + str(i) + " = " + value_code + "}"
+
+# Used by Codegen.collect_union_types to dedup: is `t` (order-
+# insensitively) equal to one already found?
+def union_already_found(found: list[UnionLType], t: UnionLType) -> bool:
+    for f in found:
+        if types_equal(f, t):
+            return true
+    return false
+
+def sort_union_types(types: list[UnionLType]) -> list[UnionLType]:
+    names: list[str] = []
+    for t in types:
+        names.append(mangle_component(t))
+    ordered_names = sorted(names)
+    result: list[UnionLType] = []
+    for n in ordered_names:
+        for t in types:
+            if mangle_component(t) == n:
+                result.append(t)
+    return result
+
 def dispatch_op_name(op: str) -> str | none:
     if op == "ADD":
         return "__add__"
@@ -221,6 +313,10 @@ def c_type_of(t: LType) -> str:
             return "lucid_list_" + mangle_component(result.element_type) + " *"
         case DictType:
             return "lucid_dict_str_" + mangle_component(result.value_type) + " *"
+        case UnionLType:
+            # By value, not by pointer -- see emit_union_type's own
+            # header comment for why.
+            return union_c_name(result.members)
         case NoneType:
             return "void"
         case _:
@@ -354,10 +450,19 @@ class Codegen:
                         return BoolType()
                     case StrLit:
                         return StrType()
+                    case NoneLit:
+                        # Only ever meaningful wrapped into a union
+                        # return type (see codegen_stmt's Return arm) --
+                        # matching checker.lucid's own check_expr, which
+                        # is what lets `return none` from a `-> Token |
+                        # none` method reach codegen at all.
+                        return NoneType()
                     case _:
                         return none
             case Ident:
                 return known.get(result.name, none)
+            case Propagate:
+                return self.infer_propagate_ok_type(result, known)
             case Binary:
                 left_type = self.infer_expr_type(result.left, known)
                 right_type = self.infer_expr_type(result.right, known)
@@ -485,6 +590,29 @@ class Codegen:
                                 return none
                     case _:
                         return none
+            case _:
+                return none
+
+    # Mirrors checker.lucid's check_propagate -- the single non-error
+    # member's type, inferred (not checked, since a program that reaches
+    # codegen has already passed the checker) purely so a `?`-RHS
+    # Assignment's own target gets the right type hoisted by
+    # infer_local_types before codegen_stmt ever emits the desugared
+    # statement sequence (see codegen_propagate_assignment).
+    def infer_propagate_ok_type(self, prop: Propagate, known: dict[str, LType]) -> LType | none:
+        match self.infer_expr_type(prop.expr, known) as it:
+            case UnionLType:
+                ok_types: list[LType] = []
+                for m in it.members:
+                    match m as mt:
+                        case ClassType:
+                            if not mt.name.endswith("Error"):
+                                ok_types.append(mt)
+                        case _:
+                            ok_types.append(mt)
+                if len(ok_types) == 1:
+                    return ok_types[0]
+                return none
             case _:
                 return none
 
@@ -626,8 +754,41 @@ class Codegen:
                 match self.classes.get(result.class_name, none) as cls:
                     case ClassSig:
                         args: list[str] = []
-                        for a in result.args:
-                            args.append(self.codegen_expr(a.value, known))
+                        i = 0
+                        while i < len(result.args) and i < len(cls.fields):
+                            av = result.args[i].value
+                            field_type_i = cls.fields[i].field_type
+                            arg_code = "0"
+                            # Mirrors checker.lucid's own check_construct
+                            # bidirectional handling: an empty list/dict
+                            # literal argument (`Stack([], 0)`) needs the
+                            # field's own declared type to know which
+                            # `_new()`/`_of(0, ...)` to emit, the same
+                            # reason codegen_stmt's VarDef arm special-
+                            # cases an empty literal.
+                            match av as avr:
+                                case ListExpr:
+                                    if len(avr.elements) == 0:
+                                        match field_type_i as ft:
+                                            case ListType:
+                                                arg_code = "lucid_list_" + mangle_component(ft.element_type) + "_new()"
+                                            case _:
+                                                arg_code = self.codegen_expr(av, known)
+                                    else:
+                                        arg_code = self.codegen_expr(av, known)
+                                case DictExpr:
+                                    if len(avr.entries) == 0:
+                                        match field_type_i as ft:
+                                            case DictType:
+                                                arg_code = "lucid_dict_str_" + mangle_component(ft.value_type) + "_of(0, (const char *[]){0}, (" + c_type_of(ft.value_type) + "[]){0})"
+                                            case _:
+                                                arg_code = self.codegen_expr(av, known)
+                                    else:
+                                        arg_code = self.codegen_expr(av, known)
+                                case _:
+                                    arg_code = self.codegen_expr(av, known)
+                            args.append(arg_code)
+                            i = i + 1
                         return "lucid_new_" + result.class_name + "(" + join_with(args, ", ") + ")"
                     case none:
                         return "0 /* unknown class */"
@@ -814,13 +975,13 @@ class Codegen:
     # always rebinds it to that loop's own flag (or none), per
     # docs/for-and-while.md's "an if_broken clause belongs to the loop
     # immediately before it".
-    def codegen_block(self, stmts: list[Stmt], indent: str, known: dict[str, LType], broken_flag: str | none) -> str:
+    def codegen_block(self, stmts: list[Stmt], indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
         lines: list[str] = []
         for s in stmts:
-            lines.append(self.codegen_stmt(s, indent, known, broken_flag))
+            lines.append(self.codegen_stmt(s, indent, known, broken_flag, expected_return))
         return join_with(lines, "\n")
 
-    def codegen_stmt(self, s: Stmt, indent: str, known: dict[str, LType], broken_flag: str | none) -> str:
+    def codegen_stmt(self, s: Stmt, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
         match s as result:
             case VarDef:
                 value_code = "0"
@@ -872,6 +1033,11 @@ class Codegen:
                         pass
                 return indent + name + " = " + value_code + ";"
             case Assignment:
+                match result.value as rhs:
+                    case Propagate:
+                        return self.codegen_propagate_assignment(result, rhs, indent, known, expected_return)
+                    case _:
+                        pass
                 value_code = self.codegen_expr(result.value, known)
                 match result.target as target:
                     case Attribute:
@@ -890,15 +1056,15 @@ class Codegen:
                         return indent + name + " = " + value_code + ";"
             case If:
                 cond = self.codegen_expr(result.condition, known)
-                then_code = self.codegen_block(result.then_branch, indent + "    ", known, broken_flag)
+                then_code = self.codegen_block(result.then_branch, indent + "    ", known, broken_flag, expected_return)
                 text = indent + "if (" + cond + ") {\n" + then_code + "\n" + indent + "}"
                 for branch in result.elif_branches:
                     elif_cond = self.codegen_expr(branch.condition, known)
-                    elif_code = self.codegen_block(branch.body, indent + "    ", known, broken_flag)
+                    elif_code = self.codegen_block(branch.body, indent + "    ", known, broken_flag, expected_return)
                     text = text + " else if (" + elif_cond + ") {\n" + elif_code + "\n" + indent + "}"
                 match result.else_branch as else_body:
                     case list[Stmt]:
-                        else_code = self.codegen_block(else_body, indent + "    ", known, broken_flag)
+                        else_code = self.codegen_block(else_body, indent + "    ", known, broken_flag, expected_return)
                         text = text + " else {\n" + else_code + "\n" + indent + "}"
                     case none:
                         pass
@@ -908,18 +1074,51 @@ class Codegen:
                 match result.if_broken_body as broken_body:
                     case list[Stmt]:
                         loop_flag = "__lucid_broke_" + str(result.span.line) + "_" + str(result.span.column)
-                        body = self.codegen_block(result.body, indent + "        ", known, loop_flag)
-                        broken_code = self.codegen_block(broken_body, indent + "        ", known, broken_flag)
+                        body = self.codegen_block(result.body, indent + "        ", known, loop_flag, expected_return)
+                        broken_code = self.codegen_block(broken_body, indent + "        ", known, broken_flag, expected_return)
                         return indent + "{\n" + indent + "    int " + loop_flag + " = 0;\n" + indent + "    while (" + cond + ") {\n" + body + "\n" + indent + "    }\n" + indent + "    if (" + loop_flag + ") {\n" + broken_code + "\n" + indent + "    }\n" + indent + "}"
                     case none:
-                        body = self.codegen_block(result.body, indent + "    ", known, none)
+                        body = self.codegen_block(result.body, indent + "    ", known, none, expected_return)
                         return indent + "while (" + cond + ") {\n" + body + "\n" + indent + "}"
             case For:
-                return self.codegen_for(result, indent, known, broken_flag)
+                return self.codegen_for(result, indent, known, broken_flag, expected_return)
             case Return:
                 match result.value as v:
                     case Expr:
-                        return indent + "return " + self.codegen_expr(v, known) + ";"
+                        value_code = self.codegen_expr(v, known)
+                        match expected_return as rt:
+                            case UnionLType:
+                                # The value's own static type is usually
+                                # exactly one union member (`return
+                                # LexError(...)`, `return none`), needing
+                                # a wrap into the declared union return
+                                # type's own tagged struct -- but it can
+                                # also already BE that exact union
+                                # (`return self.next_token()` from
+                                # inside `next_token` itself, a real
+                                # program shape in self-host/lexer.lucid:
+                                # a method returning its own call, whose
+                                # inferred type is already `Token |
+                                # LexError`), in which case wrapping
+                                # again would nest a union inside its own
+                                # `.v0` field and fail to compile --
+                                # checker.lucid's own Return-checking
+                                # (check_stmt's assignable_to) accepts
+                                # both shapes because types_equal's own
+                                # first branch already covers "same
+                                # union", so codegen has to make the same
+                                # distinction explicitly here, not just
+                                # membership.
+                                match self.infer_expr_type(v, known) as vt:
+                                    case UnionLType:
+                                        pass
+                                    case LType:
+                                        value_code = wrap_union_value(rt.members, vt, value_code)
+                                    case none:
+                                        pass
+                            case _:
+                                pass
+                        return indent + "return " + value_code + ";"
                     case none:
                         return indent + "return;"
             case Break:
@@ -936,8 +1135,151 @@ class Codegen:
                 return indent + self.codegen_expr(result.expr, known) + ";"
             case MetadataStmt:
                 return ""
+            case MatchStmt:
+                return self.codegen_match(result, indent, known, broken_flag, expected_return)
             case _:
                 return indent + "/* unsupported statement */"
+
+    # Desugars `name = expr?` (checker.lucid's check_rhs_expr only
+    # allows '?' here -- see its own header comment) into the statement
+    # sequence docs/question-mark-operator.md's own desugaring describes,
+    # built directly in C since a GNU statement-expression is off the
+    # table: evaluate `expr` once into a temp of its own (source) union
+    # type, check its tag against the one error member, return early
+    # (wrapped into the enclosing function's own union return type) if
+    # it's active, otherwise assign the temp's ok-member field to the
+    # assignment's target. `?`'s error-recognition (a class name ending
+    # in "Error") and the exactly-one-error/exactly-one-ok requirement
+    # both mirror check_propagate exactly, since codegen never re-checks
+    # anything checker.lucid already approved -- see this method's own
+    # narrower restriction (checker.lucid's check_propagate note) on why
+    # this subset requires exactly one error member, not "at least one"
+    # the way compiler/crates/lucid-checker itself allows.
+    def codegen_propagate_assignment(self, assign: Assignment, prop: Propagate, indent: str, known: dict[str, LType], expected_return: LType | none) -> str:
+        match self.infer_expr_type(prop.expr, known) as it:
+            case UnionLType:
+                ok_types: list[LType] = []
+                err_types: list[LType] = []
+                for m in it.members:
+                    match m as mt:
+                        case ClassType:
+                            if mt.name.endswith("Error"):
+                                err_types.append(mt)
+                            else:
+                                ok_types.append(mt)
+                        case _:
+                            ok_types.append(mt)
+                if len(ok_types) != 1 or len(err_types) != 1:
+                    return indent + "/* unsupported '?' */"
+                ok_type = ok_types[0]
+                err_type = err_types[0]
+                temp = "__lucid_prop_" + str(prop.span.line) + "_" + str(prop.span.column)
+                inner_code = self.codegen_expr(prop.expr, known)
+                err_index = union_member_index(it.members, err_type)
+                ok_index = union_member_index(it.members, ok_type)
+                err_field = temp + ".v" + str(err_index)
+                wrapped_err = err_field
+                match expected_return as rt:
+                    case UnionLType:
+                        wrapped_err = wrap_union_value(rt.members, err_type, err_field)
+                    case _:
+                        pass
+                name = self.ident_target_name(assign.target)
+                known[name] = ok_type
+                union_ctype = union_c_name(it.members)
+                decl = indent + union_ctype + " " + temp + " = " + inner_code + ";"
+                check = indent + "if (" + temp + ".tag == " + str(err_index) + ") {\n" + indent + "    return " + wrapped_err + ";\n" + indent + "}"
+                unwrap = indent + name + " = " + temp + ".v" + str(ok_index) + ";"
+                return decl + "\n" + check + "\n" + unwrap
+            case _:
+                return indent + "/* unsupported '?' */"
+
+    # A minimal `match`: an if/else-if chain on the subject's own `.tag`
+    # field, not a C `switch` -- a `break`/`continue` inside an arm has
+    # to mean whatever loop encloses the match (see check_match's own
+    # header comment in checker.lucid for why a switch would be wrong
+    # here), and an if/else-if chain preserves that for free. The
+    # subject is evaluated into its own temp once (matching
+    # codegen_propagate_assignment's shape) so a multi-arm match doesn't
+    # re-evaluate a subject with side effects once per arm. Each arm's
+    # own alias (if the pattern narrows to a real value, i.e. not
+    # `case none:`) is declared *inside* that arm's own C block, not
+    # hoisted with the rest of the function's locals -- checker.lucid's
+    # check_match narrows it to a different type per arm, which would
+    # break this subset's "one C declaration per local name" invariant
+    # if it were hoisted the normal way (see collect_local_names/
+    # infer_local_types, which both skip a MatchStmt entirely for
+    # exactly this reason -- the alias never becomes an ordinary hoisted
+    # local at all).
+    def codegen_match(self, m: MatchStmt, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
+        subject_code = self.codegen_expr(m.subject, known)
+        match self.infer_expr_type(m.subject, known) as st:
+            case UnionLType:
+                temp = "__lucid_match_" + str(m.span.line) + "_" + str(m.span.column)
+                decl = indent + union_c_name(st.members) + " " + temp + " = " + subject_code + ";"
+                branches: list[str] = []
+                for arm in m.arms:
+                    branches.append(self.codegen_match_arm(arm, st, temp, m.subject_alias, indent, known, broken_flag, expected_return))
+                # `branches` are each a bare "if (...) { ... }" with no
+                # leading indent (unlike codegen_stmt's If arm, which
+                # only ever indents its own first "if" once) -- joined
+                # with " else " and indented here, once, so a two-plus-
+                # arm match doesn't end up with indent re-inserted after
+                # every "else " the way naively indenting each arm on
+                # its own would.
+                return decl + "\n" + indent + join_with(branches, " else ")
+            case _:
+                # checker.lucid's check_match rejects a match on a
+                # non-union subject outright -- there's no tag to switch
+                # on unless the subject's static type is itself a union
+                # (see its own header comment) -- so a program that
+                # reaches codegen never hits this arm.
+                return indent + "/* unsupported match subject */"
+
+    # `subject_type` is always the subject's own UnionLType (see
+    # codegen_match's only call site) -- narrowed here down to the one
+    # member `arm.pattern` names (or, for `case none:`, NoneType, which
+    # gets a tag check but no field access -- 'none' carries no data,
+    # the same reason emit_union_type skips a field for it). The narrowed
+    # alias (if `m`'s subject_alias names one, and the pattern isn't
+    # `case none:`, which has nothing to bind -- see check_match's own
+    # note on why 'none' is never bound) is declared as a plain C local
+    # *inside* this arm's own `{ }` block, not hoisted with the rest of
+    # the function's locals, since it has a different type in each arm.
+    def codegen_match_arm(self, arm: MatchArm, subject_type: UnionLType, temp: str, subject_alias: str | none, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
+        arm_known: dict[str, LType] = copy_type_scope(known)
+        narrowed: LType | none = none
+        match arm.pattern as pat:
+            case TypePattern:
+                match resolve_type_expr(pat.type_expr) as nt:
+                    case LType:
+                        narrowed = nt
+                    case none:
+                        pass
+            case LiteralPattern:
+                narrowed = NoneType()
+            case WildcardPattern:
+                pass
+            case _:
+                pass
+        tag_check = "1"
+        prelude = ""
+        match narrowed as nt2:
+            case NoneType:
+                tag_check = temp + ".tag == " + str(union_member_index(subject_type.members, nt2))
+            case LType:
+                tag_check = temp + ".tag == " + str(union_member_index(subject_type.members, nt2))
+                match subject_alias as alias_name:
+                    case str:
+                        field_index = union_member_index(subject_type.members, nt2)
+                        prelude = indent + "    " + c_type_of(nt2) + " " + alias_name + " = " + temp + ".v" + str(field_index) + ";\n"
+                        arm_known[alias_name] = nt2
+                    case none:
+                        pass
+            case none:
+                pass
+        body = self.codegen_block(arm.body, indent + "    ", arm_known, broken_flag, expected_return)
+        return "if (" + tag_check + ") {\n" + prelude + body + "\n" + indent + "}"
 
     # This subset's `for` only supports two iterable shapes -- a list
     # literal, compiled to a small fixed-size C array plus an index loop,
@@ -947,7 +1289,7 @@ class Codegen:
     # infer_for_iterable_element_type always gives `range`'s element type)
     # -- see infer_for_iterable_element_type / check_for_iterable_element_type.
     # `if_broken` reuses the same flag-variable trick as While's.
-    def codegen_for(self, node: For, indent: str, known: dict[str, LType], broken_flag: str | none) -> str:
+    def codegen_for(self, node: For, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
         target_name = self.ident_pattern_name(node.target)
         has_if_broken = false
         loop_flag = ""
@@ -965,7 +1307,7 @@ class Codegen:
         if has_if_broken:
             body_indent = indent + "        "
             header_indent = indent + "    "
-        body = self.codegen_block(node.body, body_indent, known, inner_flag)
+        body = self.codegen_block(node.body, body_indent, known, inner_flag, expected_return)
 
         loop_text = header_indent + "/* unsupported for-loop iterable */"
         match node.iterable as it:
@@ -1041,7 +1383,7 @@ class Codegen:
         if has_if_broken:
             match node.if_broken_body as broken_body:
                 case list[Stmt]:
-                    broken_code = self.codegen_block(broken_body, indent + "    ", known, broken_flag)
+                    broken_code = self.codegen_block(broken_body, indent + "    ", known, broken_flag, expected_return)
                     return indent + "{\n" + indent + "    int " + loop_flag + " = 0;\n" + loop_text + "\n" + indent + "    if (" + loop_flag + ") {\n" + broken_code + "\n" + indent + "    }\n" + indent + "}"
                 case none:
                     pass
@@ -1103,6 +1445,15 @@ class Codegen:
                             self.collect_local_names(broken_body, names)
                         case none:
                             pass
+                case MatchStmt:
+                    # NOT the subject_alias itself -- codegen_match_arm
+                    # declares that inline, inside each arm's own C
+                    # block, since it has a different type per arm (see
+                    # its own header comment); only an ordinary local a
+                    # match arm's body happens to declare or assign
+                    # needs hoisting the normal way.
+                    for arm in result.arms:
+                        self.collect_local_names(arm.body, names)
                 case _:
                     pass
 
@@ -1166,6 +1517,12 @@ class Codegen:
                             self.infer_local_types(broken_body, known)
                         case none:
                             pass
+                case MatchStmt:
+                    # Same reasoning as collect_local_names's own
+                    # MatchStmt case -- the subject_alias isn't an
+                    # ordinary local here either.
+                    for arm in result.arms:
+                        self.infer_local_types(arm.body, known)
                 case _:
                     pass
 
@@ -1185,7 +1542,7 @@ class Codegen:
     # so the initializing assignment further down in the same body
     # would write to the wrong variable. Every other caller
     # (codegen_function, codegen_method) passes an empty set here.
-    def codegen_body(self, params: list[Param], body: list[Stmt], known: dict[str, LType], exclude: set[str]) -> str:
+    def codegen_body(self, params: list[Param], body: list[Stmt], known: dict[str, LType], exclude: set[str], expected_return: LType | none) -> str:
         self.infer_local_types(body, known)
         local_names: set[str] = {}
         self.collect_local_names(body, local_names)
@@ -1200,7 +1557,7 @@ class Codegen:
                         declarations.append("    " + c_type_of(t) + " " + name + ";")
                     case none:
                         declarations.append("    long " + name + ";")
-        body_code = self.codegen_block(body, "    ", known, none)
+        body_code = self.codegen_block(body, "    ", known, none, expected_return)
         return join_with(declarations, "\n") + "\n" + body_code
 
     def codegen_function(self, fn: FunctionDef, sig: FuncSig) -> str:
@@ -1210,19 +1567,23 @@ class Codegen:
         while i < len(fn.params) and i < len(sig.param_types):
             known[fn.params[i].name] = sig.param_types[i]
             i = i + 1
-        full_body = self.codegen_body(fn.params, fn.body, known, {})
+        full_body = self.codegen_body(fn.params, fn.body, known, {}, sig.return_type)
         c_name = mangled_name(self.functions, sig)
         return c_type_of(sig.return_type) + " " + c_name + "(" + param_list + ") {\n" + full_body + "\n}"
 
     # The module's top-level statements -- the only thing `lucid run`
     # actually executes directly, and the only thing that becomes C's
-    # own `int main(void)` (see codegen_module's header comment).
+    # own `int main(void)` (see codegen_module's header comment). No
+    # enclosing function to return from, so no expected_return either --
+    # checker.lucid already rejects a `return` outside a function, and a
+    # top-level `?` is rejected the same way (check_propagate's own
+    # `expected_return` is `none` here for exactly that reason).
     def codegen_entry_point(self, top_level: list[Stmt]) -> str:
         known: dict[str, LType] = {:}
         module_names: set[str] = {}
         for name in self.module_scope:
             module_names.add(name)
-        full_body = self.codegen_body([], top_level, known, module_names)
+        full_body = self.codegen_body([], top_level, known, module_names, none)
         return "int main(void) {\n" + full_body + "\n}"
 
     def codegen_forward_decl(self, fn: FunctionDef, sig: FuncSig) -> str:
@@ -1237,6 +1598,46 @@ class Codegen:
                 case none:
                     return none
         return find_signature(self.functions, fn.name, param_types)
+
+    # Every distinct union return type this module's registered
+    # functions and methods actually use -- collect_declarations already
+    # built self.functions/self.classes from every FunctionStmt/ClassDef
+    # in the module, so scanning those two tables directly is a complete
+    # enumeration, not a second AST walk that could miss a signature.
+    # Deduplicated by types_equal (order-insensitive -- see UnionLType's
+    # own header comment) and sorted by mangled name, both for the same
+    # reproducible-output reason self.module_scope's own emission sorts.
+    def collect_union_types(self) -> list[UnionLType]:
+        found: list[UnionLType] = []
+        for name in self.functions.signatures:
+            match self.functions.signatures.get(name, none) as sigs:
+                case list[FuncSig]:
+                    for sig in sigs:
+                        match sig.return_type as rt:
+                            case UnionLType:
+                                if not union_already_found(found, rt):
+                                    found.append(rt)
+                            case _:
+                                pass
+                case none:
+                    pass
+        for cname in self.classes:
+            match self.classes.get(cname, none) as cls:
+                case ClassSig:
+                    for mname in cls.methods:
+                        match cls.methods.get(mname, none) as sig:
+                            case FuncSig:
+                                match sig.return_type as rt:
+                                    case UnionLType:
+                                        if not union_already_found(found, rt):
+                                            found.append(rt)
+                                    case _:
+                                        pass
+                            case none:
+                                pass
+                case none:
+                    pass
+        return sort_union_types(found)
 
     def codegen_module(self, stmts: list[Stmt]) -> str:
         self.collect_declarations(stmts)
@@ -1305,6 +1706,22 @@ class Codegen:
                             pass
                 case _:
                     pass
+        # Every union return type any registered function/method
+        # signature actually uses (`Token | LexError`, `Token | none`,
+        # `list[Token] | LexError`, ...), each its own tagged struct --
+        # after every class/list[T]/dict[str, V] type a member could
+        # possibly need (a union member can itself be a class, as here),
+        # but before any function/method forward declaration, since a
+        # union-returning signature's own C return type names one of
+        # these. collect_union_types scans self.functions/self.classes
+        # directly -- the exact signature tables collect_declarations
+        # already built -- rather than walking the AST a second time, so
+        # it can't miss one a walk over statements might (a signature
+        # registered from an import, say). Sorted by name, same
+        # reproducibility reason as the module-level globals just below.
+        for u in self.collect_union_types():
+            parts.append(emit_union_type(u.members))
+            parts.append("")
         # Every module-level name as a real, uninitialized (per C's own
         # zero-initialization of `static` storage) C global -- declared
         # here, after every struct/list[T]/dict[str, V] type it could
@@ -1448,7 +1865,7 @@ def codegen_method(cg: Codegen, cls: ClassSig, fn: FunctionDef, sig: FuncSig) ->
     while i < len(fn.params) and i - 1 < len(sig.param_types):
         known[fn.params[i].name] = sig.param_types[i - 1]
         i = i + 1
-    full_body = cg.codegen_body(fn.params, fn.body, known, {})
+    full_body = cg.codegen_body(fn.params, fn.body, known, {}, sig.return_type)
     c_name = method_c_name(cls.name, fn.name)
     return c_type_of(sig.return_type) + " " + c_name + "(" + codegen_method_param_list(cls, fn.params) + ") {\n" + full_body + "\n}"
 

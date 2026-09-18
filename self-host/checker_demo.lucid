@@ -189,3 +189,41 @@ report("a module-level variable is readable inside a function", "x: int = 5\n\nd
 report("a module-level variable is readable inside a class method", "keywords: dict[str, str] = {\n    \"true\": \"TRUE\",\n}\n\nclass Lexer:\n    pos: int\n\n    def lookup(self, text: str) -> str:\n        return keywords.get(text, \"IDENT\")\n\nl = Lexer(0)\nprint(l.lookup(\"true\"))\n")
 
 report("a local assignment shadows a module-level name of the same type", "count: int = 0\n\ndef ok() -> int:\n    count = 5\n    return count\n\nprint(ok())\nprint(count)\n")
+
+report("a method returning T | none, narrowed by match, is supported", "class Item:\n    value: int\n\nclass Holder:\n    item: Item\n\n    def maybe(self, present: bool) -> Item | none:\n        if present:\n            return self.item\n        return none\n\ndef ok() -> int:\n    h = Holder(Item(1))\n    match h.maybe(true) as result:\n        case Item:\n            print(result.value)\n        case none:\n            print(0)\n    return 0\n")
+
+report("a method returning T | ErrorClass, narrowed by match, is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\nclass Holder:\n    item: Item\n\n    def get(self, ok: bool) -> Item | ItemError:\n        if ok:\n            return self.item\n        return ItemError(\"missing\")\n\ndef ok() -> int:\n    h = Holder(Item(1))\n    match h.get(true) as result:\n        case Item:\n            print(result.value)\n        case ItemError:\n            print(result.message)\n    return 0\n")
+
+report("'?' propagation is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\ndef get_item(ok: bool) -> Item | ItemError:\n    if ok:\n        return Item(1)\n    return ItemError(\"missing\")\n\ndef use_item(ok: bool) -> int | ItemError:\n    item = get_item(ok)?\n    return item.value\n\ndef ok() -> int:\n    use_item(true)\n    return 0\n")
+
+report("a local variable can be bound directly to a union-typed value", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef ok() -> int:\n    x = maybe_item(true)\n    match x as result:\n        case Item:\n            print(result.value)\n        case none:\n            print(0)\n    return 0\n")
+
+report("an empty list literal as a constructor argument infers from the field's declared type", "class Box:\n    items: list[int]\n    count: int\n\ndef ok() -> int:\n    b = Box([], 0)\n    print(len(b.items))\n    return 0\n")
+
+report("a union-typed field is rejected", "class Item:\n    value: int\n\nclass Bad:\n    x: Item | none\n\ndef ok() -> int:\n    return 0\n")
+
+report("a union-typed parameter is rejected", "class Item:\n    value: int\n\ndef bad(x: Item | none) -> int:\n    return 0\n")
+
+report("print() of a union-typed value is rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    print(maybe_item(true))\n    return 0\n")
+
+report("'?' on a non-union type is rejected", "def get() -> int:\n    return 5\n\ndef bad() -> int:\n    x = get()?\n    return x\n")
+
+report("'?' on a union with no error variant is rejected", "def get(flag: bool) -> int | bool:\n    if flag:\n        return 1\n    return true\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
+
+report("'?' on a union with more than one error variant is rejected", "class FooError:\n    message: str\n\nclass BarError:\n    message: str\n\ndef get(flag: bool) -> int | FooError | BarError:\n    if flag:\n        return 1\n    return FooError(\"bad\")\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
+
+report("'?' on a union with more than one non-error member is rejected", "class FooError:\n    message: str\n\ndef get(flag: bool) -> int | bool | FooError:\n    if flag:\n        return 1\n    return FooError(\"bad\")\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
+
+report("'?' whose error type the enclosing function's return type doesn't include is rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
+
+report("'?' used outside a function is rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\nx = get(true)?\n")
+
+report("'?' nested inside a larger expression is rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> int | ItemError:\n    x = get(true)? + 1\n    return x\n")
+
+report("match on a non-union subject is rejected", "def ok() -> int:\n    x = 5\n    match x as result:\n        case _:\n            print(result)\n    return 0\n")
+
+report("a non-exhaustive match on a union is rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    match maybe_item(true) as result:\n        case Item:\n            print(result.value)\n    return 0\n")
+
+report("a match arm guard is rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    match maybe_item(true) as result:\n        case Item if true:\n            print(result.value)\n        case none:\n            print(0)\n    return 0\n")
+
+report("a match pattern type that isn't part of the subject union is rejected", "class Item:\n    value: int\n\nclass Other:\n    n: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    match maybe_item(true) as result:\n        case Other:\n            print(result.n)\n        case none:\n            print(0)\n    return 0\n")

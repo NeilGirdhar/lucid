@@ -5,12 +5,16 @@
 # overload a call means), so the representation and the class/function
 # tables built from it live here once, not duplicated in each.
 #
-# Deliberately small: `int`, `bool`, `str`, and a named class -- no
-# generics, no unions, no inference beyond "what does this literal/
-# parameter/field/return type say". A class's fields and a function's
-# parameters/return type are always exactly one of these.
+# Deliberately small: `int`, `bool`, `str`, a named class, `list[T]`,
+# `dict[str, V]`, and (as of UnionLType, below) a union of these -- no
+# generics beyond list/dict, no inference beyond "what does this
+# literal/parameter/field/return type say". A class's fields and a
+# function's parameters are always exactly one of the non-union types --
+# only a return type or a local variable may be a union (see
+# UnionLType's own comment for why the distinction is fields/parameters,
+# not "value vs. return type" the way NoneType's is).
 
-from .ast import TypeExpr, NamedType
+from .ast import TypeExpr, NamedType, UnionType
 
 sealed class LType:
     pass
@@ -60,6 +64,34 @@ class ListType(LType):
 class DictType(LType):
     value_type: LType
 
+# A union of two or more of the types above. Unlike NoneType, this
+# *does* have a real runtime representation (a tagged struct, see
+# codegen.lucid's emit_union_type) -- a bare local variable can hold one
+# (self-host/lexer.lucid does exactly this: `layout =
+# self.handle_indentation()` binds a plain local to a `Token | none`
+# value, narrowed only later by the `match` that reads it), it's a
+# parameter or field that's rejected (checker.lucid's
+# collect_function_signature/method_signature_for/collect_class all
+# reject a UnionLType there explicitly), since nothing needs a
+# union-typed parameter or field yet and accepting one would need its
+# own call-site/construction-site wrapping logic this subset doesn't
+# have. `resolve_type_expr` only ever produces one from a `-> A | B`
+# annotation. `checker.lucid`'s `check_stmt` narrows a union value to
+# one member at a time, either through a `match` statement's own type
+# patterns (`case Token:`/`case none:`) or through `?` (see
+# check_propagate) -- every *other* use of a union-typed value (as a
+# binary/unary operand, a call argument, a dict/list element, ...) is
+# rejected the same way any other unsupported expression shape is,
+# simply by none of those checks having a UnionLType case to accept.
+# `members` keeps the order written in the source (`A | B` is `[A, B]`,
+# not `[B, A]`) for type_name's own diagnostics; mangle_component and
+# types_equal both treat it as an unordered set instead, via
+# sorted_member_names, so `A | B` and `B | A` (if either spelling
+# appeared) would still name the same C struct and compare
+# equal.
+class UnionLType(LType):
+    members: list[LType]
+
 def type_name(t: LType) -> str:
     match t as result:
         case IntType:
@@ -76,8 +108,42 @@ def type_name(t: LType) -> str:
             return "dict[str, " + type_name(result.value_type) + "]"
         case NoneType:
             return "none"
+        case UnionLType:
+            text = ""
+            i = 0
+            while i < len(result.members):
+                if i > 0:
+                    text = text + " | "
+                text = text + type_name(result.members[i])
+                i = i + 1
+            return text
         case _:
             return "?"
+
+# Every member's own mangle_component, sorted alphabetically -- an
+# order-insensitive canonical form so `A | B` and `B | A` (if either
+# spelling appeared) name the same C struct in codegen.lucid, the same
+# way sorted module-level names give codegen.lucid's own static-global
+# emission a stable order despite dict[str, V]'s unordered iteration.
+def sorted_member_names(members: list[LType]) -> list[str]:
+    names: list[str] = []
+    for m in members:
+        names.append(mangle_component(m))
+    return sorted(names)
+
+# The members themselves, in the same canonical (sorted-by-
+# mangle_component) order sorted_member_names names -- codegen.lucid's
+# emit_union_type needs the actual LType (for c_type_of), not just its
+# name, to build each tagged struct's own field list, with the same tag
+# (positional index into this list) c_type_of/codegen's tag checks use.
+def sorted_union_members(members: list[LType]) -> list[LType]:
+    ordered_names = sorted_member_names(members)
+    result: list[LType] = []
+    for n in ordered_names:
+        for m in members:
+            if mangle_component(m) == n:
+                result.append(m)
+    return result
 
 # Like type_name, but for building a C identifier (mangled_name in
 # codegen.lucid) -- type_name's `list[int]` has brackets, which aren't
@@ -88,6 +154,11 @@ def mangle_component(t: LType) -> str:
             return "list_" + mangle_component(result.element_type)
         case DictType:
             return "dict_str_" + mangle_component(result.value_type)
+        case UnionLType:
+            text = "union"
+            for n in sorted_member_names(result.members):
+                text = text + "_" + n
+            return text
         case _:
             return type_name(t)
 
@@ -135,6 +206,43 @@ def types_equal(a: LType, b: LType) -> bool:
                     return true
                 case _:
                     return false
+        case UnionLType:
+            match b as right:
+                case UnionLType:
+                    if len(left.members) != len(right.members):
+                        return false
+                    for lm in left.members:
+                        found = false
+                        for rm in right.members:
+                            if types_equal(lm, rm):
+                                found = true
+                        if not found:
+                            return false
+                    return true
+                case _:
+                    return false
+        case _:
+            return false
+
+# Is a value of type `value_type` usable where `expected` is required --
+# either the same type, or, when `expected` is a union, exactly one of
+# its members? Used everywhere a union return type meets a concrete
+# value: `return LexError(...)` from a `-> Token | LexError` method
+# (value_type is LexError, expected is the union, not equal to it), and
+# a `match` arm's own pattern type narrowing a union subject down to one
+# member (see checker.lucid's MatchStmt handling). Never the other
+# direction -- a union can't satisfy a non-union `expected`, since
+# nothing in this subset can hold a union value at rest, only narrow one
+# to a member immediately.
+def assignable_to(value_type: LType, expected: LType) -> bool:
+    if types_equal(value_type, expected):
+        return true
+    match expected as ut:
+        case UnionLType:
+            for m in ut.members:
+                if types_equal(value_type, m):
+                    return true
+            return false
         case _:
             return false
 
@@ -167,6 +275,8 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
                         return none
                     case NoneType:
                         return none
+                    case UnionLType:
+                        return none
                     case LType:
                         return ListType(et)
                     case none:
@@ -187,6 +297,8 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
                         return none
                     case ClassType:
                         return none
+                    case UnionLType:
+                        return none
                     case LType:
                         return DictType(vt)
                     case none:
@@ -194,6 +306,19 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
             if len(result.name) > 0 and result.name[0] >= "A" and result.name[0] <= "Z":
                 return ClassType(result.name)
             return none
+        case UnionType:
+            members: list[LType] = []
+            for member_expr in result.types:
+                match resolve_type_expr(member_expr) as mt:
+                    case UnionLType:
+                        return none
+                    case LType:
+                        members.append(mt)
+                    case none:
+                        return none
+            if len(members) < 2:
+                return none
+            return UnionLType(members)
         case _:
             return none
 

@@ -21,6 +21,21 @@ own output exactly: Lucid, compiling Lucid, to a native binary — for the
 subset covered so far, not yet for the whole language. None of the five
 pieces is close to feature parity with its Rust counterpart.
 
+**`self-host/lexer.lucid` itself now compiles through this pipeline**:
+`checker.lucid` reports zero errors on it, and `codegen.lucid`'s
+generated C compiles cleanly with `gcc` — the actual bootstrap target,
+reached after closing the gaps union return types, `match` narrowing,
+and `?` exposed (see the `checker.lucid`/`codegen.lucid` entries below,
+and the `union_types.lucid` compile-demo program, whose shapes were
+chosen specifically to mirror `lexer.lucid`'s own). Not yet linked and
+run end-to-end as a working compiled lexer (that needs a caller — a
+compiled `parser.lucid`, or a small hand-written driver — to actually
+invoke `tokenize` and check its output against the reference
+interpreter's own `tokenize`, the same differential discipline every
+other compiled program in this pipeline already gets); `self-host/
+_probe_selfcompile.lucid` (untracked, a standing local gauge, not
+committed) re-runs this check on demand.
+
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
   the reference interpreter (`lucid run`) and successfully tokenizes its
@@ -295,6 +310,66 @@ pieces is close to feature parity with its Rust counterpart.
   class-typed `obj` resolves `method` against that class's own method
   table and checks `args` against its parameter types, the same shape
   `list[T].append` already used for its one supported method.
+  A function or method's return type can now be a union
+  (`Token | none`, `Token | LexError`) — `types.lucid`'s new
+  `UnionLType`, produced only from a `-> A | B` annotation
+  (`resolve_type_expr`'s new `UnionType` case, never from a field,
+  parameter, list element, or dict value position, which all explicitly
+  reject it), the actual gap that blocked `self-host/lexer.lucid` itself
+  from compiling at all before this (`handle_indentation`, `lex_string`,
+  `next_token`, and `tokenize` all return a union). A bare `x =
+  some_union_returning_call()` binds `x` directly to the whole union (a
+  real, representable value here, unlike `none` — see UnionLType's own
+  header comment in `types.lucid`); `self-host/lexer.lucid`'s own
+  `layout = self.handle_indentation()`, narrowed only by the `match`
+  that reads it next, is exactly this shape. Two ways to narrow one: a
+  `match` statement, and `?`.
+  **`match`** requires a union-typed subject (`check_match` rejects any
+  other type outright — codegen has no tag to switch on otherwise); each
+  arm's pattern is either a `case ClassName:` (a `TypePattern`, checked
+  via `assignable_to` against the subject's own members) or the literal
+  `case none:` (a `LiteralPattern(NoneLit)`) — the two shapes
+  `self-host/lexer.lucid`'s own `match layout as result: case Token: ...
+  case none: ...` uses — or a wildcard `case _:`; no other literal
+  pattern, and no arm guard (`case X if cond:`), is supported. The
+  subject's own `as` alias, if present, is bound to the narrowed type
+  *inside that arm's own body only* — never merged back into the
+  enclosing scope — since it has a *different* type in each arm, which
+  would otherwise violate this subset's "one type per name per function"
+  invariant (see `bind()`'s own comment); nothing in
+  `self-host/lexer.lucid` ever reads the alias again after its own
+  `match` anyway. Exhaustiveness is checked: every member of the
+  subject's union needs its own arm (by name or by wildcard), matching
+  the reference checker's own requirement and giving codegen's
+  tag-check chain nowhere to silently fall through.
+  **`?`** (`check_propagate`) requires its operand's type to be a union
+  with *exactly* one "error" member (a class whose name ends in
+  `"Error"` — the same heuristic `self-host/interpreter.lucid` and
+  `compiler/crates/lucid-checker`'s own `Propagate` handling use) and
+  exactly one non-error member — narrower than the reference checker,
+  which allows more than one error member; see this method's own
+  comment and the Design notes below for why. It requires the enclosing
+  function's own return type to already include the propagated error
+  type (`assignable_to`, the same check a plain `return` uses), and
+  evaluates to the single non-error member's type. `check_rhs_expr`
+  restricts `?` to appearing only as the direct right-hand side of a
+  plain assignment (`tok = lexer.next_token()?`, `tokenize`'s own
+  shape) — not nested inside a larger expression, and not as a
+  `return` statement's own value either (`return parse(text)?`,
+  `docs/question-mark-operator.md`'s own example, which checks out
+  under the full reference checker but isn't one of the two statement
+  shapes `codegen.lucid`'s own desugaring implements — see its entry
+  below); every other appearance of `?` reports a specific error rather
+  than falling through to "unsupported expression kind".
+  `check_construct` also gained the same bidirectional handling VarDef's
+  empty list/dict literal already had, for a constructor argument
+  specifically: `Stack([], 0)`'s empty `[]` argument has nothing of its
+  own for `check_expr` to infer an element type from, so
+  `check_construct` now infers it from the *target field's* own
+  declared type (`items: list[Item]`) instead, the same way a VarDef's
+  declared type already could — a real gap only surfaced by
+  `union_types.lucid`'s own `Stack` class, never hit by any earlier
+  `compile_demo_programs/*.lucid` file.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -479,7 +554,68 @@ pieces is close to feature parity with its Rust counterpart.
   depends on that order (both the `static` declarations and the
   init statements in `main`), since a Lucid `dict`'s own key order
   isn't guaranteed stable, matching an earlier determinism fix to
-  lucid-runtime's own object repr. Lucid has no subprocess/exec builtin, so codegen stops
+  lucid-runtime's own object repr.
+  A union return type (`Token | LexError`) compiles to a small, *by-value*
+  (not heap-allocated) tagged C struct — unlike every reference-semantics
+  type this codegen otherwise emits (a class, `list[T]`, `dict[str, V]`),
+  a union value only ever exists transiently, between the call that
+  produces it and the `match`/`?` that narrows it immediately, so nothing
+  in this subset ever aliases one (`emit_union_type`). Its members are
+  canonicalized into a fixed order first — sorted by
+  `mangle_component`, via `types.lucid`'s own `sorted_union_members`, the
+  same reason module-level names are sorted before emission — so `A | B`
+  and `B | A` (if either spelling appeared) name the same struct
+  (`union_c_name`); the struct is `{ long tag; <ctype> v<i>; ... }`, one
+  field per *non-`none`* member at its own canonical index (`none`
+  itself carries no data, so it gets a tag value but no field, matching
+  `NoneType` having no C representation as a value anywhere else in this
+  codegen either). `wrap_union_value`/`union_member_index` build a
+  compound literal for a concrete member value (`return LexError(...)`
+  from a `-> Token | LexError` method becomes `(lucid_union_LexError_
+  Token){.tag = 0, .v0 = lucid_new_LexError(...)}`) — codegen_stmt's
+  Return arm calls this whenever the returned expression's own inferred
+  type is a *member* of the declared union return type, but skips it
+  when the expression's type already *is* that exact union (`return
+  self.next_token()` from inside `next_token` itself, a real shape in
+  `self-host/lexer.lucid`: a method returning its own recursive call) —
+  wrapping an already-wrapped union a second time doesn't type-check in
+  C at all, a real bug caught by compiling `self-host/lexer.lucid`
+  itself, not by any hand-written `compile_demo_programs/*.lucid` file
+  (see the Design notes entry below). Every distinct union return type
+  any registered function/method signature actually uses gets its own
+  struct, emitted once each (`Codegen.collect_union_types`, deduplicated
+  and sorted the same way the module-scope globals are) after every
+  class/`list[T]`/`dict[str, V]` type a member could reference but before
+  any function/method forward declaration.
+  `match` on a union subject (`codegen_match`) evaluates the subject
+  once into its own temp, then compiles to an if/else-if chain on that
+  temp's `.tag` field — deliberately *not* a C `switch`: this subset's
+  `break`/`continue` map straight to C's own, and a `break` inside a
+  match arm that's itself inside an enclosing `while`/`for` has to mean
+  that loop, never the match — a `switch` would silently steal it
+  instead. Each arm's own narrowed alias (`case Token: ... uses result
+  ...`) is declared as a plain C local *inside that arm's own `{ }`
+  block* (`codegen_match_arm`), never hoisted to the function's shared
+  locals the way an ordinary variable is: it has a different C type in
+  each arm, which would violate this subset's "one C declaration per
+  local name" invariant if hoisted the normal way — `collect_local_names`/
+  `infer_local_types` both gained a `MatchStmt` case that recurses into
+  each arm's own body (so an *ordinary* local a match arm happens to
+  declare still gets hoisted) while leaving the alias itself alone.
+  `?` (`codegen_propagate_assignment`) only compiles as the direct
+  right-hand side of a plain assignment (matching checker.lucid's own
+  restriction) into three C statements: a temp holding the propagated
+  call's own union value, an `if` on the temp's error tag that returns
+  early (wrapping the error into the *enclosing* function's own union
+  return type, which can differ from the propagated call's union — this
+  is exactly `tokenize`'s own shape: `Token | LexError` propagated
+  inside a function returning `list[Token] | LexError`), and a plain
+  assignment unwrapping the temp's ok-tagged field into the assignment's
+  target. No GNU statement-expression anywhere — this subset holds to
+  plain C11, so `?` never appears where only a single C expression is
+  legal (nested in a larger expression, or a `return`'s own value); see
+  checker.lucid's `check_rhs_expr`, which enforces the same restriction.
+  Lucid has no subprocess/exec builtin, so codegen stops
   at emitting C text — invoking a system C compiler on it is necessarily
   a driver step outside Lucid, the same role
   `compiler/crates/lucid-codegen` itself plays (it also just shells out
@@ -490,7 +626,7 @@ pieces is close to feature parity with its Rust counterpart.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles thirteen hand-written programs, each a
+  `codegen.lucid`. Also compiles fourteen hand-written programs, each a
   real file under `self-host/compile_demo_programs/` (recursion,
   iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
   semantics on all four sign combinations, `bools` — bool literals,
@@ -526,7 +662,19 @@ pieces is close to feature parity with its Rust counterpart.
   `self-host/lexer.lucid` itself needs), and a module-level `int`
   shadowed by a same-named local assignment inside a function, which
   must read back the original module-level value afterward, not the
-  local), plus one
+  local) — and `union_types` — a method returning `Item | none`
+  (mirroring `self-host/lexer.lucid`'s own `handle_indentation`),
+  another returning `Item | ItemError` narrowed by a `match` that also
+  mutates `self` in one arm (mirroring `next_token`), two chained `?`
+  propagations, one of them through a `list[Item] | ItemError` return
+  (mirroring `tokenize`'s own `list[Token] | LexError`), and an empty
+  list literal as a constructor argument inferring its element type
+  from the target field's own declared type (`Stack([], 0)`) — this
+  file's own shapes are deliberately the exact ones
+  `self-host/lexer.lucid` itself needs, verified by actually compiling
+  `self-host/lexer.lucid` standalone afterward: zero check errors, and
+  the generated C compiles cleanly with `gcc` (see the Design notes
+  entry below for the two real bugs this surfaced) — plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
@@ -1004,3 +1152,56 @@ work rather than a rushed fix bundled in here:
   fields by name in `Value`'s `Debug` impl before formatting, and
   `codegen.lucid`'s printer sorts its own field list the same way to
   match.
+- **A `match ... as name:` binding only lives inside its own case body —
+  not for the rest of the enclosing function, even past the whole
+  `match` statement.** Written naturally at first as `match subject_type
+  as st: case UnionLType: pass / case LType: ...error...(...)` followed,
+  *after* the match statement ends, by more code reading `st` — this
+  compiles (self-hosted files are ordinary Lucid, no different from any
+  other program), but `lucid run` rejects it with "undefined variable
+  'st'" the moment execution reaches that later code, since `st` was
+  never actually bound there. Not a bug found by inspection — found by
+  actually running `checker.lucid` (this file is Lucid, checked and run
+  by the real toolchain like any other) and hitting the error directly
+  while adding `check_match`. The fix moved everything that needed `st`
+  *inside* the `case UnionLType:` arm itself, matching how every other
+  narrowed binding in this codebase is already scoped in this codebase's
+  own style (see the existing "Reassigning a `match` statement's own
+  scrutinee inside an arm" note above for the same underlying rule from
+  the other direction). Worth remembering for any future self-hosted
+  file: a `match ... as name` binding is arm-scoped, full stop — needing
+  the narrowed value across multiple arms or after the match means
+  either restructuring around a single arm's own block, or assigning a
+  plain, pre-declared variable inside each arm instead (which *is* an
+  ordinary local, not the match's own narrowed binding — `codegen.lucid`'s
+  `codegen_propagate_assignment` hit the identical shape with a plain
+  `wrapped_err` variable first assigned inside two different `match`
+  arms, fixed the same way: pre-declare it with a default value before
+  the match, then only ever *reassign* it inside an arm).
+- **A real, previously-undiscovered miscompile in `codegen.lucid`'s new
+  union-return-type wrapping: a function returning its own recursive
+  call got double-wrapped.** `codegen_stmt`'s Return arm, when the
+  enclosing function's declared return type is a union, wraps the
+  returned value into that union's tagged struct (`wrap_union_value`) —
+  correct for `return LexError(...)` or `return self.make(...)`, where
+  the value's own static type is one *member* of the union. But
+  `self-host/lexer.lucid`'s `next_token` also has `return
+  self.next_token()` (called again after re-lexing past a line
+  continuation) — a value whose own static type is *already* the exact
+  same union (`Token | LexError`), not a member of it. Wrapping it again
+  produced `(lucid_union_LexError_Token){.tag = 0, .v0 =
+  lucid_method_Lexer_next_token(self)}`, assigning a
+  `lucid_union_LexError_Token` value into a field typed `LexError *` — a
+  real `gcc` compile error (`incompatible types when initializing type
+  'LexError *' using type 'lucid_union_LexError_Token'`), not a silent
+  miscompile, but still a program `checker.lucid` accepted (correctly —
+  its own `assignable_to` already treats "value's type equals the whole
+  union" as valid, via `types_equal`'s own first branch) that codegen
+  couldn't actually compile. Caught immediately on the first attempt to
+  compile `self-host/lexer.lucid` itself through this pipeline — no
+  hand-written `compile_demo_programs/*.lucid` file happened to return
+  its own recursive call, so nothing exercised this path before. Fixed
+  by checking the returned expression's own inferred type first: if
+  it's already the exact declared union (an `UnionLType`, matched before
+  falling through to the general member-wrapping case), return it
+  as-is.

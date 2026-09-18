@@ -1261,6 +1261,24 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- a module-level variable is readable inside a function ---\n(no errors)",
         "--- a module-level variable is readable inside a class method ---\n(no errors)",
         "--- a local assignment shadows a module-level name of the same type ---\n(no errors)",
+        "--- a method returning T | none, narrowed by match, is supported ---\n(no errors)",
+        "--- a method returning T | ErrorClass, narrowed by match, is supported ---\n(no errors)",
+        "--- '?' propagation is supported ---\n(no errors)",
+        "--- a local variable can be bound directly to a union-typed value ---\n(no errors)",
+        "--- an empty list literal as a constructor argument infers from the field's declared type ---\n(no errors)",
+        "ERROR: field 'x' has an unsupported type (a union type is only supported as a function/method return type in this subset)",
+        "ERROR: parameter 'x' has an unsupported type (a union type is only supported as a function/method return type in this subset)",
+        "ERROR: print() of a union-typed value is not supported in this subset",
+        "ERROR: '?' is only supported on a union return type in this subset",
+        "ERROR: '?' requires a union type with exactly one error variant (a class whose name ends in 'Error') in this subset",
+        "ERROR: '?' requires exactly one non-error member in this subset",
+        "ERROR: '?' propagates ItemError, but the enclosing function's return type (int) doesn't include it",
+        "ERROR: '?' used outside a function",
+        "ERROR: '?' is only supported as the direct right-hand side of a plain assignment in this subset",
+        "ERROR: match on int is not supported in this subset (only a union-typed subject can be matched)",
+        "ERROR: match on Item | none is not exhaustive: no case for none",
+        "ERROR: a match arm guard ('if ...') is not supported in this subset",
+        "ERROR: pattern type Other is not part of Item | none",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1335,7 +1353,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 14] = [
+    let cases: [(&str, &str); 15] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1354,6 +1372,10 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         (
             "module_scope",
             "self-host/compile_demo_programs/module_scope.lucid",
+        ),
+        (
+            "union_types",
+            "self-host/compile_demo_programs/union_types.lucid",
         ),
         ("vectors", "examples/vectors.lucid"),
     ];

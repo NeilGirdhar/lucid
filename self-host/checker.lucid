@@ -25,7 +25,9 @@
 #     arguments, matching docs/dispatch.md's own resolution rule, purely
 #     at check time -- there is no runtime dispatch mechanism in this
 #     subset, correct as long as every argument's type is exactly known,
-#     which it always is here (no subtyping, no unions)
+#     which it always is here (no subtyping; a union return type, see
+#     below, is the one place this subset's own values aren't a single
+#     exactly-known type until narrowed)
 #   - a binary operator on two class-typed operands resolves to a
 #     `__add__`/`__sub__`/`__mul__`/`__floordiv__`/`__mod__` dispatch
 #     function the same way a call does; otherwise each operator has its
@@ -44,13 +46,23 @@
 #     flow-sensitive definite-assignment analysis, a variable read after
 #     being assigned in only one branch of an `if` is accepted here, not
 #     rejected the way lucid-checker's own analysis would
+#   - a function/method return type can be a union of the above
+#     (`Token | none`, `Token | LexError`) -- never a parameter, field,
+#     or list/dict element type; narrowed by a `match` on a union
+#     subject (exhaustive, class-name or `none` patterns only, no
+#     guards) or by `?` (exactly one error member, a class ending in
+#     "Error", and exactly one non-error member -- narrower than
+#     compiler/crates/lucid-checker's own more permissive multi-error
+#     rule; only supported as a plain assignment's right-hand side, not
+#     nested in an expression or a return statement's own value -- see
+#     check_match/check_propagate's own comments)
 # Left for later: traits, inheritance, generics, method overloading,
 # a dict key/value type beyond str/int/bool/str, closures, exceptions,
-# `?`, comprehensions -- everything else checker.lucid's header
-# comment's Rust counterpart covers.
+# comprehensions -- everything else checker.lucid's header comment's
+# Rust counterpart covers.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, type_name, types_equal, type_list_equal, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, Propagate, FunctionDef, Param, Span
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
     message: str
@@ -101,6 +113,24 @@ def definitely_returns(stmts: list[Stmt]) -> bool:
                         case none:
                             all_others_return = false
                     if all_others_return:
+                        return true
+            case MatchStmt:
+                # Doesn't re-derive exhaustiveness here (this function
+                # has no type info to check a union's own member list
+                # against, unlike check_match) -- if every arm's body
+                # definitely returns but the match itself isn't actually
+                # exhaustive, check_match's own separate pass already
+                # reports that as its own error, so treating "every arm
+                # returns" as good enough here never lets a genuinely
+                # incomplete match through to codegen; it can only ever
+                # make this specific diagnostic (fall off the end)
+                # redundant with that other one, never wrong on its own.
+                if len(result.arms) > 0:
+                    every_arm_returns = true
+                    for arm in result.arms:
+                        if not definitely_returns(arm.body):
+                            every_arm_returns = false
+                    if every_arm_returns:
                         return true
             case _:
                 pass
@@ -179,6 +209,8 @@ class Checker:
                     match resolve_type_expr(m.field.type_annotation) as ft:
                         case NoneType:
                             self.error("field '" + m.field.name + "' has an unsupported type (none isn't a valid field type)", cd.span)
+                        case UnionLType:
+                            self.error("field '" + m.field.name + "' has an unsupported type (a union type is only supported as a function/method return type in this subset)", cd.span)
                         case LType:
                             fields.append(FieldSig(m.field.name, ft))
                         case none:
@@ -220,6 +252,9 @@ class Checker:
                 case NoneType:
                     self.error("parameter '" + p.name + "' has an unsupported type (none isn't a valid parameter type)", fn.span)
                     ok = false
+                case UnionLType:
+                    self.error("parameter '" + p.name + "' has an unsupported type (a union type is only supported as a function/method return type in this subset)", fn.span)
+                    ok = false
                 case LType:
                     param_types.append(pt)
                 case none:
@@ -256,6 +291,9 @@ class Checker:
             match resolve_type_expr(p.type_annotation) as pt:
                 case NoneType:
                     self.error("parameter '" + p.name + "' has an unsupported type (none isn't a valid parameter type)", fn.span)
+                    ok = false
+                case UnionLType:
+                    self.error("parameter '" + p.name + "' has an unsupported type (a union type is only supported as a function/method return type in this subset)", fn.span)
                     ok = false
                 case LType:
                     param_types.append(pt)
@@ -434,7 +472,7 @@ class Checker:
                     case _:
                         self.error("only a plain name is supported as a variable-definition target", result.span)
             case Assignment:
-                value_type = self.check_expr(result.value, known)
+                value_type = self.check_rhs_expr(result.value, known, expected_return)
                 match result.target as target:
                     case Ident:
                         match value_type as vt:
@@ -513,12 +551,21 @@ class Checker:
                     self.error("return statement outside a function", result.span)
                 match result.value as value_expr:
                     case Expr:
+                        # Not check_rhs_expr: '?' is only supported as
+                        # the direct right-hand side of a plain
+                        # assignment in this subset (see
+                        # check_rhs_expr's own header comment) --
+                        # `return expr?` falls through to check_expr's
+                        # own Propagate case, which reports a clear,
+                        # specific error rather than silently accepting
+                        # something codegen.lucid has no statement-level
+                        # desugaring for at a return site.
                         value_type = self.check_expr(value_expr, known)
                         match expected_return as rt:
                             case LType:
                                 match value_type as vt:
                                     case LType:
-                                        if not types_equal(vt, rt):
+                                        if not assignable_to(vt, rt):
                                             self.error("return type mismatch: expected " + type_name(rt) + ", got " + type_name(vt), result.span)
                                     case none:
                                         pass
@@ -543,8 +590,110 @@ class Checker:
                 self.check_expr(result.expr, known)
             case MetadataStmt:
                 pass
+            case MatchStmt:
+                self.check_match(result, known, expected_return, in_function, in_loop)
             case _:
                 self.error("unsupported statement kind", stmt.span)
+
+    # A minimal `match` on a union-typed subject: each arm narrows the
+    # subject to exactly one member (a `case ClassName:`/`case
+    # list[...]:`-shaped TypePattern, or the literal `case none:`, a
+    # LiteralPattern(NoneLit) -- the exact two shapes self-host/
+    # lexer.lucid's own `match layout as result: case Token: ... case
+    # none: ...` uses) or matches anything via `case _:` (a
+    # WildcardPattern, unnarrowed). The subject_alias, if present, is
+    # bound only inside each arm's own body -- narrowed to a different
+    # type per arm, so it can't live in the outer `known` the way an
+    # ordinary local does (see bind()'s "one type per name per
+    # function" rule) -- matching how nothing in self-host/lexer.lucid
+    # ever reads the alias again after the match itself. A guard
+    # ('case X if cond:') isn't supported. Every member of a union
+    # subject must be covered, by name or by a wildcard arm -- the
+    # reference checker requires match exhaustiveness too, and this
+    # subset's own codegen (an if/else-if chain on the subject's tag,
+    # not a C switch, so a break inside an arm still means whatever
+    # loop encloses the match, never the match itself) has no
+    # fallthrough case to emit for a gap.
+    def check_match(self, m: MatchStmt, known: dict[str, LType], expected_return: LType | none, in_function: bool, in_loop: bool):
+        subject_type = self.check_expr(m.subject, known)
+        match subject_type as st:
+            case UnionLType:
+                # The whole rest of this method lives inside this arm,
+                # not after the match statement ends -- `st` (like any
+                # other match-narrowed binding in this subset) is only
+                # in scope within its own case body, not for the
+                # remainder of the enclosing function the way a plain
+                # local would be.
+                covered: list[LType] = []
+                has_wildcard = false
+                for arm in m.arms:
+                    match arm.guard as g:
+                        case Expr:
+                            self.error("a match arm guard ('if ...') is not supported in this subset", arm.span)
+                        case none:
+                            pass
+                    narrowed: LType | none = none
+                    match arm.pattern as pat:
+                        case TypePattern:
+                            match resolve_type_expr(pat.type_expr) as nt:
+                                case LType:
+                                    if assignable_to(nt, st):
+                                        narrowed = nt
+                                        covered.append(nt)
+                                    else:
+                                        self.error("pattern type " + type_name(nt) + " is not part of " + type_name(st), arm.span)
+                                case none:
+                                    self.error("unsupported pattern type in match arm", arm.span)
+                        case LiteralPattern:
+                            match pat.value as lv:
+                                case NoneLit:
+                                    if assignable_to(NoneType(), st):
+                                        narrowed = NoneType()
+                                        covered.append(NoneType())
+                                    else:
+                                        self.error("'none' is not part of " + type_name(st), arm.span)
+                                case _:
+                                    self.error("only a 'none' literal pattern is supported as a match case in this subset", arm.span)
+                        case WildcardPattern:
+                            has_wildcard = true
+                        case _:
+                            self.error("unsupported match pattern kind", arm.span)
+                    arm_known: dict[str, LType] = copy_type_scope(known)
+                    match narrowed as nt2:
+                        case NoneType:
+                            # 'none' is never a value this subset can
+                            # bind a name to (see bind()'s own rule) --
+                            # an arm narrowed to it just doesn't bind
+                            # the alias at all, so reading it inside a
+                            # `case none:` arm is caught as an ordinary
+                            # "undefined name", the same as anywhere
+                            # else `none` is treated as a non-value.
+                            pass
+                        case LType:
+                            match m.subject_alias as alias_name:
+                                case str:
+                                    self.bind(arm_known, alias_name, nt2, arm.span)
+                                case none:
+                                    pass
+                        case none:
+                            pass
+                    self.check_block(arm.body, arm_known, expected_return, in_function, in_loop)
+                if not has_wildcard:
+                    for member in st.members:
+                        if not type_in_list(covered, member):
+                            self.error("match on " + type_name(st) + " is not exhaustive: no case for " + type_name(member), m.span)
+            case LType:
+                # codegen.lucid's own `match` compiles to an if/else-if
+                # chain on the subject's `.tag` field -- there's no tag
+                # to switch on unless the subject's static type is
+                # itself a union, so this subset requires one, the same
+                # way it requires a union before accepting '?' on an
+                # expression (see check_propagate). A match on an
+                # already-fully-known single type has nothing to narrow
+                # anyway.
+                self.error("match on " + type_name(st) + " is not supported in this subset (only a union-typed subject can be matched)", m.span)
+            case none:
+                pass
 
     # codegen.lucid compiles a condition straight to a C `if`/`while`
     # condition, and C accepts any scalar there -- so an unchecked
@@ -570,6 +719,15 @@ class Checker:
                         return BoolType()
                     case StrLit:
                         return StrType()
+                    case NoneLit:
+                        # `none` itself is still not a value this subset
+                        # can hold in a variable (bind() rejects it) --
+                        # returning NoneType here only lets a bare
+                        # `none` literal satisfy assignable_to at a
+                        # union-typed return position (`return none`
+                        # from a `-> Token | none` method), the one
+                        # place a `none` literal is actually meaningful.
+                        return NoneType()
                     case _:
                         self.error("unsupported literal kind", result.span)
                         return none
@@ -733,8 +891,83 @@ class Checker:
                         return DictType(vt)
                     case none:
                         return none
+            case Propagate:
+                self.error("'?' is only supported as the direct right-hand side of a plain assignment in this subset", result.span)
+                return none
             case _:
                 self.error("unsupported expression kind", expr.span)
+                return none
+
+    # '?' is only supported as the direct right-hand side of a plain
+    # assignment in this subset (`tok = lexer.next_token()?`, the shape
+    # self-host/lexer.lucid's own `tokenize` needs) -- not nested inside
+    # a larger expression, and not as a return statement's own value
+    # either (`return parse(text)?`, docs/question-mark-operator.md's
+    # own example), even though that shape checks out fine here: its
+    # desugaring is an early return followed by another return, and
+    # codegen.lucid only implements the statement sequence this one
+    # shape needs (a temp declaration, a tag check with an early return,
+    # then an ordinary assignment) -- see check_stmt's Return arm, which
+    # deliberately calls check_expr here instead, so `return expr?`
+    # reports this same error rather than passing a checker.lucid
+    # doesn't fully back up with codegen.
+    def check_rhs_expr(self, expr: Expr, known: dict[str, LType], expected_return: LType | none) -> LType | none:
+        match expr as result:
+            case Propagate:
+                return self.check_propagate(result, known, expected_return)
+            case _:
+                return self.check_expr(expr, known)
+
+    # Mirrors docs/question-mark-operator.md's own desugaring: `expr?`
+    # requires expr's type to be a union with exactly one "error" member
+    # (a class whose name ends in "Error" -- the same heuristic
+    # self-host/interpreter.lucid and compiler/crates/lucid-checker's
+    # own Propagate handling use; not fixed here, see self-host/
+    # README.md's Design notes) and exactly one non-error member,
+    # requires the enclosing function's own return type to already
+    # include the error member being propagated (the same requirement
+    # docs/question-mark-operator.md itself states), and evaluates to
+    # the single non-error member's type. compiler/crates/lucid-checker
+    # itself allows more than one error member (moving every ok type but
+    # the first into err_types when ok_types has more than one and
+    # err_types is empty) -- narrowed to exactly one of each here since
+    # codegen.lucid's own desugaring wraps a single error value into a
+    # single early return, and nothing in this subset ever needs more
+    # than that (self-host/lexer.lucid's own `?` sites are all a plain
+    # `Token | LexError`/`list[Token] | LexError`).
+    def check_propagate(self, prop: Propagate, known: dict[str, LType], expected_return: LType | none) -> LType | none:
+        inner = self.check_expr(prop.expr, known)
+        match inner as it:
+            case UnionLType:
+                ok_types: list[LType] = []
+                err_types: list[LType] = []
+                for m in it.members:
+                    match m as mt:
+                        case ClassType:
+                            if mt.name.endswith("Error"):
+                                err_types.append(mt)
+                            else:
+                                ok_types.append(mt)
+                        case _:
+                            ok_types.append(mt)
+                if len(err_types) != 1:
+                    self.error("'?' requires a union type with exactly one error variant (a class whose name ends in 'Error') in this subset", prop.span)
+                    return none
+                if len(ok_types) != 1:
+                    self.error("'?' requires exactly one non-error member in this subset", prop.span)
+                    return none
+                match expected_return as rt:
+                    case LType:
+                        for e in err_types:
+                            if not assignable_to(e, rt):
+                                self.error("'?' propagates " + type_name(e) + ", but the enclosing function's return type (" + type_name(rt) + ") doesn't include it", prop.span)
+                    case none:
+                        self.error("'?' used outside a function", prop.span)
+                return ok_types[0]
+            case LType:
+                self.error("'?' is only supported on a union return type in this subset", prop.span)
+                return none
+            case none:
                 return none
 
     # `for` loops don't get full list[T] typing in this subset (see the
@@ -856,11 +1089,39 @@ class Checker:
                         self.error("construct arguments must be positional (no name=value form) in this subset", span)
                 i = 0
                 while i < len(args) and i < len(cls.fields):
-                    arg_type = self.check_expr(args[i].value, known)
+                    field_type_i = cls.fields[i].field_type
+                    arg_type: LType | none = none
+                    # Same bidirectional case as VarDef's own empty
+                    # list/dict literal handling (see its comment) --
+                    # `Stack([], 0)` needs the field's own declared
+                    # `list[Item]` to infer the empty literal's element
+                    # type, since check_expr alone has nothing to look
+                    # at.
+                    match args[i].value as av:
+                        case ListExpr:
+                            if len(av.elements) == 0:
+                                match field_type_i as ft:
+                                    case ListType:
+                                        arg_type = ft
+                                    case _:
+                                        arg_type = self.check_expr(av, known)
+                            else:
+                                arg_type = self.check_expr(av, known)
+                        case DictExpr:
+                            if len(av.entries) == 0:
+                                match field_type_i as ft:
+                                    case DictType:
+                                        arg_type = ft
+                                    case _:
+                                        arg_type = self.check_expr(av, known)
+                            else:
+                                arg_type = self.check_expr(av, known)
+                        case _:
+                            arg_type = self.check_expr(av, known)
                     match arg_type as at:
                         case LType:
-                            if not types_equal(at, cls.fields[i].field_type):
-                                self.error("field '" + cls.fields[i].name + "' expects " + type_name(cls.fields[i].field_type) + ", got " + type_name(at), span)
+                            if not types_equal(at, field_type_i):
+                                self.error("field '" + cls.fields[i].name + "' expects " + type_name(field_type_i) + ", got " + type_name(at), span)
                         case none:
                             pass
                     i = i + 1
@@ -898,6 +1159,8 @@ class Checker:
                                 self.error("print() of a dict value is not supported in this subset", call.span)
                             case NoneType:
                                 self.error("print() of a none-typed value is not supported in this subset (a call to a function returning none produces nothing to print)", call.span)
+                            case UnionLType:
+                                self.error("print() of a union-typed value is not supported in this subset (narrow it first, with '?' or a match statement)", call.span)
                             case _:
                                 pass
                     return none
@@ -1029,6 +1292,15 @@ def copy_type_scope(scope: dict[str, LType]) -> dict[str, LType]:
     for key in scope:
         copied[key] = scope[key]
     return copied
+
+# Used by check_stmt's MatchStmt handling to check exhaustiveness: has
+# some earlier arm already narrowed the subject to this exact member
+# type?
+def type_in_list(types: list[LType], t: LType) -> bool:
+    for x in types:
+        if types_equal(x, t):
+            return true
+    return false
 
 def new_checker() -> Checker:
     return Checker(new_func_table(), {:}, [], {:})
