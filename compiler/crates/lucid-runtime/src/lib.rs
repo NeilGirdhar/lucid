@@ -723,6 +723,18 @@ pub struct Environment {
     pub binding_order: Vec<String>,
     pub parent: Option<Rc<RefCell<Environment>>>,
     pub final_bindings: HashSet<String>,
+    /// True for the environment created to hold a function/method/getter/
+    /// setter/factory call's own parameters and locals (every `call_env` at
+    /// a function-invocation site), never for a block-scoping environment
+    /// (a loop iteration, a comprehension, a `with` body). `mutate` uses
+    /// this to know where the *current function invocation's* scope ends:
+    /// per docs/scope.md ("assignment is always local ... no global, no
+    /// nonlocal"), a bare `x = value` for a name not yet bound anywhere in
+    /// the current call must create a new local in this call, never reach
+    /// across into the closure the call was made from (an enclosing
+    /// function's locals, or the module's globals) and rebind a
+    /// same-named variable there.
+    pub is_call_boundary: bool,
 }
 
 impl Environment {
@@ -737,6 +749,7 @@ impl Environment {
             binding_order: Vec::new(),
             parent: Some(parent),
             final_bindings: HashSet::new(),
+            is_call_boundary: false,
         }
     }
 
@@ -798,6 +811,15 @@ impl Environment {
         if self.bindings.contains_key(name) {
             self.bindings.insert(name.to_string(), value);
             true
+        } else if self.is_call_boundary {
+            // This environment is a function call's own scope, and `name`
+            // isn't bound anywhere within it (checked here and in every
+            // block-scoping child that delegated up to this point) -- stop
+            // here rather than reach into the closure this call was made
+            // from. The caller (Stmt::Assignment's mutate-then-set
+            // fallback) creates the new local in the call's own innermost
+            // scope instead.
+            false
         } else if let Some(ref p) = self.parent {
             p.borrow_mut().mutate(name, value)
         } else {
@@ -6345,6 +6367,7 @@ class ZeroDivisionError(Exception):
                                         let call_env = Rc::new(RefCell::new(
                                             Environment::with_parent(closure),
                                         ));
+                                        call_env.borrow_mut().is_call_boundary = true;
                                         for (param, arg_val) in
                                             params.iter().zip(call_args.drain(..))
                                         {
@@ -7930,6 +7953,7 @@ class ZeroDivisionError(Exception):
                         }
                         let bound_args = self.bind_arguments(&params, &evaluated_args)?;
                         let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+                        call_env.borrow_mut().is_call_boundary = true;
                         for (param, val) in params.iter().zip(bound_args) {
                             call_env.borrow_mut().set(param.name.clone(), val);
                         }
@@ -8208,6 +8232,7 @@ class ZeroDivisionError(Exception):
                                         let mut call_args = vec![bound_self];
                                         let call_env =
                                             Rc::new(RefCell::new(Environment::with_parent(c)));
+                                        call_env.borrow_mut().is_call_boundary = true;
                                         for (param, arg_val) in
                                             params.iter().zip(call_args.drain(..))
                                         {
@@ -8239,6 +8264,7 @@ class ZeroDivisionError(Exception):
                                             let call_env = Rc::new(RefCell::new(
                                                 Environment::with_parent(Rc::clone(&c)),
                                             ));
+                                            call_env.borrow_mut().is_call_boundary = true;
                                             call_env.borrow_mut().set(
                                                 "__current_class".into(),
                                                 Value::Str(class_name.clone()),
@@ -10160,6 +10186,7 @@ class ZeroDivisionError(Exception):
         call_args.extend_from_slice(args);
         let closure = Rc::clone(&self.env);
         let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+        call_env.borrow_mut().is_call_boundary = true;
         for (param, val) in factory.params.iter().zip(call_args) {
             call_env.borrow_mut().set(param.name.clone(), val);
         }
@@ -10308,6 +10335,7 @@ class ZeroDivisionError(Exception):
         closure: Rc<RefCell<Environment>>,
     ) -> Result<Value, RuntimeError> {
         let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+        call_env.borrow_mut().is_call_boundary = true;
         for (param, val) in func.params.iter().zip(args) {
             call_env.borrow_mut().set(param.name.clone(), val.clone());
         }
@@ -10364,6 +10392,7 @@ class ZeroDivisionError(Exception):
                 }
                 let bound = self.bind_arguments(&params, &args)?;
                 let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+                call_env.borrow_mut().is_call_boundary = true;
                 for (param, val) in params.iter().zip(bound) {
                     call_env.borrow_mut().set(param.name.clone(), val);
                 }
@@ -10623,6 +10652,7 @@ class ZeroDivisionError(Exception):
             }
         }
         let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+        call_env.borrow_mut().is_call_boundary = true;
         for (param, val) in params.iter().zip(args) {
             call_env.borrow_mut().set(param.name.clone(), val.clone());
         }
@@ -11145,6 +11175,84 @@ mod tests {
         assert!(
             matches!(interp.env.borrow().get("mapping"), Some(Value::Dict(items)) if items.borrow().len() == 1)
         );
+    }
+
+    #[test]
+    fn assignment_inside_a_function_never_rebinds_an_enclosing_variable() {
+        // docs/scope.md: "assignment is always local, independent of
+        // anything else in the function" -- no `global`, no `nonlocal`.
+        // A bare `i = 0` inside a called function, for a name that
+        // happens to already exist in the caller's scope (or the
+        // module's globals), must create a new local within that call,
+        // never silently rebind the caller's/module's own variable.
+        //
+        // The bug this guards: Stmt::Assignment falls back from
+        // `Environment::mutate` (which walks the parent chain) to
+        // `Environment::set` (local-only) only when `mutate` fails to
+        // find an existing binding *anywhere* up the chain -- including
+        // past the function-call boundary, into the closure the call was
+        // made from. A function reusing a common name like `i` for its
+        // own first-use loop counter would find and overwrite the
+        // caller's or module's same-named variable instead of creating
+        // its own local, corrupting the caller's state after the call
+        // returns. With a loop counter specifically, and the caller
+        // itself in a loop that calls the function every iteration, this
+        // turns into the caller's own loop resetting its counter every
+        // iteration -- an infinite loop, not just a wrong value.
+        let src = r#"
+def inner() -> int:
+    i = 0
+    while i < 3:
+        i = i + 1
+    return i
+
+i = 10
+iterations = 0
+while i < 15:
+    result = inner()
+    i = i + 1
+    iterations = iterations + 1
+    if iterations > 20:
+        break
+final_i = i
+final_iterations = iterations
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("final_i"), Some(Value::Int(15)));
+        assert_eq!(
+            interp.env.borrow().get("final_iterations"),
+            Some(Value::Int(5)),
+            "the outer loop's own `i` must advance by exactly 1 per call to inner(), \
+             unaffected by inner()'s same-named local `i`"
+        );
+    }
+
+    #[test]
+    fn assignment_inside_nested_blocks_still_mutates_the_enclosing_local_within_one_call() {
+        // The fix above must not regress the ordinary, intra-function
+        // case: a variable declared once in a function and reassigned
+        // from inside a nested if/while/for block, all within the same
+        // call, still mutates that one variable rather than shadowing it
+        // per block -- only the function-call boundary itself stops the
+        // walk, not every nested block scope within one call.
+        let src = r#"
+def total_after_updates(xs: list[int]) -> int:
+    total = 0
+    for x in xs:
+        if x > 0:
+            total = total + x
+        else:
+            total = total - x
+    return total
+
+result = total_after_updates([1, -2, 3, -4])
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(10)));
     }
 
     #[test]
@@ -14367,12 +14475,20 @@ with Session.open() as value:
 
     #[test]
     fn test_with_unwinds_prior_context_when_later_setup_fails() {
+        // `cleaned` is a `Cell`, not a bare module-level `int` -- per
+        // docs/scope.md, assignment inside a function is always local
+        // (no `global`, no `nonlocal`), so a bare `cleaned = cleaned + 1`
+        // inside `first()` would create its own local shadowing the
+        // module-level `cleaned` instead of mutating it, the same as any
+        // other function. Shared, mutable state across scopes goes
+        // through an explicit object instead, exactly as the docs' own
+        // `Cell` example does.
         let src = r#"
-cleaned = 0
+cleaned = Cell(0)
 
 contextmanager def first():
     yield none
-    cleaned = cleaned + 1
+    cleaned.value = cleaned.value + 1
 
 contextmanager def second():
     raise "setup failed"
@@ -14385,7 +14501,10 @@ with first():
         let module = parse(src).unwrap();
         let mut interp = Interpreter::new();
         assert!(interp.eval_module(&module).is_err());
-        assert_eq!(interp.env.borrow().get("cleaned"), Some(Value::Int(1)));
+        let Some(Value::Object { fields, .. }) = interp.env.borrow().get("cleaned") else {
+            panic!("expected `cleaned` to be a Cell object");
+        };
+        assert_eq!(fields.borrow().get("value"), Some(&Value::Int(1)));
     }
 
     #[test]
