@@ -1,0 +1,43 @@
+# The self-hosting milestone this directory has been building toward:
+# take real Lucid source, as plain text, all the way to a printed
+# result, using nothing but Lucid code (lexer.lucid, parser.lucid,
+# interpreter.lucid) run by the reference interpreter -- Lucid running
+# Lucid.
+
+from .lexer import LexError
+from .parser import parse, ParserError
+from .ast import ParsedModule
+from .interpreter import new_interpreter, run_statements, EvalError
+
+def run(source: str) -> none | ParserError | LexError | EvalError:
+    parsed = parse(source)?
+    interp = new_interpreter()
+    run_statements(interp, parsed.statements)?
+    return none
+
+fib_source = "def fib(n):\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\n\ni = 0\nwhile i < 10:\n    print(\"fib(\" + str(i) + \") =\", fib(i))\n    i = i + 1\n"
+
+print("--- running a fibonacci program, lexed/parsed/evaluated entirely in Lucid ---")
+match run(fib_source) as outcome:
+    case none:
+        print("(program ran to completion)")
+    case ParserError:
+        print("PARSE ERROR:", outcome.message)
+    case LexError:
+        print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
+    case EvalError:
+        print("EVAL ERROR:", outcome.message)
+
+factorial_source = "def factorial(n):\n    result = 1\n    k = 1\n    while k <= n:\n        result = result * k\n        k = k + 1\n    return result\n\nfor n in [1, 2, 3, 4, 5, 6, 7]:\n    print(str(n) + \"! =\", factorial(n))\n"
+
+print("")
+print("--- running a factorial program (loops, lists, for) ---")
+match run(factorial_source) as outcome:
+    case none:
+        print("(program ran to completion)")
+    case ParserError:
+        print("PARSE ERROR:", outcome.message)
+    case LexError:
+        print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
+    case EvalError:
+        print("EVAL ERROR:", outcome.message)

@@ -53,6 +53,24 @@ it, not a claim that it's close to done.
   proof point for this piece: Lucid source a human wrote, run by the
   reference interpreter, correctly parsing real Lucid source into a
   well-formed AST.
+- `interpreter.lucid` — a tree-walking evaluator over `ast.lucid`'s
+  `Expr`/`Stmt` nodes: no checker or codegen pass in between, just direct
+  execution, the way `compiler/crates/lucid-runtime` runs a checked
+  program. A genuine subset, not feature parity — classes, traits,
+  dispatch, exceptions, `match`, dict/set values, attribute access,
+  indexing, imports, comprehensions, and closures over anything but a
+  call's own parameters are all left for later, listed at the top of the
+  file itself — but what's covered (recursion, `while`/`for`, `if`/`elif`/
+  `else`, lists, the arithmetic/comparison/logical operators, `print`/
+  `len`/`str`/`int`/`float`) is enough to run real, non-trivial programs.
+- `interpreter_demo.lucid` — **the milestone this directory has been
+  building toward.** Takes two small programs as plain-text Lucid
+  source — a recursive `fib`, an iterative `factorial` over a list — and
+  runs each one, as text, through `lexer.lucid` then `parser.lucid` then
+  `interpreter.lucid`, printing their real output. Lucid source a human
+  wrote, run by the reference interpreter, correctly lexing, parsing, and
+  running other Lucid source: Lucid running Lucid, for programs with
+  recursion, loops, and conditionals, not just a hand-built AST.
 
 Run them:
 
@@ -60,6 +78,7 @@ Run them:
 lucid run self-host/lexer_demo.lucid
 lucid run self-host/ast_demo.lucid
 lucid run self-host/parser_demo.lucid
+lucid run self-host/interpreter_demo.lucid
 ```
 
 Self-tokenizing takes on the order of 20-30 seconds under the debug
@@ -233,3 +252,18 @@ work rather than a rushed fix bundled in here:
   name or an actual `case _:`. Same shape as the `sealed class`/`extend`
   mistake above — an assumption carried over from a different language's
   pattern matching, not Lucid's.
+- **...but naming the sealed base *is* a valid, narrowing pattern when
+  it's one arm of a union, not the whole hierarchy being discriminated.**
+  `interpreter.lucid` matches a `field: Expr | none` with `case Expr: ...
+  case none: ...` to tell "there's a value" from "there isn't" — that's
+  a different situation from the point above (matching `Expr`'s own
+  subclasses exhaustively) and works exactly as hoped: `case Expr:`
+  matches any concrete subclass instance and narrows the binding to
+  `Expr` inside that arm, the same way `case int:` / `case LexError:`
+  already did in `lexer_demo.lucid`'s `int | LexError` result.
+- **A bare generic type name in a pattern doesn't narrow — it needs its
+  type arguments spelled out.** `match x as v: case list: ...` type-checks
+  but `v` inside that arm keeps `x`'s original (wider) type, rejecting a
+  later call that needs the element type — `case list[Stmt]:` narrows
+  correctly. Only came up because `If.else_branch: list[Stmt] | none`
+  needed the narrowed arm passed to a `list[Stmt]`-typed parameter.
