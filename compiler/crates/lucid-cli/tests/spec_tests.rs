@@ -1062,3 +1062,141 @@ fn test_spec_command_exits_zero_when_all_snippets_validate() {
     );
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+/// self-host/*.lucid (a lexer, parser, and interpreter, all written in
+/// Lucid) is the only coverage for itself -- these files aren't part of
+/// the checker/runtime test suite, so a runtime regression here (like
+/// the `?`-inside-a-nested-expression bug this ran into) would otherwise
+/// only surface if someone remembered to run the demos by hand. `lucid
+/// run` on each demo, from the repo root (they read their own sibling
+/// files by a `self-host/...`-relative path), checking the interpreter
+/// exits zero and the differential checks in each demo's own output
+/// actually report success -- not just "didn't crash".
+#[test]
+fn self_hosted_lexer_demo_tokenizes_its_own_source() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/lexer_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "lexer_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("self-tokenize succeeded"),
+        "lexer_demo.lucid should report self-tokenizing lexer.lucid's own source: {stdout}"
+    );
+}
+
+#[test]
+fn self_hosted_ast_demo_builds_and_walks_an_expression_tree() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/ast_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "ast_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("(1 + (x * 2))"),
+        "ast_demo.lucid should print the hand-built expression tree: {stdout}"
+    );
+}
+
+#[test]
+fn self_hosted_parser_demo_parses_its_own_source() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/parser_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "parser_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("self-parse succeeded"),
+        "parser_demo.lucid should report self-parsing lexer.lucid's own source: {stdout}"
+    );
+}
+
+#[test]
+fn self_hosted_interpreter_demo_runs_and_reports_errors() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/interpreter_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "interpreter_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("fib(9) = 34"),
+        "interpreter_demo.lucid's fibonacci program should compute fib(9) = 34: {stdout}"
+    );
+    assert!(
+        stdout.contains("7! = 5040"),
+        "interpreter_demo.lucid's factorial program should compute 7! = 5040: {stdout}"
+    );
+    assert!(
+        stdout.contains("EVAL ERROR (expected): undefined variable 'undefined_name'"),
+        "interpreter_demo.lucid's fourth program should report the expected undefined-variable error: {stdout}"
+    );
+}
+
+/// Slow: loads and interprets lexer.lucid, then loads and interprets
+/// ast.lucid + lexer.lucid + parser.lucid together and runs parser.lucid's
+/// own parse() through the self-hosted interpreter -- several minutes
+/// under a debug build (see self-host/README.md's timing notes). Run
+/// explicitly (`cargo test --workspace -- --ignored
+/// self_hosted_self_hosting_demo`) or in a slower/nightly CI lane, not
+/// the default fast suite.
+#[test]
+#[ignore]
+fn self_hosted_self_hosting_demo_runs_lexer_and_parser_through_the_interpreter() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/self_hosting_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "self_hosting_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("all 19 tokens match the host-run lexer exactly"),
+        "Part 1's differential check against the host-run lexer should pass for every token: {stdout}"
+    );
+    assert!(
+        stdout.contains("statements match the host-run parser exactly, field by field"),
+        "Part 2's differential check against the host-run parser should pass for every statement: {stdout}"
+    );
+    assert!(
+        !stdout.contains("FAIL"),
+        "no differential check in either part should report a mismatch: {stdout}"
+    );
+}

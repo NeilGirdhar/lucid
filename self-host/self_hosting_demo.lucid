@@ -23,7 +23,7 @@
 
 from .parser import parse, ParserError
 from .lexer import tokenize, Token, LexError
-from .ast import ParsedModule
+from .ast import ParsedModule, Stmt, Expr, Assignment, ExprStmt, Ident, Binary, Call, LiteralExpr, IntLit
 from .interpreter import new_interpreter, run_statements, call_registered, Value, StrValue, IntValue, ListValue, ObjectValue, EvalError
 
 def load(interp, path: str) -> none | ParseError | ParserError | LexError | EvalError:
@@ -108,6 +108,148 @@ match call_registered(interp1, "tokenize", tokenize_args) as interpreted_result:
     case _:
         print("unexpected result calling tokenize()")
 
+def describe_expr_host(e: Expr) -> str:
+    match e as result:
+        case Ident:
+            return "Ident(" + result.name + ")"
+        case LiteralExpr:
+            match result.value as lit:
+                case IntLit:
+                    return "Int(" + str(lit.value) + ")"
+                case _:
+                    return "Literal(?)"
+        case Binary:
+            return "Binary(" + result.op + ", " + describe_expr_host(result.left) + ", " + describe_expr_host(result.right) + ")"
+        case Call:
+            parts: list[str] = []
+            for a in result.args:
+                parts.append(describe_expr_host(a.value))
+            joined = ""
+            i = 0
+            while i < len(parts):
+                if i > 0:
+                    joined = joined + ", "
+                joined = joined + parts[i]
+                i = i + 1
+            return "Call(" + describe_expr_host(result.func) + ", [" + joined + "])"
+        case _:
+            return "Expr(?)"
+
+def describe_stmt_host(s: Stmt) -> str:
+    match s as result:
+        case Assignment:
+            return "Assignment(" + describe_expr_host(result.target) + " = " + describe_expr_host(result.value) + ")"
+        case ExprStmt:
+            return "ExprStmt(" + describe_expr_host(result.expr) + ")"
+        case _:
+            return "Stmt(?)"
+
+def field(ov: Value, name: str) -> Value | none:
+    match ov as o:
+        case ObjectValue:
+            return o.fields.get(name, none)
+        case _:
+            return none
+
+def describe_expr_interp(v: Value) -> str:
+    match v as ov:
+        case ObjectValue:
+            if ov.class_name == "Ident":
+                match field(v, "name") as nv:
+                    case StrValue:
+                        return "Ident(" + nv.value + ")"
+                    case _:
+                        return "Ident(?)"
+            if ov.class_name == "LiteralExpr":
+                match field(v, "value") as lit:
+                    case ObjectValue:
+                        if lit.class_name == "IntLit":
+                            match field(lit, "value") as iv:
+                                case IntValue:
+                                    return "Int(" + str(iv.value) + ")"
+                                case _:
+                                    return "Int(?)"
+                        return "Literal(?)"
+                    case _:
+                        return "Literal(?)"
+            if ov.class_name == "Binary":
+                op = "?"
+                match field(v, "op") as opv:
+                    case StrValue:
+                        op = opv.value
+                    case _:
+                        pass
+                left = "?"
+                match field(v, "left") as lv:
+                    case Value:
+                        left = describe_expr_interp(lv)
+                    case _:
+                        pass
+                right = "?"
+                match field(v, "right") as rv:
+                    case Value:
+                        right = describe_expr_interp(rv)
+                    case _:
+                        pass
+                return "Binary(" + op + ", " + left + ", " + right + ")"
+            if ov.class_name == "Call":
+                func_desc = "?"
+                match field(v, "func") as fv:
+                    case Value:
+                        func_desc = describe_expr_interp(fv)
+                    case _:
+                        pass
+                joined = ""
+                match field(v, "args") as argsv:
+                    case ListValue:
+                        i = 0
+                        while i < len(argsv.items):
+                            if i > 0:
+                                joined = joined + ", "
+                            arg_value = "?"
+                            match field(argsv.items[i], "value") as av:
+                                case Value:
+                                    arg_value = describe_expr_interp(av)
+                                case _:
+                                    pass
+                            joined = joined + arg_value
+                            i = i + 1
+                    case _:
+                        pass
+                return "Call(" + func_desc + ", [" + joined + "])"
+            return ov.class_name + "(?)"
+        case _:
+            return "<not an object>"
+
+def describe_stmt_interp(v: Value) -> str:
+    match v as ov:
+        case ObjectValue:
+            if ov.class_name == "Assignment":
+                target = "?"
+                match field(v, "target") as tv:
+                    case Value:
+                        target = describe_expr_interp(tv)
+                    case _:
+                        pass
+                assigned_value = "?"
+                match field(v, "value") as vv:
+                    case Value:
+                        assigned_value = describe_expr_interp(vv)
+                    case _:
+                        pass
+                return "Assignment(" + target + " = " + assigned_value + ")"
+            if ov.class_name == "ExprStmt":
+                expr_desc = "?"
+                match field(v, "expr") as ev:
+                    case Value:
+                        expr_desc = describe_expr_interp(ev)
+                    case _:
+                        pass
+                return "ExprStmt(" + expr_desc + ")"
+            return ov.class_name + "(?)"
+        case _:
+            return "<not an object>"
+
 print("")
 print("--- Part 2: self-hosted parse(), one level deeper (interpreter running parser running lexer) ---")
 
@@ -150,15 +292,30 @@ parse_sample = "x = 1 + 2\ny = x * 3\nprint(y)\n"
 parse_args: list[Value] = [StrValue(parse_sample)]
 match call_registered(interp2, "parse", parse_args) as parsed_result:
     case ObjectValue:
-        match parsed_result.fields.get("statements", none) as stmts_val:
+        match field(parsed_result, "statements") as stmts_val:
             case ListValue:
-                print("parse() returned", len(stmts_val.items), "top-level statements:")
-                for stmt in stmts_val.items:
-                    match stmt as sv:
-                        case ObjectValue:
-                            print(" -", sv.class_name)
-                        case _:
-                            print(" - <not an object>")
+                match parse(parse_sample) as host_parsed:
+                    case ParsedModule:
+                        if len(stmts_val.items) != len(host_parsed.statements):
+                            print("FAIL: statement count differs -- interpreted", len(stmts_val.items), "host", len(host_parsed.statements))
+                        else:
+                            i = 0
+                            all_match = true
+                            while i < len(host_parsed.statements):
+                                interpreted_desc = describe_stmt_interp(stmts_val.items[i])
+                                host_desc = describe_stmt_host(host_parsed.statements[i])
+                                if interpreted_desc == host_desc:
+                                    print("PASS", i, interpreted_desc)
+                                else:
+                                    print("FAIL", i, "interpreted =", interpreted_desc, "host =", host_desc)
+                                    all_match = false
+                                i = i + 1
+                            if all_match:
+                                print("(all", len(host_parsed.statements), "statements match the host-run parser exactly, field by field)")
+                    case ParserError:
+                        print("host parse() failed:", host_parsed.message)
+                    case LexError:
+                        print("host parse() failed (lex):", host_parsed.message)
             case _:
                 print("'statements' field missing or wrong shape")
     case EvalError:

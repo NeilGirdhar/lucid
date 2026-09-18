@@ -11,11 +11,12 @@
 # to run real, non-trivial programs, including self-host/lexer.lucid
 # itself (see self_hosting_demo.lucid); everything below is left for
 # later:
-#   - traits, dispatch, exceptions/try/except (single-parent field/method
+#   - traits, dispatch, exceptions/try/except (single-parent *field*
 #     inheritance works: a subclass's ClassInfo prepends its one
-#     registered class parent's field_names, and an unresolved method
-#     call falls back through nothing -- no method-resolution-order walk
-#     up a parent chain yet, just the subclass's own methods dict)
+#     registered class parent's field_names -- but *method* inheritance
+#     doesn't: call_method only ever looks in the receiver's own class's
+#     methods dict, no walk up the parent chain, so a method declared on
+#     a class parent and called on a subclass instance fails)
 #   - set values and literals (dict/list values and literals work);
 #     slicing (plain single-index get/set on list/str/dict works)
 #   - match: only a `case ClassName:` / `case none:` / `case _:` /
