@@ -175,8 +175,18 @@ pieces is close to feature parity with its Rust counterpart.
   declared element type; `xs.pop()` (no arguments) removes and returns
   the last element, typed `T`, matching `list.pop()`'s reference
   semantics (verified first: `[1, 2, 3].pop()` returns `3`, leaving
-  `[1, 2]`) — `append`/`pop` are the only `list[T]` methods, class
-  methods (see below) the only other method call this subset supports.
+  `[1, 2]`) — `append`/`pop` are the only `list[T]` methods. `dict[str,
+  V]` for `V` in int/bool/str — always a `str` key, never a type
+  parameter of its own, matching `lucid-runtime`'s own `Value::Dict`
+  (a `HashMap<String, _>` regardless of the declared key type); a dict
+  literal's keys must all be `str`, its values all the same type,
+  matching the same rule list literals already have; an empty `{:}`
+  has the same declared-type-only rule as an empty `[]`. `d.get(key,
+  default)` is the only `dict[str, V]` method, checked for `(str, V)`
+  arguments and returning `V` — the actual feature
+  `self-host/lexer.lucid` needs (its own `keywords`/`single` tables).
+  `append`/`pop`/`get`, plus class methods (see below), are the only
+  method calls this subset supports.
   A function or `dispatch def` named
   `print`/`range`/`len`/`freeze` is rejected outright, since
   `check_call`/`codegen_expr` recognize those names ahead of consulting
@@ -322,6 +332,18 @@ pieces is close to feature parity with its Rust counterpart.
   `list[int]` — cheap, and skips walking a whole program collecting
   which element types are actually instantiated (which could miss one);
   `lucid_list_<Class>` is emitted right after `Class`'s own struct.
+  `dict[str, V]` gets the same by-value-list-of-considerations pointer
+  representation and unconditional `int`/`bool`/`str`-value emission
+  (`lucid_dict_str_int`/`_bool`/`_str`, no `_<Class>` version — this
+  subset's `dict[str, V]` doesn't support a class value type at all,
+  narrower than `list[T]`'s own element-type scope, since nothing needs
+  one yet): a struct holding parallel `keys`/`values` C arrays and a
+  `len`, with `_of` (built the same way as a list literal, from two
+  C99 compound-literal arrays) and `_get(dict, key, default)` — a
+  *linear* `strcmp` scan, not a hash table, since this subset only ever
+  compiles small, mostly compile-time-constant tables
+  (`self-host/lexer.lucid`'s own `keywords`/`single`), not a
+  general-purpose dict.
   A binary operator on two class-typed
   operands, or a call to a name with more than one `dispatch def`,
   resolves to one specific C function chosen by the static argument
@@ -400,7 +422,7 @@ pieces is close to feature parity with its Rust counterpart.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles eleven hand-written programs, each a
+  `codegen.lucid`. Also compiles twelve hand-written programs, each a
   real file under `self-host/compile_demo_programs/` (recursion,
   iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
   semantics on all four sign combinations, `bools` — bool literals,
@@ -423,10 +445,14 @@ pieces is close to feature parity with its Rust counterpart.
   (`p.x = 2`), a `-> none` function that mutates a class argument's
   field in place and is called only for effect, and reading the
   mutated field back afterward, proving the caller's own object
-  changed, not a copy — and `methods` — a method reading and mutating
+  changed, not a copy — `methods` — a method reading and mutating
   `self`'s own fields, one method calling another method on the same
   `self`, a method taking a parameter beyond `self`, and `str`/`bool`
-  method return types), plus one
+  method return types — and `dicts` — a module-level `dict[str, str]`
+  literal and `.get()`, the same inside a function body (a fresh dict
+  built each call, the actual shape `self-host/lexer.lucid`'s own
+  `keywords`/`single` tables use), and an empty `dict[str, int]`
+  literal with a declared type), plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
@@ -849,6 +875,48 @@ work rather than a rushed fix bundled in here:
   parameter named `cls` in `self-host/*.lucid` belongs to a *free*
   function, not a method — the bug is specific to a *method's* filtered
   parameter list, and free functions never go through that filter.
+- **A real, previously-undiscovered miscompile in `codegen.lucid`
+  itself: `infer_expr_type`'s `ListExpr` case returned the bare
+  *element* type instead of the list's own `ListType`.** Found while
+  adding `dict[str, V]` support and testing `xs = [1, 2, 3]` with no
+  declared annotation (every earlier test either declared `list[T]`
+  explicitly, or only used a non-empty list literal inside `for`,
+  which has its own separate, already-correct
+  `infer_for_iterable_element_type`): `xs` hoisted as `long` instead of
+  `lucid_list_int *`, and `xs.append(4)` compiled to a bare
+  `0 /* unsupported method call */;`. `check_expr`'s own `ListExpr`
+  case in `checker.lucid` already got this right (`return
+  ListType(et)`); `codegen.lucid`'s mirror of it didn't, most likely
+  copied from `infer_for_iterable_element_type`'s different, correct-
+  for-*that*-caller convention without noticing the two functions need
+  different return shapes. Fixed by wrapping in `ListType`, and fixed
+  the two call sites that had (correctly, for the old broken
+  contract) unwrapped it back out (`codegen_expr`'s own `ListExpr`
+  case, which now reads `.element_type` off the wrapped result instead
+  of using it directly) — the same shape of fix `dict[str, V]`'s new
+  `DictExpr` case needed from the start, once this was caught.
+- **`lucid run` silently echoes the module's last top-level statement's
+  value, if it isn't `none` — a REPL feature, not a language or
+  compiled-binary behavior.** `compiler/crates/lucid-cli/src/main.rs`'s
+  `run_file` prints `eval_module`'s own return value (whatever the last
+  top-level statement evaluated to) after running the program, but only
+  in the *interpreted* `lucid run` path — `lucid run --native` and
+  `compiler/crates/lucid-codegen`'s own `build` just run the compiled
+  binary directly, with no such echo, and this self-hosted `codegen.lucid`
+  correctly doesn't replicate it either. Caught testing a throwaway
+  program ending in a bare `ok()` call (an `int`-returning function) at
+  top level: `lucid run` printed the function's own `print()` output
+  *plus* a second, unexpected line echoing `ok()`'s return value — not
+  a self-hosted codegen bug, a mismatch between the driver's REPL-style
+  convenience and what a "real" program (or this subset's own compiled
+  output) actually does. Every hand-written
+  `self-host/compile_demo_programs/*.lucid` file happens to end in a
+  `print(...)` call or a loop (both `none`-typed), so this was never
+  actually a hazard for the existing differential tests — worth keeping
+  that pattern for any new one added, since ending a compile_demo
+  program in a bare non-`none` top-level expression would make its own
+  `lucid run` reference output diverge from the compiled binary's for a
+  reason that has nothing to do with the compiled program being wrong.
 - **`print()`ing the same object twice produced two different
   strings.** Found while checking whether a compiled class-value
   printer could even be differential-tested against `lucid run`'s own

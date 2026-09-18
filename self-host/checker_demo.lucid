@@ -36,7 +36,7 @@ report("wrong arity", "def add(a: int, b: int) -> int:\n    return a + b\n\ndef 
 
 report("duplicate function (same signature twice)", "def dup() -> int:\n    return 1\n\ndef dup() -> int:\n    return 2\n")
 
-report("unsupported type", "def bad() -> dict[str, int]:\n    pass\n")
+report("unsupported type", "def bad() -> dict[int, str]:\n    pass\n")
 
 report("unknown class", "def bad() -> int:\n    v = NotAClass(1)\n    return 0\n")
 
@@ -171,3 +171,15 @@ report("a duplicate method name is rejected", "class Bad:\n    x: int\n\n    def
 report("list.pop() is supported", "def ok() -> int:\n    xs: list[int] = []\n    xs.append(1)\n    x = xs.pop()\n    print(x)\n    return 0\n")
 
 report("list.pop() with an argument is rejected", "def bad() -> int:\n    xs: list[int] = []\n    xs.pop(1)\n    return 0\n")
+
+report("dict[str, V] literal and .get() are supported", "def ok() -> int:\n    d: dict[str, str] = {\n        \"a\": \"A\",\n        \"b\": \"B\",\n    }\n    print(d.get(\"a\", \"?\"))\n    print(d.get(\"z\", \"?\"))\n    return 0\n")
+
+report("empty dict[str, V] literal with a declared type is supported", "def ok() -> int:\n    d: dict[str, int] = {:}\n    print(d.get(\"a\", 0))\n    return 0\n")
+
+report("empty dict literal without a declared type is rejected", "def bad() -> int:\n    d = {:}\n    return 0\n")
+
+report("a dict literal with a non-str key is rejected", "def bad() -> int:\n    d = {1: \"a\"}\n    return 0\n")
+
+report("dict.get() with the wrong argument types is rejected", "def bad() -> int:\n    d: dict[str, int] = {:}\n    d.get(1, 0)\n    return 0\n")
+
+report("print() of a dict is rejected", "def bad() -> int:\n    d: dict[str, int] = {:}\n    print(d)\n    return 0\n")

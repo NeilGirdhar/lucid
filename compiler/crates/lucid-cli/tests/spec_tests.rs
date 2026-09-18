@@ -1252,6 +1252,12 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: duplicate method 'foo' in class 'Bad'",
         "--- list.pop() is supported ---\n(no errors)",
         "ERROR: list.pop() takes no arguments in this subset",
+        "--- dict[str, V] literal and .get() are supported ---\n(no errors)",
+        "--- empty dict[str, V] literal with a declared type is supported ---\n(no errors)",
+        "cannot infer the value type of an empty dict literal in this subset",
+        "ERROR: dict literal keys must be str in this subset, got int",
+        "ERROR: dict.get() requires (str, int) arguments in this subset",
+        "ERROR: print() of a dict value is not supported in this subset",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1326,7 +1332,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 12] = [
+    let cases: [(&str, &str); 13] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1341,6 +1347,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         ("lists", "self-host/compile_demo_programs/lists.lucid"),
         ("mutation", "self-host/compile_demo_programs/mutation.lucid"),
         ("methods", "self-host/compile_demo_programs/methods.lucid"),
+        ("dicts", "self-host/compile_demo_programs/dicts.lucid"),
         ("vectors", "examples/vectors.lucid"),
     ];
 

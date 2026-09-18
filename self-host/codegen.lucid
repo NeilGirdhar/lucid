@@ -37,8 +37,8 @@
 # variable declared inside one branch invisible after it, unlike Lucid's
 # own more permissive same-function visibility.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, NoneType, type_name, mangle_component, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, type_name, mangle_component, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
 
 runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
 
@@ -141,6 +141,27 @@ def emit_list_type(element_type: LType) -> str:
     parts.append("static " + ctype + " " + name + "_pop(" + name + " *lst) {\n    if (lst->len == 0) {\n        fprintf(stderr, \"Runtime Error: pop from an empty list\\n\");\n        exit(1);\n    }\n    lst->len = lst->len - 1;\n    return lst->items[lst->len];\n}")
     return join_with(parts, "\n\n")
 
+# A `dict[str, V]` is a heap-allocated, pointer-typed C struct, the same
+# representation choice as `list[T]` and for the same reason (reference
+# semantics -- see ListType's header comment in types.lucid; Value::Dict
+# in lucid-runtime is Rc<RefCell<HashMap<String, Value>>>). Keys are
+# always `const char *`, never mangled into the C type name the way an
+# element/value type is (`lucid_dict_str_int`, not
+# `lucid_dict_str_str_int`) -- this subset's `DictType` only ever has a
+# `str` key (see types.lucid's own note on why). `_get` is a linear
+# `strcmp` scan, not a hash table -- fine for the small, mostly
+# compile-time-constant tables this subset actually compiles
+# (self-host/lexer.lucid's own `keywords`/`single`), not a general-
+# purpose dict implementation.
+def emit_dict_type(value_type: LType) -> str:
+    ctype = c_type_of(value_type)
+    name = "lucid_dict_str_" + mangle_component(value_type)
+    parts: list[str] = []
+    parts.append("typedef struct {\n    const char **keys;\n    " + ctype + " *values;\n    long len;\n} " + name + ";")
+    parts.append("static " + name + " *" + name + "_of(long n, const char **keys, " + ctype + " *values) {\n    " + name + " *d = malloc(sizeof(" + name + "));\n    d->keys = keys;\n    d->values = values;\n    d->len = n;\n    return d;\n}")
+    parts.append("static " + ctype + " " + name + "_get(" + name + " *d, const char *key, " + ctype + " default_value) {\n    long i = 0;\n    while (i < d->len) {\n        if (strcmp(d->keys[i], key) == 0) {\n            return d->values[i];\n        }\n        i = i + 1;\n    }\n    return default_value;\n}")
+    return join_with(parts, "\n\n")
+
 def dispatch_op_name(op: str) -> str | none:
     if op == "ADD":
         return "__add__"
@@ -198,6 +219,8 @@ def c_type_of(t: LType) -> str:
             return result.name + " *"
         case ListType:
             return "lucid_list_" + mangle_component(result.element_type) + " *"
+        case DictType:
+            return "lucid_dict_str_" + mangle_component(result.value_type) + " *"
         case NoneType:
             return "void"
         case _:
@@ -370,9 +393,35 @@ class Codegen:
                     case _:
                         return none
             case ListExpr:
+                # This must be the list literal's OWN type -- ListType
+                # wrapping the element type -- not the bare element type
+                # (a real, previously-undiscovered miscompile: `xs = [1,
+                # 2, 3]` with no declared annotation hoisted `xs` as
+                # `long` instead of `lucid_list_int *`, and
+                # `xs.append(4)` compiled to a bare "unsupported method
+                # call" comment, since `known["xs"]` ended up `IntType()`
+                # instead of `ListType(IntType())`). No test program
+                # before this one used a non-empty list literal as a
+                # VarDef's value with no explicit `list[T]` annotation --
+                # every one either declared the type explicitly or only
+                # used a non-empty literal inside `for`, which has its
+                # own separate, already-correct
+                # infer_for_iterable_element_type.
                 if len(result.elements) == 0:
                     return none
-                return self.infer_expr_type(result.elements[0], known)
+                match self.infer_expr_type(result.elements[0], known) as et:
+                    case LType:
+                        return ListType(et)
+                    case none:
+                        return none
+            case DictExpr:
+                if len(result.entries) == 0:
+                    return none
+                match self.infer_expr_type(result.entries[0].value, known) as vt:
+                    case LType:
+                        return DictType(vt)
+                    case none:
+                        return none
             case Call:
                 match result.func as callee:
                     case Ident:
@@ -412,6 +461,10 @@ class Codegen:
                                 # fine, since nothing hoists a
                                 # declaration from a call whose result
                                 # isn't assigned.
+                                return none
+                            case DictType:
+                                if callee.attr == "get":
+                                    return rt.value_type
                                 return none
                             case _:
                                 return none
@@ -576,8 +629,9 @@ class Codegen:
                     case _:
                         return "lucid_rt_str_index(" + receiver_code + ", " + index_code + ")"
             case ListExpr:
-                match self.infer_expr_type(e, known) as et:
-                    case LType:
+                match self.infer_expr_type(e, known) as lt:
+                    case ListType:
+                        et = lt.element_type
                         name = "lucid_list_" + mangle_component(et)
                         if len(result.elements) == 0:
                             return name + "_new()"
@@ -586,8 +640,24 @@ class Codegen:
                             elems.append(self.codegen_expr(e, known))
                         ctype = c_type_of(et)
                         return name + "_of(" + str(len(elems)) + ", (" + ctype + "[]){" + join_with(elems, ", ") + "})"
-                    case none:
+                    case _:
                         return "0 /* unsupported list literal */"
+            case DictExpr:
+                match self.infer_expr_type(e, known) as dt:
+                    case DictType:
+                        vt = dt.value_type
+                        name = "lucid_dict_str_" + mangle_component(vt)
+                        if len(result.entries) == 0:
+                            return name + "_of(0, (const char *[]){0}, (" + c_type_of(vt) + "[]){0})"
+                        key_codes: list[str] = []
+                        value_codes: list[str] = []
+                        for entry in result.entries:
+                            key_codes.append(self.codegen_expr(entry.key, known))
+                            value_codes.append(self.codegen_expr(entry.value, known))
+                        vtype = c_type_of(vt)
+                        return name + "_of(" + str(len(key_codes)) + ", (const char *[]){" + join_with(key_codes, ", ") + "}, (" + vtype + "[]){" + join_with(value_codes, ", ") + "})"
+                    case _:
+                        return "0 /* unsupported dict literal */"
             case Call:
                 match result.func as callee:
                     case Ident:
@@ -631,6 +701,13 @@ class Codegen:
                                 for a in result.args:
                                     method_arg_codes.append(self.codegen_expr(a.value, known))
                                 return method_c_name(rt.name, callee.attr) + "(" + join_with(method_arg_codes, ", ") + ")"
+                            case DictType:
+                                if callee.attr == "get" and len(result.args) == 2:
+                                    key_code = self.codegen_expr(result.args[0].value, known)
+                                    default_code = self.codegen_expr(result.args[1].value, known)
+                                    name = "lucid_dict_str_" + mangle_component(rt.value_type)
+                                    return name + "_get(" + receiver_code + ", " + key_code + ", " + default_code + ")"
+                                return "0 /* unsupported dict method */"
                             case _:
                                 return "0 /* unsupported method call */"
                     case _:
@@ -746,6 +823,20 @@ class Codegen:
                                 case ListType:
                                     lname = "lucid_list_" + mangle_component(it.element_type)
                                     value_code = lname + "_new()"
+                                case _:
+                                    value_code = self.codegen_expr(v, known)
+                        else:
+                            value_code = self.codegen_expr(v, known)
+                            if inferred == none:
+                                inferred = self.infer_expr_type(v, known)
+                    case DictExpr:
+                        # Same bidirectional case as the empty list
+                        # literal above, for the same reason.
+                        if len(v.entries) == 0:
+                            match inferred as it:
+                                case DictType:
+                                    dname = "lucid_dict_str_" + mangle_component(it.value_type)
+                                    value_code = dname + "_of(0, (const char *[]){0}, (" + c_type_of(it.value_type) + "[]){0})"
                                 case _:
                                     value_code = self.codegen_expr(v, known)
                         else:
@@ -1155,6 +1246,12 @@ class Codegen:
         parts.append(emit_list_type(BoolType()))
         parts.append("")
         parts.append(emit_list_type(StrType()))
+        parts.append("")
+        parts.append(emit_dict_type(IntType()))
+        parts.append("")
+        parts.append(emit_dict_type(BoolType()))
+        parts.append("")
+        parts.append(emit_dict_type(StrType()))
         parts.append("")
         for stmt in stmts:
             match stmt as result:

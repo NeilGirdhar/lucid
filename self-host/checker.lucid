@@ -12,10 +12,12 @@
 # ~20,000-line crate covering generics, traits, inferred variance,
 # exhaustiveness, and far more) -- what's covered is real, useful
 # checking over the subset self-host/codegen.lucid compiles:
-#   - int, bool, str, list[T] (T one of these, or a class), and classes
-#     with fields of these types and (now) methods taking a bare `self`
-#     -- no inheritance, no generics, no method overloading (one method
-#     per name per class; `dispatch def` is function-level only here)
+#   - int, bool, str, list[T] (T one of these, or a class), dict[str, V]
+#     (V one of int/bool/str, key always str -- see types.lucid's own
+#     note on why), and classes with fields of these types and (now)
+#     methods taking a bare `self` -- no inheritance, no generics, no
+#     method overloading (one method per name per class; `dispatch def`
+#     is function-level only here)
 #   - every function/`dispatch def` registered once per distinct
 #     parameter-type signature (two `dispatch def`s sharing a name need
 #     different parameter types, not just different bodies); a call
@@ -43,11 +45,12 @@
 #     being assigned in only one branch of an `if` is accepted here, not
 #     rejected the way lucid-checker's own analysis would
 # Left for later: traits, inheritance, generics, method overloading,
-# dict[K, V], closures, exceptions, `?`, comprehensions -- everything
-# else checker.lucid's header comment's Rust counterpart covers.
+# a dict key/value type beyond str/int/bool/str, closures, exceptions,
+# `?`, comprehensions -- everything else checker.lucid's header
+# comment's Rust counterpart covers.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, NoneType, type_name, types_equal, type_list_equal, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, type_name, types_equal, type_list_equal, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
     message: str
@@ -365,6 +368,17 @@ class Checker:
                                     inferred = self.check_expr(value_expr, known)
                         else:
                             inferred = self.check_expr(value_expr, known)
+                    case DictExpr:
+                        # Same bidirectional case as the empty list
+                        # literal above, for the same reason.
+                        if len(value_expr.entries) == 0:
+                            match declared as dt:
+                                case DictType:
+                                    inferred = dt
+                                case _:
+                                    inferred = self.check_expr(value_expr, known)
+                        else:
+                            inferred = self.check_expr(value_expr, known)
                     case Expr:
                         inferred = self.check_expr(value_expr, known)
                     case none:
@@ -646,6 +660,51 @@ class Checker:
                         return ListType(et)
                     case none:
                         return none
+            case DictExpr:
+                if len(result.entries) == 0:
+                    self.error("cannot infer the value type of an empty dict literal in this subset (write it as part of a declared-type variable definition, e.g. xs: dict[str, int] = {:})", result.span)
+                    return none
+                value_type: LType | none = none
+                i = 0
+                while i < len(result.entries):
+                    entry = result.entries[i]
+                    key_type = self.check_expr(entry.key, known)
+                    match key_type as kt:
+                        case StrType:
+                            pass
+                        case LType:
+                            self.error("dict literal keys must be str in this subset, got " + type_name(kt), result.span)
+                        case none:
+                            pass
+                    t = self.check_expr(entry.value, known)
+                    if i == 0:
+                        value_type = t
+                    else:
+                        match value_type as vt:
+                            case LType:
+                                match t as tt:
+                                    case LType:
+                                        if not types_equal(vt, tt):
+                                            self.error("dict literal values must all have the same type in this subset", result.span)
+                                    case none:
+                                        pass
+                            case none:
+                                pass
+                    i = i + 1
+                match value_type as vt:
+                    case ClassType:
+                        self.error("a dict value type of a class is not supported in this subset", result.span)
+                        return none
+                    case ListType:
+                        self.error("a dict value type of list[T] is not supported in this subset", result.span)
+                        return none
+                    case DictType:
+                        self.error("a dict value type of dict[str, T] is not supported in this subset", result.span)
+                        return none
+                    case LType:
+                        return DictType(vt)
+                    case none:
+                        return none
             case _:
                 self.error("unsupported expression kind", expr.span)
                 return none
@@ -807,6 +866,8 @@ class Checker:
                                         pass
                             case ListType:
                                 self.error("print() of a list value is not supported in this subset", call.span)
+                            case DictType:
+                                self.error("print() of a dict value is not supported in this subset", call.span)
                             case NoneType:
                                 self.error("print() of a none-typed value is not supported in this subset (a call to a function returning none produces nothing to print)", call.span)
                             case _:
@@ -895,8 +956,18 @@ class Checker:
                             case none:
                                 self.error("unknown class '" + rt.name + "'", call.span)
                                 return none
+                    case DictType:
+                        if callee.attr == "get":
+                            if len(checked_arg_types) == 2 and types_equal(checked_arg_types[0], StrType()) and types_equal(checked_arg_types[1], rt.value_type):
+                                return rt.value_type
+                            if any_arg_unknown:
+                                return none
+                            self.error("dict.get() requires (str, " + type_name(rt.value_type) + ") arguments in this subset", call.span)
+                            return none
+                        self.error("'" + callee.attr + "' is not supported on dict[str, T] in this subset", call.span)
+                        return none
                     case LType:
-                        self.error("only 'list[T].append' or a class method is supported as a method call in this subset", call.span)
+                        self.error("only 'list[T].append'/'list[T].pop'/'dict[str, T].get' or a class method is supported as a method call in this subset", call.span)
                         return none
                     case none:
                         return none

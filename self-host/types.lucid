@@ -46,6 +46,20 @@ class NoneType(LType):
 class ListType(LType):
     element_type: LType
 
+# `dict[str, V]` for V in int/bool/str -- always `str` keys, never a
+# type parameter of their own: lucid-runtime's Value::Dict is
+# Rc<RefCell<HashMap<String, Value>>>, keys are always Rust `String`
+# regardless of the declared key type, so representing anything but a
+# `str` key here would diverge from what the reference interpreter
+# actually does with the same program. Reference semantics, same as
+# `list[T]` and for the same underlying reason (Rc<RefCell<_>>). `V` is
+# int/bool/str only, not a class -- narrower than `list[T]`'s own
+# element-type scope, since nothing in this subset needs a
+# class-valued dict yet and it would need its own per-class C emission
+# (`lucid_dict_str_<Class>`) the same way `list[T]` already has.
+class DictType(LType):
+    value_type: LType
+
 def type_name(t: LType) -> str:
     match t as result:
         case IntType:
@@ -58,6 +72,8 @@ def type_name(t: LType) -> str:
             return result.name
         case ListType:
             return "list[" + type_name(result.element_type) + "]"
+        case DictType:
+            return "dict[str, " + type_name(result.value_type) + "]"
         case NoneType:
             return "none"
         case _:
@@ -70,6 +86,8 @@ def mangle_component(t: LType) -> str:
     match t as result:
         case ListType:
             return "list_" + mangle_component(result.element_type)
+        case DictType:
+            return "dict_str_" + mangle_component(result.value_type)
         case _:
             return type_name(t)
 
@@ -103,6 +121,12 @@ def types_equal(a: LType, b: LType) -> bool:
             match b as right:
                 case ListType:
                     return types_equal(left.element_type, right.element_type)
+                case _:
+                    return false
+        case DictType:
+            match b as right:
+                case DictType:
+                    return types_equal(left.value_type, right.value_type)
                 case _:
                     return false
         case NoneType:
@@ -147,6 +171,26 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
                         return ListType(et)
                     case none:
                         return none
+            if result.name == "dict" and len(result.args) == 2:
+                match result.args[0] as key_type_expr:
+                    case NamedType:
+                        if key_type_expr.name != "str":
+                            return none
+                    case _:
+                        return none
+                match resolve_type_expr(result.args[1]) as vt:
+                    case ListType:
+                        return none
+                    case DictType:
+                        return none
+                    case NoneType:
+                        return none
+                    case ClassType:
+                        return none
+                    case LType:
+                        return DictType(vt)
+                    case none:
+                        return none
             if len(result.name) > 0 and result.name[0] >= "A" and result.name[0] <= "Z":
                 return ClassType(result.name)
             return none
@@ -189,6 +233,8 @@ def is_printable_class(cls: ClassSig) -> bool:
             case ClassType:
                 return false
             case ListType:
+                return false
+            case DictType:
                 return false
             case _:
                 pass
