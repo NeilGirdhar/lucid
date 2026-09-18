@@ -46,7 +46,7 @@
 # else checker.lucid's header comment's Rust counterpart covers.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param, Span
-from .types import LType, IntType, BoolType, StrType, ClassType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
+from .types import LType, IntType, BoolType, StrType, ClassType, type_name, types_equal, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature
 
 class CheckError:
     message: str
@@ -586,9 +586,28 @@ class Checker:
                     for at in arg_types:
                         match at as t:
                             case ClassType:
-                                self.error("print() of a class value is not supported in this subset", call.span)
+                                match self.classes.get(t.name, none) as cls:
+                                    case ClassSig:
+                                        if not is_printable_class(cls):
+                                            self.error("print() of a '" + t.name + "' value is not supported in this subset (it has a field whose type is itself a class)", call.span)
+                                    case none:
+                                        pass
                             case _:
                                 pass
+                    return none
+                if callee.name == "freeze":
+                    # Not a missing feature so much as a semantics this
+                    # subset's value model can't represent honestly:
+                    # freeze() is a *runtime*, aliasable property in
+                    # lucid-runtime (a shared is_frozen flag on a
+                    # reference-counted object -- freezing one alias
+                    # freezes every alias of the same object) and a
+                    # *static* one in the type system (the `!T` view).
+                    # This subset's classes are plain by-value C
+                    # structs with no aliasing at all, so neither model
+                    # applies -- an identity freeze() would silently
+                    # drop the semantics rather than implement them.
+                    self.error("freeze() is not supported in this subset (frozen-ness is a runtime property of a shared object, which by-value structs can't represent)", call.span)
                     return none
                 if any_unknown:
                     return none

@@ -38,7 +38,7 @@
 # own more permissive same-function visibility.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
-from .types import LType, IntType, BoolType, StrType, ClassType, type_name, resolve_type_expr, FieldSig, ClassSig, field_type, FuncSig, FuncTable, new_func_table, register_signature, find_signature
+from .types import LType, IntType, BoolType, StrType, ClassType, type_name, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
 
 runtime_prelude = "#include <stdio.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}"
 
@@ -47,6 +47,40 @@ def emit_struct(cls: ClassSig) -> str:
     for f in cls.fields:
         fields.append("    " + c_type_of(f.field_type) + " " + f.name + ";")
     return "typedef struct {\n" + join_with(fields, "\n") + "\n} " + cls.name + ";"
+
+# `print()` of a class value emits `ClassName({"field": value, ...})`,
+# matching lucid-runtime's own default repr -- fields sorted by name
+# (not declaration order): lucid-runtime's Value::Object stores fields
+# in a HashMap, whose iteration order this subset's printer has to
+# match, and HashMap order isn't declaration order (or even stable
+# across runs, before a lucid-runtime fix made it sort by name too). A
+# `str` field's value is wrapped in literal `"..."` with no escaping,
+# matching lucid-runtime's own (also unescaped) `Debug` for `Str`. Only
+# called for a class where is_printable_class(cls) is true -- every
+# field int/bool/str, no nested class field to print.
+def emit_print_function(cls: ClassSig) -> str:
+    names: list[str] = []
+    for f in cls.fields:
+        names.append(f.name)
+    format_parts: list[str] = []
+    arg_exprs: list[str] = []
+    for name in sorted(names):
+        match field_type(cls, name) as ft:
+            case StrType:
+                format_parts.append("\\\"" + name + "\\\": \\\"%s\\\"")
+                arg_exprs.append("value." + name)
+            case BoolType:
+                format_parts.append("\\\"" + name + "\\\": %s")
+                arg_exprs.append("(value." + name + " ? \"true\" : \"false\")")
+            case _:
+                format_parts.append("\\\"" + name + "\\\": %ld")
+                arg_exprs.append("value." + name)
+    format_str = "\"" + cls.name + "({" + join_with(format_parts, ", ") + "})\""
+    pieces: list[str] = [format_str]
+    for a in arg_exprs:
+        pieces.append(a)
+    printf_call = "printf(" + join_with(pieces, ", ") + ");"
+    return "static void lucid_print_" + cls.name + "(" + cls.name + " value) {\n    " + printf_call + "\n}"
 
 def join_with(parts: list[str], sep: str) -> str:
     text = ""
@@ -386,6 +420,15 @@ class Codegen:
                 return "0 /* unsupported expression */"
 
     def codegen_print(self, args: list[Arg], known: dict[str, LType]) -> str:
+        has_class_arg = false
+        for a in args:
+            match self.infer_expr_type(a.value, known) as at:
+                case ClassType:
+                    has_class_arg = true
+                case _:
+                    pass
+        if has_class_arg:
+            return self.codegen_print_with_class_args(args, known)
         format_parts: list[str] = []
         value_codes: list[str] = []
         i = 0
@@ -409,6 +452,34 @@ class Codegen:
         for v in value_codes:
             pieces.append(v)
         return "printf(" + join_with(pieces, ", ") + ")"
+
+    # `print`'s call site is an expression (codegen_expr's Call arm), so
+    # this always has to return one C expression, never a statement
+    # sequence -- a C comma expression, evaluating each argument's own
+    # `printf(...)` (or, for a class-typed argument, its
+    # `lucid_print_<ClassName>` call, always `void`, fine as a non-final
+    # comma operand) left to right, with its own inline `printf(" ")`
+    # between arguments and a final `printf("\n")`.
+    def codegen_print_with_class_args(self, args: list[Arg], known: dict[str, LType]) -> str:
+        terms: list[str] = []
+        i = 0
+        while i < len(args):
+            if i > 0:
+                terms.append("printf(\" \")")
+            arg_type = self.infer_expr_type(args[i].value, known)
+            arg_code = self.codegen_expr(args[i].value, known)
+            match arg_type as at:
+                case ClassType:
+                    terms.append("lucid_print_" + at.name + "(" + arg_code + ")")
+                case StrType:
+                    terms.append("printf(\"%s\", " + arg_code + ")")
+                case BoolType:
+                    terms.append("printf(\"%s\", (" + arg_code + " ? \"true\" : \"false\"))")
+                case _:
+                    terms.append("printf(\"%ld\", " + arg_code + ")")
+            i = i + 1
+        terms.append("printf(\"\\n\")")
+        return "(" + join_with(terms, ", ") + ")"
 
     def ident_pattern_name(self, p: Pattern) -> str:
         match p as result:
@@ -801,6 +872,9 @@ class Codegen:
                         case ClassSig:
                             parts.append(emit_struct(cls))
                             parts.append("")
+                            if is_printable_class(cls):
+                                parts.append(emit_print_function(cls))
+                                parts.append("")
                         case none:
                             pass
                 case _:

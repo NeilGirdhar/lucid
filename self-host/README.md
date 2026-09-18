@@ -140,9 +140,11 @@ pieces is close to feature parity with its Rust counterpart.
   `int`) — there's no general `list[T]` typing yet, so anything else is
   rejected as "unsupported iterable expression in this subset"; `for`
   and `while` both accept an `if_broken` clause, checked as an ordinary
-  extra block; a class-typed argument to `print(...)` is rejected, since
-  `codegen.lucid` has no per-class `repr` to emit yet and would
-  otherwise pass a struct straight to `printf`. Every name (a `VarDef`,
+  extra block; `print(...)` accepts a class value whose fields are all
+  int/bool/str — `codegen.lucid` has a per-class printer for those, see
+  below — but rejects one with a class-typed field (no nested printer
+  call yet); `freeze(...)` is rejected outright, not emulated (see
+  `compile_demo.lucid`'s entry below for why). Every name (a `VarDef`,
   a plain `x = ...` assignment, a `for`-loop target) has exactly one
   type for its whole enclosing function — re-binding a name to a
   *different* type is rejected, and a `VarDef` with both a declared
@@ -215,12 +217,20 @@ pieces is close to feature parity with its Rust counterpart.
   interpreted, not by inspection; `print`
   takes any number of int/bool/str arguments, each formatted by its own
   inferred type — `bool` prints as `true`/`false` (via a C `?:` into
-  `%s`), not `1`/`0`, matching the reference interpreter; a class-typed
-  argument is rejected by `checker.lucid` rather than silently passed to
-  `printf` as a struct (undefined behavior, not just wrong output —
-  there's no per-class `repr` yet, needed for `examples/shapes.lucid`'s
-  own `print(frozen_circle)`, see `compile_demo.lucid`'s entry below).
-  `for` over a list literal, or over `range(...)`, both
+  `%s`), not `1`/`0`, matching the reference interpreter; a class value
+  whose fields are all int/bool/str prints as `ClassName({"field":
+  value, ...})`, matching lucid-runtime's own default repr, through a
+  `static void lucid_print_<ClassName>(<ClassName> value)` emitted
+  right after the class's struct, fields sorted by name (matching a
+  fix to lucid-runtime's own repr — see below); mixing a class-typed
+  `print` argument with ordinary ones switches from one combined
+  `printf` call to a C comma expression sequencing each argument's own
+  `printf`/`lucid_print_<ClassName>` call, since `print`'s codegen has
+  to return one expression (its call site is `codegen_expr`, not a
+  statement); a class with a class-typed field can't print yet (no
+  nested printer call) and is rejected by `checker.lucid`, honestly,
+  rather than silently passed to `printf` as a struct — undefined
+  behavior, not just wrong output. `for` over a list literal, or over `range(...)`, both
   compile to a hidden C counter driving the loop, with the visible loop
   target assigned from it at the top of each iteration — never the C
   counter itself, and `range(...)`'s bounds are evaluated once into
@@ -249,17 +259,27 @@ pieces is close to feature parity with its Rust counterpart.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles six hand-written programs, each a real
-  file under `self-host/compile_demo_programs/` (recursion, iteration,
-  `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean semantics on all
-  four sign combinations, `bools` — bool literals, comparisons, and
-  `and`/`or` results printed as `true`/`false` — and `loops` — `for`
-  over both a list literal and `range(...)`, a nested `for` whose inner
-  loop's `if_broken` clause re-breaks the outer loop, a `while` with its
-  own `if_broken`, and the two range-codegen miscompile cases described
-  above), plus one Lucid string literal that's supposed to fail
-  checking, proving a real error stops codegen instead of emitting
-  broken C. Every valid program's compiled binary is checked the same
+  `codegen.lucid`. Also compiles seven hand-written programs, each a
+  real file under `self-host/compile_demo_programs/` (recursion,
+  iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
+  semantics on all four sign combinations, `bools` — bool literals,
+  comparisons, and `and`/`or` results printed as `true`/`false` —
+  `loops` — `for` over both a list literal and `range(...)`, a nested
+  `for` whose inner loop's `if_broken` clause re-breaks the outer loop,
+  a `while` with its own `if_broken`, and the two range-codegen
+  miscompile cases described above — and `records` — printing a class
+  value, alone, mixed with other `print` arguments, and with more than
+  one field of mixed str/int/bool type), plus one Lucid string literal
+  that's supposed to fail checking, proving a real error stops codegen
+  instead of emitting broken C. `shapes.lucid` from `examples/` isn't
+  compiled here (yet) — it needs `freeze()`, rejected outright in this
+  subset rather than emulated: lucid-runtime's `freeze` mutates a
+  shared `is_frozen` flag on a reference-counted object, and the
+  reference native backend tracks the same thing at runtime on a boxed
+  value, but this subset's classes are plain by-value C structs with no
+  aliasing at all, so neither the interpreter's nor the reference
+  compiler's actual `freeze` semantics has anything to attach to here.
+  Every valid program's compiled binary is checked the same
   way `vectors`' is: its output must match `lucid run` on that exact
   source file exactly — not a hardcoded expected string — the same
   differential discipline `self_hosting_demo.lucid` already applies to
@@ -278,7 +298,8 @@ pieces is close to feature parity with its Rust counterpart.
   tests raced on these same shared output files under `cargo test`'s
   default parallelism. Still a real subset,
   not feature parity with Lucid — `examples/shapes.lucid` needs
-  `freeze()` and printing a class value (a default `repr`);
+  `freeze()`, deliberately unsupported here rather than emulated (see
+  above);
   `examples/collections.lucid` needs comprehensions, `list[T]`
   operations beyond a `for` target (`append`, indexing, `len`), dicts,
   and sets; `examples/errors.lucid` needs `?` compiled to some
@@ -645,3 +666,16 @@ work rather than a rushed fix bundled in here:
   the underlying checker bug (something about this specific method, in
   this specific class, in this specific position) is still unexplained
   and worth a closer, dedicated investigation later.
+- **`print()`ing the same object twice produced two different
+  strings.** Found while checking whether a compiled class-value
+  printer could even be differential-tested against `lucid run`'s own
+  output: `Value::Object`'s fields live in a `HashMap`, whose iteration
+  order Rust randomizes per process, so `lucid-runtime`'s own repr
+  wasn't reproducible even within a single `cargo test` run, let alone
+  across two separate processes (the reference interpreter and a
+  compiled binary). A real bug in `lucid-runtime`, not a self-host
+  concern as such, but this is exactly what the differential discipline
+  this whole pipeline relies on exists to catch — fixed by sorting
+  fields by name in `Value`'s `Debug` impl before formatting, and
+  `codegen.lucid`'s printer sorts its own field list the same way to
+  match.

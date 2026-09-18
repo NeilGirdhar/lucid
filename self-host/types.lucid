@@ -110,6 +110,19 @@ def field_type(cls: ClassSig, name: str) -> LType | none:
             return f.field_type
     return none
 
+# A class is printable in this subset if every field is int/bool/str --
+# codegen.lucid's per-class printer only knows how to format those three
+# directly; a class-typed field would need its own nested printer call,
+# not supported yet.
+def is_printable_class(cls: ClassSig) -> bool:
+    for f in cls.fields:
+        match f.field_type as t:
+            case ClassType:
+                return false
+            case _:
+                pass
+    return true
+
 class FuncSig:
     name: str
     param_types: list[LType]

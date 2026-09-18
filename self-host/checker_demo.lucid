@@ -60,7 +60,11 @@ report("for over an unsupported iterable", "def main() -> int:\n    for x in 5:\
 
 report("range() with the wrong number of arguments", "def main() -> int:\n    for x in range(1, 2, 3):\n        print(x)\n    return 0\n")
 
-report("print() of a class value rejected", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, 2)\n    print(p)\n    return 0\n")
+report("print() of a class with int/bool/str fields is supported", "class Point:\n    x: int\n    y: int\n\ndef ok() -> int:\n    p = Point(1, 2)\n    print(p)\n    return 0\n")
+
+report("print() of a class with a class-typed field rejected", "class Inner:\n    x: int\n\nclass Outer:\n    inner: Inner\n\ndef bad() -> int:\n    o = Outer(Inner(1))\n    print(o)\n    return 0\n")
+
+report("freeze() rejected", "class Circle:\n    radius: int\n\ndef bad() -> int:\n    c = Circle(10)\n    frozen_c = freeze(c)\n    print(frozen_c)\n    return 0\n")
 
 report("str + str rejected", "def bad() -> int:\n    s = \"a\" + \"b\"\n    return 0\n")
 
