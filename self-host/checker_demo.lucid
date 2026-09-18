@@ -68,7 +68,7 @@ report("freeze() rejected", "class Circle:\n    radius: int\n\ndef bad() -> int:
 
 report("str + str rejected", "def bad() -> int:\n    s = \"a\" + \"b\"\n    return 0\n")
 
-report("str == str rejected", "def bad() -> int:\n    b = \"a\" == \"a\"\n    return 0\n")
+report("str == str and str < str are supported", "def ok() -> int:\n    b = \"a\" == \"a\"\n    c = \"a\" < \"b\"\n    n = len(\"abc\")\n    return 0\n")
 
 report("int == bool rejected", "def bad() -> int:\n    b = 1 == true\n    return 0\n")
 

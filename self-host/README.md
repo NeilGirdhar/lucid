@@ -126,14 +126,17 @@ pieces is close to feature parity with its Rust counterpart.
   with a specific message. A binary/unary operator on non-class operands
   has its own required operand types, checked explicitly rather than
   accepted for any two operands of the same non-class kind — arithmetic
-  and ordered comparison need two `int`, `and`/`or` need two `bool`,
-  `==`/`!=` need two `int` or two `bool` (never `str`), `not` needs
-  `bool`, unary `-` needs `int` — since `codegen.lucid` maps these
-  straight to C's own operators, which silently do pointer arithmetic or
-  pointer comparison on two `const char *` operands rather than
-  rejecting them (an earlier draft accepted any two non-class operands
-  here, which `"a" + "b"` and `1 and 2` both slipped through, reaching
-  codegen as real miscompiles rather than "unsupported"). `for` is
+  needs two `int`, `and`/`or` need two `bool`, `==`/`!=` and ordered
+  comparison need two `int` or two `str` (or two `bool`, `==`/`!=`
+  only), `not` needs `bool`, unary `-` needs `int` — since
+  `codegen.lucid` maps these straight to C's own operators, which
+  silently do pointer arithmetic or pointer comparison on two `const
+  char *` operands rather than rejecting them (an earlier draft
+  accepted any two non-class operands here, which `"a" + "b"` and
+  `1 and 2` both slipped through, reaching codegen as real miscompiles
+  rather than "unsupported" — `"a" == "a"`/`"a" < "b"` and `len(s)`
+  came later, once codegen actually had a correct C translation for
+  them, `strcmp`/`strlen`). `for` is
   checked over exactly two iterable
   shapes — a list literal (every element checked, all required to
   agree on one type) and `range(...)` (one or two arguments, always
@@ -189,7 +192,10 @@ pieces is close to feature parity with its Rust counterpart.
   functions in the generated C's own prelude — Lucid's are *Euclidean*:
   the remainder is always in `[0, |b|)`, unlike both C's truncating and
   Python's floored division, a real, easy-to-miss mismatch this
-  codegen's first draft got wrong); a binary operator on two class-typed
+  codegen's first draft got wrong; `==`/`!=`/ordered comparison on two
+  `str` operands go through `strcmp` instead, since two `const char *`
+  pointers being `==` in C compares addresses, not contents; `len()` of
+  a `str` is `strlen`, cast to `long`); a binary operator on two class-typed
   operands, or a call to a name with more than one `dispatch def`,
   resolves to one specific C function chosen by the static argument
   types and name-mangled by them (two `__add__` overloads, on `Vector2D`
@@ -259,7 +265,7 @@ pieces is close to feature parity with its Rust counterpart.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles seven hand-written programs, each a
+  `codegen.lucid`. Also compiles eight hand-written programs, each a
   real file under `self-host/compile_demo_programs/` (recursion,
   iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
   semantics on all four sign combinations, `bools` — bool literals,
@@ -267,9 +273,10 @@ pieces is close to feature parity with its Rust counterpart.
   `loops` — `for` over both a list literal and `range(...)`, a nested
   `for` whose inner loop's `if_broken` clause re-breaks the outer loop,
   a `while` with its own `if_broken`, and the two range-codegen
-  miscompile cases described above — and `records` — printing a class
+  miscompile cases described above — `records` — printing a class
   value, alone, mixed with other `print` arguments, and with more than
-  one field of mixed str/int/bool type), plus one Lucid string literal
+  one field of mixed str/int/bool type — and `strings` — `==`/`!=`/
+  `<`/`<=`/`>`/`>=` and `len()` on `str`), plus one Lucid string literal
   that's supposed to fail checking, proving a real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
   compiled here (yet) — it needs `freeze()`, rejected outright in this
@@ -640,9 +647,16 @@ work rather than a rushed fix bundled in here:
   written the other way, with top-level statements that just execute in
   order, no wrapper function at all. Fixed by having both check and
   compile top-level statements the same way as any function's body (with
-  their own fresh module-level scope), and having `codegen.lucid`
-  synthesize a `FunctionDef` named `main` wrapping them when the module
-  doesn't already declare one itself.
+  their own fresh module-level scope). A later pass fixed this further:
+  a Lucid function literally named `main` was still special-cased into
+  becoming C's own entry point directly (see the "real semantics
+  divergence" entry in `compiler/crates/lucid-cli/tests/spec_tests.rs`'s
+  git history for the full story) — `codegen.lucid` now always
+  synthesizes C's `int main(void)` from the module's top-level
+  statements alone, unconditionally, and a Lucid `main` (if a program
+  happens to declare one) is just an ordinary mangled function like any
+  other, never auto-invoked, matching both `lucid run` and the
+  reference native backend.
 - **`parser.lucid` didn't parse `dispatch def` at all.** Needed to parse
   `examples/vectors.lucid` in the first place: `parse_raw_function`
   already threaded an `is_dispatch` flag through to `FunctionDef` (set

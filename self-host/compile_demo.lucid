@@ -93,5 +93,6 @@ compile_path_to_file("divmod (Euclidean // and %, negative operands)", "self-hos
 compile_path_to_file("bools (bool literals, comparisons, and/or, printed as true/false)", "self-host/compile_demo_programs/bools.lucid", "self-host/compile_demo_bools.c")
 compile_path_to_file("loops (for over a list literal and range(), nested if_broken, while if_broken)", "self-host/compile_demo_programs/loops.lucid", "self-host/compile_demo_loops.c")
 compile_path_to_file("records (print() of a class value: a single field, mixed args, multi-field str/int/bool)", "self-host/compile_demo_programs/records.lucid", "self-host/compile_demo_records.c")
+compile_path_to_file("strings (str ==, !=, <, <=, >, >=, and len())", "self-host/compile_demo_programs/strings.lucid", "self-host/compile_demo_strings.c")
 compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")
 compile_path_to_file("examples/vectors.lucid (classes, dispatch, strings -- a real Lucid program)", "examples/vectors.lucid", "self-host/compile_demo_vectors.c")

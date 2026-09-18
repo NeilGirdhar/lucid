@@ -40,7 +40,7 @@
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, ListExpr, Arg, IntLit, BoolLit, StrLit, Stmt, ClassDef, ClassMember, FieldMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, Pattern, IdentPattern, FunctionDef, Param
 from .types import LType, IntType, BoolType, StrType, ClassType, type_name, resolve_type_expr, FieldSig, ClassSig, field_type, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature
 
-runtime_prelude = "#include <stdio.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}"
+runtime_prelude = "#include <stdio.h>\n#include <string.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}"
 
 def emit_struct(cls: ClassSig) -> str:
     fields: list[str] = []
@@ -260,6 +260,8 @@ class Codegen:
             case Call:
                 match result.func as callee:
                     case Ident:
+                        if callee.name == "len":
+                            return IntType()
                         arg_types: list[LType] = []
                         for a in result.args:
                             match self.infer_expr_type(a.value, known) as at:
@@ -369,6 +371,30 @@ class Codegen:
                         case none:
                             pass
                     return "0 /* unresolved dispatch operator */"
+                is_str_operands = false
+                match left_type as lt:
+                    case StrType:
+                        match right_type as rt:
+                            case StrType:
+                                is_str_operands = true
+                            case _:
+                                pass
+                    case _:
+                        pass
+                if is_str_operands:
+                    cmp = "strcmp(" + left_code + ", " + right_code + ")"
+                    if result.op == "EQ":
+                        return "(" + cmp + " == 0)"
+                    if result.op == "NOT_EQ":
+                        return "(" + cmp + " != 0)"
+                    if result.op == "LT":
+                        return "(" + cmp + " < 0)"
+                    if result.op == "LT_EQ":
+                        return "(" + cmp + " <= 0)"
+                    if result.op == "GT":
+                        return "(" + cmp + " > 0)"
+                    if result.op == "GT_EQ":
+                        return "(" + cmp + " >= 0)"
                 if result.op == "FLOOR_DIV":
                     return "lucid_rt_floordiv(" + left_code + ", " + right_code + ")"
                 if result.op == "MOD":
@@ -407,6 +433,8 @@ class Codegen:
                                     pass
                         if callee.name == "print":
                             return self.codegen_print(result.args, known)
+                        if callee.name == "len" and len(arg_codes) == 1:
+                            return "((long) strlen(" + arg_codes[0] + "))"
                         joined = join_with(arg_codes, ", ")
                         match find_signature(self.functions, callee.name, arg_types) as sig:
                             case FuncSig:

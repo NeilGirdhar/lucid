@@ -515,14 +515,16 @@ class Checker:
             self.error("operator " + op + " requires two bool operands, got " + type_name(left) + " and " + type_name(right), span)
             return none
         if op == "EQ" or op == "NOT_EQ":
-            if types_equal(left, right) and (types_equal(left, IntType()) or types_equal(left, BoolType())):
+            if types_equal(left, right) and (types_equal(left, IntType()) or types_equal(left, BoolType()) or types_equal(left, StrType())):
                 return BoolType()
             self.error("operator " + op + " is not supported on (" + type_name(left) + ", " + type_name(right) + ") in this subset", span)
             return none
         if op == "LT" or op == "LT_EQ" or op == "GT" or op == "GT_EQ":
             if types_equal(left, IntType()) and types_equal(right, IntType()):
                 return BoolType()
-            self.error("operator " + op + " requires two int operands, got " + type_name(left) + " and " + type_name(right), span)
+            if types_equal(left, StrType()) and types_equal(right, StrType()):
+                return BoolType()
+            self.error("operator " + op + " requires two int or two str operands, got " + type_name(left) + " and " + type_name(right), span)
             return none
         if op == "ADD" or op == "SUB" or op == "MUL" or op == "FLOOR_DIV" or op == "MOD":
             if types_equal(left, IntType()) and types_equal(right, IntType()):
@@ -608,6 +610,13 @@ class Checker:
                     # applies -- an identity freeze() would silently
                     # drop the semantics rather than implement them.
                     self.error("freeze() is not supported in this subset (frozen-ness is a runtime property of a shared object, which by-value structs can't represent)", call.span)
+                    return none
+                if callee.name == "len":
+                    if len(arg_types) == 1 and types_equal(arg_types[0], StrType()):
+                        return IntType()
+                    if any_unknown:
+                        return none
+                    self.error("len() supports only a single str argument in this subset", call.span)
                     return none
                 if any_unknown:
                     return none

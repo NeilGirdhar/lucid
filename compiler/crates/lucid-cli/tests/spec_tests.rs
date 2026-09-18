@@ -1202,7 +1202,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: print() of a 'Outer' value is not supported in this subset",
         "ERROR: freeze() is not supported in this subset",
         "ERROR: operator ADD requires two int operands, got str and str",
-        "ERROR: operator EQ is not supported on (str, str) in this subset",
+        "--- str == str and str < str are supported ---\n(no errors)",
         "ERROR: operator EQ is not supported on (int, bool) in this subset",
         "ERROR: operator ADD requires two int operands, got bool and int",
         "ERROR: operator AND requires two bool operands, got int and int",
@@ -1296,7 +1296,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 8] = [
+    let cases: [(&str, &str); 9] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1307,6 +1307,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         ("bools", "self-host/compile_demo_programs/bools.lucid"),
         ("loops", "self-host/compile_demo_programs/loops.lucid"),
         ("records", "self-host/compile_demo_programs/records.lucid"),
+        ("strings", "self-host/compile_demo_programs/strings.lucid"),
         ("vectors", "examples/vectors.lucid"),
     ];
 

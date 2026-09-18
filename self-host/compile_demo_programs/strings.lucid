@@ -1,0 +1,22 @@
+print("" == "")
+print("a" == "a")
+print("a" == "b")
+print("a" != "b")
+print(len(""))
+print(len("abc"))
+print("a" < "b")
+print("b" < "a")
+print("a" <= "a")
+print("b" > "a")
+print("a" >= "b")
+
+def is_empty(s: str) -> bool:
+    return len(s) == 0
+
+def same(a: str, b: str) -> bool:
+    return a == b
+
+print(is_empty(""))
+print(is_empty("x"))
+print(same("hello", "hello"))
+print(same("hello", "world"))
