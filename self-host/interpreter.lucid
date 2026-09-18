@@ -337,6 +337,11 @@ class Interpreter:
                     case Value:
                         return found
                     case none:
+                        pass
+                match env_get(self.globals, result.name) as global_found:
+                    case Value:
+                        return global_found
+                    case none:
                         return EvalError("undefined variable '" + result.name + "'", result.span)
             case Binary:
                 left = self.eval_expr(env, result.left)?

@@ -41,3 +41,20 @@ match run(factorial_source) as outcome:
         print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
     case EvalError:
         print("EVAL ERROR:", outcome.message)
+
+# A third program exercising everything the first two don't: a function
+# reading a module-level global (not just its own params), elif/else
+# chains, break/continue, not/and/or, unary minus, and float arithmetic.
+coverage_source = "THRESHOLD = 5\n\ndef classify(n):\n    if n < 0:\n        return \"negative\"\n    elif n == 0:\n        return \"zero\"\n    elif n > THRESHOLD:\n        return \"large\"\n    elif n % 2 == 0:\n        return \"even\"\n    else:\n        return \"odd\"\n\ntotal = 0.0\ncount = 0\nn = -3\nwhile n < 20:\n    if n == 0:\n        n = n + 1\n        continue\n    if n > 10:\n        break\n    if not (n < 0) and n % 3 == 0:\n        total = total + float(n) * 1.5\n        count = count + 1\n    print(str(n) + \" is \" + classify(n))\n    n = n + 1\n\nprint(\"total =\", total, \"count =\", count)\nprint(\"or short-circuit:\", false or true)\n"
+
+print("")
+print("--- running a coverage program (globals, elif/else, break/continue, not/and/or, unary -, float) ---")
+match run(coverage_source) as outcome:
+    case none:
+        print("(program ran to completion)")
+    case ParserError:
+        print("PARSE ERROR:", outcome.message)
+    case LexError:
+        print("LEX ERROR:", outcome.message, "at", outcome.line, outcome.column)
+    case EvalError:
+        print("EVAL ERROR:", outcome.message)

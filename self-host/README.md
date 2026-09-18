@@ -46,8 +46,12 @@ it, not a claim that it's close to done.
   form. Not at feature parity; deferred work (decorators, generics,
   trait/implement/module blocks, comprehensions, error recovery, and
   more) is listed at the top of the file itself. Runs under the reference
-  interpreter and successfully parses its own imports' source
-  (`parser_demo.lucid` proves this — see below).
+  interpreter and successfully parses `lexer.lucid`'s own source
+  (`parser_demo.lucid` proves this — see below). Does *not* yet parse its
+  own source or `ast.lucid`'s -- both are larger than `lexer.lucid` and
+  self-parsing either currently exceeds a few minutes under the debug
+  interpreter, past where it's practical to just wait it out; worth a
+  closer look; see "Open question" below.
 - `parser_demo.lucid` — parses a small sample program, then reads and
   parses `lexer.lucid`'s own source. The second part is the self-hosting
   proof point for this piece: Lucid source a human wrote, run by the
