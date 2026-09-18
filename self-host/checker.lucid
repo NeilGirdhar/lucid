@@ -418,6 +418,12 @@ class Checker:
                         case none:
                             any_unknown = true
                 if callee.name == "print":
+                    for at in arg_types:
+                        match at as t:
+                            case ClassType:
+                                self.error("print() of a class value is not supported in this subset", call.span)
+                            case _:
+                                pass
                     return none
                 if any_unknown:
                     return none

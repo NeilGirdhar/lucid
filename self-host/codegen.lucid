@@ -393,12 +393,16 @@ class Codegen:
             if i > 0:
                 format_parts.append(" ")
             arg_type = self.infer_expr_type(args[i].value, known)
+            arg_code = self.codegen_expr(args[i].value, known)
             match arg_type as at:
                 case StrType:
                     format_parts.append("%s")
+                case BoolType:
+                    format_parts.append("%s")
+                    arg_code = "(" + arg_code + " ? \"true\" : \"false\")"
                 case _:
                     format_parts.append("%ld")
-            value_codes.append(self.codegen_expr(args[i].value, known))
+            value_codes.append(arg_code)
             i = i + 1
         format_str = c_string_literal(join_with(format_parts, "") + "\n")
         pieces: list[str] = [format_str]

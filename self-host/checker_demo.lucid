@@ -59,3 +59,5 @@ report("for over mismatched list literal elements", "def main() -> int:\n    for
 report("for over an unsupported iterable", "def main() -> int:\n    for x in 5:\n        print(x)\n    return 0\n")
 
 report("range() with the wrong number of arguments", "def main() -> int:\n    for x in range(1, 2, 3):\n        print(x)\n    return 0\n")
+
+report("print() of a class value rejected", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, 2)\n    print(p)\n    return 0\n")

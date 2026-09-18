@@ -1198,6 +1198,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: list literal elements must all have the same type in this subset",
         "ERROR: unsupported iterable expression in this subset (only a list literal or range(...) is supported)",
         "ERROR: range(...) supports only one or two arguments in this subset",
+        "ERROR: print() of a class value is not supported in this subset",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1280,6 +1281,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         "factorial",
         "gcd",
         "divmod",
+        "bools",
         "loops",
         "broken",
         "vectors",
@@ -1320,13 +1322,19 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
-    let cases: [(&str, &str); 5] = [
+    let cases: [(&str, &str); 6] = [
         ("fib", "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n"),
         ("factorial", "1\n2\n6\n24\n120\n720\n5040\n"),
         ("gcd", "6\n1\n1\n2\n3\n"),
         // Euclidean // and %: the remainder is always in [0, |b|),
         // unlike both C's truncating and Python's floored division.
         ("divmod", "3\n-3\n-4\n4\n1\n1\n1\n1\n"),
+        // bool literals, comparisons, and `and`/`or` results printed as
+        // `true`/`false`, not `1`/`0`.
+        (
+            "bools",
+            "true\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\n",
+        ),
         // sum_list, sum_range, find_in_grid (nested for, if_broken on
         // the inner loop re-breaking the outer), count_until_break
         // (while with if_broken), range_bound_evaluated_once (range(n)'s
@@ -1397,6 +1405,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         "factorial",
         "gcd",
         "divmod",
+        "bools",
         "loops",
         "broken",
         "vectors",
