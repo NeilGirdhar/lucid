@@ -31,7 +31,10 @@ it, not a claim that it's close to done.
   `TraitMember`, `LiteralValue`, and their supporting structs, as sealed
   class hierarchies. Not yet covered: `MetadataPayload`/`MetadataDirective`
   (the `;`-introduced docstring/meta/ignore blocks) — `Stmt.Metadata` and
-  `ClassMember.Metadata` hold a placeholder `text: str` for now.
+  `ClassMember.Metadata` hold a placeholder `text: str` for now. The
+  module-root struct is `ParsedModule`, not `Module` as in `ast.rs` —
+  `Module` is a reserved builtin runtime concept (see "Design notes"
+  below).
 - `ast_demo.lucid` — builds a small expression tree by hand (`1 + (x * 2)`)
   and walks it with an exhaustive `match` over the sealed `Expr`
   hierarchy imported from `ast.lucid`, proving the AST is constructible
@@ -147,6 +150,29 @@ work rather than a rushed fix bundled in here:
   constructed (the checker resolves the construct call against the
   builtin `Literal[...]`, never registers a same-named user class in
   `env.classes`).
+- **`Module` and `ParseError` are reserved, not available class names.**
+  `Module` is a builtin runtime module-value concept distinct from an
+  AST's own module-root node — a `class Module:` construct fails with
+  "construct for 'Module' has no field named ...", since the checker
+  resolves it against the builtin, never registering the user class. Same
+  failure shape for `ParseError`: the checker hardcodes it as a builtin
+  `Exception` subclass with a single `message: str` field, so a
+  same-named user class with a different shape fails constructor checks
+  with a confusing arity/field mismatch rather than a naming collision
+  error. `ast.lucid`'s module-root struct is `ParsedModule`;
+  `parser.lucid`'s parse-error type is `ParserError`.
+- **A user error type's name has to end in `Error` for `?` to recognize
+  it.** The `?` operator picks out which union member(s) to propagate by
+  a literal name-suffix check (`name.ends_with("Error")`), not by
+  subtyping against `Exception` or any other structural signal — so
+  renaming `parser.lucid`'s error type away from the reserved
+  `ParseError` to something that doesn't end in `Error` (a first attempt
+  used `ParseFailure`) silently broke every `?` in the file: with no
+  variant recognized as the error case, `?` fell back to treating
+  *every* union member as a success type instead, and callers saw a type
+  error naming the wrong union rather than anything mentioning `?`
+  itself. Naming it `ParserError` (distinct from the builtin
+  `ParseError`, and ending in `Error`) fixed it.
 - **A `sealed class`'s fields and methods live in one body, subclasses
   in others.** A subclass inherits the parent's fields the ordinary way
   (declare `span: Span` once, on `sealed class Expr:`, and every

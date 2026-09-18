@@ -588,6 +588,6 @@ class ExprStmt(Stmt):
 class MetadataStmt(Stmt):
     text: str
 
-class Module:
+class ParsedModule:
     statements: list[Stmt]
     span: Span
