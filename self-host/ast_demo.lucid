@@ -1,0 +1,81 @@
+# Exercises self-host/ast.lucid: builds a small expression tree by hand
+# (as a parser eventually will) and walks it with an exhaustive match
+# over the sealed Expr hierarchy, proving the AST is constructible and
+# matchable, not just type-checkable.
+
+from .ast import Span, dummy_span, Expr, LiteralExpr, Ident, Binary, IntLit
+
+def describe(e: Expr) -> str:
+    match e as result:
+        case LiteralExpr:
+            match result.value as lit:
+                case IntLit:
+                    return str(lit.value)
+                case BigIntLit:
+                    return lit.text
+                case FloatLit:
+                    return str(lit.value)
+                case ComplexLit:
+                    return str(lit.value) + "j"
+                case StrLit:
+                    return "\"" + lit.value + "\""
+                case BytesLit:
+                    return "b\"" + lit.value + "\""
+                case BoolLit:
+                    return str(lit.value)
+                case NoneLit:
+                    return "none"
+                case SentinelLit:
+                    return lit.name
+                case EllipsisLit:
+                    return "..."
+        case Ident:
+            return result.name
+        case Binary:
+            return "(" + describe(result.left) + " " + result.op + " " + describe(result.right) + ")"
+        case Unary:
+            return "(" + result.op + " " + describe(result.expr) + ")"
+        case Call:
+            return "call"
+        case Construct:
+            return "construct"
+        case Propagate:
+            return "propagate"
+        case Await:
+            return "await"
+        case Attribute:
+            return "attribute"
+        case Index:
+            return "index"
+        case Slice:
+            return "slice"
+        case RecordExpr:
+            return "record"
+        case ListExpr:
+            return "list"
+        case DictExpr:
+            return "dict"
+        case SetExpr:
+            return "set"
+        case AnonymousDef:
+            return "anon"
+        case Trust:
+            return "trust"
+        case Freeze:
+            return "freeze"
+        case Skip:
+            return "skip"
+        case TypeExprAsExpr:
+            return "type"
+        case ListComp:
+            return "listcomp"
+        case SetComp:
+            return "setcomp"
+        case DictComp:
+            return "dictcomp"
+        case IfExpr:
+            return "ifexpr"
+
+s = dummy_span()
+tree = Binary(s, "+", LiteralExpr(s, IntLit(1)), Binary(s, "*", Ident(s, "x"), LiteralExpr(s, IntLit(2))))
+print(describe(tree))

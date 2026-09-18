@@ -1,0 +1,593 @@
+# The Lucid AST, in Lucid.
+#
+# Mirrors compiler/crates/lucid-syntax/src/ast.rs. Each Rust enum with
+# variant-specific payloads becomes a sealed class hierarchy here (Expr,
+# Stmt, Pattern, TypeExpr, ClassMember, TraitMember, LiteralValue,
+# TypeAliasValue, Projection, MutabilityView, Variance) -- unlike
+# lexer.lucid's Token, these carry genuinely different, recursively
+# nested payloads per case and downstream code (the checker, codegen)
+# needs to match them exhaustively and safely, which is exactly what a
+# sealed hierarchy is for. Two flat, payload-free enums without any
+# per-case behavior stay string tags for now, matching lexer.lucid's
+# token kinds: BinaryOp and UnaryOp.
+#
+# A Rust tuple field with no natural name of its own (Vec<(Option<String>,
+# Expr)> for Record's fields, Vec<(Expr, Expr)> for Dict's entries,
+# Vec<(TypeExpr, TypeExpr)> for a type-level match's arms) becomes a small
+# named class instead (RecordFieldEntry, DictEntry, TypeMatchArm), since
+# Lucid has no anonymous tuple type.
+#
+# Status: covers every node shape in ast.rs. Not yet covered:
+# MetadataPayload/MetadataDirective (the `;`-introduced docstring/meta/
+# ignore blocks) -- Stmt.Metadata and ClassMember.Metadata below hold a
+# placeholder `text: str` instead of the real payload union.
+
+class Span:
+    start: int
+    end: int
+    line: int
+    column: int
+
+def dummy_span() -> Span:
+    return Span(0, 0, 0, 0)
+
+def merge_span(a: Span, b: Span) -> Span:
+    start = a.start
+    if b.start < start:
+        start = b.start
+    end = a.end
+    if b.end > end:
+        end = b.end
+    line = a.line
+    if b.line < line:
+        line = b.line
+    column = a.column
+    if a.start > b.start:
+        column = b.column
+    return Span(start, end, line, column)
+
+# --- Mutability / variance -----------------------------------------------
+
+class MutabilityView:
+    kind: str  # "MUTABLE" | "READ_ONLY" | "IMMUTABLE"
+
+class Variance:
+    kind: str  # "INVARIANT" | "COVARIANT" | "CONTRAVARIANT" | "VIEW_COVARIANT" | "VIEW_CONTRAVARIANT" | "UNMARKED"
+
+class Projection:
+    kind: str  # "IN" | "OUT"
+
+# --- Type expressions ------------------------------------------------------
+
+sealed class TypeExpr:
+    span: Span
+
+class RecordFieldType:
+    name: str | none
+    type_expr: TypeExpr
+    is_positional_only: bool
+    is_keyword_only: bool
+    is_variadic_positional: bool
+    is_variadic_keyword: bool
+
+class TypeMatchArm:
+    pattern: TypeExpr
+    result: TypeExpr
+
+class NamedType(TypeExpr):
+    name: str
+    args: list[TypeExpr]
+
+class FunctionType(TypeExpr):
+    params: list[TypeExpr]
+    return_type: TypeExpr
+
+class RecordType(TypeExpr):
+    fields: list[RecordFieldType]
+    is_open: bool
+
+class ViewType(TypeExpr):
+    mutability: MutabilityView
+    inner: TypeExpr
+
+class UnionType(TypeExpr):
+    types: list[TypeExpr]
+
+class LiteralType(TypeExpr):
+    value: LiteralValue
+
+class ExistentialType(TypeExpr):
+    interface: TypeExpr
+
+class ReificationType(TypeExpr):
+    inner: TypeExpr
+
+class ProjectionType(TypeExpr):
+    direction: Projection
+    inner: TypeExpr
+
+class MatchType(TypeExpr):
+    subject: list[TypeExpr]
+    arms: list[TypeMatchArm]
+
+class WildcardType(TypeExpr):
+    pass
+
+class NeverType(TypeExpr):
+    pass
+
+class TypeParam:
+    name: str
+    variance: Variance
+    bound: TypeExpr | none
+    alternatives: list[TypeExpr]
+    default_value: TypeExpr | none
+    is_higher_kinded: bool
+    span: Span
+
+# --- Literals ---------------------------------------------------------------
+
+sealed class LiteralValue:
+    pass
+
+class IntLit(LiteralValue):
+    value: int
+
+class BigIntLit(LiteralValue):
+    text: str
+
+class FloatLit(LiteralValue):
+    value: float
+
+class ComplexLit(LiteralValue):
+    value: float
+
+class StrLit(LiteralValue):
+    value: str
+
+class BytesLit(LiteralValue):
+    value: str
+
+class BoolLit(LiteralValue):
+    value: bool
+
+class NoneLit(LiteralValue):
+    pass
+
+class SentinelLit(LiteralValue):
+    name: str
+
+class EllipsisLit(LiteralValue):
+    pass
+
+# --- Expressions -------------------------------------------------------------
+
+sealed class Expr:
+    span: Span
+
+class Arg:
+    name: str | none
+    value: Expr
+    is_spread: bool
+    is_dict_spread: bool
+    is_gather_spread: bool
+    span: Span
+
+class LiteralExpr(Expr):
+    value: LiteralValue
+
+class Ident(Expr):
+    name: str
+
+class Binary(Expr):
+    op: str
+    left: Expr
+    right: Expr
+
+class Unary(Expr):
+    op: str
+    expr: Expr
+
+class Call(Expr):
+    func: Expr
+    args: list[Arg]
+
+class Construct(Expr):
+    class_name: str
+    args: list[Arg]
+
+class Propagate(Expr):
+    expr: Expr
+
+class Await(Expr):
+    expr: Expr
+
+class Attribute(Expr):
+    value: Expr
+    attr: str
+
+class Index(Expr):
+    value: Expr
+    index: Expr
+
+class Slice(Expr):
+    start: Expr | none
+    stop: Expr | none
+    step: Expr | none
+
+class RecordFieldEntry:
+    name: str | none
+    value: Expr
+
+class RecordExpr(Expr):
+    fields: list[RecordFieldEntry]
+
+class ListExpr(Expr):
+    elements: list[Expr]
+
+class DictEntry:
+    key: Expr
+    value: Expr
+
+class DictExpr(Expr):
+    entries: list[DictEntry]
+
+class SetExpr(Expr):
+    elements: list[Expr]
+
+class AnonymousDef(Expr):
+    params: list[Param]
+    return_type: TypeExpr | none
+    body: list[Stmt]
+
+class Trust(Expr):
+    target_type: TypeExpr
+    expr: Expr
+
+class Freeze(Expr):
+    expr: Expr
+
+class Skip(Expr):
+    pass
+
+class TypeExprAsExpr(Expr):
+    type_expr: TypeExpr
+
+class ListComp(Expr):
+    element: Expr
+    target: Pattern
+    iter: Expr
+    condition: Expr | none
+
+class SetComp(Expr):
+    element: Expr
+    target: Pattern
+    iter: Expr
+    condition: Expr | none
+
+class DictComp(Expr):
+    key: Expr
+    value: Expr
+    target: Pattern
+    iter: Expr
+    condition: Expr | none
+
+class IfExpr(Expr):
+    condition: Expr
+    then_branch: Expr
+    else_branch: Expr
+
+# --- Patterns ----------------------------------------------------------------
+
+sealed class Pattern:
+    span: Span
+
+class IdentPattern(Pattern):
+    name: str
+
+class LiteralPattern(Pattern):
+    value: LiteralValue
+
+class DestructureField:
+    name: str | none
+    pattern: Pattern
+
+class ClassDestructure(Pattern):
+    class_name: str
+    fields: list[DestructureField]
+
+class RecordDestructure(Pattern):
+    fields: list[DestructureField]
+
+class TuplePattern(Pattern):
+    items: list[Pattern]
+
+class StarPattern(Pattern):
+    inner: Pattern
+
+class WildcardPattern(Pattern):
+    pass
+
+class TypePattern(Pattern):
+    type_expr: TypeExpr
+
+# --- Function / class member shapes -------------------------------------------
+
+class Param:
+    name: str
+    pattern: Pattern | none
+    type_annotation: TypeExpr | none
+    default_value: Expr | none
+    is_positional_only: bool
+    is_keyword_only: bool
+    is_variadic_positional: bool
+    is_variadic_keyword: bool
+    is_gather: bool
+    span: Span
+
+class FunctionDef:
+    name: str
+    type_params: list[TypeParam]
+    params: list[Param]
+    return_type: TypeExpr | none
+    body: list[Stmt]
+    is_dispatch: bool
+    is_async: bool
+    is_override: bool
+    is_final: bool
+    decorators: list[Expr]
+    span: Span
+
+class FactoryDef:
+    name: str
+    type_params: list[TypeParam]
+    params: list[Param]
+    return_type: TypeExpr | none
+    body: list[Stmt]
+    span: Span
+
+class GetterDef:
+    name: str
+    return_type: TypeExpr | none
+    body: list[Stmt]
+    span: Span
+
+class SetterDef:
+    name: str
+    param: Param
+    body: list[Stmt]
+    span: Span
+
+class FieldDef:
+    name: str
+    type_annotation: TypeExpr
+    default_value: Expr | none
+    is_final: bool
+    doc: str | none
+    span: Span
+
+sealed class TypeAliasValue:
+    pass
+
+class DirectAlias(TypeAliasValue):
+    value: TypeExpr
+
+class MatchAlias(TypeAliasValue):
+    subject: list[TypeExpr]
+    arms: list[TypeMatchArm]
+
+sealed class ClassMember:
+    pass
+
+class FieldMember(ClassMember):
+    field: FieldDef
+
+class MethodMember(ClassMember):
+    method: FunctionDef
+
+class FactoryMember(ClassMember):
+    factory_def: FactoryDef
+
+class GetterMember(ClassMember):
+    getter_def: GetterDef
+
+class SetterMember(ClassMember):
+    setter_def: SetterDef
+
+class ClassMethodMember(ClassMember):
+    method: FunctionDef
+
+class ClassVarMember(ClassMember):
+    field: FieldDef
+
+class TypeAliasMember(ClassMember):
+    name: str
+    type_params: list[TypeParam]
+    value: TypeAliasValue
+    span: Span
+
+class PassMember(ClassMember):
+    span: Span
+
+class EllipsisMember(ClassMember):
+    span: Span
+
+class MetadataMember(ClassMember):
+    text: str
+    span: Span
+
+sealed class TraitMember:
+    pass
+
+class TraitMethod(TraitMember):
+    method: FunctionDef
+
+class TraitClassMethod(TraitMember):
+    method: FunctionDef
+
+class TraitGetter(TraitMember):
+    getter_def: GetterDef
+
+class TraitSetter(TraitMember):
+    setter_def: SetterDef
+
+class TraitField(TraitMember):
+    field: FieldDef
+
+class TraitPass(TraitMember):
+    span: Span
+
+class TraitEllipsis(TraitMember):
+    span: Span
+
+class WithItem:
+    context_expr: Expr
+    target: Pattern | none
+
+class MatchArm:
+    pattern: Pattern
+    type_narrow: TypeExpr | none
+    guard: Expr | none
+    body: list[Stmt]
+    span: Span
+
+class ExceptHandler:
+    exception_type: TypeExpr
+    name: str | none
+    body: list[Stmt]
+    span: Span
+
+class ElifBranch:
+    condition: Expr
+    body: list[Stmt]
+
+class ImportedName:
+    name: str
+    alias: str | none
+
+# --- Statements ----------------------------------------------------------------
+
+sealed class Stmt:
+    span: Span
+
+class ClassDef(Stmt):
+    name: str
+    type_params: list[TypeParam]
+    bases: list[TypeExpr]
+    without_traits: list[str]
+    body: list[ClassMember]
+    is_sealed: bool
+    is_final: bool
+
+class TraitDef(Stmt):
+    name: str
+    type_params: list[TypeParam]
+    bases: list[TypeExpr]
+    body: list[TraitMember]
+
+class ImplementDef(Stmt):
+    interface: TypeExpr
+    target: TypeExpr
+    body: list[FunctionDef]
+
+class TypeAliasStmt(Stmt):
+    name: str
+    type_params: list[TypeParam]
+    value: TypeAliasValue
+
+class FunctionStmt(Stmt):
+    function: FunctionDef
+
+class VarDef(Stmt):
+    pattern: Pattern
+    type_annotation: TypeExpr | none
+    value: Expr | none
+    is_let: bool
+    is_final: bool
+
+class With(Stmt):
+    items: list[WithItem]
+    body: list[Stmt]
+
+class Assignment(Stmt):
+    target: Expr
+    value: Expr
+
+class AugAssign(Stmt):
+    target: Expr
+    op: str
+    value: Expr
+
+class If(Stmt):
+    condition: Expr
+    then_branch: list[Stmt]
+    elif_branches: list[ElifBranch]
+    else_branch: list[Stmt] | none
+
+class For(Stmt):
+    target: Pattern
+    iterable: Expr
+    body: list[Stmt]
+    on_exhausted: list[Stmt] | none
+
+class While(Stmt):
+    condition: Expr
+    body: list[Stmt]
+    on_exhausted: list[Stmt] | none
+
+class MatchStmt(Stmt):
+    subject: Expr
+    subject_alias: str | none
+    arms: list[MatchArm]
+
+class Try(Stmt):
+    body: list[Stmt]
+    handlers: list[ExceptHandler]
+    finally_body: list[Stmt] | none
+
+class Return(Stmt):
+    value: Expr | none
+
+class Raise(Stmt):
+    exception: Expr
+
+class Yield(Stmt):
+    value: Expr
+
+class Assert(Stmt):
+    condition: Expr
+    message: Expr | none
+
+class Delete(Stmt):
+    names: list[str]
+
+class Break(Stmt):
+    pass
+
+class Continue(Stmt):
+    pass
+
+class Pass(Stmt):
+    pass
+
+class ModuleStmt(Stmt):
+    name: str
+    body: list[Stmt]
+
+class Import(Stmt):
+    module: str
+    alias: str | none
+
+class FromImport(Stmt):
+    module: str
+    names: list[ImportedName]
+
+class ExprStmt(Stmt):
+    expr: Expr
+
+class MetadataStmt(Stmt):
+    text: str
+
+class Module:
+    statements: list[Stmt]
+    span: Span
