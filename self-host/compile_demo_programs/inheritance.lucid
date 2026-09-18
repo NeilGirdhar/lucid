@@ -10,6 +10,9 @@ class NameNode(Node):
 class NodeError:
     message: str
 
+class OtherError:
+    message: str
+
 class Holder:
     payload: Node | none
     label: str
@@ -33,6 +36,19 @@ def validate_name(name: str) -> none | NodeError:
 def make_validated(id: int, name: str) -> Node | NodeError:
     validate_name(name)?
     return NameNode(id, name)
+
+def make_name_or_fail_widened(id: int, name: str) -> Node | NodeError | OtherError:
+    return make_name_or_fail(id, name)
+
+def describe(n: Node) -> int:
+    match n as result:
+        case NumberNode:
+            return result.value
+        case _:
+            return -100
+
+def collect(nodes: list[Node], n: Node):
+    nodes.append(n)
 
 def ok() -> int:
     n = make_number(1, 42)
@@ -82,6 +98,28 @@ def ok() -> int:
             print(result5.id)
         case NodeError:
             print(result5.message)
+    print(describe(NumberNode(9, 55)))
+    print(describe(NameNode(10, "y")))
+    nodes: list[Node] = []
+    collect(nodes, NumberNode(11, 1))
+    collect(nodes, NameNode(12, "z"))
+    print(len(nodes))
+    print(nodes[0].id)
+    print(nodes[1].id)
+    match make_name_or_fail_widened(13, "w") as result6:
+        case Node:
+            print(result6.id)
+        case NodeError:
+            print(result6.message)
+        case OtherError:
+            print(result6.message)
+    match make_name_or_fail_widened(14, "") as result7:
+        case Node:
+            print(result7.id)
+        case NodeError:
+            print(result7.message)
+        case OtherError:
+            print(result7.message)
     return 0
 
 print(ok())

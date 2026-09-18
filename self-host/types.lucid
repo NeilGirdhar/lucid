@@ -379,12 +379,66 @@ class ClassSig:
     # nothing self-host/ast.lucid needs to compile uses a trait base at
     # all).
     parent: str | none
+    # The `sealed class` this class's own hierarchy is rooted at, if
+    # any -- itself, for a class where `is_sealed` is true (`Expr`
+    # itself); its parent's own `sealed_root`, inherited down the chain,
+    # for an ordinary subclass (`Binary`, `LiteralExpr`, ...); `none`
+    # for a class outside any sealed hierarchy at all (`Token`, say).
+    # Every class sharing the same `sealed_root` gets a runtime tag (see
+    # `class_tag`) so `match` can dispatch on which *concrete* subclass
+    # a sealed-base-typed value actually is -- the one thing
+    # `class_assignable_to`'s own subtyping can't do, since it only ever
+    # lets a value flow *up* the hierarchy, never back down to a
+    # specific subclass (see checker.lucid's `check_match` and
+    # codegen.lucid's `codegen_match`, both gaining a whole second case
+    # for this alongside their existing union-dispatch one). Deliberately
+    # only one level of nesting is assumed throughout (a `sealed class`
+    # with direct concrete subclasses, never a subclass that's itself
+    # further subclassed) -- the only shape self-host/ast.lucid's own
+    # hierarchies (`Expr`, `Stmt`, `Pattern`, `TypeExpr`, ...) use.
+    sealed_root: str | none
 
 def field_type(cls: ClassSig, name: str) -> LType | none:
     for f in cls.fields:
         if f.name == name:
             return f.field_type
     return none
+
+# The runtime tag a concrete instance of `name` (a class whose own
+# `sealed_root` is set) carries in its own hidden `__lucid_tag` field
+# (see codegen.lucid's emit_struct/emit_constructor) -- purely derived,
+# not stored anywhere, from every registered class sharing the same
+# `sealed_root`, sorted by name for the same reproducible-output reason
+# every other per-run-nondeterministic ordering in this pipeline is
+# sorted (dict iteration over `classes` isn't guaranteed stable).
+# `name` itself must have a `sealed_root` (checker.lucid only ever calls
+# this after confirming that); returns 0 if `name` is somehow missing
+# from `classes` or has no `sealed_root`, which should never happen for
+# a program that passed checking.
+def class_tag(classes: dict[str, ClassSig], name: str) -> int:
+    match classes.get(name, none) as cls:
+        case ClassSig:
+            match cls.sealed_root as root:
+                case str:
+                    siblings: list[str] = []
+                    for cname in classes:
+                        match classes.get(cname, none) as sibling:
+                            case ClassSig:
+                                if sibling.sealed_root == root:
+                                    siblings.append(cname)
+                            case none:
+                                pass
+                    ordered = sorted(siblings)
+                    i = 0
+                    while i < len(ordered):
+                        if ordered[i] == name:
+                            return i
+                        i = i + 1
+                    return 0
+                case none:
+                    return 0
+        case none:
+            return 0
 
 def method_signature(cls: ClassSig, name: str) -> FuncSig | none:
     return cls.methods.get(name, none)
@@ -471,8 +525,40 @@ def class_assignable_to(classes: dict[str, ClassSig], value_type: LType, expecte
                     return false
                 case _:
                     return false
+        case UnionLType:
+            # A union value satisfies a wider expectation when *every*
+            # one of its own members does -- self-host/parser.lucid's
+            # own `parse` returns `ParsedModule | ParserError |
+            # LexError`, satisfied by a plain `return` of a call whose
+            # own declared return type is the narrower `ParsedModule |
+            # ParserError` (no `LexError`, on a path nothing can
+            # lex-fail on). Recurses into this same function per member,
+            # so a member that's itself a *subtype* of one of
+            # `expected`'s own members (not just an exact one) still
+            # works the same way a single class value already does
+            # above.
+            for m in vt.members:
+                if not class_assignable_to(classes, m, expected):
+                    return false
+            return true
         case _:
             return false
+
+# Like type_list_equal, but subtype-aware (class_assignable_to) per
+# pair, in order -- a method call's own argument list (checker.lucid's
+# check_call, its ClassType-receiver case), where there's no dispatch
+# overload set to pick among, just one method signature per name per
+# class, so there's no "try exact first" concern the way
+# find_signature_assignable has for a plain function name.
+def type_list_assignable(classes: dict[str, ClassSig], values: list[LType], expecteds: list[LType]) -> bool:
+    if len(values) != len(expecteds):
+        return false
+    i = 0
+    while i < len(values):
+        if not class_assignable_to(classes, values[i], expecteds[i]):
+            return false
+        i = i + 1
+    return true
 
 # A class is printable in this subset if every field is int/bool/str --
 # codegen.lucid's per-class printer only knows how to format those three
@@ -523,6 +609,46 @@ def find_signature(table: FuncTable, name: str, arg_types: list[LType]) -> FuncS
             for sig in sigs:
                 if type_list_equal(sig.param_types, arg_types):
                     return sig
+            return none
+        case none:
+            return none
+
+# Like find_signature, but subtype-aware -- called with a plain,
+# non-dispatch function name (self-host/lexer.lucid's own `tokenize`, or
+# self-host/parser.lucid's `merge_span`, `dummy_span`, and its own
+# `Parser` methods calling each other) whose declared parameter is a
+# sealed base (`def merge_span(a: Span, b: Span) -> Span:` doesn't need
+# this, but `Ident`/`Binary`/... flowing into an `Expr`-typed parameter
+# does, the same subtyping check_construct/check_stmt's Return arm
+# already give a class-typed value). Tries an exact match first (find_
+# signature itself) so ordinary `dispatch def` overload resolution keeps
+# picking the single most specific registered signature when one
+# matches exactly; only falls back to a subtype-compatible one, in
+# registration order, when nothing matches exactly. A name with real
+# multiple dispatch (two `dispatch def`s differing only in a class
+# parameter's own exact type) could in principle make this fallback
+# ambiguous -- not a concern for anything self-host/lexer.lucid or
+# self-host/parser.lucid actually calls this way, and this subset
+# doesn't attempt to detect the ambiguous case honestly, just returns
+# the first match in registration order.
+def find_signature_assignable(classes: dict[str, ClassSig], table: FuncTable, name: str, arg_types: list[LType]) -> FuncSig | none:
+    match find_signature(table, name, arg_types) as exact:
+        case FuncSig:
+            return exact
+        case none:
+            pass
+    match table.signatures.get(name, none) as sigs:
+        case list[FuncSig]:
+            for sig in sigs:
+                if len(sig.param_types) == len(arg_types):
+                    all_ok = true
+                    i = 0
+                    while i < len(arg_types):
+                        if not class_assignable_to(classes, arg_types[i], sig.param_types[i]):
+                            all_ok = false
+                        i = i + 1
+                    if all_ok:
+                        return sig
             return none
         case none:
             return none

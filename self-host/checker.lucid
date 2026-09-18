@@ -75,7 +75,7 @@
 # counterpart covers.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, PassMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, Propagate, FunctionDef, Param, Span, FromImport, Import
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, has_any_signature, resolve_all_declarations, inherited_fields, is_subclass_of, class_assignable_to
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, types_equal, type_list_equal, type_list_assignable, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, has_any_signature, resolve_all_declarations, inherited_fields, is_subclass_of, class_assignable_to
 
 class CheckError:
     message: str
@@ -315,7 +315,20 @@ class Checker:
                     pass
                 case _:
                     self.error("only plain fields, methods with a bare 'self' first parameter, and 'pass' are supported in a class body", cd.span)
-        self.classes[cd.name] = ClassSig(cd.name, inherited_fields(self.classes, parent, own_fields), methods, parent)
+        sealed_root: str | none = none
+        if cd.is_sealed:
+            sealed_root = cd.name
+        else:
+            match parent as p:
+                case str:
+                    match self.classes.get(p, none) as parent_cls:
+                        case ClassSig:
+                            sealed_root = parent_cls.sealed_root
+                        case none:
+                            pass
+                case none:
+                    pass
+        self.classes[cd.name] = ClassSig(cd.name, inherited_fields(self.classes, parent, own_fields), methods, parent, sealed_root)
 
     # `self` isn't a type-annotated parameter in this subset (matching
     # every method in self-host/lexer.lucid: `def at_end(self) -> bool:`,
@@ -810,18 +823,94 @@ class Checker:
                     for member in st.members:
                         if not type_in_list(covered, member):
                             self.error("match on " + type_name(st) + " is not exhaustive: no case for " + type_name(member), m.span)
+            case ClassType:
+                # `self-host/ast.lucid`'s own node classes (`Expr`,
+                # `Stmt`, `Pattern`, `TypeExpr`, ...) are `sealed class`
+                # hierarchies with many concrete subclasses -- a
+                # different shape of `match` than the union case above,
+                # dispatching on which *concrete* subclass a
+                # sealed-base-typed value actually is at runtime (a real
+                # tag, see types.lucid's own class_tag/sealed_root
+                # comments), not on a compiler-chosen tagged struct. Only
+                # supported when the subject's own static type belongs
+                # to one (`cls.sealed_root`); an ordinary class with no
+                # sealed hierarchy at all still has nothing to narrow.
+                match self.classes.get(st.name, none) as cls:
+                    case ClassSig:
+                        match cls.sealed_root as root:
+                            case str:
+                                self.check_sealed_match(m, root, known, expected_return, in_function, in_loop)
+                            case none:
+                                self.error("match on " + type_name(st) + " is not supported in this subset (only a union-typed subject, or one belonging to a sealed class hierarchy, can be matched)", m.span)
+                    case none:
+                        self.error("unknown class '" + st.name + "'", m.span)
             case LType:
                 # codegen.lucid's own `match` compiles to an if/else-if
                 # chain on the subject's `.tag` field -- there's no tag
                 # to switch on unless the subject's static type is
-                # itself a union, so this subset requires one, the same
-                # way it requires a union before accepting '?' on an
-                # expression (see check_propagate). A match on an
+                # itself a union or a sealed-hierarchy class, the same
+                # way it requires one of those before accepting '?' on
+                # an expression (see check_propagate). A match on an
                 # already-fully-known single type has nothing to narrow
                 # anyway.
-                self.error("match on " + type_name(st) + " is not supported in this subset (only a union-typed subject can be matched)", m.span)
+                self.error("match on " + type_name(st) + " is not supported in this subset (only a union-typed subject, or one belonging to a sealed class hierarchy, can be matched)", m.span)
             case none:
                 pass
+
+    # `match` on a sealed-base-typed subject (`Expr`, say) -- every arm
+    # narrows to a *concrete* class in the same hierarchy (`root`, the
+    # sealed class the subject's own type belongs to, per
+    # ClassSig.sealed_root) via a plain class-name pattern, or is a
+    # wildcard. Unlike check_match's own union case, this subset doesn't
+    # attempt real exhaustiveness here (enumerating every one of a
+    # sealed hierarchy's own concrete subclasses would mean walking
+    # `self.classes` for every member of `root`, and self-host/
+    # ast.lucid's own hierarchies run to dozens of subclasses) -- a
+    # trailing `case _:` is required instead, the shape every actual use
+    # in self-host/parser.lucid takes (exactly one concrete-class arm
+    # plus a wildcard, three times, no exceptions).
+    def check_sealed_match(self, m: MatchStmt, root: str, known: dict[str, LType], expected_return: LType | none, in_function: bool, in_loop: bool):
+        has_wildcard = false
+        for arm in m.arms:
+            match arm.guard as g:
+                case Expr:
+                    self.error("a match arm guard ('if ...') is not supported in this subset", arm.span)
+                case none:
+                    pass
+            narrowed: LType | none = none
+            match arm.pattern as pat:
+                case TypePattern:
+                    match resolve_type_expr(pat.type_expr) as nt:
+                        case ClassType:
+                            match self.classes.get(nt.name, none) as narrow_cls:
+                                case ClassSig:
+                                    if narrow_cls.sealed_root == root:
+                                        narrowed = nt
+                                    else:
+                                        self.error("pattern type " + type_name(nt) + " is not part of the same sealed class hierarchy as '" + root + "'", arm.span)
+                                case none:
+                                    self.error("unknown class '" + nt.name + "'", arm.span)
+                        case LType:
+                            self.error("pattern type " + type_name(nt) + " is not part of the same sealed class hierarchy as '" + root + "'", arm.span)
+                        case none:
+                            self.error("unsupported pattern type in match arm", arm.span)
+                case WildcardPattern:
+                    has_wildcard = true
+                case _:
+                    self.error("only a class-name pattern, or a wildcard, is supported when matching a sealed class hierarchy in this subset", arm.span)
+            arm_known: dict[str, LType] = copy_type_scope(known)
+            match narrowed as nt2:
+                case LType:
+                    match m.subject_alias as alias_name:
+                        case str:
+                            self.bind(arm_known, alias_name, nt2, arm.span)
+                        case none:
+                            pass
+                case none:
+                    pass
+            self.check_block(arm.body, arm_known, expected_return, in_function, in_loop)
+        if not has_wildcard:
+            self.error("match on a sealed class hierarchy requires a trailing 'case _:' in this subset (exhaustively listing every concrete subclass isn't supported)", m.span)
 
     # codegen.lucid compiles a condition straight to a C `if`/`while`
     # condition, and C accepts any scalar there -- so an unchecked
@@ -1326,7 +1415,7 @@ class Checker:
                     return none
                 if any_unknown:
                     return none
-                match find_signature(self.functions, callee.name, arg_types) as sig:
+                match find_signature_assignable(self.classes, self.functions, callee.name, arg_types) as sig:
                     case FuncSig:
                         return sig.return_type
                     case none:
@@ -1350,7 +1439,7 @@ class Checker:
                 match receiver_type as rt:
                     case ListType:
                         if callee.attr == "append":
-                            if len(checked_arg_types) == 1 and types_equal(checked_arg_types[0], rt.element_type):
+                            if len(checked_arg_types) == 1 and class_assignable_to(self.classes, checked_arg_types[0], rt.element_type):
                                 return none
                             if any_arg_unknown:
                                 return none
@@ -1368,7 +1457,7 @@ class Checker:
                             case ClassSig:
                                 match method_signature(cls, callee.attr) as sig:
                                     case FuncSig:
-                                        if type_list_equal(checked_arg_types, sig.param_types):
+                                        if type_list_assignable(self.classes, checked_arg_types, sig.param_types):
                                             return sig.return_type
                                         if any_arg_unknown:
                                             return none

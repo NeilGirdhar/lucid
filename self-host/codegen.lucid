@@ -47,7 +47,7 @@
 # own more permissive same-function visibility.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param, FromImport
-from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, resolve_all_declarations, inherited_fields, class_assignable_to, is_subclass_of
+from .types import LType, IntType, BoolType, StrType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, resolve_all_declarations, inherited_fields, class_assignable_to, is_subclass_of, class_tag
 
 runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
 
@@ -60,22 +60,69 @@ runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\
 def emit_struct_forward_decl(cls: ClassSig) -> str:
     return "typedef struct " + cls.name + " " + cls.name + ";"
 
-def emit_struct(cls: ClassSig) -> str:
+# A hidden `long __lucid_tag;` field, inserted right after the fields a
+# `sealed_root` class's OWN body declares (`Expr`'s own is just `span`,
+# so every `Expr` descendant gets `[span, __lucid_tag, <its own
+# fields>]`) -- the same relative position in every descendant's own
+# struct, via `inherited_fields` prepending the root's own fields first,
+# so it's always readable through a pointer of the sealed root's own
+# type (`Expr *`), whatever concrete subclass the pointer actually
+# points to, under C11 6.5.2.3p6's "common initial sequence" rule (the
+# same reasoning `.span` access through an `Expr *` already relies on).
+# `codegen_match`'s own sealed-hierarchy dispatch reads it this way to
+# tell which concrete subclass a sealed-base-typed value actually is --
+# the one thing plain inheritance (a value only ever flowing *up* the
+# hierarchy) can't do on its own. `boundary` is how many of `cls.fields`
+# belong to the root itself; a plain (non-sealed-hierarchy) class's own
+# `cls.sealed_root` is `none`, so neither of these two functions ever
+# has to insert or set one for it.
+def sealed_root_boundary(classes: dict[str, ClassSig], cls: ClassSig) -> int:
+    match cls.sealed_root as root:
+        case str:
+            match classes.get(root, none) as root_cls:
+                case ClassSig:
+                    return len(root_cls.fields)
+                case none:
+                    return 0
+        case none:
+            return 0
+
+def emit_struct(classes: dict[str, ClassSig], cls: ClassSig) -> str:
     fields: list[str] = []
-    for f in cls.fields:
+    boundary = sealed_root_boundary(classes, cls)
+    if boundary == 0 and cls.sealed_root != none:
+        fields.append("    long __lucid_tag;")
+    i = 0
+    while i < len(cls.fields):
+        f = cls.fields[i]
         fields.append("    " + c_type_of(f.field_type) + " " + f.name + ";")
+        if i + 1 == boundary:
+            fields.append("    long __lucid_tag;")
+        i = i + 1
     return "struct " + cls.name + " {\n" + join_with(fields, "\n") + "\n};"
 
 # `Construct` (`ClassName(args)`) compiles to a call to this --
-# `malloc`, one field assignment per constructor argument, return the
-# pointer. Leaked, like every other allocation in this subset (see
-# self-host/README.md's no-GC/no-arena note).
-def emit_constructor(cls: ClassSig) -> str:
+# `malloc`, one field assignment per constructor argument (never for
+# `__lucid_tag`, which isn't a real Construct argument at all -- it's
+# set to this class's own `class_tag` unconditionally, right in the
+# constructor body, the same way it's never counted by
+# checker.lucid's own check_construct), return the pointer. Leaked,
+# like every other allocation in this subset (see self-host/README.md's
+# no-GC/no-arena note).
+def emit_constructor(classes: dict[str, ClassSig], cls: ClassSig) -> str:
     params: list[str] = []
     assigns: list[str] = []
-    for f in cls.fields:
+    boundary = sealed_root_boundary(classes, cls)
+    if boundary == 0 and cls.sealed_root != none:
+        assigns.append("    p->__lucid_tag = " + str(class_tag(classes, cls.name)) + ";")
+    i = 0
+    while i < len(cls.fields):
+        f = cls.fields[i]
         params.append(c_type_of(f.field_type) + " " + f.name)
         assigns.append("    p->" + f.name + " = " + f.name + ";")
+        if i + 1 == boundary:
+            assigns.append("    p->__lucid_tag = " + str(class_tag(classes, cls.name)) + ";")
+        i = i + 1
     param_list = join_with(params, ", ")
     if param_list == "":
         param_list = "void"
@@ -178,6 +225,31 @@ def emit_dict_type(value_type: LType) -> str:
 # emit_union_type so the two can never name the same union differently.
 def union_c_name(members: list[LType]) -> str:
     return "lucid_" + mangle_component(UnionLType(members))
+
+# A subtype value (`Binary`) flowing into a sealed-base-typed slot
+# (`Expr`) -- a Construct argument, a plain function call argument, a
+# method call argument, a `list[T].append(...)` argument, a `return`
+# value, or an assignment -- needs an explicit C cast: `Binary *` and
+# `Expr *` are two separate, unrelated struct types in this codegen (no
+# C-level inheritance at all), safe under C11 6.5.2.3p6's "common
+# initial sequence" rule for any access to a field the base class itself
+# declares (see emit_struct's own comment). `expected`/`actual` are
+# whatever checker.lucid already confirmed is a valid (sub)class
+# relationship; this only ever needs to *emit* the cast, never validate
+# one. A no-op (returns `code` unchanged) whenever `expected` isn't
+# itself a class type, or `actual` already names the same class.
+def cast_if_needed(expected: LType, actual: LType, code: str) -> str:
+    match expected as et:
+        case ClassType:
+            match actual as at:
+                case ClassType:
+                    if at.name != et.name:
+                        return "(" + c_type_of(et) + ") " + code
+                case _:
+                    pass
+        case _:
+            pass
+    return code
 
 # A union type -- `Token | LexError`, `Token | none`, `list[Token] |
 # LexError` -- is a plain, by-value (not heap-allocated) tagged C
@@ -450,7 +522,20 @@ class Codegen:
                                 methods[m.method.name] = FuncSig(m.method.name, mparam_types, mreturn_type)
                             case _:
                                 pass
-                    self.classes[result.name] = ClassSig(result.name, inherited_fields(self.classes, parent, own_fields), methods, parent)
+                    sealed_root: str | none = none
+                    if result.is_sealed:
+                        sealed_root = result.name
+                    else:
+                        match parent as p:
+                            case str:
+                                match self.classes.get(p, none) as parent_cls:
+                                    case ClassSig:
+                                        sealed_root = parent_cls.sealed_root
+                                    case none:
+                                        pass
+                            case none:
+                                pass
+                    self.classes[result.name] = ClassSig(result.name, inherited_fields(self.classes, parent, own_fields), methods, parent, sealed_root)
                 case FunctionStmt:
                     fn = result.function
                     param_types: list[LType] = []
@@ -590,7 +675,7 @@ class Codegen:
                                     arg_types.append(at)
                                 case none:
                                     pass
-                        match find_signature(self.functions, callee.name, arg_types) as sig:
+                        match find_signature_assignable(self.classes, self.functions, callee.name, arg_types) as sig:
                             case FuncSig:
                                 return sig.return_type
                             case none:
@@ -955,13 +1040,37 @@ class Codegen:
                                     return "(" + arg_codes[0] + "->len)"
                                 case _:
                                     return "((long) strlen(" + arg_codes[0] + "))"
-                        joined = join_with(arg_codes, ", ")
-                        match find_signature(self.functions, callee.name, arg_types) as sig:
+                        match find_signature_assignable(self.classes, self.functions, callee.name, arg_types) as sig:
                             case FuncSig:
+                                # A subtype argument value (`Binary`,
+                                # say) flowing into a sealed-base-typed
+                                # parameter (`Expr`) needs the same
+                                # explicit cast a sealed-base-typed
+                                # Construct argument already gets (see
+                                # codegen_expr's own Construct case) --
+                                # `Binary *` and `Expr *` are unrelated C
+                                # struct types here.
+                                cast_codes: list[str] = []
+                                i = 0
+                                while i < len(arg_codes) and i < len(sig.param_types):
+                                    cast_code = arg_codes[i]
+                                    if i < len(arg_types):
+                                        match sig.param_types[i] as pt:
+                                            case ClassType:
+                                                match arg_types[i] as at2:
+                                                    case ClassType:
+                                                        if at2.name != pt.name:
+                                                            cast_code = "(" + c_type_of(pt) + ") " + cast_code
+                                                    case _:
+                                                        pass
+                                            case _:
+                                                pass
+                                    cast_codes.append(cast_code)
+                                    i = i + 1
                                 name = mangled_name(self.functions, sig)
-                                return name + "(" + joined + ")"
+                                return name + "(" + join_with(cast_codes, ", ") + ")"
                             case none:
-                                return callee.name + "(" + joined + ")"
+                                return callee.name + "(" + join_with(arg_codes, ", ") + ")"
                     case Attribute:
                         receiver_code = self.codegen_expr(callee.value, known)
                         match self.infer_expr_type(callee.value, known) as rt:
@@ -969,14 +1078,39 @@ class Codegen:
                                 name = "lucid_list_" + mangle_component(rt.element_type)
                                 if callee.attr == "append" and len(result.args) == 1:
                                     value_code = self.codegen_expr(result.args[0].value, known)
+                                    match self.infer_expr_type(result.args[0].value, known) as at3:
+                                        case LType:
+                                            value_code = cast_if_needed(rt.element_type, at3, value_code)
+                                        case none:
+                                            pass
                                     return name + "_append(" + receiver_code + ", " + value_code + ")"
                                 if callee.attr == "pop" and len(result.args) == 0:
                                     return name + "_pop(" + receiver_code + ")"
                                 return "0 /* unsupported list method */"
                             case ClassType:
                                 method_arg_codes: list[str] = [receiver_code]
-                                for a in result.args:
-                                    method_arg_codes.append(self.codegen_expr(a.value, known))
+                                match self.classes.get(rt.name, none) as method_cls:
+                                    case ClassSig:
+                                        match method_signature(method_cls, callee.attr) as method_sig:
+                                            case FuncSig:
+                                                mi = 0
+                                                while mi < len(result.args):
+                                                    a = result.args[mi]
+                                                    arg_code2 = self.codegen_expr(a.value, known)
+                                                    if mi < len(method_sig.param_types):
+                                                        match self.infer_expr_type(a.value, known) as at4:
+                                                            case LType:
+                                                                arg_code2 = cast_if_needed(method_sig.param_types[mi], at4, arg_code2)
+                                                            case none:
+                                                                pass
+                                                    method_arg_codes.append(arg_code2)
+                                                    mi = mi + 1
+                                            case none:
+                                                for a in result.args:
+                                                    method_arg_codes.append(self.codegen_expr(a.value, known))
+                                    case none:
+                                        for a in result.args:
+                                            method_arg_codes.append(self.codegen_expr(a.value, known))
                                 return method_c_name(rt.name, callee.attr) + "(" + join_with(method_arg_codes, ", ") + ")"
                             case DictType:
                                 if callee.attr == "get" and len(result.args) == 2:
@@ -1359,7 +1493,8 @@ class Codegen:
                                 # membership.
                                 match self.infer_expr_type(v, known) as vt:
                                     case UnionLType:
-                                        pass
+                                        if not types_equal(vt, rt):
+                                            return self.codegen_union_narrowing_return(result.span.line, result.span.column, vt, rt, value_code, indent)
                                     case LType:
                                         match find_union_member(self.classes, rt.members, vt) as target:
                                             case LType:
@@ -1506,6 +1641,56 @@ class Codegen:
     # `self-host/parser.lucid`'s own dominant `?` shape (`return
     # self.parse_expr()?`, docs/question-mark-operator.md's own example
     # shape) is exactly this.
+    # `return some_call()` where the call's own return type is a
+    # union that's a strict *subset* of the enclosing function's own
+    # declared union return type -- self-host/parser.lucid's own `def
+    # parse(...) -> ParsedModule | ParserError | LexError: ... return
+    # parser.parse_module()` (`parse_module`'s own return type is the
+    # narrower `ParsedModule | ParserError`, no `LexError`). Checker.lucid's
+    # own class_assignable_to accepts this (every member of the
+    # narrower union satisfies the wider one), but the two unions are
+    # two genuinely different tagged structs in the generated C (a
+    # different member set means a different struct layout and
+    # different tag values), so simply returning the narrower value
+    # as-is -- what codegen_stmt's Return arm does for the "same exact
+    # union" case -- would be a real C type error here. This evaluates
+    # the narrower value into its own temp once, then an if/else-if
+    # chain on *its own* tag re-wraps whichever member is active into
+    # the wider union's own tag/field layout (find_union_member/
+    # wrap_union_value, the same helpers an ordinary member-to-union
+    # wrap already uses) and returns that -- called instead of the
+    # ordinary single-expression `return`, so it owns emitting the
+    # `return` statement(s) itself, for each possible tag.
+    def codegen_union_narrowing_return(self, span_line: int, span_column: int, narrow: UnionLType, wide: UnionLType, value_code: str, indent: str) -> str:
+        temp = "__lucid_conv_" + str(span_line) + "_" + str(span_column)
+        narrow_ctype = union_c_name(narrow.members)
+        decl = indent + narrow_ctype + " " + temp + " = " + value_code + ";"
+        ordered = sorted_union_members(narrow.members)
+        branches: list[str] = []
+        i = 0
+        while i < len(ordered):
+            m = ordered[i]
+            match find_union_member(self.classes, wide.members, m) as target:
+                case LType:
+                    field_code = temp + ".v" + str(i)
+                    wrap_code = field_code
+                    match m as mt:
+                        case ClassType:
+                            match target as tt:
+                                case ClassType:
+                                    if mt.name != tt.name:
+                                        wrap_code = "(" + c_type_of(tt) + ") " + field_code
+                                case _:
+                                    pass
+                        case _:
+                            pass
+                    wrapped = wrap_union_value(wide.members, target, wrap_code)
+                    branches.append("if (" + temp + ".tag == " + str(i) + ") {\n" + indent + "    return " + wrapped + ";\n" + indent + "}")
+                case none:
+                    pass
+            i = i + 1
+        return decl + "\n" + indent + join_with(branches, " else ")
+
     def codegen_propagate_return(self, prop: Propagate, indent: str, known: dict[str, LType], expected_return: LType | none) -> str:
         match self.infer_expr_type(prop.expr, known) as it:
             case UnionLType:
@@ -1645,13 +1830,84 @@ class Codegen:
                 # every "else " the way naively indenting each arm on
                 # its own would.
                 return decl + "\n" + indent + join_with(branches, " else ")
+            case ClassType:
+                match self.classes.get(st.name, none) as cls:
+                    case ClassSig:
+                        match cls.sealed_root as root:
+                            case str:
+                                return self.codegen_sealed_match(m, root, subject_code, indent, known, broken_flag, expected_return)
+                            case none:
+                                return indent + "/* unsupported match subject */"
+                    case none:
+                        return indent + "/* unsupported match subject */"
             case _:
-                # checker.lucid's check_match rejects a match on a
-                # non-union subject outright -- there's no tag to switch
-                # on unless the subject's static type is itself a union
-                # (see its own header comment) -- so a program that
-                # reaches codegen never hits this arm.
+                # checker.lucid's check_match rejects a match on
+                # anything but a union or a sealed-hierarchy class
+                # subject outright -- there's no tag to switch on
+                # otherwise (see its own header comment) -- so a
+                # program that reaches codegen never hits this arm.
                 return indent + "/* unsupported match subject */"
+
+    # `match` on a sealed-base-typed subject (checker.lucid's own
+    # check_sealed_match already confirmed every arm is either a
+    # class-name pattern within the same hierarchy as `root`, or a
+    # required trailing wildcard) -- an if/else-if chain on the
+    # subject's own hidden `__lucid_tag` field, read through a pointer
+    # of the sealed root's own type (`Expr *`), safe for any concrete
+    # subclass under C11 6.5.2.3p6 (see emit_struct's own comment). The
+    # subject is evaluated into its own `root *` temp once, the same
+    # "don't re-evaluate a subject with side effects once per arm"
+    # reasoning codegen_match's own union case already uses.
+    def codegen_sealed_match(self, m: MatchStmt, root: str, subject_code: str, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
+        temp = "__lucid_match_" + str(m.span.line) + "_" + str(m.span.column)
+        decl = indent + root + " *" + temp + " = " + subject_code + ";"
+        branches: list[str] = []
+        for arm in m.arms:
+            branches.append(self.codegen_sealed_match_arm(arm, root, temp, m.subject_alias, indent, known, broken_flag, expected_return))
+        return decl + "\n" + indent + join_with(branches, " else ")
+
+    # A concrete-class arm narrows `temp` (typed as the sealed root's
+    # own pointer type) down to the arm's own concrete subclass with an
+    # explicit C cast (`(Binary *) temp`) -- the reverse direction of
+    # the cast codegen_expr's own Construct case gives a sealed-base
+    # field, and only safe here because check_sealed_match already
+    # confirmed the tag check just above it in the generated C -- an
+    # unconditional cast with no tag check at all would be unsound the
+    # same way an unchecked C union access always is. A wildcard arm
+    # narrows to nothing (its own tag check is always true, matching
+    # codegen_match_arm's identical wildcard handling for the union
+    # case), so its own alias, if any, is never bound -- reading it
+    # would be an ordinary "undefined name", the same as any other
+    # unbound alias in this subset.
+    def codegen_sealed_match_arm(self, arm: MatchArm, root: str, temp: str, subject_alias: str | none, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
+        arm_known: dict[str, LType] = copy_type_scope(known)
+        narrowed: str | none = none
+        match arm.pattern as pat:
+            case TypePattern:
+                match resolve_type_expr(pat.type_expr) as nt:
+                    case ClassType:
+                        narrowed = nt.name
+                    case _:
+                        pass
+            case WildcardPattern:
+                pass
+            case _:
+                pass
+        tag_check = "1"
+        prelude = ""
+        match narrowed as concrete_name:
+            case str:
+                tag_check = temp + "->__lucid_tag == " + str(class_tag(self.classes, concrete_name))
+                match subject_alias as alias_name:
+                    case str:
+                        prelude = indent + "    " + concrete_name + " *" + alias_name + " = (" + concrete_name + " *) " + temp + ";\n"
+                        arm_known[alias_name] = ClassType(concrete_name)
+                    case none:
+                        pass
+            case none:
+                pass
+        body = self.codegen_block(arm.body, indent + "    ", arm_known, broken_flag, expected_return)
+        return "if (" + tag_check + ") {\n" + prelude + body + "\n" + indent + "}"
 
     # `subject_type` is always the subject's own UnionLType (see
     # codegen_match's only call site) -- narrowed here down to the one
@@ -2231,9 +2487,9 @@ class Codegen:
                 case ClassDef:
                     match self.classes.get(result.name, none) as cls:
                         case ClassSig:
-                            parts.append(emit_struct(cls))
+                            parts.append(emit_struct(self.classes, cls))
                             parts.append("")
-                            parts.append(emit_constructor(cls))
+                            parts.append(emit_constructor(self.classes, cls))
                             parts.append("")
                             if is_printable_class(cls):
                                 parts.append(emit_print_function(cls))

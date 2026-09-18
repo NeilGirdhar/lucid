@@ -38,46 +38,39 @@ committed) re-runs this check on demand.
 
 **Next target: `self-host/parser.lucid`**, probed the same way,
 repeatedly, as each gap closed — does *not* compile yet, but is down
-from dozens of error categories and hundreds of occurrences to a
-handful of small, narrow ones. Closed as of this branch: cross-file
-imports, narrowing a declared union via a later plain assignment,
-`pass`-bodied classes, class inheritance (field order and subtype
-compatibility — `class_assignable_to`/`is_subclass_of`, `types.lucid`),
-union-typed class fields, and `?` in two more positions (a `return`
-statement's own value, and — by far the single most common `?` shape in
-`parser.lucid`, ~60 of its ~70 uses — a bare expression statement on its
-own, `self.consume_stmt_end()?`). What's left, from the latest probe:
-- **`?` nested inside a larger expression or as a `Call` argument** is
-  still rejected outright (`body.append(self.parse_class_member()?)`,
-  a handful of these) — this subset's plain-C11 discipline (no GNU
-  statement expressions) means there's no single C expression `?` could
-  become there; closing this honestly would mean either accepting the
+from dozens of error categories and hundreds of occurrences to five
+categories and eighteen occurrences total, eleven of them one single
+remaining gap. Closed as of this branch: cross-file imports, narrowing
+a declared union via a later plain assignment, `pass`-bodied classes,
+class inheritance (field order and subtype compatibility), union-typed
+class fields, `?` in two more positions (a `return` statement's own
+value, and — by far the single most common `?` shape in
+`parser.lucid`, ~60 of its ~70 uses — a bare expression statement on
+its own), matching a sealed class hierarchy by its own concrete
+subclasses (a real runtime tag, `ClassSig.sealed_root`/`class_tag`), a
+subtype value satisfying a plain function or method call's own
+parameter type or a `list[T].append(...)`'s own element type (not just
+a `Construct`/`Return`/Attribute-assignment site, the gap the very
+first sealed-hierarchy test surfaced), and a union return type that's a
+strict subset of a wider one. What's left, from the latest probe:
+- **`?` nested inside a larger expression or as a `Call` argument** —
+  the one remaining category, and now the dominant one by a wide margin
+  (eleven of the eighteen total occurrences): `body.append(self.
+  parse_class_member()?)`, `bases.append(self.parse_type_expr()?)`, and
+  similar. This subset's plain-C11 discipline (no GNU statement
+  expressions) means there's no single C expression `?` could become
+  there; closing this honestly would mean either accepting the
   restriction (rewriting the small number of call sites, if this were
   real source being ported) or finding a statement-sequence desugaring
-  for a call argument specifically, not attempted yet.
-- **Matching a sealed class hierarchy by its own concrete subclasses**
-  (`match expr_value as e: case Binary: ... case LiteralExpr: ...`,
-  where `expr_value`'s own static type is the sealed base `Expr`, not a
-  union) is different from union narrowing, this subset's whole `match`
-  story so far: `Expr | LexError` is a real, compiler-chosen tagged
-  struct, but `Expr` alone, with `Binary`/`LiteralExpr`/... as its
-  concrete cases, is a sealed hierarchy the *language* dispatches on
-  through its own mechanism, not something this subset's checker/codegen
-  represent with a runtime tag at all yet (`match on Expr is not
-  supported in this subset` — a handful of these, not many, but each one
-  blocks whatever function contains it).
-- **A union return type that's a strict subset of another union**
-  (`return type mismatch: expected ParsedModule | ParserError |
-  LexError, got ParsedModule | ParserError` — `parse`'s own three-member
-  return type, satisfied by a call to a narrower two-member one) needs
-  `assignable_to`/`class_assignable_to` to accept "every member of the
-  narrower union is also a member of the wider one," not just "one
-  member" or "the exact same union" as today.
-- A couple of smaller, narrower items: `int(...)`-style calls (this
-  subset has no builtin type-conversion call at all), a field whose
-  declared type this subset's `resolve_type_expr` still can't resolve,
-  and one `list[Stmt].append(...)` call this subset's own arg-count/type
-  check rejects for a reason not yet diagnosed.
+  for a call argument specifically (evaluate into a temp before the
+  call, propagate from there, pass the temp as the actual argument),
+  not attempted yet.
+- A few smaller, narrower items, one occurrence each: `int(...)`-style
+  calls (this subset has no builtin type-conversion call at all), two
+  fields (both, it turns out, `FloatLit`'s and a sibling's own `value:
+  float` — this subset was never at feature parity with `float`/
+  `FloatType` to begin with, out of scope here) whose declared type
+  `resolve_type_expr` can't resolve.
 
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
@@ -488,13 +481,25 @@ own, `self.consume_stmt_end()?`). What's left, from the latest probe:
   rule the union case already had). `assignable_to` itself stays
   ignorant of classes on purpose — almost none of its own many call
   sites ever compare two class types, so only the handful that do call
-  `class_assignable_to` instead. No runtime tag anywhere in this subset,
-  so a value only ever flows *up* the hierarchy this way (a subtype
-  value stored where a supertype is expected) — matching one of
-  something back *down* to its own concrete subtype (`match node_value
-  as n: case NumberNode: ...` where `node_value`'s own static type is
-  the sealed base `Node`, not a union) still isn't supported; see the
-  Status section above.
+  `class_assignable_to` instead.
+  Matching one back *down* to its own concrete subtype (`match
+  node_value as n: case NumberNode: ...` where `node_value`'s own
+  static type is a `sealed class Node:`, not a union) is a real, second
+  runtime tag now too — `ClassSig` gained `sealed_root: str | none`
+  (itself, for a `sealed class`; its parent's own `sealed_root`,
+  inherited down the chain, for an ordinary subclass; `none` outside any
+  sealed hierarchy) and a new `class_tag` (`types.lucid`, purely
+  derived: every class sharing a `sealed_root`, sorted by name, gives
+  each its own index). `check_match` gained a whole second case
+  alongside its existing union one — `check_sealed_match` narrows each
+  arm to a *concrete* class in the same hierarchy via a plain
+  class-name pattern, exactly the shape every one of
+  `self-host/parser.lucid`'s own three sealed-hierarchy `match`
+  statements already takes (`case Ident: ... case _: ...`) — but
+  doesn't attempt real exhaustiveness the way the union case does
+  (`self-host/ast.lucid`'s own hierarchies run to dozens of concrete
+  subclasses); a trailing `case _:` is required instead. `codegen.lucid`
+  gained the matching `codegen_sealed_match` (its own entry below).
   A class field can be a union type now too (`alias: str | none`,
   `self-host/ast.lucid`'s own dominant field shape — `collect_class` no
   longer rejects it) — by-value, the same tagged struct a union return
@@ -515,6 +520,35 @@ own, `self.consume_stmt_end()?`). What's left, from the latest probe:
   differentially verified against `lucid run` the usual way; the bare
   expression statement shape doesn't share the bug (verified directly,
   both paths) and is differentially tested normally.
+  A subtype argument now satisfies a supertype-typed parameter almost
+  everywhere a call happens, not just at a `Construct`/`Return`/
+  Attribute-assignment site — a real gap the very first sealed-hierarchy
+  test surfaced (`describe(some_number_node)` against `def
+  describe(n: Node) -> int:` failed with "no overload... matches the
+  given argument types", since `find_signature`'s own overload
+  resolution only ever checked for an *exact* parameter-type match, the
+  right rule for picking among `dispatch def` overloads but too strict
+  for an ordinary call). A new `find_signature_assignable` (`types.lucid`)
+  tries an exact match first (so overload resolution keeps picking the
+  single most specific signature when the argument types line up
+  exactly) and only falls back to a subtype-compatible match, in
+  registration order, when nothing matches exactly — used in place of
+  `find_signature` for a plain function call (`check_call`'s `Ident`
+  case). `type_list_assignable` (also `types.lucid`) is the same idea
+  for a method call, where there's no overload set to disambiguate at
+  all (one method per name per class); `list[T].append(...)`'s own
+  element-type check switched from `types_equal` to `class_assignable_to`
+  directly for the same reason.
+  `class_assignable_to` also grew a case for `value_type` itself being a
+  union — satisfied when *every* one of its own members satisfies
+  `expected` (recursing into itself per member, so a narrower member
+  that's a genuine subtype still works too): `self-host/parser.lucid`'s
+  own `def parse(...) -> ParsedModule | ParserError | LexError: ...
+  return parser.parse_module()` needs this, since `parse_module`'s own
+  declared return type is the strictly narrower `ParsedModule |
+  ParserError` (no `LexError` on that path). `codegen.lucid` needed real
+  work for this one, not just a type-check relaxation — see its own
+  entry below.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -834,6 +868,55 @@ own, `self.consume_stmt_end()?`). What's left, from the latest probe:
   even that final return — the ok value simply isn't read out of the
   temp anywhere, since there's nowhere for it to go (an ordinary
   expression statement already discards its own value the same way).
+  Matching a sealed class hierarchy by its own concrete subclasses
+  (`codegen_sealed_match`, alongside the existing union-dispatch
+  `codegen_match`) needs a real runtime tag, unlike everything else this
+  codegen has built so far (a union's own tagged struct is a compiler
+  invention with no equivalent in the source language; a sealed
+  hierarchy's concrete identity is real). Every class whose own
+  `ClassSig.sealed_root` is set gets a hidden `long __lucid_tag;` field,
+  inserted into `emit_struct`'s own output right after the fields the
+  *root* class declares (`Expr`'s own `span`, so every `Expr`
+  descendant's struct is `{ Span *span; long __lucid_tag; <its own
+  fields> }`) — the same relative position in every descendant, via
+  `inherited_fields` already prepending the root's own fields first, so
+  it's readable through a pointer of the *root's* own type regardless of
+  which concrete subclass the pointer actually points to, under C11
+  6.5.2.3p6's "common initial sequence" rule (the same reasoning `.span`
+  access through an `Expr *` already relies on — see the inheritance
+  entry above). `emit_constructor` sets it unconditionally to this
+  class's own `class_tag` — never a real Construct argument, the same
+  way `check_construct` never counts it. `codegen_sealed_match`
+  evaluates the subject once into a `<root> *` temp, then an if/else-if
+  chain (never a C `switch`, for the identical "break inside an arm has
+  to mean whatever loop encloses the match" reason `codegen_match`'s own
+  union case already documents) checking `temp->__lucid_tag ==
+  <class_tag>`; a concrete-class arm's own alias, if any, is bound to an
+  explicit downcast (`(NumberNode *) temp`) *inside* that arm's own tag
+  check — sound only because the tag check just confirmed it, the same
+  way an unchecked C union access never would be. A subtype value also
+  now gets the explicit cast it needs (`Binary *` and `Expr *` are
+  unrelated struct types here) at two more call sites that weren't
+  covered before — a plain function call and a method call, both
+  through a new shared `cast_if_needed` helper (`list[T].append(...)`'s
+  own element argument gets it too).
+  A `return` whose own value's static type is a union that's a strict
+  *subset* of the enclosing function's own declared union return type
+  (checker.lucid's own `class_assignable_to` now accepts this — see its
+  entry above) is a real C type mismatch otherwise: the two unions are
+  different tagged structs (a different member set means a different
+  layout and different tag values), so simply returning the narrower
+  value as-is — what this codegen already does for the "exactly the
+  same union" case (`return self.next_token()` from inside
+  `next_token`, see the Design notes entry on that bug for the full
+  story) — would type-check under neither. `codegen_union_narrowing_return`
+  evaluates the narrower value into its own temp once, then an
+  if/else-if chain on *its own* tag re-wraps whichever member is active
+  into the wider union's own tag/field layout (`find_union_member`/
+  `wrap_union_value`, the same helpers an ordinary member-to-union wrap
+  already uses) and returns that directly, taking over emitting the
+  `return` statement itself instead of codegen_stmt's own Return arm
+  doing it the usual single-expression way.
   Lucid has no subprocess/exec builtin, so codegen stops
   at emitting C text — invoking a system C compiler on it is necessarily
   a driver step outside Lucid, the same role
@@ -917,14 +1000,18 @@ own, `self.consume_stmt_end()?`). What's left, from the latest probe:
   its own Construct call taking the parent's field first, a function
   returning a subtype where the declared return type is the base class
   and another where it's a union containing the base, a `match` on that
-  union narrowing to the base class (not the concrete subtype — this
-  subset's own limit, see Status above), a union-typed field
-  constructed/read/reassigned, `?` as a `return` statement's own value
-  (on the success path only — see the Design notes entry below for why
-  the failure path couldn't be included), and `?` as a bare expression
-  statement, on *both* the success and failure path (the reference
-  interpreter's own bug is specific to the `return`-statement shape,
-  verified directly before relying on it) — plus one
+  union narrowing to the base class (not the concrete subtype), a
+  union-typed field constructed/read/reassigned, `?` as a `return`
+  statement's own value (on the success path only — see the Design
+  notes entry below for why the failure path couldn't be included), `?`
+  as a bare expression statement on *both* the success and failure path
+  (the reference interpreter's own bug is specific to the
+  `return`-statement shape, verified directly before relying on it), a
+  `match` on the sealed hierarchy itself narrowing to a *concrete*
+  subclass (`case NumberNode: ...`), a subtype value passed to a plain
+  function and to `list[T].append(...)`, and a `return` whose own union
+  return type is a strict subset of the enclosing function's wider one
+  — plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't

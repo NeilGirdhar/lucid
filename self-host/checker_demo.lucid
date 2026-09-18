@@ -251,3 +251,15 @@ report("a subclass Construct call missing the parent's own field is rejected", "
 report("a class with more than one base is rejected", "class A:\n    x: int\n\nclass B:\n    y: int\n\nclass Bad(A, B):\n    z: int\n\ndef ok() -> int:\n    return 0\n")
 
 report("an unrelated class does not satisfy a base-class-typed return", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass Other:\n    n: int\n\ndef bad() -> Node:\n    return Other(1)\n")
+
+report("matching a sealed class hierarchy by its own concrete subclasses is supported", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass NameNode(Node):\n    name: str\n\ndef describe(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n        case _:\n            return -1\n\ndef ok() -> int:\n    print(describe(NumberNode(1, 42)))\n    print(describe(NameNode(2, \"x\")))\n    return 0\n")
+
+report("a subtype value satisfies a plain function's base-class-typed parameter", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef describe(n: Node) -> int:\n    return n.id\n\ndef ok() -> int:\n    print(describe(NumberNode(1, 42)))\n    return 0\n")
+
+report("a subtype value satisfies a list.append() base-class-typed element type", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef ok() -> int:\n    nodes: list[Node] = []\n    nodes.append(NumberNode(1, 42))\n    print(len(nodes))\n    return 0\n")
+
+report("a match pattern outside the subject's own sealed hierarchy is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass Other:\n    n: int\n\ndef bad(n: Node) -> int:\n    match n as result:\n        case Other:\n            return result.n\n        case _:\n            return 0\n    return 0\n")
+
+report("a sealed class hierarchy match without a trailing wildcard is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef bad(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n    return 0\n")
+
+report("a union return type that's a strict subset of another is supported", "class Result:\n    value: int\n\nclass ItemError:\n    message: str\n\nclass OtherError:\n    message: str\n\ndef inner(ok: bool) -> Result | ItemError:\n    if ok:\n        return Result(1)\n    return ItemError(\"bad\")\n\ndef outer(ok: bool) -> Result | ItemError | OtherError:\n    return inner(ok)\n\ndef ok() -> int:\n    match outer(true) as r:\n        case Result:\n            print(r.value)\n        case ItemError:\n            print(r.message)\n        case OtherError:\n            print(r.message)\n    return 0\n")

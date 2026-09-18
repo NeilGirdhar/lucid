@@ -1278,7 +1278,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: '?' propagates ItemError, but the enclosing function's return type (int) doesn't include it",
         "ERROR: '?' used outside a function",
         "ERROR: '?' is only supported as the direct right-hand side of a plain assignment, the direct value of a return statement, or a bare expression statement on its own, in this subset",
-        "ERROR: match on int is not supported in this subset (only a union-typed subject can be matched)",
+        "ERROR: match on int is not supported in this subset (only a union-typed subject, or one belonging to a sealed class hierarchy, can be matched)",
         "ERROR: match on Item | none is not exhaustive: no case for none",
         "ERROR: a match arm guard ('if ...') is not supported in this subset",
         "ERROR: pattern type Other is not part of Item | none",
@@ -1291,6 +1291,12 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: construct for 'NumberNode' expects 2 field value(s), got 1",
         "ERROR: class 'Bad' has more than one base -- only a single class parent is supported in this subset (no traits)",
         "ERROR: return type mismatch: expected Node, got Other",
+        "--- matching a sealed class hierarchy by its own concrete subclasses is supported ---\n(no errors)",
+        "--- a subtype value satisfies a plain function's base-class-typed parameter ---\n(no errors)",
+        "--- a subtype value satisfies a list.append() base-class-typed element type ---\n(no errors)",
+        "ERROR: pattern type Other is not part of the same sealed class hierarchy as 'Node'",
+        "ERROR: match on a sealed class hierarchy requires a trailing 'case _:' in this subset (exhaustively listing every concrete subclass isn't supported)",
+        "--- a union return type that's a strict subset of another is supported ---\n(no errors)",
     ] {
         assert!(
             stdout.contains(expected),
